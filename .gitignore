@@ -1,0 +1,16 @@
+# 白名单模式：默认忽略仓库内一切，仅放行必要文件（源码 / 配置 / 构建输入）。
+# 未放行项自动排除：node_modules、lib（构建产物）、*.jsonl（history/audit/approval-debug 运行时日志）、
+# review-mode.json（运行态）、*.tgz、*.tsbuildinfo 等。
+/*
+!/src/
+!/tests/
+!/scripts/
+!/.gitignore
+!/README.md
+!/README.en.md
+!/LICENSE
+!/assets/
+!/package.json
+!/tsconfig.json
+!/tsdown.config.ts
+!/cordis.patch.yml

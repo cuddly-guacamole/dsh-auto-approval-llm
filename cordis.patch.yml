@@ -1,0 +1,33 @@
+# dsh-auto-approval-llm bundle layer.
+- id: permission
+  config:
+    presets:
+      read-only:
+        sandbox: read-only
+        approval: ask
+      workspace-write:
+        sandbox: workspace-write
+        approval: ask
+      auto:
+        sandbox: danger-full-access
+        approval: ask
+        name: Auto
+        description: High-privilege execution with automatic safety classification and approval for risky actions.
+      danger-full-access:
+        sandbox: danger-full-access
+        approval: never
+
+- insert:
+    - id: auto-approval-llm
+      name: 'dsh-auto-approval-llm'
+      config:
+        enabled: true
+        autoSwitchPolicyToAsk: true
+        timeoutAction: reject
+        allowlist: []
+        denyList: []
+        humanOnlyList: [bash]
+        maxConsecutiveDenials: 3
+        maxTotalDenials: 20
+        maxArgsChars: 4000
+        notifyUser: true
