@@ -3,6 +3,14 @@
   "version": "0.0.1",
   "description": "LLM-assisted auto approval with timeout fallback for DeepSeek Harness",
   "private": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cuddly-guacamole/dsh-auto-approval-llm.git"
+  },
+  "bugs": {
+    "url": "https://github.com/cuddly-guacamole/dsh-auto-approval-llm/issues"
+  },
+  "homepage": "https://github.com/cuddly-guacamole/dsh-auto-approval-llm#readme",
   "type": "module",
   "main": "./lib/index.js",
   "types": "./lib/types/index.d.ts",
