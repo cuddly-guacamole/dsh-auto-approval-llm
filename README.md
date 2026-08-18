@@ -43,22 +43,13 @@
 
 ## 安装
 
-当前以本地注入 / 开发装配为主（尚未发布 npm）：
-
-```bash
-# 本地开发构建
-DSH_CHECKOUT=<dsh 源码 checkout> bash scripts/build.sh   # 编译 host → lib/
-npx tsdown                                               # 构建 client bundle → lib/client.js
-
-# 注入器环境（dsh-super-injector）
-dev_inject_plugin <本目录>
-```
-
-发布（待做）：
+已发布 npm（`dsh-auto-approval-llm`），直接安装：
 
 ```bash
 dsh plugin --profile web add dsh-auto-approval-llm
 ```
+
+本地开发构建 / 注入（dsh-super-injector 环境）：
 
 > 提示：本插件依赖 DSH 的 `auto` 权限预设（`danger-full-access` + `approval: ask`），并作为 `approval/request` 的唯一终结者——**不要与其他审批类插件（如 dsh-approval-llm / dsh-auto-review）同时启用**。
 
@@ -180,5 +171,6 @@ dsh plugin --profile web add dsh-auto-approval-llm
 
 ## 版本 / 发布
 
-- 当前：`0.0.1`（未发布 npm）。
-- 语义：BSD-3-Clause。
+- 当前：`0.0.1`（**已发布**）—— npm：[dsh-auto-approval-llm](https://www.npmjs.com/package/dsh-auto-approval-llm)，GitHub：[Release v0.0.1](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/releases/tag/v0.0.1)。
+- 安装：`dsh plugin --profile web add dsh-auto-approval-llm`
+- 许可证：BSD-3-Clause。

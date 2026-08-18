@@ -41,21 +41,18 @@ Tool call
 
 ## Installation
 
-Currently local injection / development is used (not yet published to npm):
-
-```bash
-# Local development build
-DSH_CHECKOUT=<dsh source checkout> bash scripts/build.sh   # compile host → lib/
-npx tsdown                                               # build client bundle → lib/client.js
-
-# Injector environment (dsh-super-injector)
-dev_inject_plugin <this dir>
-```
-
-Publish (to be done):
+Published to npm (`dsh-auto-approval-llm`) — install directly:
 
 ```bash
 dsh plugin --profile web add dsh-auto-approval-llm
+```
+
+Local development build / injection (dsh-super-injector environment):
+
+```bash
+DSH_CHECKOUT=<dsh source checkout> bash scripts/build.sh   # compile host → lib/
+npx tsdown                                               # build client bundle → lib/client.js
+dev_inject_plugin <this dir>
 ```
 
 > Note: the plugin depends on DSH's `auto` permission preset (`danger-full-access` + `approval: ask`) and is the single terminal for `approval/request` — **do not enable it together with other approval plugins** (e.g. dsh-approval-llm / dsh-auto-review).
@@ -178,5 +175,6 @@ This project references or derives from the following open-source projects — t
 
 ## Version / publishing
 
-- Current: `0.0.1` (not published to npm).
+- Current: `0.0.1` (**published**) — npm: [dsh-auto-approval-llm](https://www.npmjs.com/package/dsh-auto-approval-llm), GitHub: [Release v0.0.1](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/releases/tag/v0.0.1).
+- Install: `dsh plugin --profile web add dsh-auto-approval-llm`
 - License: BSD-3-Clause.
