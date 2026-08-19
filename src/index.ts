@@ -79,11 +79,11 @@ export const Config: z<Config> = z.object({
   reviewerProtocol: z.union(['openai', 'anthropic'] as const).default('openai'),
   reviewerBaseUrl: z.string().default(''),
   timeoutAction: z.string().default('reject'),
-  llmReviewScope: z.union(['low-or-above', 'medium-or-above', 'high'] as const).default('medium-or-above'),
+  llmReviewScope: z.union(['low-or-above', 'medium-or-above', 'high'] as const).default('low-or-above'),
   llmTakeoverScope: z.union(['low', 'medium-or-below', 'high-or-below'] as const).default('medium-or-below'),
   defaultReviewMode: z.union(['manual', 'smart', 'unattended'] as const).default('smart'),
-  lowRiskSeconds: z.number().default(3).min(1),
-  mediumRiskSeconds: z.number().default(5).min(1),
+  lowRiskSeconds: z.number().default(5).min(1),
+  mediumRiskSeconds: z.number().default(8).min(1),
   highRiskSeconds: z.number().default(10).min(1),
   safetyPrompt: z.string().default(''),
   allowlist: z.array(z.string()).default([]),
@@ -138,8 +138,8 @@ function resolveConfig(raw: Config): Config {
     timeoutAction,
     llmReviewScope: raw.llmReviewScope ?? 'medium-or-above',
     llmTakeoverScope: raw.llmTakeoverScope ?? 'medium-or-below',
-    lowRiskSeconds: raw.lowRiskSeconds ?? 3,
-    mediumRiskSeconds: raw.mediumRiskSeconds ?? 5,
+    lowRiskSeconds: raw.lowRiskSeconds ?? 5,
+    mediumRiskSeconds: raw.mediumRiskSeconds ?? 8,
     highRiskSeconds: raw.highRiskSeconds ?? 10,
   }
 }
@@ -1256,6 +1256,9 @@ export function apply(ctx: Context, rawConfig: Config): void {
   }
   const totalDenials = new Map<string, number>()
   const denialLog = new Map<string, Array<{ reason?: string; toolName: string }>>()
+  // Timestamp of the most recently entered approval/request handler, so the
+  // resolve event can report request→resolution total time.
+  let requestAt = 0
 
   const askHuman = async (req: any, review: ReviewResult | undefined, next: () => Promise<any>, breaker = false, status?: ReviewStatus): Promise<any> => {
     // Delegate to the official ApprovalPanel; the client half parses the
@@ -1352,7 +1355,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       llmDecision: (follow as any)?.decision ?? null,
       breaker: breaker === true,
     })
-    debugLog({ ev: 'resolve', callId: req.callId ?? null, outcome, timedOut, source, auto, seconds: status?.seconds ?? null, elapsedMs: Date.now() - t0, llmDecision: (follow as any)?.decision ?? null })
+    debugLog({ ev: 'resolve', callId: req.callId ?? null, outcome, timedOut, source, auto, seconds: status?.seconds ?? null, elapsedMs: Date.now() - t0, requestAt, requestToResolveMs: Date.now() - requestAt, llmDecision: (follow as any)?.decision ?? null })
     pushHistory({
       sessionId: key,
       toolName: req.toolName,
@@ -1379,6 +1382,8 @@ export function apply(ctx: Context, rawConfig: Config): void {
     const preset = permissionPresets.current?.(authority?.session?.events ?? req.agent.session.events)
     if (preset !== AUTO_PRESET) return next()
     const sessionKey = authorityKeyFor({ agent: req.agent })
+    requestAt = Date.now()
+    debugLog({ ev: 'request', callId: req.callId ?? null, toolName: req.toolName, sessionKey })
     const reviewOpts = {
       userMessages: trustedUserMessages(authority),
       workspaceRoot: rootsFor({ agent: req.agent }).workspace,
@@ -1459,7 +1464,9 @@ export function apply(ctx: Context, rawConfig: Config): void {
         })
         return 'allowed-once'
       }
+      const lowReviewStart = Date.now()
       const review = await reviewWithLLM(credentials, llm, tools, req.agent.session, req, config, seconds * 1000, reviewOpts)
+      debugLog({ ev: 'review', callId: req.callId, decision: review.decision, risk: review.riskLevel ?? null, startAt: lowReviewStart, tookMs: Date.now() - lowReviewStart, scope: 'low' })
       const verdict = lowRiskReviewOutcome(review)
       if (verdict.kind === 'allow') {
         denials.set(sessionKey, 0)
@@ -1544,7 +1551,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       const reviewStart = Date.now()
       void reviewWithLLM(credentials, llm, tools, req.agent.session, req, config, seconds * 1000, reviewOpts)
         .then((review) => {
-          debugLog({ ev: 'review', callId: req.callId, decision: review.decision, risk: review.riskLevel ?? null, tookMs: Date.now() - reviewStart, scope: 'medium' })
+          debugLog({ ev: 'review', callId: req.callId, decision: review.decision, risk: review.riskLevel ?? null, startAt: reviewStart, tookMs: Date.now() - reviewStart, scope: 'medium' })
           if (!req.callId || !reviewStates.has(req.callId)) return
           const note = `🤖 Review suggestion: ${review.decision}${review.riskLevel ? `(${review.riskLevel})` : ''}${review.reason ? ` — ${review.reason}` : ''}`
           // Remember the verdict for history whether or not it takes over.
@@ -1588,7 +1595,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       const reviewStart = Date.now()
       void reviewWithLLM(credentials, llm, tools, req.agent.session, req, config, seconds * 1000, reviewOpts)
         .then((review) => {
-          debugLog({ ev: 'review', callId: req.callId, decision: review.decision, risk: review.riskLevel ?? null, tookMs: Date.now() - reviewStart, scope: 'high' })
+          debugLog({ ev: 'review', callId: req.callId, decision: review.decision, risk: review.riskLevel ?? null, startAt: reviewStart, tookMs: Date.now() - reviewStart, scope: 'high' })
           if (!req.callId || !reviewStates.has(req.callId)) return
           const note = `🤖 Review suggestion: ${review.decision}${review.riskLevel ? `(${review.riskLevel})` : ''}${review.reason ? ` — ${review.reason}` : ''}`
           reviewVerdicts.set(req.callId, review)

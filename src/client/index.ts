@@ -427,11 +427,11 @@ function draftOf(value: any): Draft {
     enabled: value?.enabled === false ? 'off' : 'on',
     autoSwitchPolicyToAsk: value?.autoSwitchPolicyToAsk === true ? 'on' : 'off',
     timeoutAction: normalizeTimeoutAction(value?.timeoutAction),
-    llmReviewScope: value?.llmReviewScope ?? 'medium-or-above',
+    llmReviewScope: value?.llmReviewScope ?? 'low-or-above',
     llmTakeoverScope: value?.llmTakeoverScope ?? 'medium-or-below',
     defaultReviewMode: ['manual', 'smart', 'unattended'].includes(value?.defaultReviewMode) ? value.defaultReviewMode : 'smart',
-    lowRiskSeconds: String(value?.lowRiskSeconds ?? 3),
-    mediumRiskSeconds: String(value?.mediumRiskSeconds ?? 5),
+    lowRiskSeconds: String(value?.lowRiskSeconds ?? 5),
+    mediumRiskSeconds: String(value?.mediumRiskSeconds ?? 8),
     highRiskSeconds: String(value?.highRiskSeconds ?? 10),
     safetyPrompt: value?.safetyPrompt ?? '',
     reviewerProvider: value?.reviewerProvider ?? '',
@@ -461,8 +461,8 @@ function valueOf(draft: Draft): any {
     llmReviewScope: draft.llmReviewScope,
     llmTakeoverScope: draft.llmTakeoverScope,
     defaultReviewMode: draft.defaultReviewMode,
-    lowRiskSeconds: Math.max(1, Number(draft.lowRiskSeconds) || 3),
-    mediumRiskSeconds: Math.max(1, Number(draft.mediumRiskSeconds) || 5),
+    lowRiskSeconds: Math.max(1, Number(draft.lowRiskSeconds) || 5),
+    mediumRiskSeconds: Math.max(1, Number(draft.mediumRiskSeconds) || 8),
     highRiskSeconds: Math.max(1, Number(draft.highRiskSeconds) || 10),
     safetyPrompt: draft.safetyPrompt,
     allowlist: list(draft.allowlist),
@@ -891,6 +891,40 @@ function SettingsSection() {
     setError('')
   }
 
+  const resetTimerCard = () => {
+    setDraft({ ...draft, lowRiskSeconds: '5', mediumRiskSeconds: '8', highRiskSeconds: '10', breakerAntiHijackMs: '0', maxConsecutiveDenials: '3', maxTotalDenials: '20' })
+  }
+
+  const resetReviewerCard = () => {
+    setDraft({ ...draft, reviewerProtocol: 'openai', reviewerBaseUrl: '', reviewerModel: '' })
+  }
+
+  const restoreTopDefaults = async () => {
+    const base = draftOf(snapshot.value)
+    const defaults: Partial<Draft> = { enabled: 'on', autoSwitchPolicyToAsk: 'on', timeoutAction: 'reject', llmReviewScope: 'low-or-above', llmTakeoverScope: 'medium-or-below', defaultReviewMode: 'smart', showSessionPanel: 'off', aiButtonPosition: 'header' }
+    const merged = { ...base, ...defaults }
+    setDraft({ ...draft, ...defaults })
+    setSaving(true); setError(''); setMessage('')
+    try {
+      const res = await (globalThis as any).fetch(SETTINGS_ROUTE, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ expectedRevision: snapshot.revision, value: valueOf(merged) }),
+        credentials: 'same-origin',
+      })
+      const data = await res.json()
+      if (!data?.ok) throw new Error(data?.error ?? t('settings.saveFailed'))
+      broadcastSettings(data.value)
+      setSnapshot(data.value)
+      setDraft(draftOf(data.value.value))
+      setMessage(t('settings.defaultsRestoredInstant'))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
   const testOnline = async () => {
     const baseUrl = draft.reviewerBaseUrl.trim()
     const model = draft.reviewerModel.trim()
@@ -1094,7 +1128,7 @@ function SettingsSection() {
       value: draft.timeoutAction,
       options: timeoutOptions(),
       onChange: (v: string) => { void instantSaveKey('timeoutAction', v as string) },
-    })),
+    }), t('settings.timeoutActionHint')),
     row(t('settings.llmReviewScope'), React.createElement(CapsuleSelect, {
       value: draft.llmReviewScope,
       options: llmReviewOptions(),
@@ -1329,6 +1363,12 @@ function SettingsSection() {
     React.createElement(Button, {
       variant: 'outline',
       size: 'sm',
+      disabled: saving || !snapshot.writable,
+      onClick: resetReviewerCard,
+    }, t('settings.reset')),
+    React.createElement(Button, {
+      variant: 'outline',
+      size: 'sm',
       disabled: saving || !snapshot.writable || !reviewDirty,
       onClick: () => discardCard(REVIEW_KEYS, 'review'),
     }, t('settings.discard')),
@@ -1371,7 +1411,27 @@ function SettingsSection() {
     }, t('settings.history.clear')),
   )
 
-  const buildTimerFooter = () => cardFooter(TIMER_KEYS, 'timers', timerDirty)
+  const buildTimerFooter = () => React.createElement(React.Fragment, null,
+    statusLine('timers'),
+    React.createElement(Button, {
+      variant: 'outline',
+      size: 'sm',
+      disabled: saving || !snapshot.writable,
+      onClick: resetTimerCard,
+    }, t('settings.reset')),
+    React.createElement(Button, {
+      variant: 'outline',
+      size: 'sm',
+      disabled: saving || !snapshot.writable || !timerDirty,
+      onClick: () => discardCard(TIMER_KEYS, 'timers'),
+    }, t('settings.discard')),
+    React.createElement(Button, {
+      variant: 'primary',
+      size: 'sm',
+      disabled: saving || !snapshot.writable || !timerDirty,
+      onClick: () => saveCard(TIMER_KEYS, 'timers'),
+    }, saving ? t('settings.saving') : t('settings.save')),
+  )
 
   const content = React.createElement('div', { style: { display: 'grid', gap: 14, maxWidth: 720, padding: '0 2px' } },
     bannerMessage
@@ -1412,6 +1472,14 @@ function SettingsSection() {
         options: onOffOptions(),
         onChange: (v: string) => { void instantSaveKey('debug', v as 'on' | 'off') },
       }), t('settings.debugHint')),
+    ),
+    React.createElement('div', { className: 'dsa-subcardFooter', style: { borderTop: '1px solid var(--dsw-alias-border-l2)', marginTop: 4 } },
+      React.createElement(Button, {
+        variant: 'outline',
+        size: 'sm',
+        disabled: saving || !snapshot.writable,
+        onClick: restoreTopDefaults,
+      }, t('settings.reset')),
     ),
     snapshot.applies === 'restart' ? React.createElement('p', { style: { color: 'var(--dsw-alias-label-tertiary)', fontSize: 12, margin: 0 } }, t('settings.restartHint')) : null,
     message ? React.createElement('span', { className: 'dsa-success', role: 'status' }, message) : null,
