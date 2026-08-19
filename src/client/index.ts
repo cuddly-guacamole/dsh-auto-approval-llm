@@ -1474,15 +1474,16 @@ function SettingsSection() {
       }), t('settings.debugHint')),
     ),
     React.createElement('div', { className: 'dsa-subcardFooter', style: { borderTop: '1px solid var(--dsw-alias-border-l2)', marginTop: 4 } },
+      message ? React.createElement('span', { className: 'dsa-success', role: 'status', style: { flex: 1 } }, message) : null,
       React.createElement(Button, {
         variant: 'outline',
         size: 'sm',
+        className: 'dsa-resetButton',
         disabled: saving || !snapshot.writable,
         onClick: restoreTopDefaults,
       }, t('settings.reset')),
     ),
     snapshot.applies === 'restart' ? React.createElement('p', { style: { color: 'var(--dsw-alias-label-tertiary)', fontSize: 12, margin: 0 } }, t('settings.restartHint')) : null,
-    message ? React.createElement('span', { className: 'dsa-success', role: 'status' }, message) : null,
     error ? React.createElement('p', { className: 'dsa-failed', role: 'status' }, error) : null,
   );
   return React.createElement('li', { className: open ? 'dsa-card dsa-cardOpen' : 'dsa-card' },
@@ -1990,6 +1991,8 @@ function installSettingsCardStyles(): () => void {
 .dsa-alert{display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:8px;font-size:12px;line-height:1.5}
 .dsa-alertError{color:var(--dsw-alias-state-error-primary);background:rgba(var(--dsw-alias-state-error-primary,229 72 77),0.08);border:1px solid var(--dsw-alias-state-error-primary)}
 .dsa-alertText{flex:1;min-width:0;overflow-wrap:anywhere}
+/* 将最底下的恢复默认按钮从胶囊形状改为圆角矩形 */
+.dsa-resetButton{border-radius:8px!important;height:auto!important;padding:5px 14px!important}
 `
   g.document.head.appendChild(style)
   return () => { style.remove() }
