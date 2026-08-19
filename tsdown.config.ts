@@ -1,6 +1,6 @@
 import type { UserConfig } from 'tsdown'
 
-const PLUGIN_ID = 'dsh-auto-approval-llm'
+const PLUGIN_ID = '@quill507/dsh-auto-approval-llm'
 
 const CLIENT_EXTERNALS = [
   'react',
