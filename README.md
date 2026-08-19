@@ -171,6 +171,6 @@ dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 
 ## 版本 / 发布
 
-- 当前：`0.0.2`（**已发布**）—— npm：[@quill507/dsh-auto-approval-llm](https://www.npmjs.com/package/@quill507/dsh-auto-approval-llm)，GitHub：[Release v0.0.2](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/releases/tag/v0.0.2)。
+- 当前：`0.0.5`（**待发布**）—— npm：[@quill507/dsh-auto-approval-llm](https://www.npmjs.com/package/@quill507/dsh-auto-approval-llm)，GitHub：[Release v0.0.5](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/releases/tag/v0.0.5)。
 - 安装：`dsh plugin --profile web add @quill507/dsh-auto-approval-llm`
 - 许可证：BSD-3-Clause。
