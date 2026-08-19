@@ -1,4 +1,4 @@
-# dsh-auto-approval-llm bundle layer.
+# @quill507/dsh-auto-approval-llm bundle layer.
 - id: permission
   config:
     presets:
@@ -19,7 +19,7 @@
 
 - insert:
     - id: auto-approval-llm
-      name: 'dsh-auto-approval-llm'
+      name: '@quill507/dsh-auto-approval-llm'
       config:
         enabled: true
         autoSwitchPolicyToAsk: true

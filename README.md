@@ -1,4 +1,4 @@
-# dsh-auto-approval-llm
+# @quill507/dsh-auto-approval-llm
 
 > 为 DeepSeek Harness 的 **Auto 权限档**提供 LLM 辅助自动审批 + 超时自动兜底。
 
@@ -43,10 +43,10 @@
 
 ## 安装
 
-已发布 npm（`dsh-auto-approval-llm`），直接安装：
+已发布 npm（`@quill507/dsh-auto-approval-llm`），直接安装：
 
 ```bash
-dsh plugin --profile web add dsh-auto-approval-llm
+dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 ```
 
 本地开发构建 / 注入（dsh-super-injector 环境）：
@@ -171,6 +171,6 @@ dsh plugin --profile web add dsh-auto-approval-llm
 
 ## 版本 / 发布
 
-- 当前：`0.0.1`（**已发布**）—— npm：[dsh-auto-approval-llm](https://www.npmjs.com/package/dsh-auto-approval-llm)，GitHub：[Release v0.0.1](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/releases/tag/v0.0.1)。
-- 安装：`dsh plugin --profile web add dsh-auto-approval-llm`
+- 当前：`0.0.2`（**已发布**）—— npm：[@quill507/dsh-auto-approval-llm](https://www.npmjs.com/package/@quill507/dsh-auto-approval-llm)，GitHub：[Release v0.0.2](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/releases/tag/v0.0.2)。
+- 安装：`dsh plugin --profile web add @quill507/dsh-auto-approval-llm`
 - 许可证：BSD-3-Clause。

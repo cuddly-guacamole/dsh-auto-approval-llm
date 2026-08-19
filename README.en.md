@@ -1,4 +1,4 @@
-# dsh-auto-approval-llm
+# @quill507/dsh-auto-approval-llm
 
 > LLM-assisted auto approval with a timeout fallback for DeepSeek Harness's **Auto permission preset**.
 
@@ -41,10 +41,10 @@ Tool call
 
 ## Installation
 
-Published to npm (`dsh-auto-approval-llm`) — install directly:
+Published to npm (`@quill507/dsh-auto-approval-llm`) — install directly:
 
 ```bash
-dsh plugin --profile web add dsh-auto-approval-llm
+dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 ```
 
 Local development build / injection (dsh-super-injector environment):
@@ -175,6 +175,6 @@ This project references or derives from the following open-source projects — t
 
 ## Version / publishing
 
-- Current: `0.0.1` (**published**) — npm: [dsh-auto-approval-llm](https://www.npmjs.com/package/dsh-auto-approval-llm), GitHub: [Release v0.0.1](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/releases/tag/v0.0.1).
-- Install: `dsh plugin --profile web add dsh-auto-approval-llm`
+- Current: `0.0.2` (**published**) — npm: [@quill507/dsh-auto-approval-llm](https://www.npmjs.com/package/@quill507/dsh-auto-approval-llm), GitHub: [Release v0.0.2](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/releases/tag/v0.0.2).
+- Install: `dsh plugin --profile web add @quill507/dsh-auto-approval-llm`
 - License: BSD-3-Clause.
