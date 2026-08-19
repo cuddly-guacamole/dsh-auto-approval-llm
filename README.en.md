@@ -14,7 +14,7 @@
 - **LLM takeover**: for medium risk, if the LLM returns a decisive verdict within the countdown, the client follows it immediately — no click needed.
 - **Breaker**: after `maxConsecutiveDenials` consecutive or `maxTotalDenials` cumulative LLM denials → hand to a human with no auto-countdown; `/approval reset` can reset it.
 - **Reliable history & audit**: in-memory window of 200 records + `history.jsonl`; append-only `audit.jsonl` (clear leaves a tombstone).
-- **Per-session review mode**: `/approval-mode manual|smart|unattended` persisted; `manual` always asks a human, `unattended` auto-answers (HIGH still asks a human).
+- **Per-session review mode**: `/approval-mode manual|smart|unattended` persisted; `manual` always asks a human, `unattended` auto-answers; **high-risk timeouts still go to a human / fail closed**.
 - **Declarative rules**: `rulesText` uses Claude-style `Tool(pattern) | allow|deny|human [| field]`, validated live.
 - **Native-looking settings card**: 4 collapsible sub-cards (Timers & breaker / Online review model / Safety rules / Recent approvals), top-level switches save instantly, each card has independent Save/Discard (Safety card also Restore defaults); illegal config values show a red banner with a "Try to fix" button.
 
@@ -34,7 +34,7 @@ Tool call
 
 - **LOW**: silent pass when not reviewed; with review, decided directly by the LLM verdict (ALLOW/DENY); ESCALATE goes to a human.
 - **MEDIUM**: shows the panel with a countdown while the LLM reviews in parallel; if `llmTakeoverScope` covers it and the LLM is decisive → follow immediately; otherwise it's advice only.
-- **HIGH**: shows the panel with a countdown; the LLM only advises; on timeout it strictly follows `timeoutAction`.
+- **HIGH**: shows the panel with a countdown; the LLM only advises; on timeout it strictly follows `timeoutAction` (even under unattended, a HIGH timeout still goes to a human / fails closed).
 - Every "needs a human" case delegates to the official panel for the countdown; **the timeout marker is written only by the host timer** — the client only reports an outcome, so it cannot be forged.
 
 ---
@@ -107,7 +107,7 @@ Session approval stats — the "Auto Approval" header-button popup: totals / all
 | `enabled` | true | Master switch |
 | `autoSwitchPolicyToAsk` | false | Auto-switch `never` to `ask` for the auto preset with override=never |
 | `timeoutAction` | `reject` | Timeout action: `reject` / `allow` / `low-risk-allow` (auto-approve only LOW) |
-| `llmReviewScope` | `medium-or-above` | Which tiers (LOW/MEDIUM/HIGH) are sent for LLM review |
+| `llmReviewScope` | `low-or-above` | Which tiers (LOW/MEDIUM/HIGH) are sent for LLM review |
 | `llmTakeoverScope` | `medium-or-below` | Which tiers allow the LLM verdict to take over directly |
 | `defaultReviewMode` | `smart` | Default per-session review mode: Manual / Smart / Unattended |
 | `lowRiskSeconds` / `mediumRiskSeconds` / `highRiskSeconds` | 3 / 5 / 10 | Countdown seconds per tier |

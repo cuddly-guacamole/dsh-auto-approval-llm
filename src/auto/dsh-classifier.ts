@@ -18,7 +18,7 @@ function classifierMessage(input) {
         id: `auto-mode-classifier-${randomUUID()}`,
         role: 'user',
         content: [{ type: 'text', text: classifierPayload(input) }],
-        source: { kind: 'plugin', plugin: '@nanmicoder/dsh-auto-mode' },
+        source: { kind: 'plugin', plugin: 'dsh-auto-approval-llm' },
     });
 }
 function jsonText(text) {

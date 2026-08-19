@@ -40,11 +40,19 @@ export interface RuleSet {
 }
 
 function isBoundedPattern(src: string): boolean {
-  // Keep authorable rules bounded. Native ReDoS detection is intentionally not
-  // attempted: naive heuristics over-reject legitimate `(x+)*`-style patterns.
-  // The evaluator only ever applies the regex to a single bounded subject
-  // (the tool args/reason), so impact is local to one call.
-  return src.length <= 2_000
+  // Keep authorable rules bounded and reject the most obvious catastrophic
+  // signatures. Full ReDoS detection is intentionally not attempted — real
+  // static analysis of backtracking complexity is out of scope. We only guard
+  // against two unmistakable shapes: a group ending in an unbounded quantifier
+  // that is itself quantified again (nested `(a+)+`), and an alternation group
+  // wrapped in an outer unbounded quantifier. Anything else, including common
+  // anchored patterns like `^git push`, is left untouched.
+  if (src.length > 2_000) return false
+  // Nested / duplicated unbounded quantifiers: `(a+)+`, `(.*)*`, ...
+  if (/\(\s*[^()]*[+*][^()]*\)\s*[+*]/.test(src)) return false
+  // Alternation wrapped in an outer unbounded quantifier: `(a|b|c)*`, ...
+  if (/\(\s*(?:[^()]*\|[^()]*\|[^()]*)\s*\)\s*[+*]/.test(src)) return false
+  return true
 }
 
 export function parseRulesText(text: string): RuleSet {

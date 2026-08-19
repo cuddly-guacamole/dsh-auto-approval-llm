@@ -62,22 +62,44 @@ export interface HumanDecision {
 }
 
 /**
+ * Claim handle wired up by {@link raceHumanDecision}. When a caller can decide
+ * the outcome authoritatively (e.g. a decisive LLM conclusion arrives before
+ * the human), it calls {@link claim} to cancel the host countdown and settle
+ * the race immediately.
+ */
+export interface RaceHumanHandle {
+  claim: (outcome: 'allowed-once' | 'rejected') => void
+}
+
+/**
  * Race a delegated human answer (nextPromise) against a host-authoritative
  * countdown. When the timer wins the request is claimed locally with the
  * configured timeout action and the canonical timeout notice is recorded via
  * the supplied callback (never via an untrusted client text). A caller that
  * wanted a plain delegation (no time limit) should not use this helper.
+ *
+ * When `handle` is supplied its `claim` lets a decisive caller pre-empt the
+ * countdown: the timer is cleared and the race settles with the pure outcome
+ * string and `timedOut: false`, so the returned shape stays identical whether
+ * the human, the host timer, or the caller's claim wins.
  */
 export async function raceHumanDecision(
   next: () => Promise<any>,
   opts: HumanDecisionOptions,
+  handle?: RaceHumanHandle,
 ): Promise<HumanDecision> {
   const humanMs = Math.max(1, Math.round(opts.status.seconds)) * 1000
   let timeoutTimer: ReturnType<typeof setTimeout> | undefined
   let timedOut = false
-  const timeoutPromise = new Promise<any>((resolve) => {
+  let claimed = false
+  let settle: (outcome: string, didTimeout: boolean) => void = () => {}
+  const racedPromise = new Promise<string>((resolve) => {
+    settle = (outcome: string, didTimeout: boolean) => {
+      timedOut = didTimeout
+      resolve(outcome)
+    }
     timeoutTimer = setTimeout(() => {
-      timedOut = true
+      if (claimed) return
       if (opts.callId !== undefined) {
         const actionText = opts.status.action === 'allow' ? 'approved' : 'rejected'
         opts.recordTimeout(
@@ -85,14 +107,22 @@ export async function raceHumanDecision(
           `[dsh-auto-approval-llm] no response: auto-${actionText} (${opts.status.seconds}s)`,
         )
       }
-      resolve(opts.status.action === 'allow' ? 'allowed-once' : 'rejected')
+      settle(opts.status.action === 'allow' ? 'allowed-once' : 'rejected', true)
     }, humanMs)
   })
+  if (handle !== undefined) {
+    handle.claim = (outcome: 'allowed-once' | 'rejected') => {
+      if (claimed) return
+      claimed = true
+      if (timeoutTimer !== undefined) clearTimeout(timeoutTimer)
+      settle(outcome, false)
+    }
+  }
   try {
-    const outcome = await Promise.race([Promise.resolve().then(() => next()), timeoutPromise])
+    const outcome = await Promise.race([Promise.resolve().then(() => next()), racedPromise])
     return { outcome, timedOut }
   } finally {
-    if (!timedOut && timeoutTimer !== undefined) clearTimeout(timeoutTimer)
+    if (!timedOut && !claimed && timeoutTimer !== undefined) clearTimeout(timeoutTimer)
   }
 }
 
@@ -169,6 +199,41 @@ export function breakerTripped(
   if (maxConsecutive > 0 && consecutive >= maxConsecutive) return true
   if (maxTotal > 0 && total >= maxTotal) return true
   return false
+}
+
+export interface DenialCounts {
+  consecutive: number
+  total: number
+}
+
+export interface BreakerTransition {
+  counts: DenialCounts
+  reset: boolean
+  increment: boolean
+}
+
+/**
+ * Pure denial-breaker state transition for one answered request. A human
+ * decision (allow or deny) clears the streak; a decided LLM denial increments
+ * it; every other outcome leaves the counters unchanged. Callers apply the
+ * returned `counts` and may branch on `reset`/`increment` for side effects.
+ */
+export function applyBreaker(
+  counts: DenialCounts,
+  source: string,
+  llmDecided: boolean,
+): BreakerTransition {
+  if (source === 'human-allow' || source === 'human-deny') {
+    return { counts: { consecutive: 0, total: 0 }, reset: true, increment: false }
+  }
+  if (llmDecided && source === 'llm-deny') {
+    return {
+      counts: { consecutive: counts.consecutive + 1, total: counts.total + 1 },
+      reset: false,
+      increment: true,
+    }
+  }
+  return { counts: { ...counts }, reset: false, increment: false }
 }
 
 export function preserveHostKeys(

@@ -16,7 +16,7 @@
 - **LLM 接管**：中风险且 LLM 在倒计时内给出明确结论时，客户端立即按 LLM 结论裁决，无需你点。
 - **熔断**：连续 `maxConsecutiveDenials` 次或累计 `maxTotalDenials` 次被 LLM 拒绝 → 转人工、不再自动倒计时；`/approval reset` 可重置。
 - **可靠的历史与审计**：内存 200 条 + `history.jsonl`，append-only `audit.jsonl`（清空留 tombstone）。
-- **每会话评审模式**：`/approval-mode manual|smart|unattended` 持久化；`manual` 全转人、`unattended` 自动应答（高风险仍转人）。
+- **每会话评审模式**：`/approval-mode manual|smart|unattended` 持久化；`manual` 全转人、`unattended` 自动应答；**高风险超时仍转人工/失败关闭**。
 - **声明式规则**：`rulesText` 用 Claude 风格 `工具(正则) | allow|deny|human [| 字段]` 一眼看懂、实时校验。
 - **DSH 原生观感的设置卡**：4 张可折叠子卡（计时器与熔断 / 在线评审模型 / 安全规则列表 / 最近审批记录），顶层开关即时保存、每卡独立 保存/放弃/恢复默认；非法配置值有红色横幅 +「尝试修复」。
 
@@ -36,7 +36,7 @@
 
 - **LOW**：不送评审则静默放行；送评审时按 LLM 结论（ALLOW/DENY）直接裁决；LLM 无法决定（ESCALATE）转人工。
 - **MEDIUM**：弹面板 + 倒计时，同时并行跑 LLM；`llmTakeoverScope` 覆盖且 LLM 给出明确结论 → 立即跟随；否则只显示建议。
-- **HIGH**：弹面板 + 倒计时，LLM 只给建议不接管；超时严格按 `timeoutAction`。
+- **HIGH**：弹面板 + 倒计时，LLM 只给建议不接管；超时严格按 `timeoutAction`（unattended 下 HIGH 超时仍转人工/失败关闭）。
 - 所有「需要人」的场景都委托官方面板显示倒计时；**超时标记唯一作者是 host 计时器**，客户端只上报 outcome，伪造不了。
 
 ---
@@ -103,7 +103,7 @@ dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 | `enabled` | true | 总开关 |
 | `autoSwitchPolicyToAsk` | false | 仅 Auto 预设且 override=never 时自动切 ask |
 | `timeoutAction` | `reject` | 倒计时超时动作：`reject` 拒绝 / `allow` 全部通过 / `low-risk-allow` 仅低风险放行 |
-| `llmReviewScope` | `medium-or-above` | LOW/MEDIUM/HIGH 哪些档送 LLM 复审 |
+| `llmReviewScope` | `low-or-above` | LOW/MEDIUM/HIGH 哪些档送 LLM 复审 |
 | `llmTakeoverScope` | `medium-or-below` | 哪些档允许 LLM 结论直接接管 |
 | `defaultReviewMode` | `smart` | 每会话评审模式默认：人工 / 智能 / 无人值守 |
 | `lowRiskSeconds` / `mediumRiskSeconds` / `highRiskSeconds` | 3 / 5 / 10 | 三档倒计时（秒） |

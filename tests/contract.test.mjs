@@ -7,7 +7,8 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { parseReview, lowRiskReviewOutcome, raceHumanDecision, detectConflicts, reviewerDecidable, preserveHostKeys, normalizeTimeoutAction, prepareReviewerArguments, extractToolPath, frameReviewerInput, breakerTripped } from '../lib/auto/decision.js'
+import { parseReview, lowRiskReviewOutcome, raceHumanDecision, detectConflicts, reviewerDecidable, preserveHostKeys, normalizeTimeoutAction, prepareReviewerArguments, extractToolPath, frameReviewerInput, breakerTripped, applyBreaker } from '../lib/auto/decision.js'
+import { sanitizeReviewReason } from '../lib/auto/classifier.js'
 import { trimAuditTail } from '../lib/auto/audit.js'
 import { normalizeReviewMode } from '../lib/auto/review-mode.js'
 import { parseRulesText, evaluateRules, extractRuleTarget } from '../lib/auto/rules.js'
@@ -285,4 +286,57 @@ test('evaluateRules: anchored git-push rule matches the bash command, not the JS
   assert.equal(errors.length, 0)
   assert.equal(evaluateRules(rules, { toolName: 'bash', arguments: '{"command":"git push -f"}' }).policy, 'deny')
   assert.equal(evaluateRules(rules, { toolName: 'bash', arguments: '{"command":"git status"}' }), undefined)
+})
+
+// F12 · denial-breaker pure transition (Wave-A1 applyBreaker).
+test('applyBreaker: human allow/deny resets both counters', () => {
+  const t = applyBreaker({ consecutive: 3, total: 7 }, 'human-allow', true)
+  assert.deepEqual(t.counts, { consecutive: 0, total: 0 })
+  assert.equal(t.reset, true)
+  assert.equal(t.increment, false)
+  const d = applyBreaker({ consecutive: 3, total: 7 }, 'human-deny', false)
+  assert.deepEqual(d.counts, { consecutive: 0, total: 0 })
+  assert.equal(d.reset, true)
+})
+
+test('applyBreaker: decided LLM denial increments both counters', () => {
+  const t = applyBreaker({ consecutive: 2, total: 10 }, 'llm-deny', true)
+  assert.deepEqual(t.counts, { consecutive: 3, total: 11 })
+  assert.equal(t.reset, false)
+  assert.equal(t.increment, true)
+})
+
+test('applyBreaker: llmDecided=false (advisory, non-takeover DENY) never increments', () => {
+  const t = applyBreaker({ consecutive: 2, total: 10 }, 'llm-deny', false)
+  assert.deepEqual(t.counts, { consecutive: 2, total: 10 })
+  assert.equal(t.increment, false)
+  const allow = applyBreaker({ consecutive: 2, total: 10 }, 'llm-allow', true)
+  assert.deepEqual(allow.counts, { consecutive: 2, total: 10 })
+  assert.equal(allow.increment, false)
+})
+
+test('applyBreaker: timeouts and auto answers leave counters untouched', () => {
+  for (const source of ['timeout-deny', 'timeout-allow', 'auto-deny', 'auto-allow']) {
+    const t = applyBreaker({ consecutive: 1, total: 4 }, source, true)
+    assert.deepEqual(t.counts, { consecutive: 1, total: 4 }, source)
+    assert.equal(t.increment, false)
+    assert.equal(t.reset, false)
+  }
+})
+
+// F13 · review-reason sanitizing (Wave-A1 sanitizeReviewReason).
+test('sanitizeReviewReason: redacts known secret formats without truncating', () => {
+  const out = sanitizeReviewReason('Bearer sk-abcdefgh12345678, token=abc123, api_key=xyz')
+  assert.ok(!out.includes('sk-abcdefgh12345678'))
+  assert.ok(!out.includes('abc123'))
+  assert.ok(!out.includes('xyz'))
+  assert.ok(out.length > 0, 'plain reason text must be preserved')
+})
+
+test('sanitizeReviewReason: tolerates undefined/null/long plain text', () => {
+  assert.equal(sanitizeReviewReason(undefined), '')
+  assert.equal(sanitizeReviewReason(null), '')
+  const long = 'x'.repeat(5000)
+  const out = sanitizeReviewReason(long)
+  assert.equal(out, long, 'reason is redaction-only, not truncated')
 })

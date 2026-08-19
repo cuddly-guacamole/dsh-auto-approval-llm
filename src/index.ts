@@ -24,9 +24,9 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { ArtifactRegistry } from './auto/artifacts.js'
 import { appendAuditLine, recordAuditClear } from './auto/audit.js'
-import { sanitizeClassifierArguments, sanitizeClassifierText } from './auto/classifier.js'
+import { sanitizeClassifierArguments, sanitizeClassifierText, sanitizeReviewReason } from './auto/classifier.js'
 import { createDshClassifier } from './auto/dsh-classifier.js'
-import { type ReviewResult, breakerTripped, extractToolPath, frameReviewerInput, lowRiskReviewOutcome, parseReview, preserveHostKeys, raceHumanDecision } from './auto/decision.js'
+import { type RaceHumanHandle, type ReviewResult, applyBreaker, breakerTripped, extractToolPath, frameReviewerInput, lowRiskReviewOutcome, parseReview, preserveHostKeys, raceHumanDecision } from './auto/decision.js'
 import { isWithin, normalizePath, resolveRoots } from './auto/paths.js'
 import { assessTool, hardDenyReason } from './auto/policy.js'
 import { evaluateRules, parseRulesText } from './auto/rules.js'
@@ -136,7 +136,7 @@ function resolveConfig(raw: Config): Config {
   return {
     ...raw,
     timeoutAction,
-    llmReviewScope: raw.llmReviewScope ?? 'medium-or-above',
+    llmReviewScope: raw.llmReviewScope ?? 'low-or-above',
     llmTakeoverScope: raw.llmTakeoverScope ?? 'medium-or-below',
     lowRiskSeconds: raw.lowRiskSeconds ?? 5,
     mediumRiskSeconds: raw.mediumRiskSeconds ?? 8,
@@ -148,10 +148,40 @@ function resolveConfig(raw: Config): Config {
 // the configured timeoutAction ('reject' | 'allow' | 'low-risk-allow'). Only
 // LOW is auto-approved by 'low-risk-allow'; MEDIUM/HIGH stay fail-closed.
 function riskTimedOutAction(risk: 'LOW' | 'MEDIUM' | 'HIGH', action: string, unattended: boolean): 'allow' | 'reject' {
-  if (unattended) return 'allow'
+  if (unattended) return risk === 'HIGH' ? 'reject' : 'allow'
   if (action === 'allow') return 'allow'
   if (action === 'low-risk-allow') return risk === 'LOW' ? 'allow' : 'reject'
   return 'reject'
+}
+
+// Validate the online-reviewer base URL before any request crosses the
+// network. Bare "host:port" inputs are auto-prefixed with http:// so common
+// configs are not wrongly rejected; http:// is only permitted for loopback
+// (localhost/127.0.0.1/[::1]) so the API key never travels in cleartext over
+// a LAN/Docker bridge. Empty string is accepted (means "follow session route").
+function validateReviewerBaseUrl(raw: string):
+  | { ok: false; reason: string }
+  | { ok: true; baseUrl: string; insecure: boolean } {
+  const input = String(raw ?? '').trim()
+  if (input === '') return { ok: true, baseUrl: '', insecure: false } // follow session route
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(input) ? input : `http://${input}`
+  const baseUrl = withScheme.replace(/\/+$/, '')
+  let url: URL
+  try {
+    url = new URL(baseUrl)
+  } catch {
+    return { ok: false, reason: `reviewerBaseUrl 不是合法 URL：${raw}` }
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    return { ok: false, reason: `reviewerBaseUrl 仅支持 http/https：${url.protocol}` }
+  }
+  const host = url.hostname
+  // Node's URL.hostname keeps the brackets for IPv6 ("[::1]"), so test both.
+  const isLoopback = host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]'
+  if (url.protocol === 'http:' && !isLoopback) {
+    return { ok: false, reason: `reviewerBaseUrl 使用明文 http 且非回环地址（${host}）；请改用 https:// 或本机代理` }
+  }
+  return { ok: true, baseUrl, insecure: url.protocol === 'http:' }
 }
 
 function conversationRoute(session: any): { provider: string; model: string } | undefined {
@@ -264,7 +294,12 @@ async function reviewWithLLM(
 async function onlineReviewWithLLM(
   credentials: any, config: Config, payload: string, timeoutMs: number, signal?: AbortSignal,
 ): Promise<ReviewResult> {
-  const baseUrl = String(config.reviewerBaseUrl ?? '').trim().replace(/\/+$/, '')
+  const validated = validateReviewerBaseUrl(config.reviewerBaseUrl ?? '')
+  if (!validated.ok) {
+    console.warn(`[dsh-auto-approval-llm] ${validated.reason}`)
+    return { decision: 'ESCALATE', failure: validated.reason }
+  }
+  const baseUrl = validated.baseUrl
   const protocol = config.reviewerProtocol === 'anthropic' ? 'anthropic' : 'openai'
   const system = config.safetyPrompt ? `${REVIEWER_SYSTEM}\n\n${config.safetyPrompt}` : REVIEWER_SYSTEM
   let apiKey: string | undefined
@@ -412,6 +447,26 @@ function recordDecisionFeedback(callId: string | undefined, text: string): void 
   decisionFeedback.set(callId, { text, at: Date.now() })
 }
 
+// Bound both feedback maps so a stuck/broken approval chain can never grow
+// them without limit. Expired entries (older than ttlMs) are dropped first;
+// if still over maxEntries the oldest by `at` are evicted (FIFO).
+function sweepFeedback(
+  map: Map<string, { text: string; at: number }>,
+  opts: { ttlMs: number; maxEntries: number },
+): void {
+  const now = Date.now()
+  for (const [key, entry] of map) {
+    if (now - entry.at > opts.ttlMs) map.delete(key)
+  }
+  if (map.size > opts.maxEntries) {
+    const overflow = map.size - opts.maxEntries
+    const oldest = [...map.entries()]
+      .sort((a, b) => a[1].at - b[1].at)
+      .slice(0, overflow)
+    for (const [key] of oldest) map.delete(key)
+  }
+}
+
 // ── approval history ──────────────────────────────────────────────────────
 interface HistoryRecord {
   id: string
@@ -471,6 +526,9 @@ function loadHistory(): void {
 }
 
 function pushHistory(entry: Omit<HistoryRecord, 'id' | 'at'>): void {
+  if (entry.llmReason !== undefined) {
+    entry = { ...entry, llmReason: sanitizeReviewReason(entry.llmReason) }
+  }
   const record: HistoryRecord = {
     ...entry,
     id: `h${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
@@ -567,7 +625,7 @@ function isSameOriginPost(req: any): boolean {
   const fetchSite = req.headers?.['sec-fetch-site']
   if (fetchSite === 'cross-site') return false
   const origin = req.headers?.origin
-  if (origin === undefined) return fetchSite === 'same-origin' || fetchSite === 'same-site' || fetchSite === 'none'
+  if (origin === undefined) return fetchSite === 'same-origin' || fetchSite === 'same-site'
   const host = req.headers?.host
   if (host === undefined) return false
   try {
@@ -603,7 +661,11 @@ function installFeedbackRoute(ctx: any): void {
         let outcome = body?.outcome
         if (outcome !== 'allowed-once' && outcome !== 'rejected') outcome = 'rejected'
         const actionText = outcome === 'allowed-once' ? 'approved' : 'rejected'
-        recordTimeoutFeedback(body.callId, `[dsh-auto-approval-llm] no response: auto-${actionText}`)
+        // A decision feedback (e.g. the model already denied) takes precedence;
+        // never let a time/auto marker mislabel it as "no response".
+        if (!decisionFeedback.has(body.callId)) {
+          recordTimeoutFeedback(body.callId, `[dsh-auto-approval-llm] no response: auto-${actionText}`)
+        }
         // Client auto-answer marker (autoRespond/followRespond): remember it so
         // history can say 'auto-*' rather than implying a human clicked.
         if (body.auto === true) autoAnswered.add(body.callId)
@@ -872,7 +934,9 @@ function installTestRoute(ctx: any, llm: any): void {
         // logged or returned.
         if (body?.online) {
           const protocol = body.protocol === 'anthropic' ? 'anthropic' : 'openai'
-          const baseUrl = String(body.baseUrl ?? '').trim().replace(/\/+$/, '')
+          const validated = validateReviewerBaseUrl(body.baseUrl ?? '')
+          if (!validated.ok) throw new TypeError(validated.reason)
+          const baseUrl = validated.baseUrl
           const model = String(body.model ?? '').trim()
           const apiKey = typeof body.apiKey === 'string' ? body.apiKey.trim() : ''
           if (!baseUrl || !model) throw new TypeError('API 地址和模型名称是必填项')
@@ -1119,7 +1183,19 @@ export function apply(ctx: Context, rawConfig: Config): void {
     (authorityFor(exec) ?? exec.agent)?.session?.id ?? 'unknown'
 
   const classifyStaticRisk = (req: any, args: any): 'LOW' | 'MEDIUM' | 'HIGH' => {
-    const exec = { name: req.toolName, agent: req.agent, arguments: args }
+    // Approval args come from the session log as a JSON string; parse them so
+    // policy sees the real shape (external-write/destructive tools → HIGH)
+    // instead of degrading every string arg to MEDIUM. Parse failure keeps the
+    // current fail-safe behavior (undefined ≈ lost signal, never enhanced).
+    let parsedArgs: unknown = args
+    if (typeof args === 'string') {
+      try {
+        parsedArgs = JSON.parse(args)
+      } catch {
+        parsedArgs = undefined
+      }
+    }
+    const exec = { name: req.toolName, agent: req.agent, arguments: parsedArgs }
     const assessment = assessTool(exec, rootsFor(exec), artifacts)
     if (assessment.decision === 'allow') return 'LOW'
     const reason = assessment.reason ?? ''
@@ -1199,13 +1275,15 @@ export function apply(ctx: Context, rawConfig: Config): void {
   installStatsRoute(anyCtx)
 
   anyCtx.on('tools/post-execute', (exec: any, result: any, next: any) => {
+    sweepFeedback(timeoutFeedback, { ttlMs: 60_000, maxEntries: 256 })
+    sweepFeedback(decisionFeedback, { ttlMs: 60_000, maxEntries: 256 })
     const timeoutEntry = timeoutFeedback.get(exec?.callId)
     const decisionEntry = decisionFeedback.get(exec?.callId)
     if (!timeoutEntry && !decisionEntry) return next()
     if (timeoutEntry) timeoutFeedback.delete(exec.callId)
     if (decisionEntry) decisionFeedback.delete(exec.callId)
     if (!result?.isError) return next()
-    const text = timeoutEntry?.text ?? decisionEntry?.text ?? ''
+    const text = decisionEntry?.text ?? timeoutEntry?.text ?? ''
     return Promise.resolve({ kind: 'block', feedback: [{ type: 'text', text }] })
   }, { global: true })
 
@@ -1260,7 +1338,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
   // resolve event can report request→resolution total time.
   let requestAt = 0
 
-  const askHuman = async (req: any, review: ReviewResult | undefined, next: () => Promise<any>, breaker = false, status?: ReviewStatus): Promise<any> => {
+  const askHuman = async (req: any, review: ReviewResult | undefined, next: () => Promise<any>, breaker = false, status?: ReviewStatus, handle?: RaceHumanHandle, llmDecided?: boolean): Promise<any> => {
     // Delegate to the official ApprovalPanel; the client half parses the
     // countdown marker and adds the visible countdown + auto-answer. Breaker
     // requests intentionally omit the marker so no automatic timeout runs.
@@ -1305,7 +1383,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
           status: { seconds: status.seconds, action: status.action },
           callId: req.callId,
           recordTimeout: (id, text) => recordTimeoutFeedback(id, text),
-        })
+        }, handle)
         outcome = raced.outcome
         timedOut = raced.timedOut
       } else {
@@ -1318,15 +1396,10 @@ export function apply(ctx: Context, rawConfig: Config): void {
       // later (after pushHistory), never here.
       if (status && req.callId !== undefined) reviewStates.delete(req.callId)
     }
-    // A human decision (allow or reject) breaks both the consecutive-LLM-
-    // denial streak and the cumulative counter; an automatic timeout does not.
-    // Reset only after human takeover.
+    // The denial breaker is updated below, after `source` is computed, so it
+    // only ever reacts to a human decision (reset) or a decided LLM denial
+    // (increment) — never to a timeout or an advisory (non-takeover) review.
     const key = authorityKeyFor({ agent: req.agent })
-    if (!timedOut) {
-      denials.set(key, 0)
-      totalDenials.set(key, 0)
-      denialLog.delete(key)
-    }
     // Honest provenance: only the host timer actually expiring (`timedOut`,
     // returned by raceHumanDecision) is a timeout. The client's own
     // FEEDBACK_ROUTE write (auto/follow respond) must NOT relabel this as a
@@ -1344,6 +1417,23 @@ export function apply(ctx: Context, rawConfig: Config): void {
         : auto
           ? (outcome === 'allowed-once' ? 'auto-allow' : 'auto-deny')
           : (outcome === 'allowed-once' ? 'human-allow' : 'human-deny')
+    // Breaker transition: a human answer resets the counters, a decided LLM
+    // denial (only when this ask was an LLM takeover — never an advisory HIGH
+    // review) increments them; every other outcome leaves them untouched.
+    const transition = applyBreaker(
+      { consecutive: denials.get(key) ?? 0, total: totalDenials.get(key) ?? 0 },
+      source,
+      llmDecided === true,
+    )
+    denials.set(key, transition.counts.consecutive)
+    totalDenials.set(key, transition.counts.total)
+    if (transition.reset) denialLog.delete(key)
+    if (transition.increment) {
+      const log = denialLog.get(key) ?? []
+      log.push({ reason: (follow as any)?.reason, toolName: req.toolName })
+      if (log.length > config.maxConsecutiveDenials) log.shift()
+      denialLog.set(key, log)
+    }
     if (debugOn) console.log('[dsh-auto-approval-llm][debug] approval resolved', {
       callId: req.callId ?? null,
       outcome,
@@ -1492,7 +1582,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
           log.push({ reason: review.reason, toolName })
           if (log.length > config.maxConsecutiveDenials) log.shift()
           denialLog.set(sessionKey, log)
-          recordDecisionFeedback(req.callId, `[dsh-auto-approval-llm] Model denied: ${toolName}${review.reason ? ` — ${review.reason}` : ''}`)
+          recordDecisionFeedback(req.callId, `[dsh-auto-approval-llm] Model denied: ${toolName}${review.reason ? ` — ${sanitizeReviewReason(review.reason)}` : ''}`)
           pushHistory({
             sessionId: sessionKey,
             toolName,
@@ -1531,11 +1621,13 @@ export function apply(ctx: Context, rawConfig: Config): void {
 
     if (staticRisk === 'MEDIUM') {
       if (!llmReviews) {
+        const fallback = riskTimedOutAction('MEDIUM', config.timeoutAction, autoUnattended)
         const status: ReviewStatus = {
           risk: staticRisk,
           phase: 'countdown',
-          action: 'allow',
+          action: fallback,
           seconds,
+          ...(fallback === 'reject' ? { feedback: timeoutFeedback } : {}),
         }
         return askHuman(req, undefined, next, false, status)
       }
@@ -1547,16 +1639,24 @@ export function apply(ctx: Context, rawConfig: Config): void {
         seconds,
         ...(fallbackAction === 'reject' ? { feedback: timeoutFeedback } : {}),
       }
-      const askPromise = askHuman(req, undefined, next, false, status)
+      const mediumHandle: RaceHumanHandle = { claim: () => {} }
+      const askPromise = askHuman(req, undefined, next, false, status, mediumHandle, true)
       const reviewStart = Date.now()
       void reviewWithLLM(credentials, llm, tools, req.agent.session, req, config, seconds * 1000, reviewOpts)
         .then((review) => {
           debugLog({ ev: 'review', callId: req.callId, decision: review.decision, risk: review.riskLevel ?? null, startAt: reviewStart, tookMs: Date.now() - reviewStart, scope: 'medium' })
           if (!req.callId || !reviewStates.has(req.callId)) return
-          const note = `🤖 Review suggestion: ${review.decision}${review.riskLevel ? `(${review.riskLevel})` : ''}${review.reason ? ` — ${review.reason}` : ''}`
+          const note = `🤖 Review suggestion: ${review.decision}${review.riskLevel ? `(${review.riskLevel})` : ''}${review.reason ? ` — ${sanitizeReviewReason(review.reason)}` : ''}`
           // Remember the verdict for history whether or not it takes over.
           reviewVerdicts.set(req.callId, review)
           if ((llmTakeover || autoUnattended) && (review.decision === 'ALLOW' || review.decision === 'DENY')) {
+            if (review.decision === 'DENY') {
+              recordDecisionFeedback(req.callId, `[dsh-auto-approval-llm] Model denied: ${toolName}${review.reason ? ` — ${sanitizeReviewReason(review.reason)}` : ''}`)
+            }
+            // Settle the race authoritatively: the decisive LLM conclusion wins
+            // over the host countdown (clears the timer; nondeterministic
+            // auto-answers in headless sessions are resolved).
+            mediumHandle.claim(review.decision === 'ALLOW' ? 'allowed-once' : 'rejected')
             reviewStates.set(req.callId, {
               risk: staticRisk,
               phase: 'follow',
@@ -1597,7 +1697,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
         .then((review) => {
           debugLog({ ev: 'review', callId: req.callId, decision: review.decision, risk: review.riskLevel ?? null, startAt: reviewStart, tookMs: Date.now() - reviewStart, scope: 'high' })
           if (!req.callId || !reviewStates.has(req.callId)) return
-          const note = `🤖 Review suggestion: ${review.decision}${review.riskLevel ? `(${review.riskLevel})` : ''}${review.reason ? ` — ${review.reason}` : ''}`
+          const note = `🤖 Review suggestion: ${review.decision}${review.riskLevel ? `(${review.riskLevel})` : ''}${review.reason ? ` — ${sanitizeReviewReason(review.reason)}` : ''}`
           reviewVerdicts.set(req.callId, review)
           reviewStates.set(req.callId, { ...status, note })
         })
@@ -1680,6 +1780,8 @@ export function apply(ctx: Context, rawConfig: Config): void {
         reviewStates.clear()
         reviewVerdicts.clear()
         autoAnswered.clear()
+        timeoutFeedback.clear()
+        decisionFeedback.clear()
         return { kind: 'success', text: 'Breaker counters and approval state reset.' }
       },
     }), 'dsh-auto-approval-llm: /approval command')
