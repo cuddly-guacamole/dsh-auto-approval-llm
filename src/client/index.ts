@@ -114,6 +114,11 @@ function watchApprovals(ctx: any): void {
   const timers = new Map<string, any>()
   const pollers = new Map<string, any>()
   const timerMeta = new Map<string, string>()
+  // Tombstones: approvals the watcher already detached from (host resolved,
+  // follow answered, or host stopped tracking). Prevents check() from
+  // re-arming a poller for a stale approval and drops late in-flight poll
+  // responses (R004).
+  const resolvedKeys = new Set<string>()
   let currentId: string | undefined
   let unsubSession: (() => void) | undefined
 
@@ -135,37 +140,60 @@ function watchApprovals(ctx: any): void {
     for (const key of [...timerMeta.keys()]) {
       if (key.startsWith(prefix)) timerMeta.delete(key)
     }
+    for (const key of [...resolvedKeys]) {
+      if (key.startsWith(prefix)) resolvedKeys.delete(key)
+    }
     for (const key of [...answeredApprovals]) {
       if (key.startsWith(prefix)) answeredApprovals.delete(key)
     }
   }
 
+  /** Stop observing one approval: clear timer/poller/meta and tombstone it. */
+  const detach = (timerKey: string) => {
+    if (timers.has(timerKey)) {
+      clearTimeout(timers.get(timerKey))
+      timers.delete(timerKey)
+    }
+    const poller = pollers.get(timerKey)
+    if (poller) {
+      clearInterval(poller)
+      pollers.delete(timerKey)
+    }
+    timerMeta.delete(timerKey)
+    resolvedKeys.add(timerKey)
+  }
+
+  /** Whether an approval with this key is still visible in the session snapshot. */
+  const approvalStillPending = (sessionId: string, approvalKey: string): boolean => {
+    const binding = sessions.binding?.(sessionId)
+    const snapshot = binding?.session?.getSnapshot?.() ?? {}
+    return (snapshot.pending ?? []).some((i: any) => i.kind === 'approval' && i.key === approvalKey)
+  }
+
   const applyStatus = (sessionId: string, approval: any, status: any) => {
     const timerKey = `${sessionId}:${approval.key}`
+    // Late response for an approval we already detached from: drop it.
+    if (resolvedKeys.has(timerKey)) return
     if (status?.phase === 'follow') {
+      if (status.source === 'human') {
+        // The human already closed the panel; detaching is enough — re-answering
+        // would re-respond to a settled approval and mislabel it (R001).
+        detach(timerKey)
+        return
+      }
+      // LLM takeover / host timeout: answer with the real follow action so the
+      // official panel closes immediately, then detach.
+      detach(timerKey)
       void followRespond(approval, status)
       return
     }
     const priorMeta = timerMeta.get(timerKey)
     if (status === undefined && priorMeta?.startsWith('countdown:')) {
-      // The host already resolved the approval (e.g. LLM takeover deleted the
-      // follow state before the next poll landed): answer now with the armed
-      // action so the official panel closes immediately instead of restarting
-      // the visible countdown from the stale reason text.
-      const info = parseCountdown(approval.payload?.reason ?? approval.reason)
-      if (info) {
-        if (timers.has(timerKey)) {
-          clearTimeout(timers.get(timerKey))
-          timers.delete(timerKey)
-        }
-        const poller = pollers.get(timerKey)
-        if (poller) {
-          clearInterval(poller)
-          pollers.delete(timerKey)
-        }
-        timerMeta.delete(timerKey)
-        void autoRespond(approval, info)
-      }
+      // Host no longer tracks this countdown approval: it resolved and its
+      // follow was already ACKed or swept, or the host never tracked it after
+      // all. Detach without auto-answering — a stale countdown action must not
+      // be used against a decision the client cannot see (R002).
+      detach(timerKey)
       return
     }
     let info: CountdownInfo | null = null
@@ -177,6 +205,15 @@ function watchApprovals(ctx: any): void {
     if (!info) return
     const meta = `${status?.phase ?? 'reason'}:${info.action}:${info.seconds}`
     if (timerMeta.get(timerKey) === meta) return
+    if (status?.phase === 'countdown') {
+      // countdown-key: the host countdown is authoritative, so the client only
+      // observes (no local timer). The host resolves → publishes follow → the
+      // poller sees it within 500ms. A local timer here would fire with the
+      // same action but could also answer against a stale direction (R002).
+      timerMeta.set(timerKey, meta)
+      return
+    }
+    // reason-key: a status-less ask whose countdown only the client enforces.
     if (timers.has(timerKey)) {
       clearTimeout(timers.get(timerKey))
       timers.delete(timerKey)
@@ -188,7 +225,12 @@ function watchApprovals(ctx: any): void {
       if (poller) clearInterval(poller)
       pollers.delete(timerKey)
       timerMeta.delete(timerKey)
-      void autoRespond(approval, info!)
+      resolvedKeys.add(timerKey)
+      // The human may have answered while this timer was pending; only
+      // auto-answer when the approval is still open (R001).
+      if (approvalStillPending(sessionId, approval.key)) {
+        void autoRespond(approval, info!)
+      }
     }, info.seconds * 1000)
     timers.set(timerKey, timer)
   }
@@ -205,23 +247,19 @@ function watchApprovals(ctx: any): void {
       let status: any
       try {
         const res = await (globalThis as any).fetch(`${REVIEW_STATUS_ROUTE}?callId=${encodeURIComponent(callId)}`, { credentials: 'same-origin' })
-        if (res.status === 404) {
-          // Host resolved and dropped the status (e.g. LLM takeover): treated
-          // as resolved; applyStatus answers immediately if a countdown was
-          // already armed.
-          status = undefined
-        } else if (!res.ok) {
-          // Transient server error: keep the armed timer; do not treat it as
-          // a resolution.
+        if (!res.ok) {
+          // Transient server error: keep observing; do not treat it as a
+          // resolution.
           return
-        } else {
-          const data = await res.json()
-          status = data?.ok ? data.value : undefined
         }
+        const data = await res.json()
+        status = data?.ok ? data.value : undefined
       } catch {
-        // Network error: never treat it as a resolution; keep the timer.
+        // Network error: never treat it as a resolution; keep observing.
         return
       }
+      // Drop late responses for approvals we already detached from (R004).
+      if (resolvedKeys.has(timerKey)) return
       applyStatus(sessionId, approval, status)
     }
     void poll()
@@ -242,7 +280,9 @@ function watchApprovals(ctx: any): void {
       return
     }
     const timerKey = `${sessionId}:${approval.key}`
-    if (!pollers.has(timerKey)) armApproval(sessionId, approval)
+    // Never re-arm an approval we already detached from (tombstone); waiting
+    // for it to leave pending is the only path to clear the tombstone.
+    if (!pollers.has(timerKey) && !resolvedKeys.has(timerKey)) armApproval(sessionId, approval)
   }
 
   const onListChange = () => {
@@ -276,6 +316,7 @@ function watchApprovals(ctx: any): void {
     for (const poller of pollers.values()) clearInterval(poller)
     pollers.clear()
     timerMeta.clear()
+    resolvedKeys.clear()
     answeredApprovals.clear()
   }, 'dsh-auto-approval-llm: approval watcher')
 }

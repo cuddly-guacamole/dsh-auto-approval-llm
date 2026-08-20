@@ -346,6 +346,8 @@ function deletionSpec(name, words, shell) {
 }
 /** Commands whose real work is another command this policy cannot see yet. */
 const WRAPPERS = new Set(['env', 'nohup', 'setsid', 'stdbuf', 'command', 'time', 'timeout', 'xargs', 'nice', 'ionice']);
+/** Privilege-escalation commands: hard-denied at the whole-line fuse AND per segment. */
+const PRIVILEGE_COMMANDS = new Set(['sudo', 'doas', 'su']);
 /** Wrapper flags that consume the following word as their value. */
 const WRAPPER_VALUE_FLAGS = {
     xargs: /^-(?:n|I|i|P|L|s|d|E|a)$/,
@@ -640,7 +642,13 @@ function segmentHardDenyReason(segment, shell, roots) {
  */
 export function hardDenyShellReason(source, shell, roots) {
     const compact = source.trim();
-    if (/(?:^|\s)(?:sudo|doas|su)(?:\s|$)/i.test(compact))
+    // Whole-line privilege fuse: also catches a compound line whose operator
+    // separates a segment starting with sudo/doas/su (`echo hi;sudo ls`,
+    // `cmd && sudo rm -rf /`), which the old `^|\s` anchor missed. Anchored on
+    // a segment start (line start or after an operator) so a mere argument
+    // (`echo sudo`) is not misjudged; the per-segment check below is the
+    // authoritative guard for decomposed lines.
+    if (/(?:^|[;&|(])\s*(?:sudo|doas|su)(?:\s|$)/i.test(compact))
         return 'privilege escalation is not permitted by auto mode';
     if (/(?:set-executionpolicy|disable-windowsdefender|clear-disk|format-volume|remove-partition|bcdedit)(?:\s|$)/i.test(compact)) {
         return 'operating-system security or disk policy changes are not permitted';
@@ -655,6 +663,12 @@ export function hardDenyShellReason(source, shell, roots) {
     if (decomposition.kind === 'opaque')
         return undefined;
     for (const segment of decomposition.segments) {
+        // Per-segment privilege fuse: the whole-line regex above only sees the
+        // raw source; a decomposed segment lets us judge the effective command
+        // after wrappers, so `echo hi; sudo ls` cannot dodge the hard deny.
+        const segName = commandName(unwrapCommand(segment.words).words[0]?.text ?? '');
+        if (PRIVILEGE_COMMANDS.has(segName))
+            return 'privilege escalation is not permitted by auto mode';
         const reason = segmentHardDenyReason(segment, shell, roots);
         if (reason !== undefined)
             return reason;

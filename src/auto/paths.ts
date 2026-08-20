@@ -120,7 +120,13 @@ export function isCriticalPath(target, roots) {
         : ['/etc', '/bin', '/sbin', '/usr', '/system', '/library', '/private/etc', '/boot'];
     const credentialRoots = ['.ssh', '.gnupg', '.aws', '.azure', '.kube', '.config/gcloud']
         .map(path => normalizePath(path, roots.home, roots.home));
-    return windowsCritical || [...critical, ...credentialRoots].some(root => isWithin(root, normalized));
+    // Shell startup files are persistent execution hooks in the home directory
+    // (same sensitivity class as credentials: a planted ~/.bashrc runs on every
+    // login). Hard-denied here even though the workspace-level variant is only
+    // a protected-project-path 'ask' (RISK-07).
+    const shellRcRoots = ['.bashrc', '.bash_profile', '.bash_login', '.bash_logout', '.profile', '.zshrc', '.zprofile', '.zlogin', '.zlogout', '.kshrc', '.cshrc', '.tcshrc']
+        .map(name => normalizePath(name, roots.home, roots.home));
+    return windowsCritical || [...critical, ...credentialRoots, ...shellRcRoots].some(root => isWithin(root, normalized));
 }
 /** Whether a workspace path is protected metadata rather than ordinary project content. */
 export function isProtectedProjectPath(target, roots) {

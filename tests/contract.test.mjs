@@ -12,6 +12,8 @@ import { sanitizeReviewReason } from '../lib/auto/classifier.js'
 import { trimAuditTail } from '../lib/auto/audit.js'
 import { normalizeReviewMode } from '../lib/auto/review-mode.js'
 import { parseRulesText, evaluateRules, extractRuleTarget } from '../lib/auto/rules.js'
+import { hardDenyShellReason } from '../lib/auto/shell.js'
+import { isCriticalPath } from '../lib/auto/paths.js'
 
 test('parseReview: valid plain JSON', () => {
   const r = parseReview('{"decision":"ALLOW","risk_level":"LOW","reason":"safe"}')
@@ -369,4 +371,43 @@ test('sanitizeReviewReason: tolerates undefined/null/long plain text', () => {
   const long = 'x'.repeat(5000)
   const out = sanitizeReviewReason(long)
   assert.equal(out, long, 'reason is redaction-only, not truncated')
+})
+
+// ── v0.0.6 audit fixes (RISK-04/06/07) ─────────────────────────────────────
+
+test('hardDenyShellReason: privilege escalation hard-denied at line start', () => {
+  const roots = { workspace: 'C:/ws', home: 'C:/Users/u', dshHome: 'C:/Users/u/.dsh', tempRoots: [] }
+  assert.equal(hardDenyShellReason('sudo ls', 'bash', roots), 'privilege escalation is not permitted by auto mode')
+  assert.equal(hardDenyShellReason('su -c whoami', 'bash', roots), 'privilege escalation is not permitted by auto mode')
+})
+
+test('hardDenyShellReason: privilege escalation cannot be smuggled past an operator', () => {
+  const roots = { workspace: 'C:/ws', home: 'C:/Users/u', dshHome: 'C:/Users/u/.dsh', tempRoots: [] }
+  assert.equal(hardDenyShellReason('echo hi;sudo ls', 'bash', roots), 'privilege escalation is not permitted by auto mode')
+  assert.equal(hardDenyShellReason('cmd && sudo rm -rf /', 'bash', roots), 'privilege escalation is not permitted by auto mode')
+  assert.equal(hardDenyShellReason('a | doas whoami', 'bash', roots), 'privilege escalation is not permitted by auto mode')
+})
+
+test('hardDenyShellReason: sudo as a plain argument is not misjudged', () => {
+  const roots = { workspace: 'C:/ws', home: 'C:/Users/u', dshHome: 'C:/Users/u/.dsh', tempRoots: [] }
+  assert.equal(hardDenyShellReason('echo sudo', 'bash', roots), undefined)
+  assert.equal(hardDenyShellReason('ls', 'bash', roots), undefined)
+})
+
+test('isCriticalPath: home shell startup files are credential-critical (RISK-07)', () => {
+  const roots = { workspace: 'C:/ws', home: 'C:/Users/u', dshHome: 'C:/Users/u/.dsh', tempRoots: [] }
+  assert.equal(isCriticalPath('C:/Users/u/.bashrc', roots), true)
+  assert.equal(isCriticalPath('C:/Users/u/.zshrc', roots), true)
+  assert.equal(isCriticalPath('C:/Users/u/.profile', roots), true)
+  assert.equal(isCriticalPath('C:/Users/u/.ssh/id_rsa', roots), true)
+  // Workspace-level .bashrc stays project content (protected, not critical).
+  assert.equal(isCriticalPath('C:/ws/.bashrc', roots), false)
+})
+
+test('frameReviewerInput: description is sanitized at the injection boundary (RISK-04)', () => {
+  const long = 'x'.repeat(5000)
+  const framed = frameReviewerInput({ toolName: 'bash', description: long, rawArguments: null, workspaceRoot: 'C:/w' })
+  const parsed = JSON.parse(framed)
+  assert.equal(typeof parsed.description, 'string')
+  assert.ok(parsed.description.length <= 1000, 'description must be capped by sanitizeClassifierText')
 })

@@ -310,7 +310,10 @@ export interface ReviewerInput {
 export function frameReviewerInput(input: ReviewerInput): string {
   return JSON.stringify({
     tool_name: input.toolName,
-    description: input.description ?? null,
+    // The description is plugin/platform-authored text that can carry
+    // instruction-like phrasing; treat it as untrusted at the prompt-injection
+    // boundary like every other payload field (RISK-04).
+    description: input.description ? sanitizeClassifierText(input.description) : null,
     arguments: prepareReviewerArguments(input.rawArguments ?? null),
     trusted_user_messages: (input.trustedUserMessages ?? [])
       .map((m) => sanitizeClassifierText(m))

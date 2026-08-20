@@ -20,6 +20,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { appendFileSync, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { networkInterfaces } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { ArtifactRegistry } from './auto/artifacts.js'
@@ -582,6 +583,9 @@ interface ReviewStatus {
   seconds: number
   note?: string
   feedback?: string
+  /** Resolution origin, set on follow-phase statuses so the client can skip
+   * re-answering approvals the human already settled. */
+  source?: 'human' | 'llm' | 'timeout'
 }
 
 const reviewStates = new Map<string, ReviewStatus>()
@@ -589,7 +593,10 @@ const reviewStates = new Map<string, ReviewStatus>()
 // Follow-phase statuses are retained briefly after the host resolution so the
 // client's poll can observe the follow and close the official panel with the
 // real outcome. Swept by FOLLOW_STATE_TTL_MS; released earlier on client ACK.
-const FOLLOW_STATE_TTL_MS = 5_000
+// 120s covers Chrome's background-tab intensive throttling (≥1 min between
+// timer firings after 5 min hidden), so a throttled client still observes the
+// follow instead of falling back to a stale countdown action.
+const FOLLOW_STATE_TTL_MS = 120_000
 const followExpiry = new Map<string, number>()
 
 // Latest reviewer verdict per callId (covers both decisive MEDIUM takeovers
@@ -600,7 +607,25 @@ const reviewVerdicts = new Map<string, ReviewResult>()
 // callIds answered by the plugin's own client auto-answer (autoRespond /
 // followRespond) rather than a real human click. Lets askHuman record an
 // honest 'auto-*' source instead of 'human-*' when nobody actually clicked.
-const autoAnswered = new Set<string>()
+// callIds answered by the plugin's own client auto-answer (autoRespond /
+// followRespond). Map<callId, timestamp> with a TTL sweep so a late ACK can
+// never grow it without bound (RISK-05); askHuman reads/clears it to label
+// history source as 'auto-*'.
+const autoAnswered = new Map<string, number>()
+const AUTO_ANSWERED_TTL_MS = 60_000
+
+// callIds whose approval/request has already been settled by the host (any
+// resolution path). The client's follow ACK (FEEDBACK POST with auto:true)
+// arrives AFTER askHuman finished, so without this set the ACK would relabel a
+// resolved ask as "no response: auto-*" and re-add the callId to autoAnswered
+// forever. Map<callId, timestamp>; swept with the follow sweep; only used to
+// gate feedback text.
+const resolvedCallIds = new Map<string, number>()
+const RESOLVED_TTL_MS = 30_000
+
+// Trusted Host authorities for web-route fencing (RISK-01/02); resolved once
+// at apply() from webRuntime / --trusted-host / LAN enumeration.
+let trustedHosts: string[] = []
 
 function responseJson(res: any, status: number, body: any): void {
   const bytes = Buffer.from(JSON.stringify(body))
@@ -627,16 +652,77 @@ async function readJsonBody(req: any, maxBytes = 64 * 1024): Promise<any> {
   return JSON.parse(Buffer.concat(chunks).toString('utf8'))
 }
 
-function isSameOriginPost(req: any): boolean {
-  const fetchSite = req.headers?.['sec-fetch-site']
-  if (fetchSite === 'cross-site') return false
-  const origin = req.headers?.origin
-  if (origin === undefined) return fetchSite === 'same-origin' || fetchSite === 'same-site'
+// ── web request trust (RISK-01/RISK-02) ────────────────────────────────────
+// Mirrors the official dsh-client-connection `isTrustedApiRequest`: a Host
+// loopback/LAN-whitelist fence against DNS rebinding, plus same-origin
+// enforcement when an Origin header is present. Unlike the old
+// `isSameOriginPost`, the Host authority is validated against a whitelist
+// (loopback ∪ trusted LAN), so `Host: attacker.com` can never pass even when
+// Origin matches it. The settings / reviewer-credential domains are treated as
+// a privileged configuration plane and restricted to loopback-same-origin
+// only, matching the official PRIVILEGED_METHODS precedent.
+
+/** Resolve the trusted Host authorities: webRuntime service → argv → LAN IPv4. */
+function resolveTrustedHosts(ctx: any): string[] {
+  const webRuntime = ctx?.get?.('webRuntime') as { trustedHosts?: string[] } | undefined
+  const fromRuntime = webRuntime?.trustedHosts
+  if (Array.isArray(fromRuntime) && fromRuntime.length > 0) return [...fromRuntime]
+  const argvTrusted: string[] = []
+  const args = process.argv
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]
+    if (arg === '--trusted-host' && args[index + 1] !== undefined) argvTrusted.push(args[index + 1])
+    else if (arg.startsWith('--trusted-host=')) argvTrusted.push(arg.slice('--trusted-host='.length))
+  }
+  if (argvTrusted.length > 0) return argvTrusted
+  const bindHost = (ctx?.get?.('webServer') as { host?: string } | undefined)?.host
+  if (bindHost === '0.0.0.0') {
+    const lan: string[] = []
+    for (const ifaces of Object.values(networkInterfaces())) {
+      for (const iface of ifaces ?? []) {
+        if (iface.family === 'IPv4' && !iface.internal) lan.push(iface.address)
+      }
+    }
+    return lan
+  }
+  return []
+}
+
+function isLoopbackHostname(hostname: string): boolean {
+  if (hostname === 'localhost' || hostname === '[::1]' || hostname === '::1') return true
+  const parts = hostname.split('.')
+  return parts.length === 4 && parts[0] === '127' &&
+    parts.every(part => /^\d{1,3}$/.test(part) && Number(part) <= 255)
+}
+
+function trustedAuthorityMatches(entry: string, hostUrl: URL): boolean {
+  try {
+    const entryUrl = new URL(`http://${entry}`)
+    // A port-less entry (LAN IP literal, bare --trusted-host) matches any port;
+    // an explicit host:port entry matches exactly.
+    return entryUrl.port !== '' ? entryUrl.host === hostUrl.host : entryUrl.hostname === hostUrl.hostname
+  } catch {
+    return false
+  }
+}
+
+/** Whether a request may reach plugin routes: Host whitelist + same-origin. */
+function isTrustedRequest(req: any, trustedHosts: string[]): boolean {
   const host = req.headers?.host
   if (host === undefined) return false
+  let hostUrl: URL
   try {
-    const parsed = new URL(origin)
-    return (parsed.protocol === 'http:' || parsed.protocol === 'https:') && parsed.host === host
+    hostUrl = new URL(`http://${host}`)
+  } catch {
+    return false
+  }
+  if (!isLoopbackHostname(hostUrl.hostname) && !trustedHosts.some(entry => trustedAuthorityMatches(entry, hostUrl)))
+    return false
+  if (req.headers?.['sec-fetch-site'] === 'cross-site') return false
+  const origin = req.headers?.origin
+  if (origin === undefined) return true
+  try {
+    return new URL(origin).host === hostUrl.host
   } catch {
     return false
   }
@@ -654,8 +740,8 @@ function installFeedbackRoute(ctx: any): void {
         responseJson(res, 405, { ok: false, error: 'method-not-allowed' })
         return
       }
-      if (!isSameOriginPost(req)) {
-        responseJson(res, 403, { ok: false, error: 'origin-rejected' })
+      if (!isTrustedRequest(req, trustedHosts)) {
+        responseJson(res, 403, { ok: false, error: 'forbidden' })
         return
       }
       try {
@@ -668,13 +754,18 @@ function installFeedbackRoute(ctx: any): void {
         if (outcome !== 'allowed-once' && outcome !== 'rejected') outcome = 'rejected'
         const actionText = outcome === 'allowed-once' ? 'approved' : 'rejected'
         // A decision feedback (e.g. the model already denied) takes precedence;
-        // never let a time/auto marker mislabel it as "no response".
-        if (!decisionFeedback.has(body.callId)) {
+        // never let a time/auto marker mislabel it as "no response". Also skip
+        // the timeout label when the ask was already resolved by the host (the
+        // ACK landed after askHuman finished — relabeling it "no response"
+        // would be wrong for both a human answer and an LLM takeover).
+        if (!decisionFeedback.has(body.callId) && !resolvedCallIds.has(body.callId)) {
           recordTimeoutFeedback(body.callId, `[dsh-auto-approval-llm] no response: auto-${actionText}`)
         }
         // Client auto-answer marker (autoRespond/followRespond): remember it so
-        // history can say 'auto-*' rather than implying a human clicked.
-        if (body.auto === true) autoAnswered.add(body.callId)
+        // history can say 'auto-*' rather than implying a human clicked. Only
+        // when the host has NOT already resolved: otherwise the ACK would
+        // re-add a callId that askHuman already cleaned up, leaking it forever.
+        if (body.auto === true && !resolvedCallIds.has(body.callId)) autoAnswered.set(body.callId, Date.now())
         // The client has seen the follow phase and is answering: release the
         // follow state early instead of waiting for the TTL sweep.
         if (reviewStates.get(body.callId)?.phase === 'follow') {
@@ -731,6 +822,12 @@ function installSettingsRoute(ctx: any, settings: any): void {
     kind: 'exact',
     path: SETTINGS_ROUTE,
     handler: async (req: any, res: any) => {
+      // Configuration plane: loopback-same-origin only (privileged domain,
+      // mirroring the official settings/credentials fence).
+      if (!isTrustedRequest(req, [])) {
+        responseJson(res, 403, { ok: false, error: 'forbidden' })
+        return
+      }
       try {
         if (req.method === 'GET') {
           responseJson(res, 200, { ok: true, value: describeSettings() })
@@ -739,10 +836,6 @@ function installSettingsRoute(ctx: any, settings: any): void {
         if (req.method !== 'POST') {
           res.setHeader('Allow', 'GET, POST')
           responseJson(res, 405, { ok: false, error: 'method-not-allowed' })
-          return
-        }
-        if (!isSameOriginPost(req)) {
-          responseJson(res, 403, { ok: false, error: 'origin-rejected' })
           return
         }
         const body = await readJsonBody(req)
@@ -769,6 +862,11 @@ function installReviewerCredentialRoute(ctx: any, credentials: any): void {
     kind: 'exact',
     path: REVIEWER_CREDENTIAL_ROUTE,
     handler: async (req: any, res: any) => {
+      // Credential plane: loopback-same-origin only (privileged domain).
+      if (!isTrustedRequest(req, [])) {
+        responseJson(res, 403, { ok: false, error: 'forbidden' })
+        return
+      }
       try {
         if (req.method === 'GET') {
           if (!credentials) {
@@ -784,10 +882,6 @@ function installReviewerCredentialRoute(ctx: any, credentials: any): void {
               writable: info?.writable === true,
             },
           })
-          return
-        }
-        if (!isSameOriginPost(req)) {
-          responseJson(res, 403, { ok: false, error: 'origin-rejected' })
           return
         }
         const body = await readJsonBody(req)
@@ -828,15 +922,15 @@ function installHistoryRoute(ctx: any): void {
     kind: 'exact',
     path: HISTORY_ROUTE,
     handler: async (req: any, res: any) => {
+      if (!isTrustedRequest(req, trustedHosts)) {
+        responseJson(res, 403, { ok: false, error: 'forbidden' })
+        return
+      }
       if (req.method === 'GET') {
         responseJson(res, 200, { ok: true, value: { records: [...approvalHistory].reverse() } })
         return
       }
       if (req.method === 'DELETE') {
-        if (!isSameOriginPost(req)) {
-          responseJson(res, 403, { ok: false, error: 'origin-rejected' })
-          return
-        }
         const clearedCount = approvalHistory.length
         approvalHistory.length = 0
         try {
@@ -856,7 +950,11 @@ function installHistoryRoute(ctx: any): void {
   ctx.effect(() => webServer.register({
     kind: 'exact',
     path: HISTORY_EXPORT_ROUTE,
-    handler: async (_req: any, res: any) => {
+    handler: async (req: any, res: any) => {
+      if (!isTrustedRequest(req, trustedHosts)) {
+        responseJson(res, 403, { ok: false, error: 'forbidden' })
+        return
+      }
       const body = JSON.stringify([...approvalHistory].reverse(), null, 2)
       const bytes = Buffer.from(body)
       res.setHeader('Content-Type', 'application/json; charset=utf-8')
@@ -875,6 +973,10 @@ function installReviewStatusRoute(ctx: any): void {
     kind: 'exact',
     path: REVIEW_STATUS_ROUTE,
     handler: async (req: any, res: any) => {
+      if (!isTrustedRequest(req, trustedHosts)) {
+        responseJson(res, 403, { ok: false, error: 'forbidden' })
+        return
+      }
       if (req.method !== 'GET') {
         res.setHeader('Allow', 'GET')
         responseJson(res, 405, { ok: false, error: 'method-not-allowed' })
@@ -895,6 +997,10 @@ function installModelsRoute(ctx: any, llm: any): void {
     kind: 'exact',
     path: MODELS_ROUTE,
     handler: async (req: any, res: any) => {
+      if (!isTrustedRequest(req, trustedHosts)) {
+        responseJson(res, 403, { ok: false, error: 'forbidden' })
+        return
+      }
       if (req.method !== 'GET') {
         res.setHeader('Allow', 'GET')
         responseJson(res, 405, { ok: false, error: 'method-not-allowed' })
@@ -929,13 +1035,13 @@ function installTestRoute(ctx: any, llm: any): void {
     kind: 'exact',
     path: TEST_ROUTE,
     handler: async (req: any, res: any) => {
+      if (!isTrustedRequest(req, trustedHosts)) {
+        responseJson(res, 403, { ok: false, error: 'forbidden' })
+        return
+      }
       if (req.method !== 'POST') {
         res.setHeader('Allow', 'POST')
         responseJson(res, 405, { ok: false, error: 'method-not-allowed' })
-        return
-      }
-      if (!isSameOriginPost(req)) {
-        responseJson(res, 403, { ok: false, error: 'origin-rejected' })
         return
       }
       try {
@@ -943,7 +1049,10 @@ function installTestRoute(ctx: any, llm: any): void {
 
         // Online-reviewer mode: hit the endpoint directly with the typed
         // (not-yet-saved) key and model from the draft. The key is never
-        // logged or returned.
+        // logged or returned. Loopback-only: unlike the configured reviewer
+        // BaseUrl (admin-controlled), this value comes straight from the
+        // request body, so an https target must not become an SSRF probe
+        // surface (RISK-03).
         if (body?.online) {
           const protocol = body.protocol === 'anthropic' ? 'anthropic' : 'openai'
           const validated = validateReviewerBaseUrl(body.baseUrl ?? '')
@@ -952,6 +1061,15 @@ function installTestRoute(ctx: any, llm: any): void {
           const model = String(body.model ?? '').trim()
           const apiKey = typeof body.apiKey === 'string' ? body.apiKey.trim() : ''
           if (!baseUrl || !model) throw new TypeError('API 地址和模型名称是必填项')
+          let probeUrl: URL
+          try {
+            probeUrl = new URL(baseUrl)
+          } catch {
+            throw new TypeError('API 地址不是合法 URL')
+          }
+          if (!isLoopbackHostname(probeUrl.hostname)) {
+            throw new TypeError('在线评审测试仅支持本机回环地址（127.0.0.1 / localhost / [::1]）')
+          }
           const headers: Record<string, string> = { 'Content-Type': 'application/json' }
           if (apiKey) {
             if (protocol === 'anthropic') headers['x-api-key'] = apiKey
@@ -1012,6 +1130,10 @@ function installSessionModeRoute(ctx: any): void {
     kind: 'exact',
     path: SESSION_MODE_ROUTE,
     handler: async (req: any, res: any) => {
+      if (!isTrustedRequest(req, trustedHosts)) {
+        responseJson(res, 403, { ok: false, error: 'forbidden' })
+        return
+      }
       if (req.method !== 'GET') {
         res.setHeader('Allow', 'GET')
         responseJson(res, 405, { ok: false, error: 'method-not-allowed' })
@@ -1270,7 +1392,10 @@ export function apply(ctx: Context, rawConfig: Config): void {
         toolName: exec.name,
         arguments: sanitizeClassifierArguments(exec.arguments),
         workspaceRoot: roots.workspace,
-        policyReason: assessment.reason,
+        // The assessment reason embeds tool names and user-controlled paths;
+        // sanitize at the classifier boundary like every other payload field
+        // (RISK-04 prompt-injection surface).
+        policyReason: sanitizeClassifierText(assessment.reason),
         trustedUserMessages: trustedUserMessages(authority),
         ...(route === undefined ? {} : { route }),
       }, exec.signal)
@@ -1289,6 +1414,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
   })
 
   watchNotices(anyCtx)
+  trustedHosts = resolveTrustedHosts(anyCtx)
   installFeedbackRoute(anyCtx)
   installSettingsRoute(anyCtx, settings)
   installReviewerCredentialRoute(anyCtx, anyCtx.get('credentials'))
@@ -1308,6 +1434,12 @@ export function apply(ctx: Context, rawConfig: Config): void {
         followExpiry.delete(callId)
         reviewStates.delete(callId)
       }
+    }
+    for (const [callId, at] of resolvedCallIds) {
+      if (now - at > RESOLVED_TTL_MS) resolvedCallIds.delete(callId)
+    }
+    for (const [callId, at] of autoAnswered) {
+      if (now - at > AUTO_ANSWERED_TTL_MS) autoAnswered.delete(callId)
     }
   }, 1_000)
   ctx.effect(() => () => clearInterval(followSweep))
@@ -1450,16 +1582,33 @@ export function apply(ctx: Context, rawConfig: Config): void {
             phase: 'follow',
             action: outcome === 'allowed-once' ? 'allow' : 'reject',
             seconds: 0,
+            source: 'timeout',
           })
           followExpiry.set(req.callId, Date.now() + FOLLOW_STATE_TTL_MS)
         } else {
-          // Human answered: the official panel is already closed by the human;
-          // drop the status so a stale poll cannot mislabel the resolution.
-          reviewStates.delete(req.callId)
-          followExpiry.delete(req.callId)
+          // Human answered: publish a terminal follow with the human's real
+          // action instead of deleting the status. The official panel is
+          // already closed by the human's own respond, but a visible follow
+          // keeps "resolved" observable: an in-flight poll can no longer 404
+          // and re-answer with a stale countdown action (R001). The client
+          // treats source:'human' as answer-only-if-still-pending and the
+          // 120s TTL sweep bounds the entry.
+          reviewStates.set(req.callId, {
+            risk: status.risk,
+            phase: 'follow',
+            action: outcome === 'allowed-once' ? 'allow' : 'reject',
+            seconds: 0,
+            source: 'human',
+          })
+          followExpiry.set(req.callId, Date.now() + FOLLOW_STATE_TTL_MS)
         }
       }
     }
+    // Mark the ask as host-resolved so a late client ACK (FEEDBACK auto:true)
+    // cannot relabel it "no response: auto-*" or re-add it to autoAnswered.
+    // Covers status-less asks too: their client-side countdown answer is also
+    // a resolution the host has already finished by the time the ACK lands.
+    if (req.callId !== undefined) resolvedCallIds.set(req.callId, Date.now())
     // The denial breaker is updated below, after `source` is computed, so it
     // only ever reacts to a human decision (reset) or a decided LLM denial
     // (increment) — never to a timeout or an advisory (non-takeover) review.
@@ -1727,6 +1876,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
               action: review.decision === 'ALLOW' ? 'allow' : 'reject',
               seconds: 0,
               note,
+              source: 'llm',
             })
             followExpiry.set(req.callId, Date.now() + FOLLOW_STATE_TTL_MS)
             if (debugOn) console.log('[dsh-auto-approval-llm][debug] MEDIUM follow set', {
@@ -1781,6 +1931,10 @@ export function apply(ctx: Context, rawConfig: Config): void {
       kind: 'exact',
       path: STATS_ROUTE,
       handler: async (req: any, res: any) => {
+        if (!isTrustedRequest(req, trustedHosts)) {
+          responseJson(res, 403, { ok: false, error: 'forbidden' })
+          return
+        }
         if (req.method !== 'GET') {
           res.setHeader('Allow', 'GET')
           responseJson(res, 405, { ok: false, error: 'method-not-allowed' })
@@ -1844,6 +1998,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
         denialLog.clear()
         reviewStates.clear()
         followExpiry.clear()
+        resolvedCallIds.clear()
         reviewVerdicts.clear()
         autoAnswered.clear()
         timeoutFeedback.clear()
