@@ -102,6 +102,36 @@ test('raceHumanDecision: timeoutAction=allow -> allowed-once on timeout', async 
   assert.deepEqual(raced, { outcome: 'allowed-once', timedOut: true })
 })
 
+test('raceHumanDecision: LLM takeover claim pre-empts the countdown (not a timeout)', async () => {
+  const handle = {}
+  const recorded = []
+  const racing = raceHumanDecision(() => new Promise(() => {}), {
+    status: { seconds: 60, action: 'allow' },
+    callId: 'c3',
+    recordTimeout: (id, text) => recorded.push(`${id}|${text}`),
+  }, handle)
+  setTimeout(() => handle.claim('allowed-once'), 10)
+  const raced = await racing
+  assert.deepEqual(raced, { outcome: 'allowed-once', timedOut: false },
+    'claim must settle the race without relabeling the resolution as a timeout')
+  assert.equal(recorded.length, 0, 'takeover must not record a timeout notice')
+  // A second claim is a no-op so a late review can never flip the outcome.
+  handle.claim('rejected')
+  assert.deepEqual(raced, { outcome: 'allowed-once', timedOut: false })
+})
+
+test('raceHumanDecision: takeover claim for a DENY resolves rejected', async () => {
+  const denyHandle = {}
+  const racing = raceHumanDecision(() => new Promise(() => {}), {
+    status: { seconds: 60, action: 'allow' },
+    callId: 'c4',
+    recordTimeout: () => {},
+  }, denyHandle)
+  setTimeout(() => denyHandle.claim('rejected'), 10)
+  const raced = await racing
+  assert.deepEqual(raced, { outcome: 'rejected', timedOut: false })
+})
+
 test('detectConflicts: no competitors -> empty', () => {
   assert.deepEqual(detectConflicts(['dsh-auto-approval-llm', 'web-ui-skin-center']), [])
 })

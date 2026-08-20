@@ -586,6 +586,12 @@ interface ReviewStatus {
 
 const reviewStates = new Map<string, ReviewStatus>()
 
+// Follow-phase statuses are retained briefly after the host resolution so the
+// client's poll can observe the follow and close the official panel with the
+// real outcome. Swept by FOLLOW_STATE_TTL_MS; released earlier on client ACK.
+const FOLLOW_STATE_TTL_MS = 5_000
+const followExpiry = new Map<string, number>()
+
 // Latest reviewer verdict per callId (covers both decisive MEDIUM takeovers
 // and advisory MEDIUM/HIGH opinions). askHuman emits it into history so the
 // LLM's review is always visible, even when it did not take over.
@@ -669,6 +675,12 @@ function installFeedbackRoute(ctx: any): void {
         // Client auto-answer marker (autoRespond/followRespond): remember it so
         // history can say 'auto-*' rather than implying a human clicked.
         if (body.auto === true) autoAnswered.add(body.callId)
+        // The client has seen the follow phase and is answering: release the
+        // follow state early instead of waiting for the TTL sweep.
+        if (reviewStates.get(body.callId)?.phase === 'follow') {
+          reviewStates.delete(body.callId)
+          followExpiry.delete(body.callId)
+        }
         responseJson(res, 200, { ok: true })
       } catch (error) {
         responseJson(res, error instanceof RangeError ? 413 : 400, {
@@ -1140,6 +1152,24 @@ export function apply(ctx: Context, rawConfig: Config): void {
   }
   debugOn = config.debug
 
+  // Reviewer provider/model and classifier knobs are read at construction
+  // time, so the classifier must be rebuilt whenever (live) settings change;
+  // otherwise reviewerProvider edits would only take effect after a restart.
+  let classifier = createDshClassifier(llm, {
+    timeoutMs: config.classifierTimeoutMs ?? 8_000,
+    maxOutputTokens: config.classifierMaxOutputTokens ?? 1_024,
+    ...(config.reviewerProvider ? { provider: config.reviewerProvider } : {}),
+    ...(config.reviewerModel ? { model: config.reviewerModel } : {}),
+  })
+  const rebuildClassifier = () => {
+    classifier = createDshClassifier(llm, {
+      timeoutMs: config.classifierTimeoutMs ?? 8_000,
+      maxOutputTokens: config.classifierMaxOutputTokens ?? 1_024,
+      ...(config.reviewerProvider ? { provider: config.reviewerProvider } : {}),
+      ...(config.reviewerModel ? { model: config.reviewerModel } : {}),
+    })
+  }
+
   if (settings) {
     anyCtx.on('settings/updated', (ns: string, next: any) => {
       if (ns !== SETTINGS_NS) return
@@ -1147,6 +1177,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
         config = resolveConfig(next)
         configError = null
         debugOn = config.debug
+        rebuildClassifier()
         console.log('[dsh-auto-approval-llm] settings updated, applied live')
       } catch (error) {
         console.error('[dsh-auto-approval-llm] live settings update failed', error)
@@ -1157,12 +1188,6 @@ export function apply(ctx: Context, rawConfig: Config): void {
 
   // ── ported auto-mode policy (replaces @nanmicoder/dsh-auto-mode) ────────
   const artifacts = new ArtifactRegistry()
-  const classifier = createDshClassifier(llm, {
-    timeoutMs: config.classifierTimeoutMs ?? 8_000,
-    maxOutputTokens: config.classifierMaxOutputTokens ?? 1_024,
-    ...(config.reviewerProvider ? { provider: config.reviewerProvider } : {}),
-    ...(config.reviewerModel ? { model: config.reviewerModel } : {}),
-  })
   const rootOptions = {
     ...(config.workspaceRoot ? { workspaceRoot: config.workspaceRoot } : {}),
     ...(config.dshHome ? { dshHome: config.dshHome } : {}),
@@ -1273,6 +1298,19 @@ export function apply(ctx: Context, rawConfig: Config): void {
   installTestRoute(anyCtx, llm)
   installSessionModeRoute(anyCtx)
   installStatsRoute(anyCtx)
+
+  // Sweep expired follow-phase statuses so a client that never ACKs (closed
+  // tab / headless page) cannot leak callId keys in reviewStates.
+  const followSweep = setInterval(() => {
+    const now = Date.now()
+    for (const [callId, expiry] of followExpiry) {
+      if (expiry <= now) {
+        followExpiry.delete(callId)
+        reviewStates.delete(callId)
+      }
+    }
+  }, 1_000)
+  ctx.effect(() => () => clearInterval(followSweep))
 
   anyCtx.on('tools/post-execute', (exec: any, result: any, next: any) => {
     sweepFeedback(timeoutFeedback, { ttlMs: 60_000, maxEntries: 256 })
@@ -1390,11 +1428,37 @@ export function apply(ctx: Context, rawConfig: Config): void {
         outcome = await Promise.resolve().then(() => next())
       }
     } finally {
-      // Always release the in-flight panel status so a headless/aborted path
-      // can never leak a callId key in reviewStates. The verdict maps are read
-      // RIGHT AFTER this block to compute the source, so they are cleaned up
-      // later (after pushHistory), never here.
-      if (status && req.callId !== undefined) reviewStates.delete(req.callId)
+      // Release the in-flight panel status so a headless/aborted path can
+      // never leak a callId key in reviewStates — but keep a `follow` phase
+      // visible for the client's poll window. The host has already decided,
+      // and the official panel is only closed by the client's respond, so a
+      // deleted status would make the next poll 404 and restart the visible
+      // countdown (the reported "LLM 审批后弹窗仍倒计时" bug). The verdict
+      // maps are read RIGHT AFTER this block to compute the source, so they
+      // are cleaned up later (after pushHistory), never here.
+      if (status && req.callId !== undefined) {
+        const current = reviewStates.get(req.callId)
+        if (current?.phase === 'follow') {
+          // LLM takeover already published the follow (keeps its note);
+          // keep it observable until the client answers or the TTL sweeps it.
+          followExpiry.set(req.callId, Date.now() + FOLLOW_STATE_TTL_MS)
+        } else if (timedOut) {
+          // Host countdown expired: republish as a follow with the real
+          // outcome so the client closes the panel instead of re-arming.
+          reviewStates.set(req.callId, {
+            risk: status.risk,
+            phase: 'follow',
+            action: outcome === 'allowed-once' ? 'allow' : 'reject',
+            seconds: 0,
+          })
+          followExpiry.set(req.callId, Date.now() + FOLLOW_STATE_TTL_MS)
+        } else {
+          // Human answered: the official panel is already closed by the human;
+          // drop the status so a stale poll cannot mislabel the resolution.
+          reviewStates.delete(req.callId)
+          followExpiry.delete(req.callId)
+        }
+      }
     }
     // The denial breaker is updated below, after `source` is computed, so it
     // only ever reacts to a human decision (reset) or a decided LLM denial
@@ -1645,7 +1709,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       void reviewWithLLM(credentials, llm, tools, req.agent.session, req, config, seconds * 1000, reviewOpts)
         .then((review) => {
           debugLog({ ev: 'review', callId: req.callId, decision: review.decision, risk: review.riskLevel ?? null, startAt: reviewStart, tookMs: Date.now() - reviewStart, scope: 'medium' })
-          if (!req.callId || !reviewStates.has(req.callId)) return
+          if (!req.callId || reviewStates.get(req.callId)?.phase !== 'countdown') return
           const note = `🤖 Review suggestion: ${review.decision}${review.riskLevel ? `(${review.riskLevel})` : ''}${review.reason ? ` — ${sanitizeReviewReason(review.reason)}` : ''}`
           // Remember the verdict for history whether or not it takes over.
           reviewVerdicts.set(req.callId, review)
@@ -1664,6 +1728,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
               seconds: 0,
               note,
             })
+            followExpiry.set(req.callId, Date.now() + FOLLOW_STATE_TTL_MS)
             if (debugOn) console.log('[dsh-auto-approval-llm][debug] MEDIUM follow set', {
               callId: req.callId,
               decision: review.decision,
@@ -1696,7 +1761,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       void reviewWithLLM(credentials, llm, tools, req.agent.session, req, config, seconds * 1000, reviewOpts)
         .then((review) => {
           debugLog({ ev: 'review', callId: req.callId, decision: review.decision, risk: review.riskLevel ?? null, startAt: reviewStart, tookMs: Date.now() - reviewStart, scope: 'high' })
-          if (!req.callId || !reviewStates.has(req.callId)) return
+          if (!req.callId || reviewStates.get(req.callId)?.phase !== 'countdown') return
           const note = `🤖 Review suggestion: ${review.decision}${review.riskLevel ? `(${review.riskLevel})` : ''}${review.reason ? ` — ${sanitizeReviewReason(review.reason)}` : ''}`
           reviewVerdicts.set(req.callId, review)
           reviewStates.set(req.callId, { ...status, note })
@@ -1778,6 +1843,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
         totalDenials.clear()
         denialLog.clear()
         reviewStates.clear()
+        followExpiry.clear()
         reviewVerdicts.clear()
         autoAnswered.clear()
         timeoutFeedback.clear()

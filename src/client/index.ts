@@ -146,6 +146,28 @@ function watchApprovals(ctx: any): void {
       void followRespond(approval, status)
       return
     }
+    const priorMeta = timerMeta.get(timerKey)
+    if (status === undefined && priorMeta?.startsWith('countdown:')) {
+      // The host already resolved the approval (e.g. LLM takeover deleted the
+      // follow state before the next poll landed): answer now with the armed
+      // action so the official panel closes immediately instead of restarting
+      // the visible countdown from the stale reason text.
+      const info = parseCountdown(approval.payload?.reason ?? approval.reason)
+      if (info) {
+        if (timers.has(timerKey)) {
+          clearTimeout(timers.get(timerKey))
+          timers.delete(timerKey)
+        }
+        const poller = pollers.get(timerKey)
+        if (poller) {
+          clearInterval(poller)
+          pollers.delete(timerKey)
+        }
+        timerMeta.delete(timerKey)
+        void autoRespond(approval, info)
+      }
+      return
+    }
     let info: CountdownInfo | null = null
     if (status?.phase === 'countdown') {
       info = { seconds: status.seconds, action: status.action, feedbackText: status.feedback }
@@ -180,13 +202,27 @@ function watchApprovals(ctx: any): void {
         applyStatus(sessionId, approval, undefined)
         return
       }
+      let status: any
       try {
         const res = await (globalThis as any).fetch(`${REVIEW_STATUS_ROUTE}?callId=${encodeURIComponent(callId)}`, { credentials: 'same-origin' })
-        const data = await res.json()
-        applyStatus(sessionId, approval, data?.ok ? data.value : undefined)
+        if (res.status === 404) {
+          // Host resolved and dropped the status (e.g. LLM takeover): treated
+          // as resolved; applyStatus answers immediately if a countdown was
+          // already armed.
+          status = undefined
+        } else if (!res.ok) {
+          // Transient server error: keep the armed timer; do not treat it as
+          // a resolution.
+          return
+        } else {
+          const data = await res.json()
+          status = data?.ok ? data.value : undefined
+        }
       } catch {
-        applyStatus(sessionId, approval, undefined)
+        // Network error: never treat it as a resolution; keep the timer.
+        return
       }
+      applyStatus(sessionId, approval, status)
     }
     void poll()
     const interval = setInterval(() => { void poll() }, 500)
