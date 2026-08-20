@@ -210,6 +210,15 @@ function watchApprovals(ctx: any): void {
       // observes (no local timer). The host resolves → publishes follow → the
       // poller sees it within 500ms. A local timer here would fire with the
       // same action but could also answer against a stale direction (R002).
+      // Also clear a local timer that may have been armed on an earlier
+      // observation when the status was still absent (status-lag: the snapshot
+      // showed the approval and the reason parsed a countdown before the host
+      // review-status published it). Once the host takes over with a real
+      // countdown, the client must not auto-answer from the stale local timer.
+      if (timers.has(timerKey)) {
+        clearTimeout(timers.get(timerKey))
+        timers.delete(timerKey)
+      }
       timerMeta.set(timerKey, meta)
       return
     }

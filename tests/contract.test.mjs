@@ -7,7 +7,7 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { parseReview, lowRiskReviewOutcome, raceHumanDecision, detectConflicts, reviewerDecidable, preserveHostKeys, normalizeTimeoutAction, prepareReviewerArguments, extractToolPath, frameReviewerInput, breakerTripped, applyBreaker } from '../lib/auto/decision.js'
+import { parseReview, lowRiskReviewOutcome, raceHumanDecision, detectConflicts, reviewerDecidable, preserveHostKeys, normalizeTimeoutAction, prepareReviewerArguments, extractToolPath, frameReviewerInput, breakerTripped, applyBreaker, reviewSuggestionNote } from '../lib/auto/decision.js'
 import { sanitizeReviewReason } from '../lib/auto/classifier.js'
 import { trimAuditTail } from '../lib/auto/audit.js'
 import { normalizeReviewMode } from '../lib/auto/review-mode.js'
@@ -410,4 +410,25 @@ test('frameReviewerInput: description is sanitized at the injection boundary (RI
   const parsed = JSON.parse(framed)
   assert.equal(typeof parsed.description, 'string')
   assert.ok(parsed.description.length <= 1000, 'description must be capped by sanitizeClassifierText')
+})
+
+// ── audit loop (4th round) fixes ────────────────────────────────────────────
+// F2: the reviewer reason must be secret-redacted wherever it is embedded into
+// the human-visible suggestion note (ask text / denial-breaker history).
+test('reviewSuggestionNote: reviewer reason is secret-redacted in the note', () => {
+  const note = reviewSuggestionNote({
+    decision: 'ESCALATE',
+    riskLevel: 'HIGH',
+    reason: 'needs sk-abcdefgh12345678 and Bearer ghp_12345678abcdef',
+  })
+  assert.ok(!note.includes('sk-abcdefgh12345678'))
+  assert.ok(!note.includes('ghp_12345678abcdef'))
+  assert.ok(note.includes('[redacted'))
+  assert.ok(note.startsWith('🤖 Review suggestion: ESCALATE(HIGH)'))
+})
+
+test('reviewSuggestionNote: reason omitted / plain text kept', () => {
+  assert.equal(reviewSuggestionNote({ decision: 'ALLOW' }), '🤖 Review suggestion: ALLOW')
+  assert.equal(reviewSuggestionNote({ decision: 'DENY', reason: 'policy forbids it' }),
+    '🤖 Review suggestion: DENY — policy forbids it')
 })

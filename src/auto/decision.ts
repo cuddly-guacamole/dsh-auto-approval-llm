@@ -6,7 +6,7 @@
  * without a running harness.
  */
 
-import { sanitizeClassifierArguments, sanitizeClassifierText } from './classifier.js'
+import { sanitizeClassifierArguments, sanitizeClassifierText, sanitizeReviewReason } from './classifier.js'
 
 export interface ReviewResult {
   decision: 'ALLOW' | 'DENY' | 'ESCALATE'
@@ -324,4 +324,22 @@ export function frameReviewerInput(input: ReviewerInput): string {
       in_workspace: input.inWorkspace ?? null,
     },
   })
+}
+
+/**
+ * Build the human-visible "🤖 Review suggestion" line. The reviewer reason is
+ * routed through {@link sanitizeReviewReason} so a reviewer (or a compromised
+ * prompt echo) can never persist raw secret-like material into the approval
+ * ask text or the denial-breaker history. Kept pure so the contract is
+ * pinned without a harness, and shared by both the host askHuman pipeline and
+ * the browser approval panel.
+ */
+export function reviewSuggestionNote(review: {
+  decision: string
+  riskLevel?: string
+  reason?: string
+}): string {
+  const risk = review.riskLevel ? `(${review.riskLevel})` : ''
+  const reason = review.reason ? ` — ${sanitizeReviewReason(review.reason)}` : ''
+  return `🤖 Review suggestion: ${review.decision}${risk}${reason}`
 }

@@ -27,7 +27,7 @@ import { ArtifactRegistry } from './auto/artifacts.js'
 import { appendAuditLine, recordAuditClear } from './auto/audit.js'
 import { sanitizeClassifierArguments, sanitizeClassifierText, sanitizeReviewReason } from './auto/classifier.js'
 import { createDshClassifier } from './auto/dsh-classifier.js'
-import { type RaceHumanHandle, type ReviewResult, applyBreaker, breakerTripped, extractToolPath, frameReviewerInput, lowRiskReviewOutcome, parseReview, preserveHostKeys, raceHumanDecision } from './auto/decision.js'
+import { type RaceHumanHandle, type ReviewResult, applyBreaker, breakerTripped, extractToolPath, frameReviewerInput, lowRiskReviewOutcome, parseReview, preserveHostKeys, raceHumanDecision, reviewSuggestionNote } from './auto/decision.js'
 import { isWithin, normalizePath, resolveRoots } from './auto/paths.js'
 import { assessTool, hardDenyReason } from './auto/policy.js'
 import { evaluateRules, parseRulesText } from './auto/rules.js'
@@ -1035,7 +1035,12 @@ function installTestRoute(ctx: any, llm: any): void {
     kind: 'exact',
     path: TEST_ROUTE,
     handler: async (req: any, res: any) => {
-      if (!isTrustedRequest(req, trustedHosts)) {
+      // The online branch performs a server-side HTTP request driven by
+      // request-body settings, so it must sit on the same trust plane as the
+      // settings/credential routes: loopback-same-origin only. Otherwise any
+      // LAN peer that passes `trustedHosts` (when the web server binds
+      // 0.0.0.0) could turn the host process into an SSRF-to-loopback probe.
+      if (!isTrustedRequest(req, [])) {
         responseJson(res, 403, { ok: false, error: 'forbidden' })
         return
       }
@@ -1504,6 +1509,19 @@ export function apply(ctx: Context, rawConfig: Config): void {
   }
   const totalDenials = new Map<string, number>()
   const denialLog = new Map<string, Array<{ reason?: string; toolName: string }>>()
+
+  // Breaker counters are keyed by the authority session id (see
+  // authorityKeyFor). A `session/disposed` only fires for the exact session
+  // that is going away — a subagent disposal never fires for its root — so it
+  // is safe to drop the counters when that id itself is a key: the authority
+  // is gone and its breaker state must not leak in a long-lived process.
+  anyCtx.on('session/disposed', (session: any) => {
+    const key = session?.id
+    if (key === undefined) return
+    if (denials.has(key)) denials.delete(key)
+    if (totalDenials.has(key)) totalDenials.delete(key)
+    if (denialLog.has(key)) denialLog.delete(key)
+  })
   // Timestamp of the most recently entered approval/request handler, so the
   // resolve event can report request→resolution total time.
   let requestAt = 0
@@ -1516,7 +1534,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
     const notes: string[] = []
     let breakerReasons: string[] | undefined
     if (review) {
-      notes.push(`🤖 Review suggestion: ${review.decision}${review.riskLevel ? `(${review.riskLevel})` : ''}${review.reason ? ` — ${review.reason}` : ''}`)
+      notes.push(reviewSuggestionNote(review))
     }
     if (breaker) {
       const key = authorityKeyFor({ agent: req.agent })
@@ -1559,6 +1577,22 @@ export function apply(ctx: Context, rawConfig: Config): void {
       } else {
         outcome = await Promise.resolve().then(() => next())
       }
+    } catch (error) {
+      // The delegated official approval (next()) rejected — e.g. the session
+      // was disposed or the request was cancelled while awaiting the panel.
+      // The success path below (resolvedCallIds/verdict/autoAnswered cleanup,
+      // history, breaker) is skipped by the propagating exception, so perform
+      // the essential per-callId cleanup here to keep the maps bounded, mark
+      // the ask host-resolved so a late FEEDBACK ACK cannot relabel it, and
+      // drop any stored verdict/auto-answer marker. Then rethrow so the
+      // approval chain observes the failure (fail-closed: never a fabricated
+      // resolution).
+      if (req.callId !== undefined) {
+        resolvedCallIds.set(req.callId, Date.now())
+        reviewVerdicts.delete(req.callId)
+        autoAnswered.delete(req.callId)
+      }
+      throw error
     } finally {
       // Release the in-flight panel status so a headless/aborted path can
       // never leak a callId key in reviewStates — but keep a `follow` phase
@@ -1643,7 +1677,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
     if (transition.reset) denialLog.delete(key)
     if (transition.increment) {
       const log = denialLog.get(key) ?? []
-      log.push({ reason: (follow as any)?.reason, toolName: req.toolName })
+      log.push({ reason: (follow as any)?.reason ? sanitizeReviewReason((follow as any).reason) : undefined, toolName: req.toolName })
       if (log.length > config.maxConsecutiveDenials) log.shift()
       denialLog.set(key, log)
     }
@@ -1792,7 +1826,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
           denials.set(sessionKey, prior + 1)
           totalDenials.set(sessionKey, denialsTotal + 1)
           const log = denialLog.get(sessionKey) ?? []
-          log.push({ reason: review.reason, toolName })
+          log.push({ reason: review.reason ? sanitizeReviewReason(review.reason) : undefined, toolName })
           if (log.length > config.maxConsecutiveDenials) log.shift()
           denialLog.set(sessionKey, log)
           recordDecisionFeedback(req.callId, `[dsh-auto-approval-llm] Model denied: ${toolName}${review.reason ? ` — ${sanitizeReviewReason(review.reason)}` : ''}`)
@@ -1859,7 +1893,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
         .then((review) => {
           debugLog({ ev: 'review', callId: req.callId, decision: review.decision, risk: review.riskLevel ?? null, startAt: reviewStart, tookMs: Date.now() - reviewStart, scope: 'medium' })
           if (!req.callId || reviewStates.get(req.callId)?.phase !== 'countdown') return
-          const note = `🤖 Review suggestion: ${review.decision}${review.riskLevel ? `(${review.riskLevel})` : ''}${review.reason ? ` — ${sanitizeReviewReason(review.reason)}` : ''}`
+          const note = reviewSuggestionNote(review)
           // Remember the verdict for history whether or not it takes over.
           reviewVerdicts.set(req.callId, review)
           if ((llmTakeover || autoUnattended) && (review.decision === 'ALLOW' || review.decision === 'DENY')) {
@@ -1912,7 +1946,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
         .then((review) => {
           debugLog({ ev: 'review', callId: req.callId, decision: review.decision, risk: review.riskLevel ?? null, startAt: reviewStart, tookMs: Date.now() - reviewStart, scope: 'high' })
           if (!req.callId || reviewStates.get(req.callId)?.phase !== 'countdown') return
-          const note = `🤖 Review suggestion: ${review.decision}${review.riskLevel ? `(${review.riskLevel})` : ''}${review.reason ? ` — ${sanitizeReviewReason(review.reason)}` : ''}`
+          const note = reviewSuggestionNote(review)
           reviewVerdicts.set(req.callId, review)
           reviewStates.set(req.callId, { ...status, note })
         })
