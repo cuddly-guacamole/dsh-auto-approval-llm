@@ -22,11 +22,21 @@
 
 ```mermaid
 flowchart TD
-    A["订阅 sessions.list + session 快照，找到 pending 里 kind==='approval' 的项 → 布署轮询 [arm]"] -->|500ms 轮询 review-status| B1["① follow + source='human'：人已决定 → 只收面板，绝不代答 [observe]"]
+    A["订阅 sessions.list + session 快照，找到 pending 里 kind==='approval' 的项 → 布署轮询 [arm]"]
+    A -->|500ms 轮询 review-status| B1["① follow + source='human'：人已决定 → 只收面板，绝不代答 [observe]"]
     A -->|500ms 轮询 review-status| B2["② follow 其他（llm/timeout）：收面板 + 上报 outcome（followRespond） [report]"]
     A -->|500ms 轮询 review-status| B3["③ status 消失但曾是 countdown：宽限 FOLLOW_GRACE_MS=120s，仍 pending 才按记录动作自动应答 [grace]"]
     A -->|500ms 轮询 review-status| B4["④ phase='countdown'：宿主倒计时权威 → 只观察、清本地残留定时器 [observe]"]
     A -->|500ms 轮询 review-status| B5["⑤ 失配（reason-key 无状态）：本地 setTimeout(seconds*1000)，到点仍 pending → 自动应答 [fallback]"]
+    subgraph GR1["观察与上报"]
+        B1
+        B2
+    end
+    subgraph GR2["容错与兜底"]
+        B3
+        B4
+        B5
+    end
 ```
 
 `followRespond/autoRespond` 只把 `outcome ∈ {allowed-once, rejected}` 传上网（POST /feedback + wait.respond），通告文案由宿主生成；`answeredApprovals` Set 保证同一审批只答一次。

@@ -71,6 +71,5 @@ hero:
 <div class="navgrid">
   <a class="navcard" href="/dsh-auto-approval-llm/14-code-map"><span class="nn">14</span><span class="nt">代码地图与构建发布</span><span class="nd">tsc + tsdown + patch 层</span></a>
   <a class="navcard" href="/dsh-auto-approval-llm/15-quality"><span class="nn">15</span><span class="nt">质量保障体系</span><span class="nd">113 测试 + 运行时验证</span></a>
-  <a class="navcard" href="/dsh-auto-approval-llm/16-timeline"><span class="nn">16</span><span class="nt">演进时间线</span><span class="nd">移植 → B1/B2/B3 → P0/P1/P2</span></a>
-  <a class="navcard" href="/dsh-auto-approval-llm/17-axioms"><span class="nn">17</span><span class="nt">设计公理</span><span class="nd">为什么不追求完美</span></a>
+  <a class="navcard" href="/dsh-auto-approval-llm/16-axioms"><span class="nn">16</span><span class="nt">设计公理</span><span class="nd">为什么不追求完美</span></a>
 </div>

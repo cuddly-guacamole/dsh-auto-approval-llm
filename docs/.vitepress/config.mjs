@@ -52,8 +52,7 @@ export default withMermaid(defineConfig({
         items: [
           { text: '14 代码地图', link: '/14-code-map' },
           { text: '15 质量保障', link: '/15-quality' },
-          { text: '16 演进时间线', link: '/16-timeline' },
-          { text: '17 设计公理', link: '/17-axioms' }
+          { text: '16 设计公理', link: '/16-axioms' }
         ]
       }
     ],
@@ -69,5 +68,19 @@ export default withMermaid(defineConfig({
     docFooter: { prev: '上一篇', next: '下一篇' },
     lastUpdated: { text: '最后更新', formatOptions: { dateStyle: 'short', timeStyle: 'medium' } }
   },
-  mermaid: { theme: 'dark' }        // vitepress-plugin-mermaid 配置
+  mermaid: {
+    // base 主题 + GitHub 风格变量：节点框用面板色而非 dark 主题的纯黑 #1f2020
+    theme: 'base',
+    themeVariables: {
+      darkMode: true,
+      background: '#0d1117',
+      primaryColor: '#161b22',
+      primaryBorderColor: '#30363d',
+      primaryTextColor: '#c9d1d9',
+      lineColor: '#8b949e',
+      clusterBkg: '#161b22',
+      clusterBorder: '#30363d',
+      fontSize: '14px'
+    }
+  }        // vitepress-plugin-mermaid 配置
 }))
