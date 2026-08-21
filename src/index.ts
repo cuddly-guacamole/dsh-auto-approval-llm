@@ -19,7 +19,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
-import { appendFileSync, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs'
 import { networkInterfaces } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -27,9 +27,9 @@ import { ArtifactRegistry } from './auto/artifacts.js'
 import { appendAuditLine, recordAuditClear } from './auto/audit.js'
 import { sanitizeClassifierArguments, sanitizeClassifierText, sanitizeReviewReason } from './auto/classifier.js'
 import { createDshClassifier } from './auto/dsh-classifier.js'
-import { type RaceHumanHandle, type ReviewResult, applyBreaker, breakerTripped, extractToolPath, frameReviewerInput, lowRiskReviewOutcome, parseReview, preserveHostKeys, raceHumanDecision, reviewSuggestionNote } from './auto/decision.js'
+import { type RaceHumanHandle, type ReviewResult, applyBreaker, approvalSource, breakerTripped, extractToolPath, frameReviewerInput, lowRiskReviewOutcome, parseReview, preserveHostKeys, raceHumanDecision, reviewSuggestionNote } from './auto/decision.js'
 import { isWithin, normalizePath, resolveRoots } from './auto/paths.js'
-import { assessTool, hardDenyReason } from './auto/policy.js'
+import { assessTool, hardDenyReason, patchTargetPaths } from './auto/policy.js'
 import { evaluateRules, parseRulesText } from './auto/rules.js'
 import { type ReviewMode, loadReviewModes, normalizeReviewMode, persistReviewModes } from './auto/review-mode.js'
 
@@ -1377,9 +1377,77 @@ export function apply(ctx: Context, rawConfig: Config): void {
     return true
   }
 
+  // ── symlink-escape guard (host-side) ────────────────────────────────────
+  // The pure policy layer is deliberately fs-free and only compares textual
+  // paths, so a workspace symlink pointing outside (e.g. `ws/ln -> ~/.bashrc`)
+  // would let a write/read that is textually "inside the workspace" actually
+  // hit an external file and defeat the home/DSH_HOME/credential fuses. This
+  // host-side guard resolves the deepest existing ancestor of the target and
+  // hard-denies when its realpath leaves the workspace. Best-effort: any fs
+  // failure returns undefined and the normal (textual) policy decides.
+  const MUTATION_TOOLS = new Set(['write', 'edit', 'apply_patch'])
+  const STR_EDIT_MUTATION = (name: string, args: any) => name === 'str_replace_editor' && args?.command !== 'view'
+  // Resolve the realpath of the workspace root once (cached) so targets are
+  // compared against the *resolved* workspace, not its textual spelling: a
+  // workspace that lives under a junctioned/symlinked parent (OneDrive,
+  // AppData links, …) must not turn every routine read into a false escape.
+  let realWorkspace: string | undefined
+  const resolveDeepest = (input: string): string | undefined => {
+    let probe = input
+    while (true) {
+      try {
+        return realpathSync(probe)
+      } catch {
+        const parent = dirname(probe)
+        if (parent === probe) return undefined
+        probe = parent
+      }
+    }
+  }
+  const symlinkEscapeReason = (exec: any, roots: any): string | undefined => {
+    const args = (typeof exec.arguments === 'object' && exec.arguments !== null && !Array.isArray(exec.arguments)) ? exec.arguments : undefined
+    if (args === undefined) return undefined
+    const name = String(exec.name ?? '')
+    let targets: string[] | undefined
+    if (MUTATION_TOOLS.has(name)) targets = patchTargetPaths(args, name) ?? []
+    else if (STR_EDIT_MUTATION(name, args)) targets = typeof args?.path === 'string' ? [args.path] : []
+    else if (name === 'read' || name === 'read_image') targets = typeof args?.file_path === 'string' ? [args.file_path] : []
+    else return undefined
+    if (targets.length === 0) return undefined
+    if (realWorkspace === undefined) realWorkspace = resolveDeepest(roots.workspace)
+    if (realWorkspace === undefined) return undefined
+    const realWsNormalized = normalizePath(realWorkspace, roots.workspace, roots.home)
+    for (const target of targets) {
+      const textual = normalizePath(target, roots.workspace, roots.home)
+      // Only a target that is textually inside the workspace (or inside a
+      // trusted plugin-development path, which the policy auto-allows) is this
+      // guard's business: a realpath escaping it is worth hard-denying only
+      // when the textual target pretended to be local/trusted. Any other
+      // textually-external target is judged by the normal hard-deny / 'ask'
+      // escalation instead of being turned into an unconditional hard deny.
+      const trustedZone: string[] = roots.allowedDshSubpaths ?? []
+      const inTrustedZone = trustedZone.some(root => isWithin(root, textual))
+      if (!isWithin(roots.workspace, textual) && !inTrustedZone) continue
+      const resolved = resolveDeepest(target)
+      if (resolved === undefined) continue
+      const normalized = normalizePath(resolved, roots.workspace, roots.home)
+      // The trusted-zone exemption holds only while the resolved target stays
+      // inside the trusted zone: a symlink/junction planted there that resolves
+      // into a credential or home tree must still be hard-denied.
+      const withinTrustedZone = trustedZone.some(root => isWithin(root, normalized))
+      if (!isWithin(realWsNormalized, normalized) && !withinTrustedZone) {
+        return `target resolves outside the workspace via a symlink: ${resolved}`
+      }
+    }
+    return undefined
+  }
+
   anyCtx.tools?.guard?.((exec: any) => {
     if (!isAutoExecution(exec)) return undefined
-    return hardDenyReason(exec, rootsFor(exec))
+    const roots = rootsFor(exec)
+    const hard = hardDenyReason(exec, roots)
+    if (hard !== undefined) return hard
+    return symlinkEscapeReason(exec, roots)
   })
 
   anyCtx.on('tools/pre-execute', async (exec: any, next: any) => {
@@ -1559,6 +1627,10 @@ export function apply(ctx: Context, rawConfig: Config): void {
     req.reason = req.reason ? `${req.reason}${extra}` : extra
     let outcome: any
     let timedOut = false
+    // Whether a decisive caller (an LLM takeover) authoritatively settled the
+    // race. Only this — never the mere presence of an advisory review verdict —
+    // may label the resolution `llm-*` or feed the denial breaker.
+    let claimed = false
     const t0 = Date.now()
     const canTimeout = status !== undefined && req.callId !== undefined &&
       status.phase === 'countdown' && status.seconds > 0
@@ -1574,6 +1646,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
         }, handle)
         outcome = raced.outcome
         timedOut = raced.timedOut
+        claimed = raced.claimed
       } else {
         outcome = await Promise.resolve().then(() => next())
       }
@@ -1657,13 +1730,17 @@ export function apply(ctx: Context, rawConfig: Config): void {
       ? { llmDecision: follow.decision, llmRisk: follow.riskLevel, llmReason: follow.reason }
       : {}
     const auto = req.callId !== undefined && autoAnswered.has(req.callId)
-    const source = timedOut
-      ? (outcome === 'allowed-once' ? 'timeout-allow' : 'timeout-deny')
-      : followDecidable
-        ? (follow.decision === 'ALLOW' ? 'llm-allow' : 'llm-deny')
-        : auto
-          ? (outcome === 'allowed-once' ? 'auto-allow' : 'auto-deny')
-          : (outcome === 'allowed-once' ? 'human-allow' : 'human-deny')
+    // Honest provenance: only a genuine LLM takeover (the caller's claim
+    // settled the race) may label the resolution `llm-*`. An advisory review
+    // verdict may still exist (followDecidable), but a human/timeout/auto
+    // resolution is NOT an LLM decision, and the breaker must not count it.
+    const source = approvalSource({
+      outcome,
+      timedOut,
+      claimed,
+      auto,
+      reviewerDecision: followDecidable ? follow.decision : undefined,
+    })
     // Breaker transition: a human answer resets the counters, a decided LLM
     // denial (only when this ask was an LLM takeover — never an advisory HIGH
     // review) increments them; every other outcome leaves them untouched.
@@ -1752,6 +1829,15 @@ export function apply(ctx: Context, rawConfig: Config): void {
             })
             return 'rejected'
           } else if (matched.policy === 'allow') {
+            // Declared-rule allow is an approval decision too: keep it in the
+            // durable history/audit trail (same as rule-deny), no user notice.
+            pushHistory({
+              sessionId: sessionKey,
+              toolName,
+              outcome: 'allowed-once',
+              source: 'rule-allow',
+              llmReason: `matched ${matched.rule.source}`,
+            })
             return 'allowed-once'
           } else {
             return askHuman(req, undefined, next)
@@ -1762,9 +1848,25 @@ export function apply(ctx: Context, rawConfig: Config): void {
 
     if (config.denyList.includes(toolName)) {
       recordDecisionFeedback(req.callId, `[dsh-auto-approval-llm] Rule denied: ${toolName} is in the denyList`)
+      pushHistory({
+        sessionId: sessionKey,
+        toolName,
+        outcome: 'rejected',
+        source: 'denyList-deny',
+      })
       return 'rejected'
     }
-    if (config.allowlist.includes(toolName)) return 'allowed-once'
+    if (config.allowlist.includes(toolName)) {
+      // Static-policy allow: the approval trail must not be silent about a
+      // decision that permitted a tool call.
+      pushHistory({
+        sessionId: sessionKey,
+        toolName,
+        outcome: 'allowed-once',
+        source: 'allowlist-allow',
+      })
+      return 'allowed-once'
+    }
     if (config.humanOnlyList.includes(toolName)) {
       return askHuman(req, undefined, next)
     }

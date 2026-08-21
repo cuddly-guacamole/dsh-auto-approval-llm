@@ -59,6 +59,14 @@ export interface HumanDecisionOptions {
 export interface HumanDecision {
   outcome: string
   timedOut: boolean
+  /**
+   * Whether the race was settled by the caller's authoritative {@link
+   * RaceHumanHandle.claim} (an LLM takeover) rather than by the human or the
+   * host countdown. The caller must not infer takeovers from a stored review
+   * verdict: an advisory (non-takeover) verdict does not make the resolution
+   * an LLM decision.
+   */
+  claimed: boolean
 }
 
 /**
@@ -120,10 +128,44 @@ export async function raceHumanDecision(
   }
   try {
     const outcome = await Promise.race([Promise.resolve().then(() => next()), racedPromise])
-    return { outcome, timedOut }
+    return { outcome, timedOut, claimed }
   } finally {
     if (!timedOut && !claimed && timeoutTimer !== undefined) clearTimeout(timeoutTimer)
   }
+}
+
+/**
+ * Resolve the honest `source` label for an answered approval.
+ *
+ * Only the outcomes the actor actually produced may label the decision:
+ *  - host countdown expiry            -> timeout-allow / timeout-deny
+ *  - decisive caller claim (an LLM takeover) -> llm-allow / llm-deny
+ *  - client-side auto-answer          -> auto-allow / auto-deny
+ *  - otherwise (human / plain panel)  -> human-allow / human-deny
+ *
+ * It is a bug to label a decision `llm-*` merely because an advisory
+ * (non-takeover) review verdict happens to exist: the reviewer's opinion does
+ * not make the resolution an LLM decision, and the denial breaker must not
+ * count a human-allowed ask as an LLM denial. `claimed` (from
+ * {@link raceHumanDecision}) is the only trustworthy takeover signal.
+ */
+export function approvalSource(input: {
+  outcome: string
+  timedOut: boolean
+  claimed: boolean
+  auto: boolean
+  reviewerDecision?: string
+}): string {
+  if (input.timedOut) return input.outcome === 'allowed-once' ? 'timeout-allow' : 'timeout-deny'
+  if (input.claimed) {
+    // A claim is only ever made for a decidable ALLOW/DENY verdict; when the
+    // verdict is somehow absent, fall back to the outcome rather than guessing.
+    if (input.reviewerDecision === 'ALLOW') return 'llm-allow'
+    if (input.reviewerDecision === 'DENY') return 'llm-deny'
+    return input.outcome === 'allowed-once' ? 'llm-allow' : 'llm-deny'
+  }
+  if (input.auto) return input.outcome === 'allowed-once' ? 'auto-allow' : 'auto-deny'
+  return input.outcome === 'allowed-once' ? 'human-allow' : 'human-deny'
 }
 
 /**

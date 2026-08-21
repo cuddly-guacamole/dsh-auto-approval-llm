@@ -298,6 +298,33 @@ function dynamicHomeTarget(source) {
 function sensitiveMarker(source) {
     return /(?:\.ssh[\\/]|\.gnupg[\\/]|\.aws[\\/]|\.kube[\\/]|\.credentials\.yaml|id_(?:rsa|ed25519)|(?:API|AUTH|ACCESS|SECRET)[_-]?KEY|TOKEN|PASSWORD)/i.test(source);
 }
+/**
+ * Whether a shell exfil would ship a file living under the configured DSH_HOME
+ * (or the home-relative default `.dsh`). Scoped to those roots (rather than a
+ * bare unanchored `.dsh` substring) so a workspace `.dsh/` subdir or a URL with
+ * `.dsh/` in its path is not mistaken for a credential exfil, while a custom,
+ * non-`.dsh`-named DSH_HOME is still caught.
+ *
+ * The dynamic spellings of those roots match too (`$HOME`, `${HOME}`,
+ * `$env:USERPROFILE`, `%USERPROFILE%`, `$DSH_HOME`, …): a compromised model
+ * reaches for the variable form in practice (`curl -F file=@$HOME/.dsh/…`), and
+ * the bare `.dsh[\\/]` marker that used to cover them also over-blocked
+ * ordinary workspace/URL `.dsh/` paths.
+ */
+function dshHomeExfil(source, roots) {
+    const flat = String(source).replace(/\\/g, '/');
+    const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const home = typeof roots?.home === 'string' ? roots.home.replace(/\\/g, '/') : '';
+    const dshHome = typeof roots?.dshHome === 'string' ? roots.dshHome.replace(/\\/g, '/') : '';
+    const patterns = [];
+    if (/([^\\/])/.test(dshHome))
+        patterns.push(esc(dshHome.replace(/\/+$/, '')) + '/');
+    if (/([^\\/])/.test(home))
+        patterns.push('(?:' + esc(home) + '|~)/\\.dsh/');
+    patterns.push('(?:\\$\\{?DSH_HOME\\}?|\\$env:DSH_HOME)/');
+    patterns.push('(?:\\$\\{?HOME\\}?|\\$env:(?:USERPROFILE|HOME)|%USERPROFILE%|%HOME%)/\\.dsh/');
+    return patterns.some((pattern) => new RegExp(pattern, 'i').test(flat));
+}
 /** Whether a redirection target discards output instead of writing a file. */
 function isNullSink(word, shell) {
     const text = word.text.toLowerCase();
@@ -653,7 +680,7 @@ export function hardDenyShellReason(source, shell, roots) {
     if (/(?:set-executionpolicy|disable-windowsdefender|clear-disk|format-volume|remove-partition|bcdedit)(?:\s|$)/i.test(compact)) {
         return 'operating-system security or disk policy changes are not permitted';
     }
-    if (/(?:curl|wget|invoke-webrequest|invoke-restmethod)/i.test(compact) && sensitiveMarker(compact)) {
+    if (/(?:curl|wget|invoke-webrequest|invoke-restmethod)/i.test(compact) && (sensitiveMarker(compact) || dshHomeExfil(compact, roots))) {
         return 'credential or private-data exfiltration pattern is not permitted';
     }
     if (dynamicHomeTarget(compact) && /(?:rm|remove-item|rmdir)\b/i.test(compact)) {

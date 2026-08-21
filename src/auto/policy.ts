@@ -15,6 +15,27 @@ function pathArgument(args) {
     }
     return undefined;
 }
+/**
+ * Resolve the concrete file-mutation targets of a tool call. `apply_patch`
+ * nests its paths under `patches[].file_path` (never top-level), so the flat
+ * `pathArgument` lookup would miss them and let the protected-path fuses be
+ * skipped. Returns the list of patch targets, or `undefined` when any patch
+ * entry lacks a readable path (callers must then fail closed).
+ */
+export function patchTargetPaths(args, name) {
+    if (name === 'apply_patch') {
+        const patches = Array.isArray(args?.patches) ? args.patches : [];
+        const targets = [];
+        for (const patch of patches) {
+            if (typeof patch?.file_path !== 'string' || patch.file_path === '')
+                return undefined;
+            targets.push(patch.file_path);
+        }
+        return targets.length > 0 ? targets : undefined;
+    }
+    const path = pathArgument(args);
+    return path === undefined ? undefined : [path];
+}
 function serializedArguments(argumentsValue) {
     try {
         return JSON.stringify(argumentsValue);
@@ -100,8 +121,12 @@ export function hardDenyReason(exec, roots) {
     }
     if (['write', 'edit', 'apply_patch'].includes(exec.name)
         || (exec.name === 'str_replace_editor' && args?.command !== 'view')) {
-        const path = pathArgument(args);
-        if (path !== undefined) {
+        const targets = patchTargetPaths(args, exec.name);
+        // Fail-closed: a mutation tool whose target cannot be resolved (e.g.
+        // apply_patch with no/misshapen patches) must not pass the fuse.
+        if (targets === undefined)
+            return `mutation target is missing or unreadable for ${exec.name}`;
+        for (const path of targets) {
             const reason = hardDestructiveTargetReason(path, roots);
             if (reason !== undefined)
                 return `mutation targets ${reason}`;
@@ -152,6 +177,26 @@ export function assessTool(exec, roots, artifacts) {
             return { decision: 'ask', reason: `mutation of external or protected path requires specific user authorization: ${normalized}`, classifierEligible: true };
         }
         return { decision: 'allow', reason: 'routine project-local file edit', classifierEligible: false };
+    }
+    // apply_patch nests its targets under `patches[].file_path`; the flat path
+    // lookup used by write/edit would miss them and silently classify a
+    // anywhere-write as a routine unknown tool (fail-open). Require at least
+    // one target and route every target through the same workspace/protected
+    // gate as write/edit.
+    if (exec.name === 'apply_patch') {
+        const targets = patchTargetPaths(args, exec.name);
+        if (targets === undefined) {
+            return { decision: 'ask', reason: 'apply_patch target paths are missing or unreadable', classifierEligible: false };
+        }
+        const normalized = targets.map((target) => normalizePath(target, roots.workspace, roots.home));
+        if (normalized.every((n) => (roots.allowedDshSubpaths ?? []).some((root) => isWithin(root, n)))) {
+            return { decision: 'allow', reason: 'trusted plugin development path', classifierEligible: false };
+        }
+        const allRoutine = normalized.every((n) => isWithin(roots.workspace, n) && !isProtectedProjectPath(n, roots));
+        if (allRoutine) {
+            return { decision: 'allow', reason: 'routine project-local file edit', classifierEligible: false };
+        }
+        return { decision: 'ask', reason: `apply_patch touches external or protected paths and requires specific user authorization`, classifierEligible: true };
     }
     if (exec.name === 'str_replace_editor') {
         const command = args?.command;

@@ -924,7 +924,10 @@ function SettingsSection() {
       if (!data?.ok) throw new Error(data?.error ?? t('settings.saveFailed'))
       broadcastSettings(data.value)
       setSnapshot(data.value)
-      setDraft(draftOf(data.value.value))
+      // Per-card ownership: only the just-saved keys are refreshed from the
+      // server baseline; unsaved edits held in other cards' local drafts are
+      // preserved instead of being wiped by a full draft replacement.
+      setDraft({ ...draft, ...pick(keys, draftOf(data.value.value)) })
       setCardStatus({ id: cardId, kind: 'ok', text: t('settings.saved') })
       if (cardId === 'security') {
         setSecurityActive(true)
