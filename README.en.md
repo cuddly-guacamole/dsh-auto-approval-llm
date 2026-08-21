@@ -10,7 +10,7 @@
 
 - **Static rules + LLM classifier**: read-only / session / workspace routine operations pass directly; dangerous, external-write, credential-exfiltration and protected-path operations are denied directly; ambiguous ones go to the LLM pre-classifier (`tools/guard` + `tools/pre-execute`).
 - **Online review model (optional)**: fill in the API protocol, base URL, model and key, and approval review hits your OpenAI / Anthropic-compatible endpoint directly; the key lives in DSH's credential store — the frontend only shows "Configured" and never echoes it.
-- **Human countdown + timeout fallback**: low/medium/high countdowns (default 3/5/10 s); on timeout the action follows `timeoutAction` (`Reject` / `Allow` / `Auto-approve low-risk`). Closing the browser never hangs (the host timer is authoritative).
+- **Human countdown + timeout fallback**: low/medium/high countdowns (default 5/8/10 s); on timeout the action follows `timeoutAction` (`Reject` / `Allow` / `Auto-approve low-risk`). Closing the browser never hangs (the host timer is authoritative).
 - **LLM takeover**: for medium risk, if the LLM returns a decisive verdict within the countdown, the client follows it immediately — no click needed.
 - **Breaker**: after `maxConsecutiveDenials` consecutive or `maxTotalDenials` cumulative LLM denials → hand to a human with no auto-countdown; `/approval reset` can reset it.
 - **Reliable history & audit**: in-memory window of 200 records + `history.jsonl`; append-only `audit.jsonl` (clear leaves a tombstone).
@@ -66,6 +66,8 @@ dev_inject_plugin <this dir>
 3. To route approval through your own model: in the "Online review model" card fill in protocol / API base URL / model name / API key → Save → Test connection.
 4. If medium-risk popups are too frequent or timeouts slip through: raise "Medium-risk countdown", or set "Timeout action" to `Reject` / `Auto-approve low-risk`.
 
+> 📚 In-repo docs: [how-it-works.html](how-it-works.html) (plain-language explanation) · [how-it-works-detailed.html](how-it-works-detailed.html) (detailed how-it-works with source line references).
+
 ---
 
 ## Screenshots
@@ -110,7 +112,7 @@ Session approval stats — the "Auto Approval" header-button popup: totals / all
 | `llmReviewScope` | `low-or-above` | Which tiers (LOW/MEDIUM/HIGH) are sent for LLM review |
 | `llmTakeoverScope` | `medium-or-below` | Which tiers allow the LLM verdict to take over directly |
 | `defaultReviewMode` | `smart` | Default per-session review mode: Manual / Smart / Unattended |
-| `lowRiskSeconds` / `mediumRiskSeconds` / `highRiskSeconds` | 3 / 5 / 10 | Countdown seconds per tier |
+| `lowRiskSeconds` / `mediumRiskSeconds` / `highRiskSeconds` | 5 / 8 / 10 | Countdown seconds per tier |
 | `breakerAntiHijackMs` | 0 | Disable breaker panel buttons for this many ms; 0 disables |
 | `maxConsecutiveDenials` | 3 | Consecutive LLM-denial breaker threshold; 0 off |
 | `maxTotalDenials` | 20 | Cumulative denial breaker threshold; 0 off |
@@ -160,7 +162,7 @@ Query: `node scripts/audit-query.mjs [--last N|--tool X|--session S|--source S|-
 - **Fail-closed**: reviewer timeout/garbage/failure → reject or hand to a human; ESCALATE always goes to a human and is never auto-allowed by `timeoutAction=allow`; reviewer failure doesn't count toward the breaker.
 - **Reasoning-blind**: the reviewer sees only the tool identity, structurally sanitized arguments, bounded direct user messages (the sole authorization evidence) and workspace facts — reviewer prose and tool output are stripped.
 - **Key never leaves the host**: the online-review key lives in DSH credentials, resolved per operation; the frontend only shows "Configured".
-- **Countdown button rule**: the countdown is attached only to the button that will auto-execute on timeout — `timeoutAction=Allow` → auto-approve, "Allow once" counts down and Reject stays clean; `timeoutAction=Reject` / `Auto-approve low-risk` → medium/high risk auto-reject on timeout, "Reject" counts down (with low-risk-auto-approve, only low risk auto-passes). The medium-risk default of 5 s is tight — raise it as needed.
+- **Countdown button rule**: the countdown is attached only to the button that will auto-execute on timeout — `timeoutAction=Allow` → auto-approve, "Allow once" counts down and Reject stays clean; `timeoutAction=Reject` / `Auto-approve low-risk` → medium/high risk auto-reject on timeout, "Reject" counts down (with low-risk-auto-approve, only low risk auto-passes). The medium-risk default of 8 s is tight — raise it as needed.
 
 ---
 
@@ -175,6 +177,6 @@ This project references or derives from the following open-source projects — t
 
 ## Version / publishing
 
-- Current: `0.0.5` (**pending release**) — npm: [@quill507/dsh-auto-approval-llm](https://www.npmjs.com/package/@quill507/dsh-auto-approval-llm), GitHub: [Release v0.0.5](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/releases/tag/v0.0.5).
+- Current: `0.0.6` (**upcoming release**) — npm: [@quill507/dsh-auto-approval-llm](https://www.npmjs.com/package/@quill507/dsh-auto-approval-llm), GitHub: [Release v0.0.6](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/releases/tag/v0.0.6).
 - Install: `dsh plugin --profile web add @quill507/dsh-auto-approval-llm`
 - License: BSD-3-Clause.

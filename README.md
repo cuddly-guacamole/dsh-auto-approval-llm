@@ -12,7 +12,7 @@
 
 - **静态规则 + LLM 分类器**：只读/会话/工作区常规操作直接放行；危险、外部写、凭据外泄、受保护路径直接拒绝；模糊操作交给 LLM 预分类（`tools/guard` + `tools/pre-execute`）。
 - **在线评审模型（可选）**：填写 API 协议、地址、模型、密钥后，审批复审直接打到你的 OpenAI / Anthropic 兼容端点；密钥存在 DSH 凭据存储里，前端只显示「已配置」，永不回显。
-- **人工倒计时 + 超时兜底**：低/中/高三档倒计时（默认 3/5/10 秒）；超时按 `timeoutAction` 处理（`拒绝` / `通过` / `低风险自动同意`）。关浏览器也不悬挂（host 计时器独裁）。
+- **人工倒计时 + 超时兜底**：低/中/高三档倒计时（默认 5/8/10 秒）；超时按 `timeoutAction` 处理（`拒绝` / `通过` / `低风险自动同意`）。关浏览器也不悬挂（host 计时器独裁）。
 - **LLM 接管**：中风险且 LLM 在倒计时内给出明确结论时，客户端立即按 LLM 结论裁决，无需你点。
 - **熔断**：连续 `maxConsecutiveDenials` 次或累计 `maxTotalDenials` 次被 LLM 拒绝 → 转人工、不再自动倒计时；`/approval reset` 可重置。
 - **可靠的历史与审计**：内存 200 条 + `history.jsonl`，append-only `audit.jsonl`（清空留 tombstone）。
@@ -62,6 +62,8 @@ dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 3. 想让审批走你自己的模型：在「在线评审模型」卡填 协议 / API 地址 / 模型名称 / API 密钥 → 保存 → 测试连接。
 4. 嫌中风险弹窗频繁或超时漏拦：调大「中风险倒计时」，或把「超时动作」改为 `拒绝` / `低风险自动同意`。
 
+> 📚 仓库内另有原理文档：[how-it-works.html](how-it-works.html)（大白话版说明）· [how-it-works-detailed.html](how-it-works-detailed.html)（详版工作原理图，含源码行号溯源）。
+
 ---
 
 ## 界面预览
@@ -106,7 +108,7 @@ dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 | `llmReviewScope` | `low-or-above` | LOW/MEDIUM/HIGH 哪些档送 LLM 复审 |
 | `llmTakeoverScope` | `medium-or-below` | 哪些档允许 LLM 结论直接接管 |
 | `defaultReviewMode` | `smart` | 每会话评审模式默认：人工 / 智能 / 无人值守 |
-| `lowRiskSeconds` / `mediumRiskSeconds` / `highRiskSeconds` | 3 / 5 / 10 | 三档倒计时（秒） |
+| `lowRiskSeconds` / `mediumRiskSeconds` / `highRiskSeconds` | 5 / 8 / 10 | 三档倒计时（秒） |
 | `breakerAntiHijackMs` | 0 | 熔断弹窗按钮防误点禁用时长，0 不启用 |
 | `maxConsecutiveDenials` | 3 | 连续 LLM 拒绝熔断阈值，0 关闭 |
 | `maxTotalDenials` | 20 | 累计拒绝熔断阈值，0 关闭 |
@@ -156,7 +158,7 @@ dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 - **fail-closed**：评审器超时/垃圾/失败 → 拒绝或转人；ESCALATE 一律转人，不被 `timeoutAction=allow` 自动放行；reviewer 失败不计入熔断。
 - **reasoning-blind**：评审只看 工具名 + 结构化脱敏参数 + 有界直接用户消息（唯一授权证据）+ 工作区事实，剥离评审者的自述与工具输出。
 - **密钥不出 host**：在线评审密钥存 DSH 凭据，每操作解析、前端仅显「已配置」。
-- **倒计时按钮规则**：倒计时只贴在「会超时自动执行」的那个按钮上——`timeoutAction=通过` → 超时自动通过，「允许一次」倒计时、拒绝按钮干净；`timeoutAction=拒绝` / `低风险自动同意` → 中/高风险超时自动拒绝，「拒绝」按钮倒计时（低风险自动同意时仅低风险超时通过）。中风险默认 5 秒偏紧，建议按需调大。
+- **倒计时按钮规则**：倒计时只贴在「会超时自动执行」的那个按钮上——`timeoutAction=通过` → 超时自动通过，「允许一次」倒计时、拒绝按钮干净；`timeoutAction=拒绝` / `低风险自动同意` → 中/高风险超时自动拒绝，「拒绝」按钮倒计时（低风险自动同意时仅低风险超时通过）。中风险默认 8 秒偏紧，建议按需调大。
 
 ---
 
@@ -171,6 +173,6 @@ dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 
 ## 版本 / 发布
 
-- 当前：`0.0.5`（**待发布**）—— npm：[@quill507/dsh-auto-approval-llm](https://www.npmjs.com/package/@quill507/dsh-auto-approval-llm)，GitHub：[Release v0.0.5](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/releases/tag/v0.0.5)。
+- 当前：`0.0.6`（**即将发布**）—— npm：[@quill507/dsh-auto-approval-llm](https://www.npmjs.com/package/@quill507/dsh-auto-approval-llm)，GitHub：[Release v0.0.6](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/releases/tag/v0.0.6)。
 - 安装：`dsh plugin --profile web add @quill507/dsh-auto-approval-llm`
 - 许可证：BSD-3-Clause。
