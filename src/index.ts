@@ -26,8 +26,9 @@ import { fileURLToPath } from 'node:url'
 import { ArtifactRegistry } from './auto/artifacts.js'
 import { appendAuditLine, recordAuditClear } from './auto/audit.js'
 import { sanitizeClassifierArguments, sanitizeClassifierText, sanitizeReviewReason } from './auto/classifier.js'
+import { THRESHOLD_DEFAULTS } from './auto/constants.js'
 import { createDshClassifier } from './auto/dsh-classifier.js'
-import { type RaceHumanHandle, type ReviewResult, applyBreaker, approvalSource, breakerTripped, createKeyedMutex, extractToolPath, followResolution, frameReviewerInput, lowRiskReviewOutcome, parseReview, preserveHostKeys, raceHumanDecision, reviewSuggestionNote, reviewerAutoAllowBlocked } from './auto/decision.js'
+import { type RaceHumanHandle, type ReviewResult, applyBreaker, approvalSource, breakerTripped, createKeyedMutex, extractToolPath, followResolution, frameReviewerInput, lowRiskReviewOutcome, parseReview, preserveHostKeys, raceHumanDecision, reviewSuggestionNote, reviewerAutoAllowBlocked, staticListDecision } from './auto/decision.js'
 import { isWithin, normalizePath, resolveRoots } from './auto/paths.js'
 import { RISK_NAME_PATTERN, RISK_REASON_PATTERN } from './auto/risk-tokens.js'
 import { assessTool, hardDenyReason, symlinkGuardTargets } from './auto/policy.js'
@@ -85,18 +86,18 @@ export const Config: z<Config> = z.object({
   llmReviewScope: z.union(['low-or-above', 'medium-or-above', 'high'] as const).default('low-or-above'),
   llmTakeoverScope: z.union(['low', 'medium-or-below', 'high-or-below'] as const).default('medium-or-below'),
   defaultReviewMode: z.union(['manual', 'smart', 'unattended'] as const).default('smart'),
-  lowRiskSeconds: z.number().default(5).min(1),
-  mediumRiskSeconds: z.number().default(8).min(1),
-  highRiskSeconds: z.number().default(10).min(1),
+  lowRiskSeconds: z.number().default(THRESHOLD_DEFAULTS.lowRiskSeconds).min(1),
+  mediumRiskSeconds: z.number().default(THRESHOLD_DEFAULTS.mediumRiskSeconds).min(1),
+  highRiskSeconds: z.number().default(THRESHOLD_DEFAULTS.highRiskSeconds).min(1),
   safetyPrompt: z.string().default(''),
   allowlist: z.array(z.string()).default([]),
   denyList: z.array(z.string()).default([]),
   humanOnlyList: z.array(z.string()).default([]),
   rulesText: z.string().default(''),
   rulesDryRun: z.boolean().default(false),
-  maxConsecutiveDenials: z.number().default(3).min(0),
-  maxTotalDenials: z.number().default(20).min(0),
-  maxArgsChars: z.number().default(4_000).min(1),
+  maxConsecutiveDenials: z.number().default(THRESHOLD_DEFAULTS.maxConsecutiveDenials).min(0),
+  maxTotalDenials: z.number().default(THRESHOLD_DEFAULTS.maxTotalDenials).min(0),
+  maxArgsChars: z.number().default(THRESHOLD_DEFAULTS.maxArgsChars).min(1),
   notifyUser: z.boolean().default(true),
   showSessionPanel: z.union(['on', 'auto', 'off'] as const).default('off'),
   breakerAntiHijackMs: z.number().default(0).min(0),
@@ -141,9 +142,9 @@ function resolveConfig(raw: Config): Config {
     timeoutAction,
     llmReviewScope: raw.llmReviewScope ?? 'low-or-above',
     llmTakeoverScope: raw.llmTakeoverScope ?? 'medium-or-below',
-    lowRiskSeconds: raw.lowRiskSeconds ?? 5,
-    mediumRiskSeconds: raw.mediumRiskSeconds ?? 8,
-    highRiskSeconds: raw.highRiskSeconds ?? 10,
+    lowRiskSeconds: raw.lowRiskSeconds ?? THRESHOLD_DEFAULTS.lowRiskSeconds,
+    mediumRiskSeconds: raw.mediumRiskSeconds ?? THRESHOLD_DEFAULTS.mediumRiskSeconds,
+    highRiskSeconds: raw.highRiskSeconds ?? THRESHOLD_DEFAULTS.highRiskSeconds,
   }
 }
 
@@ -187,18 +188,33 @@ function validateReviewerBaseUrl(raw: string):
   return { ok: true, baseUrl, insecure: url.protocol === 'http:' }
 }
 
-function conversationRoute(session: any): { provider: string; model: string } | undefined {
+function isModelRouteConfig(cfg: any): cfg is { provider: string; model: string } {
+  return typeof cfg?.provider === 'string' && cfg.provider.length > 0 &&
+    typeof cfg?.model === 'string' && cfg.model.length > 0
+}
+
+// Single resolver for "which provider/model is this session talking through":
+// the live request header first, then the newest recorded header event.
+function sessionModelRoute(session: any): { provider: string; model: string } | undefined {
+  const live = session?.requestHeader?.()?.config
+  if (isModelRouteConfig(live)) return { provider: live.provider, model: live.model }
   const events = session?.events ?? []
   for (let i = events.length - 1; i >= 0; i -= 1) {
     const event = events[i]
     if (event?.type !== 'request/header') continue
     const cfg = event.data?.header?.config
-    if (typeof cfg?.provider === 'string' && cfg.provider.length > 0 &&
-        typeof cfg?.model === 'string' && cfg.model.length > 0) {
-      return { provider: cfg.provider, model: cfg.model }
-    }
+    if (isModelRouteConfig(cfg)) return { provider: cfg.provider, model: cfg.model }
   }
   return undefined
+}
+
+// Agent-level resolution: session route first, then explicit agent options.
+function resolveModelRoute(agent: any): { provider: string; model: string } | undefined {
+  const fromSession = sessionModelRoute(agent?.session)
+  if (fromSession) return fromSession
+  const provider = agent?.options?.provider
+  const model = agent?.options?.model
+  return isModelRouteConfig({ provider, model }) ? { provider, model } : undefined
 }
 
 function findToolCallArguments(session: any, callId: string | undefined, maxChars: number): string | undefined {
@@ -256,7 +272,7 @@ async function reviewWithLLM(
 
   const route = config.reviewerProvider && config.reviewerModel
     ? { provider: config.reviewerProvider, model: config.reviewerModel }
-    : conversationRoute(session)
+    : sessionModelRoute(session)
   if (!route) return { decision: 'ESCALATE', failure: 'no reviewer route' }
 
   const timeoutSignal = AbortSignal.timeout(timeoutMs)
@@ -622,6 +638,48 @@ const AUTO_ANSWERED_TTL_MS = 60_000
 // gate feedback text.
 const resolvedCallIds = new Map<string, number>()
 const RESOLVED_TTL_MS = 30_000
+
+// ── approval state registry ───────────────────────────────────────────────
+// Every plugin-lifetime callId-keyed approval map, grouped so cleanup can
+// never forget a member: /approval reset clears them all through
+// clearApprovalState(), and the periodic / post-execute sweeps run from one
+// place. The maps stay top-level variables (hot paths read them directly);
+// this registry only owns their lifecycle. pendingNotices is deliberately
+// NOT a member: it is session-keyed and released by its own session/disposed
+// hook, not by the reset or the callId sweeps.
+const approvalState = {
+  reviewStates,
+  followExpiry,
+  reviewVerdicts,
+  autoAnswered,
+  resolvedCallIds,
+  timeoutFeedback,
+  decisionFeedback,
+}
+
+function clearApprovalState(): void {
+  for (const map of Object.values(approvalState)) map.clear()
+}
+
+function sweepFollowPhase(now = Date.now()): void {
+  for (const [callId, expiry] of followExpiry) {
+    if (expiry <= now) {
+      followExpiry.delete(callId)
+      reviewStates.delete(callId)
+    }
+  }
+  for (const [callId, at] of resolvedCallIds) {
+    if (now - at > RESOLVED_TTL_MS) resolvedCallIds.delete(callId)
+  }
+  for (const [callId, at] of autoAnswered) {
+    if (now - at > AUTO_ANSWERED_TTL_MS) autoAnswered.delete(callId)
+  }
+}
+
+function sweepFeedbackMaps(): void {
+  sweepFeedback(timeoutFeedback, { ttlMs: 60_000, maxEntries: 256 })
+  sweepFeedback(decisionFeedback, { ttlMs: 60_000, maxEntries: 256 })
+}
 
 // Trusted Host authorities for web-route fencing (RISK-01/02); resolved once
 // at apply() from webRuntime / --trusted-host / LAN enumeration.
@@ -1124,15 +1182,6 @@ function installSessionModeRoute(ctx: any): void {
   }), 'dsh-auto-approval-llm: session mode route')
 }
 
-function modelRoute(agent: any) {
-  const session = agent?.session
-  const request = session?.requestHeader?.()?.config
-  if (request !== undefined) return { provider: request.provider, model: request.model }
-  const provider = agent?.options?.provider
-  const model = agent?.options?.model
-  return provider === undefined || model === undefined ? undefined : { provider, model }
-}
-
 function trustedUserMessages(authority: any) {
   if (authority === undefined) return []
   const messages: string[] = []
@@ -1244,15 +1293,15 @@ export function apply(ctx: Context, rawConfig: Config): void {
   // time, so the classifier must be rebuilt whenever (live) settings change;
   // otherwise reviewerProvider edits would only take effect after a restart.
   let classifier = createDshClassifier(llm, {
-    timeoutMs: config.classifierTimeoutMs ?? 8_000,
-    maxOutputTokens: config.classifierMaxOutputTokens ?? 1_024,
+    timeoutMs: config.classifierTimeoutMs ?? THRESHOLD_DEFAULTS.classifierTimeoutMs,
+    maxOutputTokens: config.classifierMaxOutputTokens ?? THRESHOLD_DEFAULTS.classifierMaxOutputTokens,
     ...(config.reviewerProvider ? { provider: config.reviewerProvider } : {}),
     ...(config.reviewerModel ? { model: config.reviewerModel } : {}),
   })
   const rebuildClassifier = () => {
     classifier = createDshClassifier(llm, {
-      timeoutMs: config.classifierTimeoutMs ?? 8_000,
-      maxOutputTokens: config.classifierMaxOutputTokens ?? 1_024,
+      timeoutMs: config.classifierTimeoutMs ?? THRESHOLD_DEFAULTS.classifierTimeoutMs,
+      maxOutputTokens: config.classifierMaxOutputTokens ?? THRESHOLD_DEFAULTS.classifierMaxOutputTokens,
       ...(config.reviewerProvider ? { provider: config.reviewerProvider } : {}),
       ...(config.reviewerModel ? { model: config.reviewerModel } : {}),
     })
@@ -1416,7 +1465,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
     if (!assessment.classifierEligible) return { kind: 'ask', reason: `[auto-mode approval required] ${assessment.reason}` }
     try {
       const authority = authorityFor(exec)
-      const route = modelRoute(exec.agent) ?? modelRoute(authority)
+      const route = resolveModelRoute(exec.agent) ?? resolveModelRoute(authority)
       const decision = await classifier.classify({
         toolName: exec.name,
         arguments: sanitizeClassifierArguments(exec.arguments),
@@ -1457,25 +1506,12 @@ export function apply(ctx: Context, rawConfig: Config): void {
   // Sweep expired follow-phase statuses so a client that never ACKs (closed
   // tab / headless page) cannot leak callId keys in reviewStates.
   const followSweep = setInterval(() => {
-    const now = Date.now()
-    for (const [callId, expiry] of followExpiry) {
-      if (expiry <= now) {
-        followExpiry.delete(callId)
-        reviewStates.delete(callId)
-      }
-    }
-    for (const [callId, at] of resolvedCallIds) {
-      if (now - at > RESOLVED_TTL_MS) resolvedCallIds.delete(callId)
-    }
-    for (const [callId, at] of autoAnswered) {
-      if (now - at > AUTO_ANSWERED_TTL_MS) autoAnswered.delete(callId)
-    }
+    sweepFollowPhase(Date.now())
   }, 1_000)
   ctx.effect(() => () => clearInterval(followSweep))
 
   anyCtx.on('tools/post-execute', (exec: any, result: any, next: any) => {
-    sweepFeedback(timeoutFeedback, { ttlMs: 60_000, maxEntries: 256 })
-    sweepFeedback(decisionFeedback, { ttlMs: 60_000, maxEntries: 256 })
+    sweepFeedbackMaps()
     const timeoutEntry = timeoutFeedback.get(exec?.callId)
     const decisionEntry = decisionFeedback.get(exec?.callId)
     if (!timeoutEntry && !decisionEntry) return next()
@@ -1813,28 +1849,29 @@ export function apply(ctx: Context, rawConfig: Config): void {
       }
     }
 
-    if (config.denyList.includes(toolName)) {
+    const staticDecision = staticListDecision(config, toolName)
+    if (staticDecision.kind === 'reject') {
       recordDecisionFeedback(req.callId, `[dsh-auto-approval-llm] Rule denied: ${toolName} is in the denyList`)
       pushHistory({
         sessionId: sessionKey,
         toolName,
         outcome: 'rejected',
-        source: 'denyList-deny',
+        source: staticDecision.source,
       })
       return 'rejected'
     }
-    if (config.allowlist.includes(toolName)) {
+    if (staticDecision.kind === 'allow') {
       // Static-policy allow: the approval trail must not be silent about a
       // decision that permitted a tool call.
       pushHistory({
         sessionId: sessionKey,
         toolName,
         outcome: 'allowed-once',
-        source: 'allowlist-allow',
+        source: staticDecision.source,
       })
       return 'allowed-once'
     }
-    if (config.humanOnlyList.includes(toolName)) {
+    if (staticDecision.kind === 'ask-human') {
       return askHuman(req, undefined, next)
     }
 
@@ -1854,11 +1891,11 @@ export function apply(ctx: Context, rawConfig: Config): void {
     }
 
     const staticRisk = classifyStaticRisk(req, args)
-    const llmRouteAvailable = !!((config.reviewerProvider && config.reviewerModel) || config.reviewerBaseUrl || conversationRoute(req.agent.session))
+    const llmRouteAvailable = !!((config.reviewerProvider && config.reviewerModel) || config.reviewerBaseUrl || sessionModelRoute(req.agent.session))
     const llmReviews = llmRouteAvailable && riskReviewed(staticRisk, config.llmReviewScope)
     const llmTakeover = llmReviews && riskTakenOver(staticRisk, config.llmTakeoverScope)
     const seconds = riskSeconds(staticRisk)
-    const timeoutFeedback = `The review model did not respond (recorded). Retry the command; after ${config.maxConsecutiveDenials} more failures the breaker will hand over to the user.`
+    const timeoutNotice = `The review model did not respond (recorded). Retry the command; after ${config.maxConsecutiveDenials} more failures the breaker will hand over to the user.`
 
     if (staticRisk === 'LOW') {
       if (!llmReviews) {
@@ -1923,7 +1960,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
         } else {
           // Reviewer unavailable/crashed: fail closed on LOW, never auto-allow
           // and never count toward the LLM-denial breaker.
-          recordDecisionFeedback(req.callId, timeoutFeedback)
+          recordDecisionFeedback(req.callId, timeoutNotice)
           pushHistory({
             sessionId: sessionKey,
             toolName,
@@ -1955,7 +1992,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
           phase: 'countdown',
           action: fallback,
           seconds,
-          ...(fallback === 'reject' ? { feedback: timeoutFeedback } : {}),
+          ...(fallback === 'reject' ? { feedback: timeoutNotice } : {}),
         }
         return askHuman(req, undefined, next, false, status)
       }
@@ -1965,7 +2002,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
         phase: 'countdown',
         action: fallbackAction,
         seconds,
-        ...(fallbackAction === 'reject' ? { feedback: timeoutFeedback } : {}),
+        ...(fallbackAction === 'reject' ? { feedback: timeoutNotice } : {}),
       }
       const mediumHandle: RaceHumanHandle = { claim: () => {} }
       const askPromise = askHuman(req, undefined, next, false, status, mediumHandle, true)
@@ -2026,7 +2063,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       phase: 'countdown',
       action: highAction,
       seconds,
-      ...(highAction === 'allow' ? {} : { feedback: timeoutFeedback }),
+      ...(highAction === 'allow' ? {} : { feedback: timeoutNotice }),
     }
     const askPromise = askHuman(req, undefined, next, false, status)
     if (llmReviews) {
@@ -2124,13 +2161,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
         denials.clear()
         totalDenials.clear()
         denialLog.clear()
-        reviewStates.clear()
-        followExpiry.clear()
-        resolvedCallIds.clear()
-        reviewVerdicts.clear()
-        autoAnswered.clear()
-        timeoutFeedback.clear()
-        decisionFeedback.clear()
+        clearApprovalState()
         return { kind: 'success', text: 'Breaker counters and approval state reset.' }
       },
     }), 'dsh-auto-approval-llm: /approval command')

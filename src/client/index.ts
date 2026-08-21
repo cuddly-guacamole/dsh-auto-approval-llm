@@ -1,6 +1,7 @@
 import React from 'react'
 import { Button, Input } from '@deepseek-ai/dsh-client-ui-primitives'
 import { normalizeTimeoutAction } from '../auto/decision.js'
+import { THRESHOLD_DEFAULTS } from '../auto/constants.js'
 import { parseRulesText } from '../auto/rules.js'
 import { installAutoPermissionIcon } from './auto-icon.js'
 import { zh, en } from './locale.js'
@@ -16,7 +17,7 @@ const REVIEWER_CREDENTIAL_ROUTE = '/_dsh/auto-approval-llm/reviewer-credential'
 const SESSION_MODE_ROUTE = '/_dsh/auto-approval-llm/session-mode'
 const REVIEW_STATUS_ROUTE = '/_dsh/auto-approval-llm/review-status'
 let sessionsRef: any
-let breakerAntiHijackMs = 0
+let breakerAntiHijackMs = THRESHOLD_DEFAULTS.breakerAntiHijackMs
 let aiButtonPosition: 'header' | 'floating' = 'header'
 const MAX_PANEL_RECORDS = 10
 // Grace (ms) during which a countdown approval whose host follow is not yet
@@ -549,9 +550,9 @@ function draftOf(value: any): Draft {
     llmReviewScope: value?.llmReviewScope ?? 'low-or-above',
     llmTakeoverScope: value?.llmTakeoverScope ?? 'medium-or-below',
     defaultReviewMode: ['manual', 'smart', 'unattended'].includes(value?.defaultReviewMode) ? value.defaultReviewMode : 'smart',
-    lowRiskSeconds: String(value?.lowRiskSeconds ?? 5),
-    mediumRiskSeconds: String(value?.mediumRiskSeconds ?? 8),
-    highRiskSeconds: String(value?.highRiskSeconds ?? 10),
+    lowRiskSeconds: String(value?.lowRiskSeconds ?? THRESHOLD_DEFAULTS.lowRiskSeconds),
+    mediumRiskSeconds: String(value?.mediumRiskSeconds ?? THRESHOLD_DEFAULTS.mediumRiskSeconds),
+    highRiskSeconds: String(value?.highRiskSeconds ?? THRESHOLD_DEFAULTS.highRiskSeconds),
     safetyPrompt: value?.safetyPrompt ?? '',
     reviewerProvider: value?.reviewerProvider ?? '',
     reviewerModel: value?.reviewerModel ?? '',
@@ -562,10 +563,10 @@ function draftOf(value: any): Draft {
     humanOnlyList: (value?.humanOnlyList ?? []).join('\n'),
     rulesText: value?.rulesText ?? '',
     rulesDryRun: value?.rulesDryRun === true ? 'on' : 'off',
-    maxConsecutiveDenials: String(value?.maxConsecutiveDenials ?? 3),
-    maxTotalDenials: String(value?.maxTotalDenials ?? 20),
+    maxConsecutiveDenials: String(value?.maxConsecutiveDenials ?? THRESHOLD_DEFAULTS.maxConsecutiveDenials),
+    maxTotalDenials: String(value?.maxTotalDenials ?? THRESHOLD_DEFAULTS.maxTotalDenials),
     showSessionPanel: normalizeShowSessionPanel(value?.showSessionPanel ?? 'off'),
-    breakerAntiHijackMs: String(value?.breakerAntiHijackMs ?? 0),
+    breakerAntiHijackMs: String(value?.breakerAntiHijackMs ?? THRESHOLD_DEFAULTS.breakerAntiHijackMs),
     aiButtonPosition: value?.aiButtonPosition === 'floating' ? 'floating' : 'header',
     debug: value?.debug === true ? 'on' : 'off',
   }
@@ -580,9 +581,9 @@ function valueOf(draft: Draft): any {
     llmReviewScope: draft.llmReviewScope,
     llmTakeoverScope: draft.llmTakeoverScope,
     defaultReviewMode: draft.defaultReviewMode,
-    lowRiskSeconds: Math.max(1, Number(draft.lowRiskSeconds) || 5),
-    mediumRiskSeconds: Math.max(1, Number(draft.mediumRiskSeconds) || 8),
-    highRiskSeconds: Math.max(1, Number(draft.highRiskSeconds) || 10),
+    lowRiskSeconds: Math.max(1, Number(draft.lowRiskSeconds) || THRESHOLD_DEFAULTS.lowRiskSeconds),
+    mediumRiskSeconds: Math.max(1, Number(draft.mediumRiskSeconds) || THRESHOLD_DEFAULTS.mediumRiskSeconds),
+    highRiskSeconds: Math.max(1, Number(draft.highRiskSeconds) || THRESHOLD_DEFAULTS.highRiskSeconds),
     safetyPrompt: draft.safetyPrompt,
     allowlist: list(draft.allowlist),
     denyList: list(draft.denyList),
@@ -925,7 +926,7 @@ function SettingsSection() {
   const anyDirty = timerDirty || reviewDirty || securityDirtyEff
 
   const broadcastSettings = (saved: any) => {
-    breakerAntiHijackMs = saved?.value?.breakerAntiHijackMs ?? 0
+    breakerAntiHijackMs = saved?.value?.breakerAntiHijackMs ?? THRESHOLD_DEFAULTS.breakerAntiHijackMs
     aiButtonPosition = saved?.value?.aiButtonPosition === 'floating' ? 'floating' : 'header'
     const g = globalThis as any
     if (typeof g.CustomEvent === 'function') {
@@ -1014,7 +1015,15 @@ function SettingsSection() {
   }
 
   const resetTimerCard = () => {
-    setDraft({ ...draft, lowRiskSeconds: '5', mediumRiskSeconds: '8', highRiskSeconds: '10', breakerAntiHijackMs: '0', maxConsecutiveDenials: '3', maxTotalDenials: '20' })
+    setDraft({
+      ...draft,
+      lowRiskSeconds: String(THRESHOLD_DEFAULTS.lowRiskSeconds),
+      mediumRiskSeconds: String(THRESHOLD_DEFAULTS.mediumRiskSeconds),
+      highRiskSeconds: String(THRESHOLD_DEFAULTS.highRiskSeconds),
+      breakerAntiHijackMs: String(THRESHOLD_DEFAULTS.breakerAntiHijackMs),
+      maxConsecutiveDenials: String(THRESHOLD_DEFAULTS.maxConsecutiveDenials),
+      maxTotalDenials: String(THRESHOLD_DEFAULTS.maxTotalDenials),
+    })
   }
 
   const resetReviewerCard = () => {
@@ -2132,7 +2141,7 @@ export function apply(ctx: any): void {
     .then((r: any) => r.json())
     .then((data: any) => {
       if (data?.ok) {
-        breakerAntiHijackMs = data.value.value?.breakerAntiHijackMs ?? 0
+        breakerAntiHijackMs = data.value.value?.breakerAntiHijackMs ?? THRESHOLD_DEFAULTS.breakerAntiHijackMs
         aiButtonPosition = data.value.value?.aiButtonPosition === 'floating' ? 'floating' : 'header'
       }
     })

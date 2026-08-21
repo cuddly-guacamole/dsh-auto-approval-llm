@@ -284,6 +284,30 @@ export function preserveHostKeys(
   return out
 }
 
+export type StaticListDecision =
+  | { kind: 'reject'; source: 'denyList-deny' }
+  | { kind: 'allow'; source: 'allowlist-allow' }
+  | { kind: 'ask-human' }
+  | { kind: 'continue' }
+
+/**
+ * Pure static-list policy for one tool call, evaluated before any LLM review
+ * or denial breaker. Precedence is deny > allow > human-only, exact name
+ * match. The signature deliberately takes no breaker state: static-list
+ * outcomes never read or mutate the breaker counters. That isolation is
+ * intentional — the breaker measures LLM-review failures only, while these
+ * are deterministic user-configured decisions.
+ */
+export function staticListDecision(
+  lists: { denyList: readonly string[]; allowlist: readonly string[]; humanOnlyList: readonly string[] },
+  toolName: string,
+): StaticListDecision {
+  if (lists.denyList.includes(toolName)) return { kind: 'reject', source: 'denyList-deny' }
+  if (lists.allowlist.includes(toolName)) return { kind: 'allow', source: 'allowlist-allow' }
+  if (lists.humanOnlyList.includes(toolName)) return { kind: 'ask-human' }
+  return { kind: 'continue' }
+}
+
 /**
  * Normalize a persisted timeoutAction for the client editor. The legacy
  * "llm-low-risk-only" value (subsumed by the LOW branch) is presented as and
