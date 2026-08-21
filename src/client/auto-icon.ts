@@ -2,38 +2,49 @@
 // Ported from @nanmicoder/dsh-auto-mode (client/icon-injection.js).
 // MIT License, Copyright (c) 2026 程序员阿江-Relakkes (https://github.com/NanmiCoder/dsh-auto-mode).
 // Retained per the MIT License: this is a substantial portion of the original.
+//
+// Localized + separated rendering follows the official access-mode surfaces:
+//   - menu item:  <span class=itemIcon><svg aria-hidden/></span><span class=itemLabel>label</span>
+//   - trigger:    <span class=triggerIcon><svg aria-hidden/></span><span class=triggerLabel>label</span><span chevron/>
+//   - /permission tooltip rows and the settings selector carry the label only (official shows no glyph there).
+// The label is localized: zh → 自动审批, everything else → Auto.
 const PLUGIN_ID = 'dsh-auto-approval-llm';
 const ICON_ATTRIBUTE = 'data-dsh-auto-mode-icon';
+const LABEL_ATTRIBUTE = 'data-dsh-auto-mode-label';
 const DIALOG_ATTRIBUTE = 'data-dsh-auto-mode-risk-dialog';
-const REQUIRED_PERMISSION_LABELS = ['Read Only', 'Workspace Write', 'Auto', 'Full access'];
-const ICON_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M8.21.9l6.58 2.47v3.64c0 4.99-3.74 7.2-6.58 8.29C5.36 14.21 1.62 12 1.62 7.01V3.37L8.21.9Z" fill="none" stroke="black" stroke-width="1.32" stroke-linejoin="round"/><path d="M8.75 3.65 5.95 8.2h2.08l-.78 4.15 2.82-4.9H8.12l.63-3.8Z" fill="black"/></svg>';
+// Both locales of the four presets; a permission menu matches when every
+// preset slot is present in either language (the ported implementation only
+// shipped the English set, which silently dropped the zh menu).
+const PERMISSION_LABEL_SETS = {
+    readOnly: ['Read Only', '仅可查看'],
+    workspaceWrite: ['Workspace Write', '可写入工作区'],
+    auto: ['Auto', '自动审批'],
+    fullAccess: ['Full access', '完全权限'],
+};
+// Shield outline + bolt, drawn 1:1 like the official 16px permission glyphs
+// (stroke currentColor / fill currentColor, aria-hidden wrapper).
+const SHIELD_PATH = 'M8.20554 0.899994L14.7901 3.36857V7.01026C14.7901 12 11.0466 14.2103 8.20554 15.3C5.36446 14.2103 1.62012 12 1.62012 7.01026V3.36857L8.20554 0.899994Z';
+const BOLT_PATH = 'M8.75 3.65 5.95 8.2h2.08l-.78 4.15 2.82-4.9H8.12l.63-3.8Z';
+// The official preset name for `auto` in this deployment's patch (cordis.patch.yml).
+const CONFIGURED_AUTO_NAME = 'Auto';
+function autoName(document) {
+    const language = document.documentElement.lang || document.defaultView?.navigator.language || '';
+    return /^zh(?:-|$)/i.test(language) ? '自动审批' : CONFIGURED_AUTO_NAME;
+}
 function iconStyles() {
-    const mask = `url("data:image/svg+xml,${encodeURIComponent(ICON_SVG)}")`;
     return `
-[${ICON_ATTRIBUTE}]::before {
-  content: "";
-  display: inline-block;
-  flex: 0 0 auto;
+.dsa-autoIcon {
+  display: inline-flex;
+  flex: none;
   width: 16px;
   height: 16px;
-  background-color: var(--dsw-alias-label-tertiary, currentColor);
-  -webkit-mask-image: ${mask};
-  mask-image: ${mask};
-  -webkit-mask-position: center;
-  mask-position: center;
-  -webkit-mask-repeat: no-repeat;
-  mask-repeat: no-repeat;
-  -webkit-mask-size: contain;
-  mask-size: contain;
+  align-items: center;
+  justify-content: center;
+  color: var(--dsw-alias-label-tertiary, currentColor);
 }
-[${ICON_ATTRIBUTE}="trigger"]::before {
+.dsa-autoIconTrigger {
   width: 14px;
   height: 14px;
-}
-@container (max-width: 460px) {
-  [${ICON_ATTRIBUTE}="trigger"] > span:first-of-type {
-    display: none;
-  }
 }
 [${DIALOG_ATTRIBUTE}] {
   position: fixed;
@@ -186,6 +197,11 @@ function iconStyles() {
     max-height: calc(100dvh - 48px);
   }
 }
+@container (max-width: 460px) {
+  [${ICON_ATTRIBUTE}="trigger"] [${LABEL_ATTRIBUTE}] {
+    display: none;
+  }
+}
 `;
 }
 const EN_RISK_COPY = {
@@ -197,11 +213,11 @@ const EN_RISK_COPY = {
     close: 'Close',
 };
 const ZH_RISK_COPY = {
-    title: '确认启用 Auto？',
-    description: 'Auto 保留 Full access 的文件访问范围，并通过自动策略层判断工具调用。该策略不是操作系统级沙箱：分类误判，以及插件或其他代码在 DSH 工具链外执行的操作，仍可能避开检查。仅建议在你信任当前任务、工作区和已安装插件时使用。',
+    title: '确认启用自动审批？',
+    description: '自动审批保留“完全权限”的文件访问范围，并通过自动策略层判断工具调用。该策略不是操作系统级沙箱：分类误判，以及插件或其他代码在 DSH 工具链外执行的操作，仍可能避开检查。仅建议在你信任当前任务、工作区和已安装插件时使用。',
     acknowledge: '我已了解风险，并愿意继续',
     cancel: '取消',
-    confirm: '启用 Auto',
+    confirm: '启用自动审批',
     close: '关闭',
 };
 function riskCopy(document) {
@@ -275,10 +291,10 @@ function normalizedText(element) {
 }
 function isPermissionMenu(menu) {
     const labels = new Set(Array.from(menu.querySelectorAll('button[role="menuitem"]'), normalizedText));
-    return REQUIRED_PERMISSION_LABELS.every(label => labels.has(label));
+    return Object.values(PERMISSION_LABEL_SETS).every(variants => variants.some(label => labels.has(label)));
 }
 function isAutoMenuItem(element) {
-    if (element.matches('button[role="menuitem"]') && normalizedText(element) === 'Auto') {
+    if (element.matches('button[role="menuitem"]') && PERMISSION_LABEL_SETS.auto.includes(normalizedText(element))) {
         const menu = element.closest('[role="menu"]');
         return menu !== null && isPermissionMenu(menu);
     }
@@ -291,7 +307,7 @@ function isAutoPermissionOption(element) {
     const listboxLabel = listbox?.getAttribute('aria-label') ?? '';
     if (!/^\/permission\s+(?:matches|匹配项)$/i.test(listboxLabel.trim()))
         return false;
-    return normalizedText(element.firstElementChild ?? element) === 'Auto';
+    return PERMISSION_LABEL_SETS.auto.includes(normalizedText(element.firstElementChild ?? element));
 }
 function activeAutoPermissionOption(target) {
     const overlay = target.closest('[aria-label^="/permission"]');
@@ -308,10 +324,64 @@ function isAutoTrigger(element) {
     if (!element.matches('button[aria-label]'))
         return false;
     const label = element.getAttribute('aria-label') ?? '';
-    return /(?:访问模式|Access mode)[\s\S]*Auto\s*$/i.test(label);
+    return /(?:访问模式|Access mode)[\s\S]*(?:Auto|自动审批)\s*$/i.test(label);
 }
-/** Mark the official Auto permission row and active trigger for CSS decoration. */
+/** The direct text node(s) of an element (used by the settings selector). */
+function directText(element) {
+    const parts = [];
+    for (const node of element.childNodes) {
+        if (node.nodeType === 3) {
+            const text = node.data.trim();
+            if (text)
+                parts.push(text);
+        }
+    }
+    return parts.join(' ');
+}
+/** Build the plugin-owned Auto glyph span (official-style icon element). */
+function createAutoGlyph(document, size) {
+    const span = document.createElement('span');
+    span.className = 'dsa-autoIcon' + (size === 'trigger' ? ' dsa-autoIconTrigger' : '');
+    span.setAttribute('aria-hidden', 'true');
+    span.innerHTML = `<svg width="${size}" height="${size}" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="${SHIELD_PATH}" stroke="currentColor" stroke-width="1.31831" stroke-linejoin="round"/><path d="${BOLT_PATH}" fill="currentColor"/></svg>`;
+    return span;
+}
+/**
+ * Insert the glyph span and localize the label of one auto surface.
+ * The glyph only joins surfaces where the official UI renders permission
+ * glyphs (menu items, the composer trigger); the popup rows and settings
+ * selector are label-only, matching the official /permission surfaces.
+ */
+function decorateSurface(document, container, label, kind) {
+    if (kind !== 'option' && container.querySelector('.dsa-autoIcon') === null) {
+        const glyph = createAutoGlyph(document, kind === 'trigger' ? 14 : 16);
+        // Mirror official ordering: glyph first, then the label element.
+        container.insertBefore(glyph, container.firstChild);
+    }
+    if (label === null)
+        return;
+    label.setAttribute(LABEL_ATTRIBUTE, '');
+    const text = autoName(document);
+    if (label.textContent !== text)
+        label.textContent = text;
+}
+/** Localize the settings PermissionRow selector text node (official has no glyph there). */
+function decorateSelector(document, button) {
+    if (directText(button) === 'Auto' || directText(button) === '自动审批') {
+        const text = autoName(document);
+        for (const node of button.childNodes) {
+            if (node.nodeType === 3 && node.data.trim() !== '') {
+                if (node.data !== text)
+                    node.data = text;
+                break;
+            }
+        }
+        button.setAttribute(LABEL_ATTRIBUTE, '');
+    }
+}
+/** Mark + decorate the official Auto permission rows, trigger, and settings selector. */
 export function decorateAutoPermissionIcons(document) {
+    const autoNames = PERMISSION_LABEL_SETS.auto;
     for (const marked of document.querySelectorAll(`[${ICON_ATTRIBUTE}]`)) {
         const kind = marked.getAttribute(ICON_ATTRIBUTE);
         if ((kind === 'menu' && !isAutoMenuItem(marked)) || (kind === 'trigger' && !isAutoTrigger(marked))) {
@@ -322,13 +392,45 @@ export function decorateAutoPermissionIcons(document) {
         if (!isPermissionMenu(menu))
             continue;
         for (const item of menu.querySelectorAll('button[role="menuitem"]')) {
-            if (normalizedText(item) === 'Auto')
-                item.setAttribute(ICON_ATTRIBUTE, 'menu');
+            if (!autoNames.includes(normalizedText(item)))
+                continue;
+            item.setAttribute(ICON_ATTRIBUTE, 'menu');
+            // Label span = a text-carrying span without an embedded glyph/check.
+            const label = Array.from(item.children).find(child => child.tagName === 'SPAN' && child.querySelector('svg') === null && autoNames.includes(normalizedText(child))) ?? null;
+            decorateSurface(document, item, label, 'menu');
         }
     }
     for (const button of document.querySelectorAll('button[aria-label]')) {
-        if (isAutoTrigger(button))
+        if (isAutoTrigger(button)) {
             button.setAttribute(ICON_ATTRIBUTE, 'trigger');
+            const label = Array.from(button.children).find(child => child.tagName === 'SPAN' && child.querySelector('svg') === null && autoNames.includes(normalizedText(child))) ?? null;
+            decorateSurface(document, button, label, 'trigger');
+            const aria = button.getAttribute('aria-label') ?? '';
+            const localized = aria.replace(/(?:Auto|自动审批)\s*$/i, autoName(document));
+            if (localized !== aria)
+                button.setAttribute('aria-label', localized);
+        }
+    }
+    // /permission popup rows (listbox 匹配项 rows under the 选项 overlay).
+    for (const listbox of document.querySelectorAll('[role="listbox"][aria-label]')) {
+        const listboxLabel = listbox.getAttribute('aria-label') ?? '';
+        if (!/^\/permission\s+(?:matches|匹配项)$/i.test(listboxLabel.trim()))
+            continue;
+        for (const option of listbox.querySelectorAll('[role="option"]')) {
+            const label = option.firstElementChild && option.firstElementChild.tagName === 'SPAN'
+                ? option.firstElementChild
+                : null;
+            if (label === null || !autoNames.includes(normalizedText(label)))
+                continue;
+            decorateSurface(document, option, label, 'option');
+        }
+    }
+    // Settings PermissionRow selector (bare text node + chevron).
+    for (const button of document.querySelectorAll('button[aria-haspopup="menu"]')) {
+        if (button.getAttribute('aria-label') !== null)
+            continue;
+        if (directText(button) === 'Auto' || directText(button) === '自动审批')
+            decorateSelector(document, button);
     }
 }
 /** Install the Auto icon and explicit risk gate, then return their disposer. */
@@ -358,7 +460,7 @@ export function installAutoPermissionIcon(document) {
     const observer = new MutationObserver(scan);
     observer.observe(document.documentElement, {
         attributes: true,
-        attributeFilter: ['aria-label'],
+        attributeFilter: ['aria-label', 'lang'],
         characterData: true,
         childList: true,
         subtree: true,
@@ -444,9 +546,34 @@ export function installAutoPermissionIcon(document) {
         document.removeEventListener('keydown', onKeyDown, true);
         closeDialog();
         style.remove();
+        // Remove injected glyphs and restore the configured official labels.
+        for (const glyph of document.querySelectorAll('.dsa-autoIcon')) {
+            glyph.remove();
+        }
+        for (const labelled of document.querySelectorAll(`[${LABEL_ATTRIBUTE}]`)) {
+            labelled.removeAttribute(LABEL_ATTRIBUTE);
+            if (labelled.tagName === 'SPAN') {
+                if (labelled.textContent !== CONFIGURED_AUTO_NAME)
+                    labelled.textContent = CONFIGURED_AUTO_NAME;
+            }
+            else if (directText(labelled) === '自动审批') {
+                for (const node of labelled.childNodes) {
+                    if (node.nodeType === 3 && node.data.trim() !== '') {
+                        node.data = CONFIGURED_AUTO_NAME;
+                        break;
+                    }
+                }
+            }
+        }
         for (const marked of document.querySelectorAll(`[${ICON_ATTRIBUTE}]`)) {
             marked.removeAttribute(ICON_ATTRIBUTE);
         }
+        // Restore the trigger aria-label the decorate pass localized.
+        for (const button of document.querySelectorAll('button[aria-label]')) {
+            const label = button.getAttribute('aria-label') ?? '';
+            if (/访问模式，当前：自动审批$/.test(label)) {
+                button.setAttribute('aria-label', label.replace(/(?:Auto|自动审批)\s*$/, CONFIGURED_AUTO_NAME));
+            }
+        }
     };
 }
-//# sourceMappingURL=icon-injection.js.map

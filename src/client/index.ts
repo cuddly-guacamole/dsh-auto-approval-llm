@@ -2100,13 +2100,13 @@ function installSettingsCardStyles(): () => void {
 .dsa-nestedHeader:hover{background:var(--dsw-alias-interactive-bg-hover)}
 .dsa-nestedTitle{flex:1;min-width:0;font-weight:600;font-size:14px;color:var(--dsw-alias-label-primary)}
 .dsa-nestedBody{display:grid;gap:12px;padding:0 16px 14px;border-top:1px solid var(--dsw-alias-border-l2)}
-.dsa-subcard{border:1px solid var(--dsw-alias-border-l1);border-radius:14px;background:var(--dsw-alias-bg-layer-1);display:flex;flex-direction:column;overflow:hidden}
+.dsa-subcard{border:1px solid var(--dsw-alias-border-l2);border-radius:14px;background:var(--dsw-alias-bg-layer-1);display:flex;flex-direction:column;overflow:hidden}
 .dsa-subcardHeader{appearance:none;display:flex;align-items:center;gap:8px;width:100%;padding:14px 16px;background:var(--dsw-alias-bg-layer-2);border:0;cursor:pointer;font:inherit;color:inherit;text-align:left}
 .dsa-subcardHeader:hover{background:var(--dsw-alias-interactive-bg-hover)}
 .dsa-subcardHeader:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-2px}
 .dsa-subcardTitle{flex:1;min-width:0;font-weight:600;font-size:14px;color:var(--dsw-alias-label-primary)}
 .dsa-subcardBody{display:grid;gap:12px;padding:4px 16px 14px;border-top:1px solid var(--dsw-alias-border-l2)}
-.dsa-subcardFooter{display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:10px 16px;border-top:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1)}
+.dsa-subcardFooter{display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:10px 16px;border-top:1px solid var(--dsw-alias-border-l2)}
 .dsa-badgeOk,.dsa-badgeMuted{white-space:nowrap;border-radius:999px;padding:1px 8px;font-size:11px;font-weight:500;line-height:17px;border:1px solid var(--dsw-alias-border-l1);flex:none}
 .dsa-badgeOk{color:var(--dsw-alias-state-success-primary);background:rgba(var(--dsw-alias-state-success-rgb,0),0.08)}
 .dsa-badgeMuted{color:var(--dsw-alias-label-tertiary);background:var(--dsw-alias-bg-layer-2)}
@@ -2122,7 +2122,6 @@ function installSettingsCardStyles(): () => void {
 .dsa-alert{display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:8px;font-size:12px;line-height:1.5}
 .dsa-alertError{color:var(--dsw-alias-state-error-primary);background:rgba(var(--dsw-alias-state-error-primary,229 72 77),0.08);border:1px solid var(--dsw-alias-state-error-primary)}
 .dsa-alertText{flex:1;min-width:0;overflow-wrap:anywhere}
-/* 将最底下的恢复默认按钮从胶囊形状改为圆角矩形 */
 .dsa-resetButton{border-radius:8px!important;height:auto!important;padding:5px 14px!important}
 `
   g.document.head.appendChild(style)
