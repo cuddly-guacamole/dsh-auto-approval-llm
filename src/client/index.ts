@@ -456,6 +456,12 @@ function hijackApprovalButtons(): () => void {
         breakerTimers.delete(key)
       }
     }
+    // The `originals` cache is keyed by button nodes React re-creates per
+    // approval; pruning disconnected nodes here (rather than only at dispose)
+    // stops a long-lived SPA from accumulating stale button strong-refs.
+    for (const [btn] of originals) {
+      if (btn != null && btn.isConnected === false) originals.delete(btn)
+    }
   }
 
   const observer = new g.MutationObserver(scan)

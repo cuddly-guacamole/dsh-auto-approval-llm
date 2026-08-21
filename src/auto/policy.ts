@@ -45,7 +45,7 @@ function serializedArguments(argumentsValue) {
     }
 }
 function containsCredentialMaterial(argumentsValue) {
-    return /(?:BEGIN (?:RSA |OPENSSH )?PRIVATE KEY|\b(?:sk|ghp|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{8,}\b|Bearer\s+[A-Za-z0-9._~+\/-]{8,}|\.ssh[\\/](?:id_|config)|\.credentials\.yaml)/i
+    return /(?:BEGIN (?:RSA |OPENSSH )?PRIVATE KEY|\b(?:sk|ghp|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{8,}\b|\bAKIA[0-9A-Z]{16}\b|(?:aws_secret_access_key|aws_access_key_id|secret_access_key|access_key_id)\s*=\s*[A-Za-z0-9/+=_-]{16,}|\bBearer\s+[A-Za-z0-9._~+\/-]{8,}|\.ssh[\\/](?:id_|config)|\.credentials\.yaml)/i
         .test(serializedArguments(argumentsValue));
 }
 const DESTRUCTIVE_TOOL = /(?:^|[_-])(?:delete|destroy|remove|erase|purge|drop|truncate|wipe|unlink|rmdir|reset|revoke)(?:$|[_-])/i;

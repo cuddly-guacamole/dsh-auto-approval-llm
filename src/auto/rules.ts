@@ -52,6 +52,14 @@ function isBoundedPattern(src: string): boolean {
   if (/\(\s*[^()]*[+*][^()]*\)\s*[+*]/.test(src)) return false
   // Alternation wrapped in an outer unbounded quantifier: `(a|b|c)*`, ...
   if (/\(\s*(?:[^()]*\|[^()]*\|[^()]*)\s*\)\s*[+*]/.test(src)) return false
+  // Nested groups each carrying a repeat, at any paren depth: `((a)+)+`,
+  // `((ab)*)+` — exhaustive nested-quantifier checks are out of scope, but this
+  // unmistakable shape is a classic catastrophic-backtracking signature.
+  if (/\(\([^)]*\)\s*[+*?][^)]*\)\s*[+*?]/.test(src)) return false
+  // A counted repeat with an unbounded/loose upper bound applied to a group or
+  // a repeat (`(a+){0,}`, `(a|b){2,}`, `(ab){5,}`) can still force
+  // super-linear backtracking and is not caught by the `[+*]` guards above.
+  if (/(?:\)|[*+?])\s*\{\s*\d+\s*,\s*\}/.test(src)) return false
   return true
 }
 

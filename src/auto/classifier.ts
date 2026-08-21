@@ -24,7 +24,14 @@ function redactSecrets(value) {
     return value
         .replace(/\b(?:sk|ghp|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{8,}\b/g, '[redacted-secret]')
         .replace(/\bBearer\s+[A-Za-z0-9._~+\/-]{8,}/gi, 'Bearer [redacted-secret]')
-        .replace(/((?:api[_-]?key|token|secret|password)=)[^&\s]+/gi, '$1[redacted-secret]');
+        .replace(/((?:api[_-]?key|token|secret|password)=)[^&\s]+/gi, '$1[redacted-secret]')
+        // AWS access-key IDs (`AKIA...`) and AWS secret material (the
+        // `aws_secret_access_key=`/`secret_access_key=` forms are NOT caught by
+        // the `secret=` pattern above because `_access_key` sits between).
+        .replace(/\bAKIA[0-9A-Z]{16}\b/g, '[redacted-secret]')
+        .replace(/((?:aws_secret_access_key|aws_access_key_id|secret_access_key|access_key_id|aws_session_token)\s*=\s*)[A-Za-z0-9/+=_-]{16,}/gi, '$1[redacted-secret]')
+        // PEM private-key blocks (whole block, not just the header line).
+        .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/gi, '[redacted-secret]');
 }
 /** Redact likely secrets and bound one classifier-visible text value. */
 export function sanitizeClassifierText(value) {

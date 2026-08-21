@@ -386,6 +386,13 @@ const WRAPPER_VALUE_FLAGS = {
 function unwrapCommand(words) {
     let current = words;
     let dynamicInput = false;
+    // Strip leading `NAME=value` environment prefixes (`VAR=val cmd`), which
+    // are legal in both shells. Without this, `words[0]` being `VAR=val` made
+    // the effective command name `var=val` and skipped the privilege / hard
+    // destructive fuses entirely (`BLAH=0 sudo ls`, `BLAH=0 rm -rf /`).
+    while (current.length > 1 && /^[A-Za-z_][A-Za-z0-9_]*=.+/.test(current[0]?.text ?? '')) {
+        current = current.slice(1);
+    }
     for (let depth = 0; depth < 4; depth += 1) {
         const name = commandName(current[0]?.text ?? '');
         if (!WRAPPERS.has(name))
@@ -463,6 +470,15 @@ function explicitPaths(words, roots) {
         .map(token => normalizePath(token, roots.workspace, roots.home));
 }
 function readPathsAreRoutine(words, roots) {
+    // A variable/expansion operand cannot be statically proven to stay inside
+    // the workspace (`cat $HOME/.aws/credentials`, `get-content
+    // $env:USERPROFILE\.aws\credentials`, `grep ${HOME}/.gnupg/...`). Treating
+    // it as "no path given" made explicitPaths() drop it and `.every()` over
+    // an empty list return true, auto-allowing a credential read. Fail closed:
+    // route such a read to semantic review, mirroring deletion/write whose
+    // dynamic targets are never auto-allowed.
+    if (words.some(word => word && word.dynamic))
+        return false;
     return explicitPaths(words, roots).every(path => (isWithin(roots.workspace, path) && !isProtectedProjectPath(path, roots))
         || roots.tempRoots.some(root => isWithin(root, path)));
 }

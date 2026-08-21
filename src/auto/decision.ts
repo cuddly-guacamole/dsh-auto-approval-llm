@@ -181,12 +181,26 @@ export type LowRiskOutcome =
   | { kind: 'deny'; llmDenied: boolean }
   | { kind: 'ask' }
 
+/**
+ * Whether a reviewer `ALLOW` verdict must NOT be auto-answered by the host.
+ * A CRITICAL risk level is a hard escalation signal even when the reviewer
+ * returned ALLOW (contradictory output): it is surfaced to a human, never
+ * auto-allowed. A `DENY` is already fail-closed and stays decisive.
+ */
+export function reviewerAutoAllowBlocked(review: {
+  decision: string
+  riskLevel?: string
+}): boolean {
+  return review.decision === 'ALLOW' && review.riskLevel === 'CRITICAL'
+}
+
 export function lowRiskReviewOutcome(review: {
   decision: string
   failure?: string
   riskLevel?: string
   reason?: string
 }): LowRiskOutcome {
+  if (reviewerAutoAllowBlocked(review)) return { kind: 'ask' }
   if (review.decision === 'ALLOW') return { kind: 'allow' }
   if (review.decision === 'DENY') return { kind: 'deny', llmDenied: true }
   if (review.failure !== undefined) return { kind: 'deny', llmDenied: false }

@@ -7,12 +7,12 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { parseReview, lowRiskReviewOutcome, raceHumanDecision, detectConflicts, reviewerDecidable, preserveHostKeys, normalizeTimeoutAction, prepareReviewerArguments, extractToolPath, frameReviewerInput, breakerTripped, applyBreaker, reviewSuggestionNote, approvalSource } from '../lib/auto/decision.js'
-import { sanitizeReviewReason } from '../lib/auto/classifier.js'
+import { parseReview, lowRiskReviewOutcome, raceHumanDecision, detectConflicts, reviewerDecidable, preserveHostKeys, normalizeTimeoutAction, prepareReviewerArguments, extractToolPath, frameReviewerInput, breakerTripped, applyBreaker, reviewSuggestionNote, approvalSource, reviewerAutoAllowBlocked } from '../lib/auto/decision.js'
+import { sanitizeReviewReason, sanitizeClassifierText } from '../lib/auto/classifier.js'
 import { trimAuditTail } from '../lib/auto/audit.js'
 import { normalizeReviewMode } from '../lib/auto/review-mode.js'
 import { parseRulesText, evaluateRules, extractRuleTarget } from '../lib/auto/rules.js'
-import { hardDenyShellReason } from '../lib/auto/shell.js'
+import { hardDenyShellReason, assessShell } from '../lib/auto/shell.js'
 import { hardDenyReason, assessTool } from '../lib/auto/policy.js'
 import { isCriticalPath } from '../lib/auto/paths.js'
 
@@ -560,4 +560,110 @@ test('assessTool: apply_patch honors allowedDshSubpaths like write/edit', () => 
   const d = assessTool({ name: 'apply_patch', arguments: { patches: [{ file_path: 'C:/Users/u/.dsh/dev/x.ts' }] } }, roots, artifacts)
   assert.equal(d.decision, 'allow')
   assert.ok(d.reason.includes('trusted plugin development path'))
+})
+
+// ── audit loop (6th round) fixes ──────────────────────────────────────────
+
+// A·CRITICAL: a variable-expanded operand (`$HOME/...`, `$env:USERPROFILE\...`,
+// `${HOME}/...`) must never be auto-allowed as a "routine" read — it bypasses
+// the protected-path read gate that a literal `~/.aws` form is subject to.
+test('assessShell: variable-expanded home credential reads are not auto-allowed', () => {
+  const roots = { workspace: 'C:/ws', home: 'C:/Users/u', dshHome: 'C:/Users/u/.dsh', tempRoots: [] }
+  const artifacts = { has: () => false }
+  for (const cmd of [
+    'cat $HOME/.aws/credentials',
+    'cat ${HOME}/.ssh/id_rsa',
+    'grep $HOME/.gnupg/gpg.conf',
+    'cat "$HOME/.ssh/config"',
+  ]) {
+    const a = assessShell(cmd, 'bash', roots, artifacts, undefined)
+    assert.notEqual(a.decision, 'allow', `must not auto-allow: ${cmd}`)
+    assert.equal(a.classifierEligible, true, `${cmd} must reach semantic review`)
+  }
+  const pwsh = assessShell('get-content $env:USERPROFILE\\.aws\\credentials', 'pwsh', roots, artifacts, undefined)
+  assert.notEqual(pwsh.decision, 'allow')
+  assert.equal(pwsh.classifierEligible, true)
+})
+
+test('assessShell: literal tilde home credential read stays gated (non-regression)', () => {
+  const roots = { workspace: 'C:/ws', home: 'C:/Users/u', dshHome: 'C:/Users/u/.dsh', tempRoots: [] }
+  const artifacts = { has: () => false }
+  const a = assessShell('cat ~/.ssh/id_rsa', 'bash', roots, artifacts, undefined)
+  assert.notEqual(a.decision, 'allow')
+})
+
+test('assessShell: routine literal workspace read is not over-blocked', () => {
+  const roots = { workspace: 'C:/ws', home: 'C:/Users/u', dshHome: 'C:/Users/u/.dsh', tempRoots: [] }
+  const artifacts = { has: () => false }
+  const a = assessShell('cat C:/ws/src/a.ts', 'bash', roots, artifacts, undefined)
+  assert.equal(a.decision, 'allow')
+})
+
+// B·MEDIUM: a leading `NAME=value` env prefix must not hide the effective
+// command from the privilege / hard-destructive fuses.
+test('hardDenyShellReason: bare VAR= prefix cannot hide privilege escalation', () => {
+  const roots = { workspace: 'C:/ws', home: 'C:/Users/u', dshHome: 'C:/Users/u/.dsh', tempRoots: [] }
+  assert.equal(hardDenyShellReason('BLAH=0 sudo ls', 'bash', roots), 'privilege escalation is not permitted by auto mode')
+  assert.equal(hardDenyShellReason('A=b doas whoami', 'bash', roots), 'privilege escalation is not permitted by auto mode')
+})
+
+test('hardDenyShellReason: bare VAR= prefix cannot hide destructive targets', () => {
+  const roots = { workspace: 'C:/ws', home: 'C:/Users/u', dshHome: 'C:/Users/u/.dsh', tempRoots: [] }
+  assert.match(hardDenyShellReason('BLAH=0 rm -rf /', 'bash', roots) ?? '', /destructive operation targets|not permitted/)
+  assert.notEqual(hardDenyShellReason('MODE=1 rm -rf $HOME/x', 'bash', roots), undefined)
+})
+
+test('hardDenyShellReason: plain assignment-looking arg is not misjudged as escalation', () => {
+  const roots = { workspace: 'C:/ws', home: 'C:/Users/u', dshHome: 'C:/Users/u/.dsh', tempRoots: [] }
+  assert.equal(hardDenyShellReason('VAR=1 ls', 'bash', roots), undefined)
+  assert.equal(hardDenyShellReason('ls -la', 'bash', roots), undefined)
+})
+
+// C·MEDIUM: a reviewer `ALLOW` contradicting a CRITICAL risk level must be
+// surfaced to a human, never auto-allowed by the LOW/MEDIUM takeover paths.
+test('lowRiskReviewOutcome: ALLOW with CRITICAL risk escalates (never auto-allows)', () => {
+  assert.deepEqual(lowRiskReviewOutcome({ decision: 'ALLOW', riskLevel: 'CRITICAL' }), { kind: 'ask' })
+  assert.deepEqual(lowRiskReviewOutcome({ decision: 'ALLOW' }), { kind: 'allow' })
+  assert.deepEqual(lowRiskReviewOutcome({ decision: 'ALLOW', riskLevel: 'LOW' }), { kind: 'allow' })
+  // DENY stays decisive even for a CRITICAL risk.
+  assert.deepEqual(lowRiskReviewOutcome({ decision: 'DENY', riskLevel: 'CRITICAL' }), { kind: 'deny', llmDenied: true })
+})
+
+test('reviewerAutoAllowBlocked: only ALLOW+CRITICAL blocks the auto-allow', () => {
+  assert.equal(reviewerAutoAllowBlocked({ decision: 'ALLOW', riskLevel: 'CRITICAL' }), true)
+  assert.equal(reviewerAutoAllowBlocked({ decision: 'ALLOW', riskLevel: 'HIGH' }), false)
+  assert.equal(reviewerAutoAllowBlocked({ decision: 'ALLOW' }), false)
+  assert.equal(reviewerAutoAllowBlocked({ decision: 'DENY', riskLevel: 'CRITICAL' }), false)
+})
+
+// E·MEDIUM: AWS access-key IDs / secret material and PEM blocks must be
+// redacted at the classifier boundary and in persisted reasons.
+test('sanitizeClassifierText: redacts AWS access-key ID and secret access key', () => {
+  const out = sanitizeClassifierText('AKIAZX6FOBMXYZABC123 aws_secret_access_key=abcdefghijklmnopqrstuvwxyz123456')
+  assert.ok(!out.includes('AKIAZX6FOBMXYZABC123'))
+  assert.ok(!out.includes('abcdefghijklmnopqrstuvwxyz123456'))
+  assert.ok(out.includes('[redacted-secret]'))
+})
+
+test('sanitizeReviewReason: redacts PEM private-key blocks', () => {
+  const pem = '-----BEGIN RSA PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFA...\n-----END RSA PRIVATE KEY-----'
+  const out = sanitizeReviewReason(pem)
+  assert.ok(!out.includes('MII'))
+  assert.ok(!out.includes('BEGIN RSA PRIVATE KEY'))
+  assert.ok(out.includes('[redacted-secret]'))
+})
+
+// I·LOW: pathological rule regex shapes (counted/unbounded repeats on groups)
+// are rejected, while common anchored patterns stay accepted.
+test('parseRulesText: counted-repetition and nested ReDoS shapes are rejected', () => {
+  assert.equal(parseRulesText('(a+){0,} | deny').errors.length, 1)
+  assert.equal(parseRulesText('(a|b){2,} | deny').errors.length, 1)
+  assert.equal(parseRulesText('((a)+)+ | deny').errors.length, 1)
+  assert.equal(parseRulesText('((ab)*)+ | deny').errors.length, 1)
+})
+
+test('parseRulesText: common anchored patterns remain accepted (no over-block)', () => {
+  assert.equal(parseRulesText('^git push | deny').errors.length, 0)
+  assert.equal(parseRulesText('git.push | deny | arguments').errors.length, 0)
+  assert.equal(parseRulesText('\\.ssh[\\\\/]id_rsa | deny | arguments').errors.length, 0)
 })

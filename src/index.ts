@@ -27,7 +27,7 @@ import { ArtifactRegistry } from './auto/artifacts.js'
 import { appendAuditLine, recordAuditClear } from './auto/audit.js'
 import { sanitizeClassifierArguments, sanitizeClassifierText, sanitizeReviewReason } from './auto/classifier.js'
 import { createDshClassifier } from './auto/dsh-classifier.js'
-import { type RaceHumanHandle, type ReviewResult, applyBreaker, approvalSource, breakerTripped, extractToolPath, frameReviewerInput, lowRiskReviewOutcome, parseReview, preserveHostKeys, raceHumanDecision, reviewSuggestionNote } from './auto/decision.js'
+import { type RaceHumanHandle, type ReviewResult, applyBreaker, approvalSource, breakerTripped, extractToolPath, frameReviewerInput, lowRiskReviewOutcome, parseReview, preserveHostKeys, raceHumanDecision, reviewSuggestionNote, reviewerAutoAllowBlocked } from './auto/decision.js'
 import { isWithin, normalizePath, resolveRoots } from './auto/paths.js'
 import { assessTool, hardDenyReason, patchTargetPaths } from './auto/policy.js'
 import { evaluateRules, parseRulesText } from './auto/rules.js'
@@ -695,6 +695,12 @@ function isLoopbackHostname(hostname: string): boolean {
     parts.every(part => /^\d{1,3}$/.test(part) && Number(part) <= 255)
 }
 
+/** Whether a TCP peer address is on loopback (incl. IPv4-mapped IPv6). */
+function isLoopbackIp(ip: string | undefined): boolean {
+  if (!ip) return false
+  return ip === '::1' || ip === '127.0.0.1' || /^127\./.test(ip) || ip === '::ffff:127.0.0.1' || /^::ffff:127\./.test(ip)
+}
+
 function trustedAuthorityMatches(entry: string, hostUrl: URL): boolean {
   try {
     const entryUrl = new URL(`http://${entry}`)
@@ -718,6 +724,11 @@ function isTrustedRequest(req: any, trustedHosts: string[]): boolean {
   }
   if (!isLoopbackHostname(hostUrl.hostname) && !trustedHosts.some(entry => trustedAuthorityMatches(entry, hostUrl)))
     return false
+  // Privileged plane (trustedHosts empty → loopback-only): the Host header is
+  // HTTP-controlled, so also verify the TCP peer actually sits on loopback.
+  // Otherwise a LAN peer (webServer bound to 0.0.0.0) could spoof
+  // `Host: localhost` to reach the settings / credential / test routes.
+  if (trustedHosts.length === 0 && !isLoopbackIp(req.socket?.remoteAddress)) return false
   if (req.headers?.['sec-fetch-site'] === 'cross-site') return false
   const origin = req.headers?.origin
   if (origin === undefined) return true
@@ -1998,7 +2009,11 @@ export function apply(ctx: Context, rawConfig: Config): void {
           const note = reviewSuggestionNote(review)
           // Remember the verdict for history whether or not it takes over.
           reviewVerdicts.set(req.callId, review)
-          if ((llmTakeover || autoUnattended) && (review.decision === 'ALLOW' || review.decision === 'DENY')) {
+          // A CRITICAL-flagged ALLOW is contradictory (the reviewer is told to
+          // deny CRITICAL); it must NOT take over and auto-allow — surface to a
+          // human instead. DENY stays decisive.
+          const blockedAllow = reviewerAutoAllowBlocked(review as any)
+          if ((llmTakeover || autoUnattended) && !blockedAllow && (review.decision === 'ALLOW' || review.decision === 'DENY')) {
             if (review.decision === 'DENY') {
               recordDecisionFeedback(req.callId, `[dsh-auto-approval-llm] Model denied: ${toolName}${review.reason ? ` — ${sanitizeReviewReason(review.reason)}` : ''}`)
             }
@@ -2022,7 +2037,11 @@ export function apply(ctx: Context, rawConfig: Config): void {
               at: Date.now(),
             })
             debugLog({ ev: 'follow', callId: req.callId, decision: review.decision, tookMs: Date.now() - reviewStart })
-          } else {
+          } else if (reviewStates.get(req.callId)?.phase === 'countdown') {
+            // Advisory verdict while the ask is still live: refresh the note on
+            // the countdown status only. Re-check the phase at set time so a
+            // late advisory can never revert a follow the host already published
+            // (human/timeout resolution) back to a countdown.
             reviewStates.set(req.callId, { ...status, note })
           }
         })
@@ -2050,7 +2069,12 @@ export function apply(ctx: Context, rawConfig: Config): void {
           if (!req.callId || reviewStates.get(req.callId)?.phase !== 'countdown') return
           const note = reviewSuggestionNote(review)
           reviewVerdicts.set(req.callId, review)
-          reviewStates.set(req.callId, { ...status, note })
+          // Re-check the phase at set time: a late advisory must never revert a
+          // follow the host already published (human/timeout resolution) back
+          // to a countdown.
+          if (reviewStates.get(req.callId)?.phase === 'countdown') {
+            reviewStates.set(req.callId, { ...status, note })
+          }
         })
         .catch((error) => {
           debugLog({ ev: 'review-error', callId: req.callId, scope: 'high', error: error instanceof Error ? error.message : String(error) })
