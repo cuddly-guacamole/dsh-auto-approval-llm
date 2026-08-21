@@ -20,8 +20,8 @@
 | MEDIUM | 8 s | `…mediumRiskSeconds（L8）` |
 | HIGH | 10 s | `…highRiskSeconds（L9）` |
 
-::: warning
-⚠️ 注意：**README 写的是 3/5/10，已过时**。代码当前真值是 5/8/10（重构时把默认值集中进 constants.ts，README 未同步）。若你按 README 写配置会得到与预期不同的等待时长。
+::: tip 单一事实源
+倒计时（5/8/10）、熔断（3/20）、截断（4000）等数值默认值**唯一**集中在 `src/auto/constants.ts` 的 `THRESHOLD_DEFAULTS`；host schema、host 回退、客户端草稿/重置均引用同一常量。查默认值以代码（constants.ts）为准，README 仅为速查（已同步 5/8/10）。
 :::
 
 ## 5.3　超时动作矩阵 `riskTimedOutAction` <span class="lnum">index.ts:L154-159</span>

@@ -62,7 +62,7 @@ hero:
   <a class="navcard" href="/dsh-auto-approval-llm/09-defense-in-depth"><span class="nn">09</span><span class="nt">安全纵深九层</span><span class="nd">从预设门到审计碑</span></a>
   <a class="navcard" href="/dsh-auto-approval-llm/10-client-ui"><span class="nn">10</span><span class="nt">客户端 UI 结构</span><span class="nd">设置卡 + 面板劫持 + 轮询</span></a>
   <a class="navcard" href="/dsh-auto-approval-llm/11-data-persistence"><span class="nn">11</span><span class="nt">数据与持久化</span><span class="nd">四个 JSONL 文件</span></a>
-  <a class="navcard" href="/dsh-auto-approval-llm/12-config"><span class="nn">12</span><span class="nt">配置全景</span><span class="nd">28 键 schema + bundle 覆盖</span></a>
+  <a class="navcard" href="/dsh-auto-approval-llm/12-config"><span class="nn">12</span><span class="nt">配置全景</span><span class="nd">32 键 schema + bundle 覆盖</span></a>
   <a class="navcard" href="/dsh-auto-approval-llm/13-http-api"><span class="nn">13</span><span class="nt">HTTP API 面</span><span class="nd">10 条路由与其信任平面</span></a>
 </div>
 

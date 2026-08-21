@@ -1,5 +1,5 @@
 # 12 · 配置全景
-> *28 keys, one source of truth*
+> *32 keys, one source of truth*
 
 ### 全部配置键（src/index.ts Config schema Z.object 原文）
 
@@ -46,7 +46,7 @@
 :::
 
 ::: warning bundle 层覆盖
-（cordis.patch.yml）：装包即生效的两处与代码默认不同 —— `autoSwitchPolicyToAsk: true`（默认关）、`humanOnlyList: ['bash']` → **bash 默认永远人工决定**，分类器/名单/规则都不能自动放行 shell。
+（cordis.patch.yml）：装包即生效的一处与代码默认不同 —— `autoSwitchPolicyToAsk: true`（默认关）。`humanOnlyList` 保持代码默认空列表：bash 回归正常管线（静态评估 → LLM 审查 → 人工兜底），不再被强制永远人工决定。
 :::
 
 ### 评审模式与命令

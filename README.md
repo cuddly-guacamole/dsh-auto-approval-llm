@@ -66,7 +66,7 @@ dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 3. 想让审批走你自己的模型：在「在线评审模型」卡填 协议 / API 地址 / 模型名称 / API 密钥 → 保存 → 测试连接。
 4. 嫌中风险弹窗频繁或超时漏拦：调大「中风险倒计时」，或把「超时动作」改为 `拒绝` / `低风险自动同意`。
 
-> 📚 工作原理详解文档站：<https://cuddly-guacamole.github.io/dsh-auto-approval-llm/> ；仓库内另有原理文档：[how-it-works.html](how-it-works.html)（大白话版说明）· [how-it-works-detailed.html](how-it-works-detailed.html)（详版工作原理图，含源码行号溯源）。
+> 📚 工作原理详解文档站：<https://cuddly-guacamole.github.io/dsh-auto-approval-llm/>
 
 ---
 
@@ -177,6 +177,6 @@ dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 
 ## 版本 / 发布
 
-- 当前：`0.0.6`（**即将发布**）—— npm：[@quill507/dsh-auto-approval-llm](https://www.npmjs.com/package/@quill507/dsh-auto-approval-llm)，GitHub：[Release v0.0.6](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/releases/tag/v0.0.6)。
+- 当前：`0.0.7`（**即将发布**）—— npm：[@quill507/dsh-auto-approval-llm](https://www.npmjs.com/package/@quill507/dsh-auto-approval-llm)，GitHub：[Release v0.0.7](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/releases/tag/v0.0.7)。
 - 安装：`dsh plugin --profile web add @quill507/dsh-auto-approval-llm`
 - 许可证：BSD-3-Clause。
