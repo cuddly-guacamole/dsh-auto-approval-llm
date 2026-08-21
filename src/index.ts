@@ -1895,7 +1895,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
     const llmReviews = llmRouteAvailable && riskReviewed(staticRisk, config.llmReviewScope)
     const llmTakeover = llmReviews && riskTakenOver(staticRisk, config.llmTakeoverScope)
     const seconds = riskSeconds(staticRisk)
-    const timeoutNotice = `The review model did not respond (recorded). Retry the command; after ${config.maxConsecutiveDenials} more failures the breaker will hand over to the user.`
+    const timeoutNotice = `The review model did not respond or was unavailable (recorded). This outcome is fail-closed and does NOT count toward the denial breaker — only decided LLM denials do.`
 
     if (staticRisk === 'LOW') {
       if (!llmReviews) {
