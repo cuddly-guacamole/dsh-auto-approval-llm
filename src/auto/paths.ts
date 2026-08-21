@@ -182,4 +182,3 @@ export function isArtifactArea(target, roots) {
     const normalized = normalizePath(target, roots.workspace, roots.home);
     return isWithin(roots.workspace, normalized) || roots.tempRoots.some(root => isWithin(root, normalized));
 }
-//# sourceMappingURL=paths.js.map

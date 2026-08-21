@@ -112,8 +112,6 @@ function containsCredentialMaterial(argumentsValue: unknown): boolean {
 const DESTRUCTIVE_TOOL = /(?:^|[_-])(?:delete|destroy|remove|erase|purge|drop|truncate|wipe|unlink|rmdir|reset|revoke)(?:$|[_-])/i;
 const EXTERNAL_WRITE_TOOL = /(?:^|[_-])(?:deploy|publish|push|upload|send|post|release|merge|submit|create[-_]?(?:issue|pull[-_]?request))(?:$|[_-])/i;
 const SECURITY_CHANGE_TOOL = /(?:^|[_-])(?:chmod|chown|permission|permissions|policy|grant|revoke|role|credential|credentials|secret|secrets|auth)(?:$|[_-])/i;
-// Single source for the static-risk name pattern, shared with index.ts via
-// `riskyPluginToolReason` and (when tiering is extracted) the host classifier.
 export const RISK_NAME_PATTERN = new RegExp(
     [DESTRUCTIVE_TOOL, EXTERNAL_WRITE_TOOL, SECURITY_CHANGE_TOOL].map((r) => r.source).join('|'),
     'i',
@@ -327,4 +325,3 @@ export function assessTool(exec: ExecLike, roots: Roots, artifacts: unknown): To
     }
     return { decision: 'allow', reason: `ordinary registered plugin tool: ${exec.name}`, classifierEligible: false };
 }
-//# sourceMappingURL=policy.js.map

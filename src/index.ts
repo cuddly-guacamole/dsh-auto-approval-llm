@@ -621,9 +621,6 @@ const followExpiry = new Map<string, number>()
 const reviewVerdicts = new Map<string, ReviewResult>()
 
 // callIds answered by the plugin's own client auto-answer (autoRespond /
-// followRespond) rather than a real human click. Lets askHuman record an
-// honest 'auto-*' source instead of 'human-*' when nobody actually clicked.
-// callIds answered by the plugin's own client auto-answer (autoRespond /
 // followRespond). Map<callId, timestamp> with a TTL sweep so a late ACK can
 // never grow it without bound (RISK-05); askHuman reads/clears it to label
 // history source as 'auto-*'.

@@ -54,4 +54,3 @@ export class ArtifactRegistry {
         this.created.set(owner, paths);
     }
 }
-//# sourceMappingURL=artifacts.js.map

@@ -859,4 +859,3 @@ export function assessShell(source, shell, roots, artifacts, owner) {
     const reasons = assessments.filter(assessment => assessment.decision !== 'allow').map(assessment => assessment.reason);
     return semanticReview([...new Set(reasons)].join('; ').slice(0, 800));
 }
-//# sourceMappingURL=shell.js.map
