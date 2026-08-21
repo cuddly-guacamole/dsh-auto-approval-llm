@@ -95,3 +95,23 @@
 .vp-doc .mermaid svg .label-container {
   overflow: visible;
 }
+
+/* ── 侧边栏底部留白 ──
+   VitePress 默认 .VPSidebar padding-bottom:96px（带 data-v 属性选择器，特异性更高），
+   内容不满一屏时底部会露出明显空白；收紧为 24px（保留少量余量避免贴底）。 */
+.VPSidebar {
+  padding-bottom: 24px !important;
+}
+
+/* ── 隐藏侧边栏滚动条 ──
+   浏览器缩放比例 ≠ 100% 时，fixed 侧边栏内容高度略超视口会触发 overflow:auto 滚动条
+   （实际并不需要）。隐藏滚动条、保留滚轮/触控滚动能力。 */
+.VPSidebar {
+  scrollbar-width: none;         /* Firefox */
+  -ms-overflow-style: none;      /* 旧 Edge/IE */
+}
+.VPSidebar::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;                 /* Chrome/Safari/新 Edge */
+}
