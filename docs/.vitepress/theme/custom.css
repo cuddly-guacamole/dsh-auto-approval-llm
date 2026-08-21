@@ -73,3 +73,25 @@
 /* 首页头图徽章行 */
 .vp-doc .homebadges { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin: 8px 0 4px; }
 .vp-doc .homebadges img { border-radius: 6px; }
+
+/* ── mermaid 节点文本修复 ──
+   VitePress 全局 `.vp-doc p` 会给 foreignObject 内的 <p> 施加 line-height:28px 等样式，
+   撑大行高后文本溢出节点盒子而被截断。这里恢复 mermaid 自身的段落渲染。 */
+.vp-doc .mermaid p {
+  margin: 0 !important;
+  padding: 0 !important;
+  line-height: 1.5 !important;
+  font-size: 14px !important;
+  text-align: center;
+}
+.vp-doc .mermaid .nodeLabel p,
+.vp-doc .mermaid .edgeLabel p {
+  width: auto !important;
+}
+.vp-doc .mermaid svg {
+  max-width: 100%;
+  overflow-x: auto;
+}
+.vp-doc .mermaid svg .label-container {
+  overflow: visible;
+}
