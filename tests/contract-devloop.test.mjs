@@ -14,7 +14,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { assessTool, symlinkGuardTargets } from '../lib/auto/policy.js'
 import { hardDenyShellReason, assessShell } from '../lib/auto/shell.js'
-import { followResolution } from '../lib/auto/decision.js'
+import { followResolution, createKeyedMutex } from '../lib/auto/decision.js'
 
 // ── A: protected workspace secret reads via the read tool family ───────────
 test('assessTool: read/read_image/grep/glob on protected workspace files routes to review', () => {
@@ -118,4 +118,69 @@ test('followResolution: human/timeout/keep branches keep their honest provenance
   assert.deepEqual(timed.kind === 'publish' && timed.follow, { risk: 'LOW', phase: 'follow', action: 'reject', seconds: 0, source: 'timeout' })
   const takeover = followResolution('follow', { risk: 'MEDIUM', outcome: 'rejected' }, { timedOut: false, aborted: false })
   assert.deepEqual(takeover, { kind: 'keep' })
+})
+
+// ── F: denial-breaker concurrency — per-key mutex prevents lost-update ───────
+// The host wraps every breaker read-modify-write in a per-session-key mutex so
+// two concurrent approvals for the SAME session cannot interleave and lose an
+// increment. These tests pin the mutex contract: same-key critical sections are
+// atomic (no lost update) while different keys stay independent.
+
+test('createKeyedMutex: same-key read-modify-write is atomic (no lost update)', async () => {
+  const m = createKeyedMutex()
+  const counter = { n: 0 }
+  const tasks = []
+  for (let i = 0; i < 300; i++) {
+    tasks.push(m.run('same', () => {
+      // mimic the breaker read-modify-write, with an internal yield to expose
+      // any interleaving bug.
+      const v = counter.n
+      return Promise.resolve().then(() => {
+        counter.n = v + 1
+      })
+    }))
+  }
+  await Promise.all(tasks)
+  assert.equal(counter.n, 300, 'no increment may be lost under same-key concurrency')
+})
+
+test('createKeyedMutex: same-key critical sections never overlap', async () => {
+  const m = createKeyedMutex()
+  let active = 0
+  let maxOverlap = 0
+  const tasks = []
+  for (let i = 0; i < 100; i++) {
+    tasks.push(m.run('same', () => {
+      active++
+      maxOverlap = Math.max(maxOverlap, active)
+      return Promise.resolve().then(() => { active-- })
+    }))
+  }
+  await Promise.all(tasks)
+  assert.equal(maxOverlap, 1, 'two critical sections for the same key must never run concurrently')
+})
+
+test('createKeyedMutex: different keys run independently (per-key, not global)', async () => {
+  const m = createKeyedMutex()
+  const counters = { a: 0, b: 0 }
+  const tasks = []
+  for (let i = 0; i < 150; i++) {
+    const key = i % 2 === 0 ? 'a' : 'b'
+    tasks.push(m.run(key, () => {
+      const v = counters[key]
+      return Promise.resolve().then(() => { counters[key] = v + 1 })
+    }))
+  }
+  await Promise.all(tasks)
+  assert.equal(counters.a, 75, 'key a count is exact')
+  assert.equal(counters.b, 75, 'key b count is exact')
+})
+
+test('createKeyedMutex: callbacks that throw keep the chain alive for later lockers', async () => {
+  const m = createKeyedMutex()
+  await assert.rejects(() => m.run('k', () => { throw new Error('boom') }))
+  // a later locker for the same key must still run, not hang.
+  let ran = false
+  await m.run('k', () => { ran = true })
+  assert.equal(ran, true)
 })

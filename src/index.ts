@@ -27,7 +27,7 @@ import { ArtifactRegistry } from './auto/artifacts.js'
 import { appendAuditLine, recordAuditClear } from './auto/audit.js'
 import { sanitizeClassifierArguments, sanitizeClassifierText, sanitizeReviewReason } from './auto/classifier.js'
 import { createDshClassifier } from './auto/dsh-classifier.js'
-import { type RaceHumanHandle, type ReviewResult, applyBreaker, approvalSource, breakerTripped, extractToolPath, followResolution, frameReviewerInput, lowRiskReviewOutcome, parseReview, preserveHostKeys, raceHumanDecision, reviewSuggestionNote, reviewerAutoAllowBlocked } from './auto/decision.js'
+import { type RaceHumanHandle, type ReviewResult, applyBreaker, approvalSource, breakerTripped, createKeyedMutex, extractToolPath, followResolution, frameReviewerInput, lowRiskReviewOutcome, parseReview, preserveHostKeys, raceHumanDecision, reviewSuggestionNote, reviewerAutoAllowBlocked } from './auto/decision.js'
 import { isWithin, normalizePath, resolveRoots } from './auto/paths.js'
 import { assessTool, hardDenyReason, symlinkGuardTargets } from './auto/policy.js'
 import { evaluateRules, parseRulesText } from './auto/rules.js'
@@ -1537,6 +1537,12 @@ export function apply(ctx: Context, rawConfig: Config): void {
   }
   const totalDenials = new Map<string, number>()
   const denialLog = new Map<string, Array<{ reason?: string; toolName: string }>>()
+  // Per-session-key mutex serializing the breaker read-modify-write. Without it
+  // two in-flight approvals sharing a sessionKey could interleave their map
+  // reads/writes (after an await) and lose an increment. The critical section
+  // contains ONLY synchronous Map ops — never the surrounding await — so
+  // unrelated approvals stay concurrent.
+  const breakerMutex = createKeyedMutex()
 
   // Breaker counters are keyed by the authority session id (see
   // authorityKeyFor). A `session/disposed` only fires for the exact session
@@ -1546,10 +1552,18 @@ export function apply(ctx: Context, rawConfig: Config): void {
   anyCtx.on('session/disposed', (session: any) => {
     const key = session?.id
     if (key === undefined) return
-    if (denials.has(key)) denials.delete(key)
-    if (totalDenials.has(key)) totalDenials.delete(key)
-    if (denialLog.has(key)) denialLog.delete(key)
-    requestAtByKey.delete(key)
+    // Drop the breaker counters under the same per-key lock as the in-flight
+    // approval writes, so a write that is still queued behind us cannot
+    // resurrect a stale counter after disposal (reset race). The shared Promise
+    // chain serializes this delete after any pending critical section for the
+    // key; a write that starts after disposal recreates the key, which is fine
+    // because the session is gone.
+    void breakerMutex.run(key, () => {
+      denials.delete(key)
+      totalDenials.delete(key)
+      denialLog.delete(key)
+    })
+    if (requestAtByKey.has(key)) requestAtByKey.delete(key)
     // Persisted per-session review mode is keyed by the same authority id; drop
     // it so a long-lived process neither leaks the entry in memory nor grows the
     // review-mode.json file forever with disposed sessions.
@@ -1694,20 +1708,26 @@ export function apply(ctx: Context, rawConfig: Config): void {
     // Breaker transition: a human answer resets the counters, a decided LLM
     // denial (only when this ask was an LLM takeover — never an advisory HIGH
     // review) increments them; every other outcome leaves them untouched.
-    const transition = applyBreaker(
-      { consecutive: denials.get(key) ?? 0, total: totalDenials.get(key) ?? 0 },
-      source,
-      llmDecided === true,
-    )
-    denials.set(key, transition.counts.consecutive)
-    totalDenials.set(key, transition.counts.total)
-    if (transition.reset) denialLog.delete(key)
-    if (transition.increment) {
-      const log = denialLog.get(key) ?? []
-      log.push({ reason: (follow as any)?.reason ? sanitizeReviewReason((follow as any).reason) : undefined, toolName: req.toolName })
-      if (log.length > config.maxConsecutiveDenials) log.shift()
-      denialLog.set(key, log)
-    }
+    // Serialize the read-modify-write per sessionKey so concurrent approvals
+    // for the same session cannot interleave and lose an increment. The block
+    // is synchronous (no await) — holding the lock across an await would
+    // serialize unrelated approvals for the session.
+    await breakerMutex.run(key, () => {
+      const transition = applyBreaker(
+        { consecutive: denials.get(key) ?? 0, total: totalDenials.get(key) ?? 0 },
+        source,
+        llmDecided === true,
+      )
+      denials.set(key, transition.counts.consecutive)
+      totalDenials.set(key, transition.counts.total)
+      if (transition.reset) denialLog.delete(key)
+      if (transition.increment) {
+        const log = denialLog.get(key) ?? []
+        log.push({ reason: (follow as any)?.reason ? sanitizeReviewReason((follow as any).reason) : undefined, toolName: req.toolName })
+        if (log.length > config.maxConsecutiveDenials) log.shift()
+        denialLog.set(key, log)
+      }
+    })
     if (debugOn) console.log('[dsh-auto-approval-llm][debug] approval resolved', {
       callId: req.callId ?? null,
       outcome,
@@ -1859,9 +1879,13 @@ export function apply(ctx: Context, rawConfig: Config): void {
       debugLog({ ev: 'review', callId: req.callId, decision: review.decision, risk: review.riskLevel ?? null, startAt: lowReviewStart, tookMs: Date.now() - lowReviewStart, scope: 'low' })
       const verdict = lowRiskReviewOutcome(review)
       if (verdict.kind === 'allow') {
-        denials.set(sessionKey, 0)
-        totalDenials.set(sessionKey, 0)
-        denialLog.delete(sessionKey)
+        // Serialize the reset so a concurrent denial for this session cannot
+        // interleave and lose its increment (or resurrect stale counters).
+        await breakerMutex.run(sessionKey, () => {
+          denials.set(sessionKey, 0)
+          totalDenials.set(sessionKey, 0)
+          denialLog.delete(sessionKey)
+        })
         if (config.notifyUser) queueNotice(req.agent.session, req.callId, `✅ Model approved "${toolName}"`)
         pushHistory({
           sessionId: sessionKey,
@@ -1876,12 +1900,20 @@ export function apply(ctx: Context, rawConfig: Config): void {
       }
       if (verdict.kind === 'deny') {
         if (verdict.llmDenied) {
-          denials.set(sessionKey, prior + 1)
-          totalDenials.set(sessionKey, denialsTotal + 1)
-          const log = denialLog.get(sessionKey) ?? []
-          log.push({ reason: review.reason ? sanitizeReviewReason(review.reason) : undefined, toolName })
-          if (log.length > config.maxConsecutiveDenials) log.shift()
-          denialLog.set(sessionKey, log)
+          // Serialize the increment: read the counters INSIDE the lock (the
+          // snapshot at 1846-1847 is only for the unlocked trip check) so a
+          // concurrent approval for this session cannot interleave and lose this
+          // increment (lost-update race).
+          await breakerMutex.run(sessionKey, () => {
+            const priorNow = denials.get(sessionKey) ?? 0
+            const totalNow = totalDenials.get(sessionKey) ?? 0
+            denials.set(sessionKey, priorNow + 1)
+            totalDenials.set(sessionKey, totalNow + 1)
+            const log = denialLog.get(sessionKey) ?? []
+            log.push({ reason: review.reason ? sanitizeReviewReason(review.reason) : undefined, toolName })
+            if (log.length > config.maxConsecutiveDenials) log.shift()
+            denialLog.set(sessionKey, log)
+          })
           recordDecisionFeedback(req.callId, `[dsh-auto-approval-llm] Model denied: ${toolName}${review.reason ? ` — ${sanitizeReviewReason(review.reason)}` : ''}`)
           pushHistory({
             sessionId: sessionKey,

@@ -465,3 +465,51 @@ export function followResolution(
   }
 }
 
+/**
+ * Per-key async mutex. Serializes critical sections that perform a
+ * read-modify-write on shared, session-keyed state (the denial-breaker
+ * counters) so two concurrent approvals for the SAME session cannot interleave
+ * and lose an increment (lost-update race after an `await`).
+ *
+ * Keys are independent: different keys run concurrently; the same key runs
+ * strictly in order. The callback is invoked synchronously inside the chain and,
+ * if it returns a thenable, the chain awaits it before the next locker for that
+ * key starts — so an async read-modify-write stays atomic. Callbacks must not
+ * await a long operation, or this key's chain would stall (only same-key
+ * ordering is guaranteed; other keys are unaffected). The chain map is pruned
+ * when a key's tail settles, so it never grows unbounded across sessions.
+ */
+export interface KeyedMutex {
+  run<T>(key: string, fn: () => T): Promise<T>
+}
+
+export function createKeyedMutex(): KeyedMutex {
+  const chains = new Map<string, Promise<unknown>>()
+  return {
+    run<T>(key: string, fn: () => T): Promise<T> {
+      const prev = chains.get(key) ?? Promise.resolve()
+      const chain: Promise<T> = prev.then(
+        () => fn(),
+        () => {
+          // A previous critical section rejected; still run ours so this key's
+          // chain stays alive and never blocks later lockers for the key.
+          try {
+            return fn()
+          } catch (e) {
+            throw e
+          }
+        },
+      )
+      chains.set(key, chain)
+      // Prune the chain map when this key's tail settles. The finally-derived
+      // promise is handled with a no-op catch so a rejecting `fn` (and the
+      // cleanup's rejection propagation) never surfaces as an unhandledRejection
+      // — the original `chain` is returned and consumed by the caller.
+      void chain.finally(() => {
+        if (chains.get(key) === chain) chains.delete(key)
+      }).catch(() => {})
+      return chain
+    },
+  }
+}
+
