@@ -24,7 +24,7 @@
         approval: never
 
 # Config values are pinned against the z.object defaults in src/index.ts.
-# Exactly two entries intentionally DIVERGE from code defaults (override
+# Exactly one entry intentionally DIVERGES from code defaults (override
 # intent declared inline); everything else equals the default and stays
 # explicit so the bundle contract remains diffable across refactors.
 - insert:
@@ -38,9 +38,10 @@
         timeoutAction: reject
         allowlist: []
         denyList: []
-        # OVERRIDE of code default ([]): bash stays human-only — neither the
-        # classifier nor allowlist/rules may ever auto-approve shell execution.
-        humanOnlyList: [bash]
+        # Equals code default ([]): bash is not pinned to human review; the
+        # classifier and LLM review pipeline handle it (unreadable destructive
+        # shell still stays on the one-shot human path via shell.ts).
+        humanOnlyList: []
         # Equals code defaults (see src/index.ts Config):
         maxConsecutiveDenials: 3
         maxTotalDenials: 20
