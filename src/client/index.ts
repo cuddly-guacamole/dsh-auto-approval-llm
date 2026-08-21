@@ -19,6 +19,11 @@ let sessionsRef: any
 let breakerAntiHijackMs = 0
 let aiButtonPosition: 'header' | 'floating' = 'header'
 const MAX_PANEL_RECORDS = 10
+// Grace (ms) during which a countdown approval whose host follow is not yet
+// observable keeps being watched before the client closes the panel with the
+// recorded countdown action. Aligned with the host's follow TTL so the client
+// never closes before the host would have swept the follow state.
+const FOLLOW_GRACE_MS = 120_000
 const LOCALE_NS = 'dsh-auto-approval-llm'
 // Answer-once guard: an approval may be auto-answered by the watcher, the
 // countdown timer, or a follow-up responder; only the first responder wins.
@@ -189,11 +194,28 @@ function watchApprovals(ctx: any): void {
     }
     const priorMeta = timerMeta.get(timerKey)
     if (status === undefined && priorMeta?.startsWith('countdown:')) {
-      // Host no longer tracks this countdown approval: it resolved and its
-      // follow was already ACKed or swept, or the host never tracked it after
-      // all. Detach without auto-answering — a stale countdown action must not
-      // be used against a decision the client cannot see (R002).
-      detach(timerKey)
+      // Host stopped reporting a follow for this countdown approval. Per the
+      // DSH contract review-status is never 404 — resolution is signalled by
+      // ok:false — so the host resolved and its terminal `follow` may simply
+      // arrive one poll later. Keep the watch alive for a bounded grace so a
+      // late follow still closes the official panel (A5). We never auto-answer
+      // here: if a real follow arrives, the follow branch responds with the
+      // host's authoritative action. Only if none arrives within the grace and
+      // the approval is still open do we close it with the countdown's recorded
+      // action — the only action this approval ever declared. When the approval
+      // leaves the pending snapshot, check() clears everything.
+      const parts = priorMeta.split(':')
+      const recordedAction = parts[1] === 'allow' ? 'allow' : 'reject'
+      if (!timers.has(timerKey)) {
+        timerMeta.set(timerKey, priorMeta)
+        const fallback = setTimeout(() => {
+          if (approvalStillPending(sessionId, approval.key)) {
+            void autoRespond(approval, { seconds: 0, action: recordedAction })
+          }
+          detach(timerKey)
+        }, FOLLOW_GRACE_MS)
+        timers.set(timerKey, fallback)
+      }
       return
     }
     let info: CountdownInfo | null = null
@@ -255,7 +277,12 @@ function watchApprovals(ctx: any): void {
       }
       let status: any
       try {
-        const res = await (globalThis as any).fetch(`${REVIEW_STATUS_ROUTE}?callId=${encodeURIComponent(callId)}`, { credentials: 'same-origin' })
+        const res = await (globalThis as any).fetch(REVIEW_STATUS_ROUTE, {
+          credentials: 'same-origin',
+          // Call id is sent in a header so it never lands in the URL query
+          // (devtools/logs/Referer). The host route reads this header.
+          headers: { 'x-auto-approval-call-id': String(callId) },
+        })
         if (!res.ok) {
           // Transient server error: keep observing; do not treat it as a
           // resolution.

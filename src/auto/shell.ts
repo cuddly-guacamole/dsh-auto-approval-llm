@@ -465,7 +465,11 @@ function destructiveNestedSource(source) {
 function explicitPaths(words, roots) {
     return words
         .map(word => word.text)
-        .filter(token => token === '~' || token.startsWith('./') || token.startsWith('../') || token.startsWith('/')
+        .filter(token => token === '~' || token.startsWith('/')
+        // Bare-relative (".git/config", ".env") and dot tokens (".", "..") are
+        // explicit paths too — without them a protected carve-out like
+        // `./.git/config` is silently bypassed by writing `.git/config`.
+        || token === '.' || token.startsWith('.')
         || token.startsWith('~\\') || token.startsWith('~/') || /^[A-Za-z]:[\\/]/.test(token) || /^\\\\/.test(token))
         .map(token => normalizePath(token, roots.workspace, roots.home));
 }

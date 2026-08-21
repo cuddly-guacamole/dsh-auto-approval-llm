@@ -15,6 +15,7 @@ import { parseRulesText, evaluateRules, extractRuleTarget } from '../lib/auto/ru
 import { hardDenyShellReason, assessShell } from '../lib/auto/shell.js'
 import { hardDenyReason, assessTool } from '../lib/auto/policy.js'
 import { isCriticalPath } from '../lib/auto/paths.js'
+import { isTrustedRequest } from '../lib/auto/trust.js'
 
 test('parseReview: valid plain JSON', () => {
   const r = parseReview('{"decision":"ALLOW","risk_level":"LOW","reason":"safe"}')
@@ -666,4 +667,59 @@ test('parseRulesText: common anchored patterns remain accepted (no over-block)',
   assert.equal(parseRulesText('^git push | deny').errors.length, 0)
   assert.equal(parseRulesText('git.push | deny | arguments').errors.length, 0)
   assert.equal(parseRulesText('\\.ssh[\\\\/]id_rsa | deny | arguments').errors.length, 0)
+})
+
+// ── 7th audit round — A1: LAN-bind loopback-source hardening ───────────────
+test('isTrustedRequest: loopback Host demands an actually-loopback peer (A1)', () => {
+  const socket = (ip) => ({ socket: { remoteAddress: ip } })
+  // Loopback peer + loopback Host -> trusted.
+  assert.equal(isTrustedRequest({ headers: { host: 'localhost:8080' }, ...socket('127.0.0.1') }, []), true)
+  assert.equal(isTrustedRequest({ headers: { host: '127.0.0.1' }, ...socket('::ffff:127.0.0.1') }, []), true)
+  // A peer spoofing `Host: localhost` from a non-loopback source must be
+  // rejected even when the LAN whitelist is non-empty (the A1 hole).
+  assert.equal(isTrustedRequest({ headers: { host: 'localhost:8080' }, ...socket('192.168.1.50') }, ['192.168.1.10']), false)
+  assert.equal(isTrustedRequest({ headers: { host: '127.0.0.1' }, ...socket('10.0.0.5') }, ['10.0.0.5']), false)
+  assert.equal(isTrustedRequest({ headers: { host: 'localhost' }, ...socket('192.168.1.9') }, []), false)
+})
+
+test('isTrustedRequest: LAN peer addressing by a whitelisted LAN IP stays trusted (A1)', () => {
+  // Host = a whitelisted LAN IP (non-loopback) from any LAN peer -> trusted.
+  assert.equal(isTrustedRequest({ headers: { host: '192.168.1.50:3000' }, socket: { remoteAddress: '192.168.1.60' } }, ['192.168.1.50']), true)
+  // Just-another-LAN-peer with Host=localhost must not be elevated to loopback.
+  assert.equal(isTrustedRequest({ headers: { host: 'localhost' }, socket: { remoteAddress: '192.168.1.60' } }, ['192.168.1.50']), false)
+  // Non-whitelisted non-loopback Host is always rejected.
+  assert.equal(isTrustedRequest({ headers: { host: '10.0.0.99' }, socket: { remoteAddress: '127.0.0.1' } }, ['192.168.1.50']), false)
+})
+
+test('isTrustedRequest: privileged plane (empty whitelist) stays loopback-only', () => {
+  assert.equal(isTrustedRequest({ headers: { host: 'localhost' }, socket: { remoteAddress: '127.0.0.1' } }, []), true)
+  assert.equal(isTrustedRequest({ headers: { host: 'localhost' }, socket: { remoteAddress: '192.168.1.9' } }, []), false)
+  assert.equal(isTrustedRequest({ headers: { host: '192.168.1.9' }, socket: { remoteAddress: '127.0.0.1' } }, []), false)
+})
+
+test('isTrustedRequest: cross-site and Origin mismatch are rejected', () => {
+  const loop = { headers: { host: 'localhost', ...{ 'sec-fetch-site': 'cross-site' } }, socket: { remoteAddress: '127.0.0.1' } }
+  assert.equal(isTrustedRequest(loop, []), false)
+  assert.equal(isTrustedRequest({ headers: { host: 'localhost', origin: 'http://evil.com', 'sec-fetch-site': 'same-site' }, socket: { remoteAddress: '127.0.0.1' } }, []), false)
+  assert.equal(isTrustedRequest({ headers: { host: 'localhost', origin: 'http://localhost' }, socket: { remoteAddress: '127.0.0.1' } }, []), true)
+})
+
+// ── 7th audit round — A2: bare-dot protected-path read carve-out bypass ────
+test('assessShell: bare-dot protected read (.git/config without ./) is not auto-allowed (A2)', () => {
+  const roots = { workspace: 'C:/ws', home: 'C:/Users/u', dshHome: 'C:/Users/u/.dsh', tempRoots: [] }
+  const artifacts = { has: () => false }
+  const a = assessShell('cat .git/config', 'bash', roots, artifacts, undefined)
+  assert.notEqual(a.decision, 'allow', 'bare .git/config must not be auto-allowed')
+  assert.equal(a.classifierEligible, true, 'must reach semantic review')
+  // Same for the explicitly-prefixed spelling (non-regression).
+  const b = assessShell('cat ./.git/config', 'bash', roots, artifacts, undefined)
+  assert.notEqual(b.decision, 'allow')
+})
+
+test('assessShell: ordinary reads are not over-blocked by A2', () => {
+  const roots = { workspace: 'C:/ws', home: 'C:/Users/u', dshHome: 'C:/Users/u/.dsh', tempRoots: [] }
+  const artifacts = { has: () => false }
+  assert.equal(assessShell('cat README.md', 'bash', roots, artifacts, undefined).decision, 'allow')
+  assert.equal(assessShell('cat src/a.ts', 'bash', roots, artifacts, undefined).decision, 'allow')
+  assert.equal(assessShell('cat C:/ws/package.json', 'bash', roots, artifacts, undefined).decision, 'allow')
 })

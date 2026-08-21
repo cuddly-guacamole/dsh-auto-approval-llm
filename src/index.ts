@@ -32,6 +32,7 @@ import { isWithin, normalizePath, resolveRoots } from './auto/paths.js'
 import { assessTool, hardDenyReason, patchTargetPaths } from './auto/policy.js'
 import { evaluateRules, parseRulesText } from './auto/rules.js'
 import { type ReviewMode, loadReviewModes, normalizeReviewMode, persistReviewModes } from './auto/review-mode.js'
+import { isLoopbackHostname, isTrustedRequest } from './auto/trust.js'
 
 export const name = 'dsh-auto-approval-llm'
 export const inject = ['approval', 'permissionPresets', 'tools', 'llm', 'agents', 'webServer', 'settings', 'commands']
@@ -688,57 +689,6 @@ function resolveTrustedHosts(ctx: any): string[] {
   return []
 }
 
-function isLoopbackHostname(hostname: string): boolean {
-  if (hostname === 'localhost' || hostname === '[::1]' || hostname === '::1') return true
-  const parts = hostname.split('.')
-  return parts.length === 4 && parts[0] === '127' &&
-    parts.every(part => /^\d{1,3}$/.test(part) && Number(part) <= 255)
-}
-
-/** Whether a TCP peer address is on loopback (incl. IPv4-mapped IPv6). */
-function isLoopbackIp(ip: string | undefined): boolean {
-  if (!ip) return false
-  return ip === '::1' || ip === '127.0.0.1' || /^127\./.test(ip) || ip === '::ffff:127.0.0.1' || /^::ffff:127\./.test(ip)
-}
-
-function trustedAuthorityMatches(entry: string, hostUrl: URL): boolean {
-  try {
-    const entryUrl = new URL(`http://${entry}`)
-    // A port-less entry (LAN IP literal, bare --trusted-host) matches any port;
-    // an explicit host:port entry matches exactly.
-    return entryUrl.port !== '' ? entryUrl.host === hostUrl.host : entryUrl.hostname === hostUrl.hostname
-  } catch {
-    return false
-  }
-}
-
-/** Whether a request may reach plugin routes: Host whitelist + same-origin. */
-function isTrustedRequest(req: any, trustedHosts: string[]): boolean {
-  const host = req.headers?.host
-  if (host === undefined) return false
-  let hostUrl: URL
-  try {
-    hostUrl = new URL(`http://${host}`)
-  } catch {
-    return false
-  }
-  if (!isLoopbackHostname(hostUrl.hostname) && !trustedHosts.some(entry => trustedAuthorityMatches(entry, hostUrl)))
-    return false
-  // Privileged plane (trustedHosts empty → loopback-only): the Host header is
-  // HTTP-controlled, so also verify the TCP peer actually sits on loopback.
-  // Otherwise a LAN peer (webServer bound to 0.0.0.0) could spoof
-  // `Host: localhost` to reach the settings / credential / test routes.
-  if (trustedHosts.length === 0 && !isLoopbackIp(req.socket?.remoteAddress)) return false
-  if (req.headers?.['sec-fetch-site'] === 'cross-site') return false
-  const origin = req.headers?.origin
-  if (origin === undefined) return true
-  try {
-    return new URL(origin).host === hostUrl.host
-  } catch {
-    return false
-  }
-}
-
 function installFeedbackRoute(ctx: any): void {
   const webServer = ctx.get('webServer')
   if (!webServer) return
@@ -993,8 +943,9 @@ function installReviewStatusRoute(ctx: any): void {
         responseJson(res, 405, { ok: false, error: 'method-not-allowed' })
         return
       }
-      const url = new URL(req.url ?? '/', 'http://x')
-      const callId = url.searchParams.get('callId') ?? ''
+      // Call id travels in a request header (not the URL query) so it does not
+      // leak into devtools/logs/Referer. Same-origin + loopback-trusted plan.
+      const callId = String(req.headers?.['x-auto-approval-call-id'] ?? '').trim()
       const status = callId ? reviewStates.get(callId) : undefined
       responseJson(res, 200, status ? { ok: true, value: status } : { ok: false, error: 'not-found' })
     },
@@ -1600,10 +1551,18 @@ export function apply(ctx: Context, rawConfig: Config): void {
     if (denials.has(key)) denials.delete(key)
     if (totalDenials.has(key)) totalDenials.delete(key)
     if (denialLog.has(key)) denialLog.delete(key)
+    requestAtByKey.delete(key)
+    // Persisted per-session review mode is keyed by the same authority id; drop
+    // it so a long-lived process neither leaks the entry in memory nor grows the
+    // review-mode.json file forever with disposed sessions.
+    if (reviewModes.has(key)) {
+      reviewModes.delete(key)
+      persistReviewModes(reviewModes)
+    }
   })
-  // Timestamp of the most recently entered approval/request handler, so the
-  // resolve event can report request→resolution total time.
-  let requestAt = 0
+  // request→resolution total time, tracked per session authority so concurrent
+  // approves in different sessions cannot clobber each other's timestamp.
+  const requestAtByKey = new Map<string, number>()
 
   const askHuman = async (req: any, review: ReviewResult | undefined, next: () => Promise<any>, breaker = false, status?: ReviewStatus, handle?: RaceHumanHandle, llmDecided?: boolean): Promise<any> => {
     // Delegate to the official ApprovalPanel; the client half parses the
@@ -1780,7 +1739,8 @@ export function apply(ctx: Context, rawConfig: Config): void {
       llmDecision: (follow as any)?.decision ?? null,
       breaker: breaker === true,
     })
-    debugLog({ ev: 'resolve', callId: req.callId ?? null, outcome, timedOut, source, auto, seconds: status?.seconds ?? null, elapsedMs: Date.now() - t0, requestAt, requestToResolveMs: Date.now() - requestAt, llmDecision: (follow as any)?.decision ?? null })
+    const requestAt = requestAtByKey.get(key) ?? null
+    debugLog({ ev: 'resolve', callId: req.callId ?? null, outcome, timedOut, source, auto, seconds: status?.seconds ?? null, elapsedMs: Date.now() - t0, requestAt, requestToResolveMs: requestAt !== null ? Date.now() - requestAt : null, llmDecision: (follow as any)?.decision ?? null })
     pushHistory({
       sessionId: key,
       toolName: req.toolName,
@@ -1807,7 +1767,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
     const preset = permissionPresets.current?.(authority?.session?.events ?? req.agent.session.events)
     if (preset !== AUTO_PRESET) return next()
     const sessionKey = authorityKeyFor({ agent: req.agent })
-    requestAt = Date.now()
+    requestAtByKey.set(sessionKey, Date.now())
     debugLog({ ev: 'request', callId: req.callId ?? null, toolName: req.toolName, sessionKey })
     const reviewOpts = {
       userMessages: trustedUserMessages(authority),
