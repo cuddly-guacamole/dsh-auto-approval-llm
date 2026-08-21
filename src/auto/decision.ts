@@ -208,25 +208,6 @@ export function lowRiskReviewOutcome(review: {
 }
 
 /**
- * Unique-terminator conflict detection: given the list of installed bundle
- * names, report any known approval-plugin competitors that would also try to
- * claim `approval/request`. Kept pure so P0.7a can assert it.
- */
-export function detectConflicts(bundles: Iterable<string>): string[] {
-  const names = new Set([...bundles].map((b) => b.toLowerCase()))
-  const competitors = ['dsh-approval-llm', 'dsh-auto-review', '@nanmicoder/dsh-auto-mode', 'dsh-approval-ai', 'dsh-approval-timeout']
-  return competitors.filter((c) => names.has(c.toLowerCase()))
-}
-
-/**
- * Whether a reviewer result (or its absence/rejection) may be auto-answered.
- * ESCALATE must always surface to a human; only ALLOW/DENY are decisive.
- */
-export function reviewerDecidable(decision: string): boolean {
-  return decision === 'ALLOW' || decision === 'DENY'
-}
-
-/**
  * Fields that are configured host-side (via patch/YAML) and never edited by
  * the browser settings card. A card save must preserve whatever the current
  * stored value holds for these, otherwise the full `settings.replace` would

@@ -1,19 +1,54 @@
-// @ts-nocheck
 // Ported from @nanmicoder/dsh-auto-mode (policy.js).
 // MIT License, Copyright (c) 2026 程序员阿江-Relakkes (https://github.com/NanmiCoder/dsh-auto-mode).
 // Retained per the MIT License: this is a substantial portion of the original.
+//
+// NOTE: this file is intentionally type-checked (no `@ts-nocheck`). The
+// fail-closed classifier must not escape the compiler — DSH schema drift must
+// surface at build time, not at runtime. Keep the helper types below minimal so
+// the logic stays the single source of truth.
 import { hardDestructiveTargetReason, isProtectedProjectPath, isWithin, normalizePath, } from './paths.js';
 import { assessShell, hardDenyShellReason } from './shell.js';
-function record(value) {
-    return typeof value === 'object' && value !== null && !Array.isArray(value) ? value : undefined;
+
+/** Runtime roots the classifier reasons about (mirrors `resolveRoots` in paths.ts). */
+export interface Roots {
+    workspace: string
+    home: string
+    dshHome?: string
+    tempRoots?: string[]
+    allowedDshSubpaths?: string[]
 }
-function pathArgument(args) {
+
+/** Minimal shape of a tool execution the classifier inspects. */
+export interface ExecLike {
+    name: string
+    arguments?: unknown
+    agent?: { session?: unknown }
+}
+
+/** Deterministic first-pass classification result. */
+export interface ToolAssessment {
+    decision: 'allow' | 'deny' | 'ask'
+    reason?: string
+    classifierEligible?: boolean
+    /** Files the shell classifier predicts the command will create (artifacts). */
+    plannedCreates?: string[]
+}
+
+type JsonObject = Record<string, unknown>
+
+function record(value: unknown): JsonObject | undefined {
+    return typeof value === 'object' && value !== null && !Array.isArray(value)
+        ? (value as JsonObject)
+        : undefined
+}
+function pathArgument(args: unknown): string | undefined {
+    if (args === null || typeof args !== 'object') return undefined
     for (const key of ['file_path', 'path', 'cwd', 'workdir']) {
-        const value = args?.[key];
+        const value = (args as JsonObject)[key]
         if (typeof value === 'string')
-            return value;
+            return value
     }
-    return undefined;
+    return undefined
 }
 /**
  * Resolve the concrete file-mutation targets of a tool call. `apply_patch`
@@ -22,14 +57,15 @@ function pathArgument(args) {
  * skipped. Returns the list of patch targets, or `undefined` when any patch
  * entry lacks a readable path (callers must then fail closed).
  */
-export function patchTargetPaths(args, name) {
+export function patchTargetPaths(args: unknown, name: string): string[] | undefined {
     if (name === 'apply_patch') {
-        const patches = Array.isArray(args?.patches) ? args.patches : [];
-        const targets = [];
+        const rawPatches = (args as JsonObject)?.patches;
+        const patches = Array.isArray(rawPatches) ? (rawPatches as unknown[]) : [];
+        const targets: string[] = [];
         for (const patch of patches) {
-            if (typeof patch?.file_path !== 'string' || patch.file_path === '')
+            if (typeof (patch as JsonObject)?.file_path !== 'string' || (patch as JsonObject).file_path === '')
                 return undefined;
-            targets.push(patch.file_path);
+            targets.push((patch as JsonObject).file_path as string);
         }
         return targets.length > 0 ? targets : undefined;
     }
@@ -48,20 +84,20 @@ const SYMLINK_GUARD_MUTATION = new Set(['write', 'edit', 'apply_patch']);
  * `path`, lsp reads `cwd`) and the host guard cannot silently drop a family
  * member (A-via-symlink gap).
  */
-export function symlinkGuardTargets(name, args) {
+export function symlinkGuardTargets(name: string, args?: unknown): string[] | undefined {
     if (SYMLINK_GUARD_MUTATION.has(name))
         return patchTargetPaths(args, name) ?? [];
-    if (name === 'str_replace_editor' && args?.command !== 'view')
-        return typeof args?.path === 'string' ? [args.path] : [];
+    if (name === 'str_replace_editor' && (args as JsonObject)?.command !== 'view')
+        return typeof (args as JsonObject)?.path === 'string' ? [(args as JsonObject).path as string] : [];
     if (name === 'read' || name === 'read_image')
-        return typeof args?.file_path === 'string' ? [args.file_path] : [];
+        return typeof (args as JsonObject)?.file_path === 'string' ? [(args as JsonObject).file_path as string] : [];
     if (name === 'grep' || name === 'glob')
-        return typeof args?.path === 'string' ? [args.path] : [];
+        return typeof (args as JsonObject)?.path === 'string' ? [(args as JsonObject).path as string] : [];
     if (name === 'lsp')
-        return typeof args?.cwd === 'string' ? [args.cwd] : [];
+        return typeof (args as JsonObject)?.cwd === 'string' ? [(args as JsonObject).cwd as string] : [];
     return undefined;
 }
-function serializedArguments(argumentsValue) {
+function serializedArguments(argumentsValue: unknown): string {
     try {
         return JSON.stringify(argumentsValue);
     }
@@ -69,14 +105,20 @@ function serializedArguments(argumentsValue) {
         return '';
     }
 }
-function containsCredentialMaterial(argumentsValue) {
+function containsCredentialMaterial(argumentsValue: unknown): boolean {
     return /(?:BEGIN (?:RSA |OPENSSH )?PRIVATE KEY|\b(?:sk|ghp|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{8,}\b|\bAKIA[0-9A-Z]{16}\b|(?:aws_secret_access_key|aws_access_key_id|secret_access_key|access_key_id)\s*=\s*[A-Za-z0-9/+=_-]{16,}|\bBearer\s+[A-Za-z0-9._~+\/-]{8,}|\.ssh[\\/](?:id_|config)|\.credentials\.yaml)/i
         .test(serializedArguments(argumentsValue));
 }
 const DESTRUCTIVE_TOOL = /(?:^|[_-])(?:delete|destroy|remove|erase|purge|drop|truncate|wipe|unlink|rmdir|reset|revoke)(?:$|[_-])/i;
 const EXTERNAL_WRITE_TOOL = /(?:^|[_-])(?:deploy|publish|push|upload|send|post|release|merge|submit|create[-_]?(?:issue|pull[-_]?request))(?:$|[_-])/i;
 const SECURITY_CHANGE_TOOL = /(?:^|[_-])(?:chmod|chown|permission|permissions|policy|grant|revoke|role|credential|credentials|secret|secrets|auth)(?:$|[_-])/i;
-function riskyPluginToolReason(name) {
+// Single source for the static-risk name pattern, shared with index.ts via
+// `riskyPluginToolReason` and (when tiering is extracted) the host classifier.
+export const RISK_NAME_PATTERN = new RegExp(
+    [DESTRUCTIVE_TOOL, EXTERNAL_WRITE_TOOL, SECURITY_CHANGE_TOOL].map((r) => r.source).join('|'),
+    'i',
+);
+function riskyPluginToolReason(name: string): string | undefined {
     if (DESTRUCTIVE_TOOL.test(name))
         return `registered tool name indicates a destructive operation: ${name}`;
     if (EXTERNAL_WRITE_TOOL.test(name))
@@ -136,7 +178,7 @@ const AGENT_TEAMS_CONTROL_TOOLS = new Set([
     'agent_teams_delete',
 ]);
 /** Synchronous hard-deny reason suitable for the monotonic tool guard. */
-export function hardDenyReason(exec, roots) {
+export function hardDenyReason(exec: ExecLike, roots: Roots): string | undefined {
     const args = record(exec.arguments);
     if ((/^(?:web_fetch|curl|wget)/i.test(exec.name) || EXTERNAL_WRITE_TOOL.test(exec.name)) && containsCredentialMaterial(exec.arguments)) {
         return 'external call contains credential or private-key material';
@@ -168,7 +210,7 @@ export function hardDenyReason(exec, roots) {
     return undefined;
 }
 /** Deterministic first-pass classification for every normal tool call. */
-export function assessTool(exec, roots, artifacts) {
+export function assessTool(exec: ExecLike, roots: Roots, artifacts: unknown): ToolAssessment {
     const hard = hardDenyReason(exec, roots);
     if (hard !== undefined)
         return { decision: 'deny', reason: hard, classifierEligible: false };

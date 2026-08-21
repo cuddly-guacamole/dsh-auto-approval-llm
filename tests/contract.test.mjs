@@ -7,7 +7,7 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { parseReview, lowRiskReviewOutcome, raceHumanDecision, detectConflicts, reviewerDecidable, preserveHostKeys, normalizeTimeoutAction, prepareReviewerArguments, extractToolPath, frameReviewerInput, breakerTripped, applyBreaker, reviewSuggestionNote, approvalSource, reviewerAutoAllowBlocked } from '../lib/auto/decision.js'
+import { parseReview, lowRiskReviewOutcome, raceHumanDecision, preserveHostKeys, normalizeTimeoutAction, prepareReviewerArguments, extractToolPath, frameReviewerInput, breakerTripped, applyBreaker, reviewSuggestionNote, approvalSource, reviewerAutoAllowBlocked } from '../lib/auto/decision.js'
 import { sanitizeReviewReason, sanitizeClassifierText } from '../lib/auto/classifier.js'
 import { trimAuditTail } from '../lib/auto/audit.js'
 import { normalizeReviewMode } from '../lib/auto/review-mode.js'
@@ -15,7 +15,39 @@ import { parseRulesText, evaluateRules, extractRuleTarget } from '../lib/auto/ru
 import { hardDenyShellReason, assessShell } from '../lib/auto/shell.js'
 import { hardDenyReason, assessTool } from '../lib/auto/policy.js'
 import { isCriticalPath } from '../lib/auto/paths.js'
-import { isTrustedRequest } from '../lib/auto/trust.js'
+import { isTrustedRequest, isLoopbackIp } from '../lib/auto/trust.js'
+import { parseClassifierDecision } from '../lib/auto/classifier.js'
+import { RISK_NAME_PATTERN, RISK_REASON_PATTERN } from '../lib/auto/risk-tokens.js'
+
+test('parseClassifierDecision: valid allow/ask/deny', () => {
+  assert.deepEqual(parseClassifierDecision({ decision: 'allow', reason: 'ok' }), { decision: 'allow', reason: 'ok' })
+  assert.deepEqual(parseClassifierDecision({ decision: 'deny', reason: 'no' }), { decision: 'deny', reason: 'no' })
+})
+test('parseClassifierDecision: extra key is rejected (fail closed)', () => {
+  assert.throws(() => parseClassifierDecision({ decision: 'allow', reason: 'ok', extra: 1 }))
+})
+test('parseClassifierDecision: missing reason / invalid decision rejected', () => {
+  assert.throws(() => parseClassifierDecision({ decision: 'allow' }))
+  assert.throws(() => parseClassifierDecision({ decision: 'maybe', reason: 'x' }))
+})
+test('parseClassifierDecision: reason too long rejected', () => {
+  assert.throws(() => parseClassifierDecision({ decision: 'allow', reason: 'x'.repeat(1001) }))
+})
+test('isLoopbackIp: loopback literals + non-loopback + undefined', () => {
+  assert.ok(isLoopbackIp('127.0.0.1'))
+  assert.ok(isLoopbackIp('::1'))
+  assert.ok(isLoopbackIp('::ffff:127.0.0.1'))
+  assert.ok(!isLoopbackIp('192.168.1.5'))
+  assert.ok(!isLoopbackIp(undefined))
+})
+test('risk-tokens: HIGH-risk name/reason patterns lock the dedup source', () => {
+  assert.ok(RISK_NAME_PATTERN.test('deploy'))
+  assert.ok(RISK_NAME_PATTERN.test('chmod'))
+  assert.ok(!RISK_NAME_PATTERN.test('read'))
+  assert.ok(RISK_REASON_PATTERN.test('external write'))
+  assert.ok(RISK_REASON_PATTERN.test('security-boundary'))
+  assert.ok(!RISK_REASON_PATTERN.test('routine edit'))
+})
 
 test('parseReview: valid plain JSON', () => {
   const r = parseReview('{"decision":"ALLOW","risk_level":"LOW","reason":"safe"}')
@@ -134,22 +166,6 @@ test('raceHumanDecision: takeover claim for a DENY resolves rejected', async () 
   setTimeout(() => denyHandle.claim('rejected'), 10)
   const raced = await racing
   assert.deepEqual(raced, { outcome: 'rejected', timedOut: false, claimed: true })
-})
-
-test('detectConflicts: no competitors -> empty', () => {
-  assert.deepEqual(detectConflicts(['dsh-auto-approval-llm', 'web-ui-skin-center']), [])
-})
-
-test('detectConflicts: known approval competitors flagged (case-insensitive)', () => {
-  assert.deepEqual(detectConflicts(['dsh-approval-llm']), ['dsh-approval-llm'])
-  assert.deepEqual(detectConflicts(['@nanmicoder/dsh-auto-mode', 'dsh-auto-review']), ['dsh-auto-review', '@nanmicoder/dsh-auto-mode'])
-  assert.deepEqual(detectConflicts(['DSH-APPROVAL-TIMEOUT']), ['dsh-approval-timeout'])
-})
-
-test('reviewerDecidable: only ALLOW/DENY are decisive', () => {
-  assert.ok(reviewerDecidable('ALLOW'))
-  assert.ok(reviewerDecidable('DENY'))
-  assert.ok(!reviewerDecidable('ESCALATE'))
 })
 
 test('preserveHostKeys: host-only fields survive a card save that omits them', () => {

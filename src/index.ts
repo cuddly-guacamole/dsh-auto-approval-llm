@@ -29,6 +29,7 @@ import { sanitizeClassifierArguments, sanitizeClassifierText, sanitizeReviewReas
 import { createDshClassifier } from './auto/dsh-classifier.js'
 import { type RaceHumanHandle, type ReviewResult, applyBreaker, approvalSource, breakerTripped, createKeyedMutex, extractToolPath, followResolution, frameReviewerInput, lowRiskReviewOutcome, parseReview, preserveHostKeys, raceHumanDecision, reviewSuggestionNote, reviewerAutoAllowBlocked } from './auto/decision.js'
 import { isWithin, normalizePath, resolveRoots } from './auto/paths.js'
+import { RISK_NAME_PATTERN, RISK_REASON_PATTERN } from './auto/risk-tokens.js'
 import { assessTool, hardDenyReason, symlinkGuardTargets } from './auto/policy.js'
 import { evaluateRules, parseRulesText } from './auto/rules.js'
 import { type ReviewMode, loadReviewModes, normalizeReviewMode, persistReviewModes } from './auto/review-mode.js'
@@ -364,10 +365,6 @@ async function onlineReviewWithLLM(
       failure: `online reviewer failed: ${error instanceof Error ? error.message : String(error)}`,
     }
   }
-}
-
-function isLowRisk(result: ReviewResult): boolean {
-  return result.riskLevel === undefined || result.riskLevel === 'LOW' || result.riskLevel === 'MEDIUM'
 }
 
 function appendNotice(session: any, text: string): void {
@@ -1316,8 +1313,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
     if (assessment.decision === 'allow') return 'LOW'
     const reason = assessment.reason ?? ''
     const name = req.toolName
-    if (/(?:external write|security-boundary|destructive|protected path|credential|private-key|stateful terminal)/i.test(reason) ||
-        /(?:^|[_-])(?:delete|destroy|remove|erase|purge|drop|truncate|wipe|unlink|rmdir|reset|revoke|deploy|publish|push|upload|send|post|release|merge|submit|chmod|chown|permission|permissions|policy|grant|revoke|credential|credentials|secret|secrets|auth)(?:$|[_-])/i.test(name)) {
+    if (RISK_REASON_PATTERN.test(reason) || RISK_NAME_PATTERN.test(name)) {
       return 'HIGH'
     }
     return 'MEDIUM'
