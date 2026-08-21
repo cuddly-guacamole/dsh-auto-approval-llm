@@ -27,9 +27,9 @@ import { ArtifactRegistry } from './auto/artifacts.js'
 import { appendAuditLine, recordAuditClear } from './auto/audit.js'
 import { sanitizeClassifierArguments, sanitizeClassifierText, sanitizeReviewReason } from './auto/classifier.js'
 import { createDshClassifier } from './auto/dsh-classifier.js'
-import { type RaceHumanHandle, type ReviewResult, applyBreaker, approvalSource, breakerTripped, extractToolPath, frameReviewerInput, lowRiskReviewOutcome, parseReview, preserveHostKeys, raceHumanDecision, reviewSuggestionNote, reviewerAutoAllowBlocked } from './auto/decision.js'
+import { type RaceHumanHandle, type ReviewResult, applyBreaker, approvalSource, breakerTripped, extractToolPath, followResolution, frameReviewerInput, lowRiskReviewOutcome, parseReview, preserveHostKeys, raceHumanDecision, reviewSuggestionNote, reviewerAutoAllowBlocked } from './auto/decision.js'
 import { isWithin, normalizePath, resolveRoots } from './auto/paths.js'
-import { assessTool, hardDenyReason, patchTargetPaths } from './auto/policy.js'
+import { assessTool, hardDenyReason, symlinkGuardTargets } from './auto/policy.js'
 import { evaluateRules, parseRulesText } from './auto/rules.js'
 import { type ReviewMode, loadReviewModes, normalizeReviewMode, persistReviewModes } from './auto/review-mode.js'
 import { isLoopbackHostname, isTrustedRequest } from './auto/trust.js'
@@ -585,8 +585,10 @@ interface ReviewStatus {
   note?: string
   feedback?: string
   /** Resolution origin, set on follow-phase statuses so the client can skip
-   * re-answering approvals the human already settled. */
-  source?: 'human' | 'llm' | 'timeout'
+   * re-answering approvals the human already settled. 'abort' labels a
+   * cancelled/aborted ask (no human and no LLM decided) so it is never
+   * misread as a human answer. */
+  source?: 'human' | 'llm' | 'timeout' | 'abort'
 }
 
 const reviewStates = new Map<string, ReviewStatus>()
@@ -1347,8 +1349,8 @@ export function apply(ctx: Context, rawConfig: Config): void {
   // host-side guard resolves the deepest existing ancestor of the target and
   // hard-denies when its realpath leaves the workspace. Best-effort: any fs
   // failure returns undefined and the normal (textual) policy decides.
-  const MUTATION_TOOLS = new Set(['write', 'edit', 'apply_patch'])
-  const STR_EDIT_MUTATION = (name: string, args: any) => name === 'str_replace_editor' && args?.command !== 'view'
+  // The per-tool target extraction lives in policy.symlinkGuardTargets (pure,
+  // contract-tested) so the guard sees the exact same paths as the policy.
   // Resolve the realpath of the workspace root once (cached) so targets are
   // compared against the *resolved* workspace, not its textual spelling: a
   // workspace that lives under a junctioned/symlinked parent (OneDrive,
@@ -1370,12 +1372,8 @@ export function apply(ctx: Context, rawConfig: Config): void {
     const args = (typeof exec.arguments === 'object' && exec.arguments !== null && !Array.isArray(exec.arguments)) ? exec.arguments : undefined
     if (args === undefined) return undefined
     const name = String(exec.name ?? '')
-    let targets: string[] | undefined
-    if (MUTATION_TOOLS.has(name)) targets = patchTargetPaths(args, name) ?? []
-    else if (STR_EDIT_MUTATION(name, args)) targets = typeof args?.path === 'string' ? [args.path] : []
-    else if (name === 'read' || name === 'read_image') targets = typeof args?.file_path === 'string' ? [args.file_path] : []
-    else return undefined
-    if (targets.length === 0) return undefined
+    const targets = symlinkGuardTargets(name, args)
+    if (targets === undefined || targets.length === 0) return undefined
     if (realWorkspace === undefined) realWorkspace = resolveDeepest(roots.workspace)
     if (realWorkspace === undefined) return undefined
     const realWsNormalized = normalizePath(realWorkspace, roots.workspace, roots.home)
@@ -1601,6 +1599,10 @@ export function apply(ctx: Context, rawConfig: Config): void {
     // race. Only this — never the mere presence of an advisory review verdict —
     // may label the resolution `llm-*` or feed the denial breaker.
     let claimed = false
+    // Whether the delegated official approval (next()) rejected — session
+    // disposed or the request was cancelled. The follow published in the finally
+    // must then never claim the human decided (source 'abort', action reject).
+    let aborted = false
     const t0 = Date.now()
     const canTimeout = status !== undefined && req.callId !== undefined &&
       status.phase === 'countdown' && status.seconds > 0
@@ -1630,6 +1632,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       // drop any stored verdict/auto-answer marker. Then rethrow so the
       // approval chain observes the failure (fail-closed: never a fabricated
       // resolution).
+      aborted = true
       if (req.callId !== undefined) {
         resolvedCallIds.set(req.callId, Date.now())
         reviewVerdicts.delete(req.callId)
@@ -1647,38 +1650,15 @@ export function apply(ctx: Context, rawConfig: Config): void {
       // are cleaned up later (after pushHistory), never here.
       if (status && req.callId !== undefined) {
         const current = reviewStates.get(req.callId)
-        if (current?.phase === 'follow') {
-          // LLM takeover already published the follow (keeps its note);
-          // keep it observable until the client answers or the TTL sweeps it.
-          followExpiry.set(req.callId, Date.now() + FOLLOW_STATE_TTL_MS)
-        } else if (timedOut) {
-          // Host countdown expired: republish as a follow with the real
-          // outcome so the client closes the panel instead of re-arming.
-          reviewStates.set(req.callId, {
-            risk: status.risk,
-            phase: 'follow',
-            action: outcome === 'allowed-once' ? 'allow' : 'reject',
-            seconds: 0,
-            source: 'timeout',
-          })
-          followExpiry.set(req.callId, Date.now() + FOLLOW_STATE_TTL_MS)
-        } else {
-          // Human answered: publish a terminal follow with the human's real
-          // action instead of deleting the status. The official panel is
-          // already closed by the human's own respond, but a visible follow
-          // keeps "resolved" observable: an in-flight poll can no longer 404
-          // and re-answer with a stale countdown action (R001). The client
-          // treats source:'human' as answer-only-if-still-pending and the
-          // 120s TTL sweep bounds the entry.
-          reviewStates.set(req.callId, {
-            risk: status.risk,
-            phase: 'follow',
-            action: outcome === 'allowed-once' ? 'allow' : 'reject',
-            seconds: 0,
-            source: 'human',
-          })
-          followExpiry.set(req.callId, Date.now() + FOLLOW_STATE_TTL_MS)
+        const resolution = followResolution(
+          current?.phase,
+          { risk: status.risk, outcome },
+          { timedOut, aborted },
+        )
+        if (resolution.kind === 'publish') {
+          reviewStates.set(req.callId, resolution.follow)
         }
+        followExpiry.set(req.callId, Date.now() + FOLLOW_STATE_TTL_MS)
       }
     }
     // Mark the ask as host-resolved so a late client ACK (FEEDBACK auto:true)

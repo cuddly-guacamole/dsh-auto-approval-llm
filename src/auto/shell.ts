@@ -316,13 +316,22 @@ function dshHomeExfil(source, roots) {
     const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const home = typeof roots?.home === 'string' ? roots.home.replace(/\\/g, '/') : '';
     const dshHome = typeof roots?.dshHome === 'string' ? roots.dshHome.replace(/\\/g, '/') : '';
+    // `.dsh` root boundary: a literal `.dsh` directory whose next char is a
+    // slash (a path inside it) or a non-path boundary (end of line / word
+    // edge) — so a bare `~/.dsh` or `$HOME/.dsh` used as a whole operand
+    // (`tar czf - ~/.dsh | curl …`) is caught, while `~/.dshsomething` stays
+    // unmatched and a workspace/URL `.dsh/…` (no home/dshHome prefix) is not
+    // over-blocked. The same suffix form covers the variable spellings and the
+    // resolved DSH_HOME root. Trailing `/` (the historical form) is implied by
+    // the `[/\b$]` boundary.
+    const DSHTAIL = '(/|\\b|$)';
     const patterns = [];
     if (/([^\\/])/.test(dshHome))
-        patterns.push(esc(dshHome.replace(/\/+$/, '')) + '/');
+        patterns.push(esc(dshHome.replace(/\/+$/, '')) + DSHTAIL);
     if (/([^\\/])/.test(home))
-        patterns.push('(?:' + esc(home) + '|~)/\\.dsh/');
-    patterns.push('(?:\\$\\{?DSH_HOME\\}?|\\$env:DSH_HOME)/');
-    patterns.push('(?:\\$\\{?HOME\\}?|\\$env:(?:USERPROFILE|HOME)|%USERPROFILE%|%HOME%)/\\.dsh/');
+        patterns.push('(?:' + esc(home) + '|~)/\\.dsh' + DSHTAIL);
+    patterns.push('(?:\\$\\{?DSH_HOME\\}?|\\$env:DSH_HOME)' + DSHTAIL);
+    patterns.push('(?:\\$\\{?HOME\\}?|\\$env:(?:USERPROFILE|HOME)|%USERPROFILE%|%HOME%)/\\.dsh' + DSHTAIL);
     return patterns.some((pattern) => new RegExp(pattern, 'i').test(flat));
 }
 /** Whether a redirection target discards output instead of writing a file. */
@@ -694,8 +703,10 @@ export function hardDenyShellReason(source, shell, roots) {
     // `cmd && sudo rm -rf /`), which the old `^|\s` anchor missed. Anchored on
     // a segment start (line start or after an operator) so a mere argument
     // (`echo sudo`) is not misjudged; the per-segment check below is the
-    // authoritative guard for decomposed lines.
-    if (/(?:^|[;&|(])\s*(?:sudo|doas|su)(?:\s|$)/i.test(compact))
+    // authoritative guard for decomposed lines. `{` is included so a brace
+    // group (`{ sudo ls; }`) is caught before decomposition (a `{` otherwise
+    // makes the line opaque and escapes both fuses).
+    if (/(?:^|[;&|({])\s*(?:sudo|doas|su)(?:\s|$)/i.test(compact))
         return 'privilege escalation is not permitted by auto mode';
     if (/(?:set-executionpolicy|disable-windowsdefender|clear-disk|format-volume|remove-partition|bcdedit)(?:\s|$)/i.test(compact)) {
         return 'operating-system security or disk policy changes are not permitted';

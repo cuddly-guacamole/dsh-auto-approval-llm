@@ -36,6 +36,31 @@ export function patchTargetPaths(args, name) {
     const path = pathArgument(args);
     return path === undefined ? undefined : [path];
 }
+/** Mutation/read tool names whose path call-args the host symlink guard checks. */
+const SYMLINK_GUARD_MUTATION = new Set(['write', 'edit', 'apply_patch']);
+/**
+ * Resolve the concrete path operands the host-side symlink-escape guard must
+ * check for a tool call. Returns the target list for mutation tools, the
+ * `read`/`read_image` file path, the `grep`/`glob` path, and the `lsp` cwd;
+ * `undefined` when the tool carries no checked path operand.
+ *
+ * Kept pure so contract tests pin the exact per-tool spelling (grep/glob read
+ * `path`, lsp reads `cwd`) and the host guard cannot silently drop a family
+ * member (A-via-symlink gap).
+ */
+export function symlinkGuardTargets(name, args) {
+    if (SYMLINK_GUARD_MUTATION.has(name))
+        return patchTargetPaths(args, name) ?? [];
+    if (name === 'str_replace_editor' && args?.command !== 'view')
+        return typeof args?.path === 'string' ? [args.path] : [];
+    if (name === 'read' || name === 'read_image')
+        return typeof args?.file_path === 'string' ? [args.file_path] : [];
+    if (name === 'grep' || name === 'glob')
+        return typeof args?.path === 'string' ? [args.path] : [];
+    if (name === 'lsp')
+        return typeof args?.cwd === 'string' ? [args.cwd] : [];
+    return undefined;
+}
 function serializedArguments(argumentsValue) {
     try {
         return JSON.stringify(argumentsValue);
@@ -161,9 +186,15 @@ export function assessTool(exec, roots, artifacts) {
         if (path === undefined)
             return { decision: 'allow', reason: 'read-only project inspection', classifierEligible: false };
         const normalized = normalizePath(path, roots.workspace, roots.home);
-        return isWithin(roots.workspace, normalized)
-            ? { decision: 'allow', reason: 'read-only project inspection', classifierEligible: false }
-            : { decision: 'ask', reason: `reading outside the workspace requires semantic review: ${normalized}`, classifierEligible: true };
+        if (!isWithin(roots.workspace, normalized))
+            return { decision: 'ask', reason: `reading outside the workspace requires semantic review: ${normalized}`, classifierEligible: true };
+        // Protected workspace metadata (.env, .npmrc, .git/*, …) must not be
+        // silently read through the `read` tool family. The shell path is gated
+        // (`readPathsAreRoutine`), so routing the read *tool* to semantic review
+        // here closes the mismatch (mirror of the F1 contract).
+        if (isProtectedProjectPath(normalized, roots))
+            return { decision: 'ask', reason: `reading protected project metadata requires semantic review: ${normalized}`, classifierEligible: true };
+        return { decision: 'allow', reason: 'read-only project inspection', classifierEligible: false };
     }
     if (exec.name === 'write' || exec.name === 'edit') {
         const path = pathArgument(args);

@@ -399,3 +399,69 @@ export function reviewSuggestionNote(review: {
   const reason = review.reason ? ` — ${sanitizeReviewReason(review.reason)}` : ''
   return `🤖 Review suggestion: ${review.decision}${risk}${reason}`
 }
+
+export type FollowSource = 'human' | 'llm' | 'timeout' | 'abort'
+
+export interface FollowStatusInput {
+  risk: 'LOW' | 'MEDIUM' | 'HIGH'
+  outcome?: string
+}
+
+export type FollowResolution =
+  | { kind: 'keep' }
+  | { kind: 'publish'; follow: { risk: 'LOW' | 'MEDIUM' | 'HIGH'; phase: 'follow'; action: 'allow' | 'reject'; seconds: 0; source: FollowSource } }
+
+/**
+ * Decide the follow-phase status to publish after an approval resolution.
+ *
+ * Mirrors the historical host `finally` logic, with one honesty fix: a
+ * cancelled/aborted ask (the delegated official approval rejected — session
+ * disposed or request cancelled) must NOT be labelled `source:'human'` — no
+ * human decided anything. It publishes `source:'abort'` with a hard `reject`
+ * action (the outcome is undefined, so an allow is never implied), keeping the
+ * polling client able to close the panel while never claiming a human verdict.
+ *
+ * Order of precedence (matches the host):
+ *  1. still-follow (an LLM takeover already published it) → keep
+ *  2. host countdown expiry        → timeout
+ *  3. cancellation/abort           → abort (always reject)
+ *  4. otherwise (human answered)   → human, action from the real outcome
+ */
+export function followResolution(
+  currentPhase: string | undefined,
+  input: FollowStatusInput,
+  opts: { timedOut: boolean; aborted: boolean },
+): FollowResolution {
+  if (currentPhase === 'follow') return { kind: 'keep' }
+  if (opts.timedOut) {
+    return {
+      kind: 'publish',
+      follow: {
+        risk: input.risk,
+        phase: 'follow',
+        action: input.outcome === 'allowed-once' ? 'allow' : 'reject',
+        seconds: 0,
+        source: 'timeout',
+      },
+    }
+  }
+  if (opts.aborted) {
+    // Fail-closed and honest: no human (nor LLM) decided; a rejection closes
+    // the panel without implying a user answer.
+    return {
+      kind: 'publish',
+      follow: { risk: input.risk, phase: 'follow', action: 'reject', seconds: 0, source: 'abort' },
+    }
+  }
+  return {
+    kind: 'publish',
+    follow: {
+      risk: input.risk,
+      phase: 'follow',
+      action: input.outcome === 'allowed-once' ? 'allow' : 'reject',
+      seconds: 0,
+      source: 'human',
+    },
+  }
+}
+
