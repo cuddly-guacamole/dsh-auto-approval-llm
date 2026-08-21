@@ -140,7 +140,15 @@ export function isProtectedProjectPath(target, roots) {
     if (first !== undefined && ['.git', '.vscode', '.idea', '.husky', '.dsh'].includes(first))
         return true;
     const base = api.basename(normalized).toLowerCase();
-    return ['.gitconfig', '.gitmodules', '.bashrc', '.bash_profile', '.zshrc', '.zprofile', '.profile', '.mcp.json'].includes(base);
+    const secretFileBases = ['.gitconfig', '.gitmodules', '.bashrc', '.bash_profile', '.zshrc', '.zprofile', '.profile', '.mcp.json', '.netrc', '.npmrc', '.pypirc'];
+    if (secretFileBases.includes(base))
+        return true;
+    // Environment-secret files (`.env`, `.env.local`, `.env.production`) hold
+    // real credentials and must not be silently read/written in auto mode. The
+    // `.example` template variant is documentation and stays readable.
+    if (base === '.env' || /^\.env\.(?!example(?:\.|$))/.test(base))
+        return true;
+    return false;
 }
 /** Deterministic destructive-target fuse. */
 export function hardDestructiveTargetReason(target, roots) {
