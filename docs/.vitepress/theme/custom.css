@@ -1,0 +1,75 @@
+:root {
+  --vp-c-brand-1: #58a6ff;
+  --vp-c-brand-2: #3fb950;
+  --vp-c-brand-3: #58a6ff;
+  --vp-c-green: #3fb950;
+  --vp-c-red: #f85149;
+  --vp-c-yellow: #d29922;
+  --vp-c-default-soft: rgba(88, 166, 255, .15);
+}
+.dark {
+  --vp-c-bg: #0d1117;
+  --vp-c-bg-alt: #161b22;
+  --vp-c-bg-soft: #161b22;
+  --vp-c-divider: #30363d;
+  --vp-c-text-1: #c9d1d9;
+  --vp-c-text-2: #8b949e;
+}
+
+/* 行内标签 chips（原 .tag） */
+.vp-doc .tag {
+  display: inline-block; padding: 1px 8px; border-radius: 999px;
+  font-size: 12px; border: 1px solid var(--vp-c-divider);
+  color: var(--vp-c-text-2); vertical-align: middle;
+}
+.vp-doc .tag.deny  { color: #f85149; border-color: #f85149; }
+.vp-doc .tag.allow { color: #3fb950; border-color: #3fb950; }
+.vp-doc .tag.ask   { color: #d29922; border-color: #d29922; }
+.vp-doc .tag.shell { color: #bc8cff; border-color: #bc8cff; }
+.vp-doc .tag.read  { color: #39c5cf; border-color: #39c5cf; }
+.vp-doc .tag.write { color: #58a6ff; border-color: #58a6ff; }
+
+/* 行内徽章（原 .badgeok/.badgeerr） */
+.vp-doc .badgeok  { color: #3fb950; font-weight: 600; }
+.vp-doc .badgeerr { color: #f85149; font-weight: 600; }
+
+/* 风险等级（原 .rk-low/.rk-high） */
+.vp-doc .rk-low  { color: #3fb950; }
+.vp-doc .rk-high { color: #f85149; }
+
+/* 时序步骤（原 .seq/.stmt/.who/.cap）—— 用在有序列表里 */
+.vp-doc ol.seq { list-style: none; counter-reset: seq; padding: 0; }
+.vp-doc ol.seq > li { counter-increment: seq; position: relative; padding: 10px 14px 10px 40px;
+  border: 1px solid var(--vp-c-divider); border-radius: 8px; margin: 8px 0; background: var(--vp-c-bg-soft); }
+.vp-doc ol.seq > li::before { content: counter(seq); position: absolute; left: 12px; top: 12px;
+  width: 20px; height: 20px; border-radius: 50%; background: rgba(88,166,255,.15);
+  color: #58a6ff; font-size: 12px; text-align: center; line-height: 20px; font-weight: 700; }
+.vp-doc .who { font-weight: 600; }
+.vp-doc .cap { color: var(--vp-c-text-2); margin-top: 2px; }
+
+/* 关键数字 stat（原 .stat/.chip） */
+.vp-doc .stat { font-family: var(--vp-font-family-mono); font-size: .9em; color: #58a6ff; }
+
+/* 代码位置引用（原 .lnum） */
+.vp-doc .lnum { font-family: var(--vp-font-family-mono); font-size: .85em; color: #39c5cf; }
+
+/* 其余流转标签（patch/editor/lex/segment/classify/gate/ctx/breaker 等）统一蓝 */
+.vp-doc .tag:not(.deny):not(.allow):not(.ask):not(.shell):not(.read):not(.write) {
+  color: #58a6ff; border-color: #58a6ff;
+}
+
+/* 首页导航卡片 */
+.vp-doc .navcard {
+  display: block; padding: 14px 16px; border: 1px solid var(--vp-c-divider);
+  border-radius: 10px; background: var(--vp-c-bg-soft); text-decoration: none;
+  transition: border-color .2s; break-inside: avoid;
+}
+.vp-doc .navcard:hover { border-color: var(--vp-c-brand-1); }
+.vp-doc .navcard .nn { font-family: var(--vp-font-family-mono); font-size: 12px; color: var(--vp-c-brand-1); }
+.vp-doc .navcard .nt { font-weight: 600; color: var(--vp-c-text-1); display: block; margin-top: 2px; }
+.vp-doc .navcard .nd { font-size: 12.5px; color: var(--vp-c-text-2); margin-top: 4px; }
+.vp-doc .navgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; margin: 12px 0; }
+
+/* 首页头图徽章行 */
+.vp-doc .homebadges { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin: 8px 0 4px; }
+.vp-doc .homebadges img { border-radius: 6px; }

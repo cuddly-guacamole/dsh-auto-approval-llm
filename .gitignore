@@ -6,6 +6,7 @@
 !/tests/
 !/scripts/
 !/.gitignore
+!/.github/
 !/README.md
 !/README.en.md
 !/LICENSE
@@ -14,3 +15,6 @@
 !/tsconfig.json
 !/tsdown.config.ts
 !/cordis.patch.yml
+!/package-lock.json
+!/docs/
+/docs/.vitepress/dist/

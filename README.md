@@ -8,6 +8,10 @@
 
 ---
 
+📖 **工作原理详解文档站**：<https://cuddly-guacamole.github.io/dsh-auto-approval-llm/>
+
+---
+
 ## 特性
 
 - **静态规则 + LLM 分类器**：只读/会话/工作区常规操作直接放行；危险、外部写、凭据外泄、受保护路径直接拒绝；模糊操作交给 LLM 预分类（`tools/guard` + `tools/pre-execute`）。
@@ -62,7 +66,7 @@ dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 3. 想让审批走你自己的模型：在「在线评审模型」卡填 协议 / API 地址 / 模型名称 / API 密钥 → 保存 → 测试连接。
 4. 嫌中风险弹窗频繁或超时漏拦：调大「中风险倒计时」，或把「超时动作」改为 `拒绝` / `低风险自动同意`。
 
-> 📚 仓库内另有原理文档：[how-it-works.html](how-it-works.html)（大白话版说明）· [how-it-works-detailed.html](how-it-works-detailed.html)（详版工作原理图，含源码行号溯源）。
+> 📚 工作原理详解文档站：<https://cuddly-guacamole.github.io/dsh-auto-approval-llm/> ；仓库内另有原理文档：[how-it-works.html](how-it-works.html)（大白话版说明）· [how-it-works-detailed.html](how-it-works-detailed.html)（详版工作原理图，含源码行号溯源）。
 
 ---
 
