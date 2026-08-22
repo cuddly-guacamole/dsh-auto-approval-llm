@@ -265,9 +265,12 @@ export function assessTool(exec: ExecLike, roots: Roots, artifacts: unknown): To
             return { decision: 'ask', reason: `${exec.name} target path is missing`, classifierEligible: false };
         const normalized = normalizePath(path, roots.workspace, roots.home);
         if ((roots.allowedDshSubpaths ?? []).some(root => isWithin(root, normalized))) {
+            // Unconditional deny, never an 'ask': an ask lands in the risk-tiered
+            // approval pipeline where timeoutAction=allow turns an unanswered
+            // countdown into an allow, silently rewriting the audit trail.
             const stateReason = runtimeStateTargetReason(normalized);
             if (stateReason !== undefined)
-                return { decision: 'ask', reason: `mutation of ${stateReason} requires explicit user authorization`, classifierEligible: false };
+                return { decision: 'deny', reason: `mutation of ${stateReason} is not permitted`, classifierEligible: false };
             return { decision: 'allow', reason: 'trusted plugin development path', classifierEligible: false };
         }
         if (!isWithin(roots.workspace, normalized) || isProtectedProjectPath(normalized, roots)) {
@@ -288,7 +291,7 @@ export function assessTool(exec: ExecLike, roots: Roots, artifacts: unknown): To
         const normalized = targets.map((target) => normalizePath(target, roots.workspace, roots.home));
         const patchState = zoneStateTarget(normalized, roots);
         if (patchState !== undefined)
-            return { decision: 'ask', reason: `mutation of ${runtimeStateTargetReason(patchState)} requires explicit user authorization`, classifierEligible: false };
+            return { decision: 'deny', reason: `mutation of ${runtimeStateTargetReason(patchState)} is not permitted`, classifierEligible: false };
         if (normalized.every((n) => (roots.allowedDshSubpaths ?? []).some((root) => isWithin(root, n)))) {
             return { decision: 'allow', reason: 'trusted plugin development path', classifierEligible: false };
         }
@@ -309,9 +312,11 @@ export function assessTool(exec: ExecLike, roots: Roots, artifacts: unknown): To
         }
         const normalized = normalizePath(path, roots.workspace, roots.home);
         if ((roots.allowedDshSubpaths ?? []).some(root => isWithin(root, normalized)) && command !== 'view') {
+            // Same unconditional deny as write/edit: an ask would decay into a
+            // timeout allow under timeoutAction=allow.
             const stateReason = runtimeStateTargetReason(normalized);
             if (stateReason !== undefined)
-                return { decision: 'ask', reason: `mutation of ${stateReason} requires explicit user authorization`, classifierEligible: false };
+                return { decision: 'deny', reason: `mutation of ${stateReason} is not permitted`, classifierEligible: false };
             return { decision: 'allow', reason: 'trusted plugin development path', classifierEligible: false };
         }
         if (command === 'view') {

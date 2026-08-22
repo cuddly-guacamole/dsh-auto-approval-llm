@@ -919,14 +919,13 @@ test('assessTool: enumerated trusted/read sets keep their allow (no over-block)'
 })
 
 // ── plugin runtime-state files are not writable through the trusted zone ──
-test('assessTool: write to plugin runtime state inside the zone asks a human', () => {
+test('assessTool: write to plugin runtime state inside the zone is hard-denied (never an ask that timeout-allow could pass)', () => {
   const roots = { workspace: 'C:/ws', home: 'C:/Users/u', dshHome: 'C:/Users/u/.dsh', tempRoots: [], allowedDshSubpaths: ['C:/Users/u/.dsh/plugins/dsh-auto-approval-llm'] }
   const artifacts = { has: () => false }
   const zone = 'C:/Users/u/.dsh/plugins/dsh-auto-approval-llm'
   for (const name of ['history.jsonl', 'audit.jsonl', 'approval-debug.jsonl', 'review-mode.json']) {
     const verdict = assessTool({ name: 'write', arguments: { file_path: `${zone}/${name}`, content: 'x' } }, roots, artifacts)
-    assert.equal(verdict.decision, 'ask', name)
-    assert.equal(verdict.classifierEligible, false, name)
+    assert.equal(verdict.decision, 'deny', name)
     assert.match(verdict.reason ?? '', /runtime state/)
   }
 })
@@ -935,9 +934,9 @@ test('assessTool: apply_patch and str_replace_editor honor the runtime-state gua
   const artifacts = { has: () => false }
   const zone = 'C:/Users/u/.dsh/plugins/dsh-auto-approval-llm'
   const patch = assessTool({ name: 'apply_patch', arguments: { patches: [{ file_path: `${zone}/history.jsonl` }] } }, roots, artifacts)
-  assert.equal(patch.decision, 'ask')
+  assert.equal(patch.decision, 'deny')
   const sre = assessTool({ name: 'str_replace_editor', arguments: { command: 'str_replace', path: `${zone}/review-mode.json`, old_string: 'a', new_string: 'b' } }, roots, artifacts)
-  assert.equal(sre.decision, 'ask')
+  assert.equal(sre.decision, 'deny')
   // Ordinary zone sources stay allowed.
   assert.equal(assessTool({ name: 'edit', arguments: { file_path: `${zone}/src/index.ts` } }, roots, artifacts).decision, 'allow')
 })
