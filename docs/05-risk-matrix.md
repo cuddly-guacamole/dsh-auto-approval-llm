@@ -44,8 +44,8 @@
 |  | `high` | 仅 HIGH |
 | `llmTakeoverScope`<br><span class="pr-purple badgeok">哪些档允许 LLM 结论直接接管</span> | `medium-or-below（默认）` | LOW + MEDIUM 可被 LLM 结论直接结案 |
 |  | `low` | 仅 LOW |
-|  | `high-or-below` | 全部都可接管（含 HIGH，谨慎） |
+|  | `high-or-below` | 与 `medium-or-below` 等价：HIGH 永远只建议、不接管（高危由人/超时兜底）。该取值保留仅为兼容旧配置，不建议新用 |
 
 ::: tip 默认姿态
-全部档都送审（`low-or-above`），但只有 LOW/MEDIUM 允许 LLM 直接拍板（`medium-or-below`）—— 高危永远是人的事。
+全部档都送审（`low-or-above`），但只有 LOW/MEDIUM 允许 LLM 直接拍板（`medium-or-below`）—— 高危永远是人的事。`high-or-below` 并不放开 HIGH 接管：HIGH 分支只有建议、没有人/超时以外的决议方。
 :::

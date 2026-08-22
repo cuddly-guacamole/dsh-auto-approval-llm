@@ -28,9 +28,8 @@ import { appendAuditLine, recordAuditClear } from './auto/audit.js'
 import { sanitizeClassifierArguments, sanitizeClassifierText, sanitizeReviewReason } from './auto/classifier.js'
 import { THRESHOLD_DEFAULTS } from './auto/constants.js'
 import { createDshClassifier } from './auto/dsh-classifier.js'
-import { type RaceHumanHandle, type ReviewResult, applyBreaker, approvalSource, breakerTripped, createKeyedMutex, extractToolPath, followResolution, frameReviewerInput, lowRiskReviewOutcome, parseReview, preserveHostKeys, raceHumanDecision, reviewSuggestionNote, reviewerAutoAllowBlocked, staticListDecision, stripCountdownMarkers } from './auto/decision.js'
+import { type RaceHumanHandle, type ReviewResult, type StaticRisk, applyBreaker, approvalSource, breakerTripped, createKeyedMutex, extractToolPath, followResolution, frameReviewerInput, lowRiskReviewOutcome, parseReview, preserveHostKeys, raceHumanDecision, reviewSuggestionNote, reviewerAutoAllowBlocked, riskFromAssessment, staticListDecision, stripCountdownMarkers } from './auto/decision.js'
 import { isWithin, normalizePath, resolveRoots } from './auto/paths.js'
-import { RISK_NAME_PATTERN, RISK_REASON_PATTERN } from './auto/risk-tokens.js'
 import { assessTool, hardDenyReason, symlinkGuardTargets } from './auto/policy.js'
 import { evaluateRules, parseRulesText } from './auto/rules.js'
 import { type ReviewMode, loadReviewModes, normalizeReviewMode, persistReviewModes } from './auto/review-mode.js'
@@ -871,8 +870,16 @@ function installReviewerCredentialRoute(ctx: any, credentials: any): void {
         }
         const body = await readJsonBody(req)
         if (req.method === 'DELETE') {
+          // Never report a cleared credential unless the store actually
+          // dropped it: an unset failure (read-only store, backend error)
+          // must surface to the settings card instead of a silent ok:true
+          // that leaves the API key live and still being sent (M3).
           if (credentials) {
-            await credentials.unset(REVIEWER_CREDENTIAL_REF).catch(() => {})
+            const cleared = await credentials.unset(REVIEWER_CREDENTIAL_REF).then(() => true).catch(() => false)
+            if (!cleared) {
+              responseJson(res, 400, { ok: false, error: 'credential clear failed on the store' })
+              return
+            }
           }
           responseJson(res, 200, { ok: true })
           return
@@ -1311,7 +1318,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
   const authorityKeyFor = (exec: any): string =>
     (authorityFor(exec) ?? exec.agent)?.session?.id ?? 'unknown'
 
-  const classifyStaticRisk = (req: any, args: any): 'LOW' | 'MEDIUM' | 'HIGH' => {
+  const classifyStaticRisk = (req: any, args: any): StaticRisk => {
     // Approval args come from the session log as a JSON string; parse them so
     // policy sees the real shape (external-write/destructive tools → HIGH)
     // instead of degrading every string arg to MEDIUM. Parse failure keeps the
@@ -1326,13 +1333,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
     }
     const exec = { name: req.toolName, agent: req.agent, arguments: parsedArgs }
     const assessment = assessTool(exec, rootsFor(exec), artifacts)
-    if (assessment.decision === 'allow') return 'LOW'
-    const reason = assessment.reason ?? ''
-    const name = req.toolName
-    if (RISK_REASON_PATTERN.test(reason) || RISK_NAME_PATTERN.test(name)) {
-      return 'HIGH'
-    }
-    return 'MEDIUM'
+    return riskFromAssessment(assessment, req.toolName)
   }
 
   const riskReviewed = (risk: 'LOW' | 'MEDIUM' | 'HIGH', scope: Config['llmReviewScope']): boolean => {
@@ -1862,6 +1863,23 @@ export function apply(ctx: Context, rawConfig: Config): void {
     }
 
     const staticRisk = classifyStaticRisk(req, args)
+    // Terminal hard-deny from the policy layer (e.g. a plugin runtime-state
+    // mutation): answer with an immediate rejection — never a countdown
+    // status, so timeoutAction=allow and LLM takeovers can neither answer it
+    // nor leave an "allowed" record against an effect that is permanently
+    // forbidden. Mirrors the rule-deny path: history gets one honest rejected
+    // entry, the breaker counters stay untouched (this is not an LLM denial).
+    if (staticRisk === 'DENY') {
+      recordDecisionFeedback(req.callId, `[dsh-auto-approval-llm] Policy denied: ${toolName}`)
+      pushHistory({
+        sessionId: sessionKey,
+        toolName,
+        outcome: 'rejected',
+        source: 'policy-deny',
+        llmReason: undefined,
+      })
+      return 'rejected'
+    }
     const llmRouteAvailable = !!((config.reviewerProvider && config.reviewerModel) || config.reviewerBaseUrl || sessionModelRoute(req.agent.session))
     const llmReviews = llmRouteAvailable && riskReviewed(staticRisk, config.llmReviewScope)
     const llmTakeover = llmReviews && riskTakenOver(staticRisk, config.llmTakeoverScope)

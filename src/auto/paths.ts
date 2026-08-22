@@ -182,3 +182,25 @@ export function isArtifactArea(target, roots) {
     const normalized = normalizePath(target, roots.workspace, roots.home);
     return isWithin(roots.workspace, normalized) || roots.tempRoots.some(root => isWithin(root, normalized));
 }
+/**
+ * Plugin-owned approval/audit state files. They live inside the trusted
+ * plugin-development zone, so a plain zone-membership check would let an Auto
+ * session silently overwrite its own approval history / audit trail; mutating
+ * them must be an unconditional hard deny for every mutation vector —
+ * structured tools, shell redirection/output commands, deletion, and creation
+ * alike (a shell vector must never degrade into a countdown-answerable ask).
+ * Canonical here so policy.ts and shell.ts share one source of truth.
+ */
+export const RUNTIME_STATE_BASENAMES = new Set(['history.jsonl', 'audit.jsonl', 'approval-debug.jsonl', 'review-mode.json']);
+
+/** Reason when a normalized target names one of those state files. */
+export function runtimeStateTargetReason(normalizedPath) {
+    const base = normalizedPath.split(/[\\/]/).pop()?.toLowerCase() ?? '';
+    return RUNTIME_STATE_BASENAMES.has(base) ? `plugin runtime state file ${normalizedPath}` : undefined;
+}
+
+/** Whether a normalized path is a runtime-state file inside the trusted plugin zone. */
+export function runtimeStateTargetInZone(normalizedPath, allowedDshSubpaths) {
+    return (allowedDshSubpaths ?? []).some(root => isWithin(root, normalizedPath))
+        && runtimeStateTargetReason(normalizedPath) !== undefined;
+}

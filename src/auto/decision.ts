@@ -7,6 +7,7 @@
  */
 
 import { sanitizeClassifierArguments, sanitizeClassifierText, sanitizeReviewReason } from './classifier.js'
+import { RISK_NAME_PATTERN, RISK_REASON_PATTERN } from './risk-tokens.js'
 
 export interface ReviewResult {
   decision: 'ALLOW' | 'DENY' | 'ESCALATE'
@@ -385,6 +386,28 @@ export function frameReviewerInput(input: ReviewerInput): string {
       in_workspace: input.inWorkspace ?? null,
     },
   })
+}
+
+export type StaticRisk = 'LOW' | 'MEDIUM' | 'HIGH' | 'DENY'
+
+/**
+ * Map a first-pass {@link assessTool} verdict to the approval pipeline's risk
+ * tier. A hard-denied tool (unconditional deny from the policy layer, e.g. a
+ * plugin runtime-state mutation) must surface as a terminal `DENY` — the
+ * pipeline answers it with an immediate rejection and never publishes a
+ * countdown status, so a timeoutAction=allow (or an LLM takeover) can never
+ * turn an audit-trail mutation into an allow. Pure so the contract is pinned
+ * without a running harness.
+ */
+export function riskFromAssessment(assessment: {
+  decision: 'allow' | 'deny' | 'ask'
+  reason?: string
+}, toolName: string): StaticRisk {
+  if (assessment.decision === 'allow') return 'LOW'
+  if (assessment.decision === 'deny') return 'DENY'
+  const reason = assessment.reason ?? ''
+  if (RISK_REASON_PATTERN.test(reason) || RISK_NAME_PATTERN.test(toolName)) return 'HIGH'
+  return 'MEDIUM'
 }
 
 /**

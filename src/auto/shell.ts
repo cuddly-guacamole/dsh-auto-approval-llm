@@ -3,7 +3,7 @@
 // MIT License, Copyright (c) 2026 程序员阿江-Relakkes (https://github.com/NanmiCoder/dsh-auto-mode).
 // Retained per the MIT License: this is a substantial portion of the original.
 import { basename } from 'node:path';
-import { hardDestructiveTargetReason, isArtifactArea, isProtectedProjectPath, isWithin, normalizePath, } from './paths.js';
+import { hardDestructiveTargetReason, isArtifactArea, isProtectedProjectPath, isWithin, normalizePath, runtimeStateTargetInZone, runtimeStateTargetReason, } from './paths.js';
 function ambiguous(reason) {
     return { decision: 'ask', reason, classifierEligible: true };
 }
@@ -645,6 +645,30 @@ function creationSpec(name, words, shell, roots) {
     return { paths, protected: paths.some(path => !isWithin(roots.workspace, path) || isProtectedProjectPath(path, roots)) };
 }
 /** Unconditional hard deny for one segment, independent of classifier behavior. */
+function runtimeStateWriteReason(normalizedPath, roots) {
+    // The plugin's own approval/audit state files must never be reachable
+    // through a shell vector: an 'ask' for them lands in the risk-tiered
+    // pipeline where timeoutAction=allow (or an LLM takeover) can answer it,
+    // silently rewriting the audit trail (34251eb only covered the structured
+    // write tools). Zone-scoped like the structured-tool guard: an ordinary
+    // workspace file that merely shares a basename (`foo/history.jsonl`) is
+    // not plugin state.
+    return runtimeStateTargetInZone(normalizedPath, roots.allowedDshSubpaths)
+        ? `mutation of ${runtimeStateTargetReason(normalizedPath)} is not permitted`
+        : undefined;
+}
+/** Explicit path operands of a command word list that act as write targets. */
+function writeOperandCandidates(words) {
+    // cp/mv: the destination is the last non-flag operand; the earlier ones
+    // are sources (reads) and must not be denied as writes.
+    const candidates = [];
+    for (let index = 1; index < words.length; index += 1) {
+        const word = words[index];
+        if (word.dynamic || word.glob || word.text.startsWith('-')) continue;
+        if (index === words.length - 1) candidates.push(word);
+    }
+    return candidates;
+}
 function segmentHardDenyReason(segment, shell, roots) {
     for (const target of segment.writeTargets) {
         if (isNullSink(target, shell))
@@ -657,9 +681,45 @@ function segmentHardDenyReason(segment, shell, roots) {
         const reason = hardDestructiveTargetReason(globRoot(target.text), roots);
         if (reason !== undefined)
             return `redirection overwrites ${reason}`;
+        const stateReason = runtimeStateWriteReason(normalizePath(target.text, roots.workspace, roots.home), roots);
+        if (stateReason !== undefined)
+            return `redirection targets ${stateReason}`;
     }
     const unwrapped = unwrapCommand(segment.words);
     const name = commandName(unwrapped.words[0]?.text ?? '');
+    // Commands whose non-flag operands are write destinations (copy/move,
+    // creation, pwsh output cmdlets): a runtime-state target inside the zone is
+    // an unconditional hard deny, and the same normalization the allow path
+    // uses must not weaken when the workspace IS the zone.
+    let writeOperands = null;
+    if (shell === 'bash' && ['cp', 'mv'].includes(name)) {
+        writeOperands = writeOperandCandidates(unwrapped.words);
+    }
+    else if (shell === 'bash' && ['mkdir', 'touch'].includes(name)) {
+        writeOperands = unwrapped.words.slice(1).filter(word => !word.text.startsWith('-'));
+    }
+    else if (shell === 'pwsh' && ['set-content', 'add-content', 'out-file', 'copy-item', 'move-item', 'new-item'].includes(name)) {
+        writeOperands = [];
+        for (let index = 1; index < unwrapped.words.length; index += 1) {
+            const word = unwrapped.words[index];
+            if (/^-(?:path|literalpath|filepath)$/i.test(word.text)) {
+                const value = unwrapped.words[index + 1];
+                if (value !== undefined) writeOperands.push(value);
+                index += 1;
+            }
+            else if (!word.text.startsWith('-')) {
+                writeOperands.push(word);
+            }
+        }
+    }
+    if (writeOperands !== null) {
+        for (const operand of writeOperands) {
+            if (operand.dynamic || operand.glob) continue;
+            const stateReason = runtimeStateWriteReason(normalizePath(operand.text, roots.workspace, roots.home), roots);
+            if (stateReason !== undefined)
+                return `${name} targets ${stateReason}`;
+        }
+    }
     if (name === 'find' && findHasDestructiveAction(unwrapped.words)) {
         const rootsToCheck = findSearchRoots(unwrapped.words);
         for (const target of rootsToCheck) {
@@ -671,6 +731,9 @@ function segmentHardDenyReason(segment, shell, roots) {
             const reason = hardDestructiveTargetReason(globRoot(target.text), roots);
             if (reason !== undefined)
                 return `destructive find operation targets ${reason}`;
+            const stateReason = runtimeStateWriteReason(normalizePath(globRoot(target.text), roots.workspace, roots.home), roots);
+            if (stateReason !== undefined)
+                return `destructive find operation targets ${stateReason}`;
         }
     }
     const deletion = deletionSpec(name, unwrapped.words, shell);
@@ -685,6 +748,9 @@ function segmentHardDenyReason(segment, shell, roots) {
         const reason = hardDestructiveTargetReason(globRoot(target.text), roots);
         if (reason !== undefined)
             return `destructive operation targets ${reason}`;
+        const stateReason = runtimeStateWriteReason(normalizePath(globRoot(target.text), roots.workspace, roots.home), roots);
+        if (stateReason !== undefined)
+            return `destructive operation targets ${stateReason}`;
     }
     return undefined;
 }

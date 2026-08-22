@@ -10,7 +10,7 @@ import assert from 'node:assert/strict'
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { parseReview, lowRiskReviewOutcome, raceHumanDecision, preserveHostKeys, normalizeTimeoutAction, prepareReviewerArguments, extractToolPath, frameReviewerInput, breakerTripped, applyBreaker, reviewSuggestionNote, approvalSource, reviewerAutoAllowBlocked, staticListDecision, stripCountdownMarkers } from '../lib/auto/decision.js'
+import { parseReview, lowRiskReviewOutcome, raceHumanDecision, preserveHostKeys, normalizeTimeoutAction, prepareReviewerArguments, extractToolPath, frameReviewerInput, breakerTripped, applyBreaker, reviewSuggestionNote, approvalSource, reviewerAutoAllowBlocked, staticListDecision, stripCountdownMarkers, riskFromAssessment } from '../lib/auto/decision.js'
 import { sanitizeReviewReason, sanitizeClassifierText } from '../lib/auto/classifier.js'
 import { trimAuditTail } from '../lib/auto/audit.js'
 import { normalizeReviewMode } from '../lib/auto/review-mode.js'
@@ -958,3 +958,84 @@ test('assessShell: rd on ordinary workspace content keeps the semantic path (no 
   assert.equal(verdict.classifierEligible, true)
 })
 
+
+// ── M1: shell vectors cannot reach plugin runtime-state files (round-2) ──
+const zoneRoots = () => ({ workspace: 'C:/ws', home: 'C:/Users/u', dshHome: 'C:/Users/u/.dsh', tempRoots: [], allowedDshSubpaths: ['C:/Users/u/.dsh/plugins/dsh-auto-approval-llm'] })
+const ZONE = 'C:/Users/u/.dsh/plugins/dsh-auto-approval-llm'
+const HO = () => ({ has: () => false })
+
+test('hardDenyShellReason: redirection into a zone runtime-state file is an unconditional deny', () => {
+  const roots = zoneRoots()
+  for (const name of ['history.jsonl', 'audit.jsonl', 'approval-debug.jsonl', 'review-mode.json']) {
+    const out = hardDenyShellReason(`echo x > ${ZONE}/${name}`, 'bash', roots)
+    assert.match(out ?? '', /runtime state/, name)
+    const out2 = hardDenyShellReason(`printf x >> ${ZONE}/${name}`, 'bash', roots)
+    assert.match(out2 ?? '', /runtime state/, `append ${name}`)
+  }
+})
+test('assessShell: redirection into a zone runtime-state file denies end to end', () => {
+  const verdict = assessShell(`echo x > ${ZONE}/audit.jsonl`, 'bash', zoneRoots(), HO(), undefined)
+  assert.equal(verdict.decision, 'deny', verdict.reason)
+  assert.match(verdict.reason ?? '', /runtime state/)
+})
+test('assessShell: workspace=zone still denies echo redirection (zero-gate edge closed)', () => {
+  // An Auto session rooted at the plugin directory must not be able to
+  // overwrite its own audit trail with a trivially read-only-classified echo.
+  const roots = { ...zoneRoots(), workspace: ZONE }
+  const verdict = assessShell('echo x > audit.jsonl', 'bash', roots, HO(), undefined)
+  assert.equal(verdict.decision, 'deny', verdict.reason)
+  assert.match(verdict.reason ?? '', /runtime state/)
+})
+test('assessShell: cp/mv/touch/mkdir into a zone runtime-state file deny', () => {
+  const roots = zoneRoots()
+  assert.match(assessShell(`cp evil.txt ${ZONE}/audit.jsonl`, 'bash', roots, HO(), undefined).reason ?? '', /runtime state/)
+  assert.match(assessShell(`mv ${ZONE}/tmp.txt ${ZONE}/history.jsonl`, 'bash', roots, HO(), undefined).reason ?? '', /runtime state/)
+  assert.match(assessShell(`touch ${ZONE}/approval-debug.jsonl`, 'bash', roots, HO(), undefined).reason ?? '', /runtime state/)
+  assert.match(assessShell(`mkdir ${ZONE}/review-mode.json`, 'bash', roots, HO(), undefined).reason ?? '', /runtime state/)
+})
+test('assessShell: pwsh write cmdlets into a zone runtime-state file deny', () => {
+  const roots = zoneRoots()
+  assert.match(assessShell(`Set-Content ${ZONE}/history.jsonl evil`, 'pwsh', roots, HO(), undefined).reason ?? '', /runtime state/)
+  assert.match(assessShell(`Out-File -FilePath ${ZONE}/audit.jsonl -InputObject x`, 'pwsh', roots, HO(), undefined).reason ?? '', /runtime state/)
+  assert.match(assessShell(`Copy-Item evil.txt ${ZONE}/history.jsonl`, 'pwsh', roots, HO(), undefined).reason ?? '', /runtime state/)
+})
+test('assessShell: deletion of a zone runtime-state file denies', () => {
+  const roots = zoneRoots()
+  assert.match(assessShell(`rm ${ZONE}/history.jsonl`, 'bash', roots, HO(), undefined).reason ?? '', /runtime state/)
+  assert.match(assessShell(`rd ${ZONE}/review-mode.json`, 'pwsh', roots, HO(), undefined).reason ?? '', /runtime state/)
+})
+test('assessShell: same runtime-state basename outside the zone is NOT over-blocked', () => {
+  const roots = zoneRoots()
+  // Project-local history.jsonl in the workspace stays a routine write.
+  assert.equal(assessShell('echo x > C:/ws/history.jsonl', 'bash', roots, HO(), undefined).decision, 'allow')
+  // Zone non-state source files keep the ordinary semantic path (not deny, not auto-allow).
+  assert.equal(assessShell(`echo x > ${ZONE}/src/index.ts`, 'bash', roots, HO(), undefined).decision, 'ask')
+})
+
+// ── M2: hard-deny verdicts map to a terminal policy-deny, never a countdown ──
+test('riskFromAssessment: deny maps to DENY, allow maps to LOW', () => {
+  assert.equal(riskFromAssessment({ decision: 'deny', reason: 'mutation of plugin runtime state file … is not permitted' }, 'write'), 'DENY')
+  assert.equal(riskFromAssessment({ decision: 'deny', reason: 'privilege escalation is not permitted by auto mode' }, 'bash'), 'DENY')
+  assert.equal(riskFromAssessment({ decision: 'allow', reason: 'routine project-local file edit' }, 'write'), 'LOW')
+})
+test('riskFromAssessment: ask lands on HIGH only when the reason or name carries a risk token', () => {
+  assert.equal(riskFromAssessment({ decision: 'ask', reason: 'external write requires specific user authorization' }, 'git_push'), 'HIGH')
+  assert.equal(riskFromAssessment({ decision: 'ask', reason: 'mutation of external or protected path requires specific user authorization' }, 'write'), 'HIGH')
+  assert.equal(riskFromAssessment({ decision: 'ask', reason: 'unrecognized registered plugin tool requires independent classification' }, 'delete_agent'), 'HIGH')
+  assert.equal(riskFromAssessment({ decision: 'ask', reason: 'redirection writes outside routine project content' }, 'bash'), 'MEDIUM')
+  assert.equal(riskFromAssessment({ decision: 'ask', reason: 'unrecognized bash command requires independent classification' }, 'bash'), 'MEDIUM')
+  // "protected project metadata" carries no HIGH token (only "protected path"
+  // does) — document the exact current tier for protected-metadata reads.
+  assert.equal(riskFromAssessment({ decision: 'ask', reason: 'reading protected project metadata requires semantic review' }, 'read'), 'MEDIUM')
+})
+test('riskFromAssessment: deny is terminal even for tool names that carry risk tokens', () => {
+  // A hard deny always outranks the name-based HIGH: it must reach the
+  // immediate-reject branch, not a countdown.
+  assert.equal(riskFromAssessment({ decision: 'deny', reason: 'x' }, 'rmdir'), 'DENY')
+})
+test('applyBreaker: policy-deny never touches the breaker counters', () => {
+  const t = applyBreaker({ consecutive: 2, total: 5 }, 'policy-deny', true)
+  assert.equal(t.increment, false)
+  assert.equal(t.reset, false)
+  assert.deepEqual(t.counts, { consecutive: 2, total: 5 })
+})

@@ -121,7 +121,7 @@ export const zh = {
   'option.llmReview.high': '高风险',
   'option.llmTakeover.low': '低风险',
   'option.llmTakeover.mediumOrBelow': '中风险及以下',
-  'option.llmTakeover.highOrBelow': '高风险及以下',
+  'option.llmTakeover.highOrBelow': '低中风险（HIGH 仍只建议）',
   'test.failed': '测试失败',
   'record.line': '{time} · {toolName} · {source}（{outcome}）',
 } as const
@@ -250,7 +250,7 @@ export const en: Record<LocaleKey, string> = {
   'option.llmReview.high': 'High risk',
   'option.llmTakeover.low': 'Low risk',
   'option.llmTakeover.mediumOrBelow': 'Medium risk and below',
-  'option.llmTakeover.highOrBelow': 'High risk and below',
+  'option.llmTakeover.highOrBelow': 'Low & medium (HIGH stays advisory)',
   'test.failed': 'Test failed',
   'record.line': '{time} · {toolName} · {source} ({outcome})',
 }

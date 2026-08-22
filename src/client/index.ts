@@ -1106,7 +1106,14 @@ function SettingsSection() {
   const clearHistory = async () => {
     if (!(globalThis as any).confirm?.(t('confirm.clearHistory'))) return
     try {
-      await (globalThis as any).fetch(HISTORY_ROUTE, { method: 'DELETE', credentials: 'same-origin' })
+      // fetch resolves on HTTP errors too; only a verified ok:true response
+      // may claim the history was cleared (same discipline as
+      // clearReviewerCredential), otherwise the card would lie while the
+      // server-side records stay.
+      const res = await (globalThis as any).fetch(HISTORY_ROUTE, { method: 'DELETE', credentials: 'same-origin' })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = await res.json().catch(() => null)
+      if (data?.ok !== true) throw new Error(String(data?.error ?? 'history clear failed'))
       setHistory([])
     } catch (e) {
       setHistoryError(e instanceof Error ? e.message : String(e))

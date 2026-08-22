@@ -6,8 +6,13 @@
 // fail-closed classifier must not escape the compiler — DSH schema drift must
 // surface at build time, not at runtime. Keep the helper types below minimal so
 // the logic stays the single source of truth.
-import { hardDestructiveTargetReason, isProtectedProjectPath, isWithin, normalizePath, } from './paths.js';
+import { hardDestructiveTargetReason, isProtectedProjectPath, isWithin, normalizePath, runtimeStateTargetInZone, runtimeStateTargetReason, } from './paths.js';
 import { assessShell, hardDenyShellReason } from './shell.js';
+
+// Re-exported for callers/tests that referenced the policy-owned names; the
+// canonical definitions now live in paths.ts so shell.ts can share them
+// without a shell↔policy import cycle.
+export { RUNTIME_STATE_BASENAMES, runtimeStateTargetReason } from './paths.js';
 
 /** Runtime roots the classifier reasons about (mirrors `resolveRoots` in paths.ts). */
 export interface Roots {
@@ -179,24 +184,10 @@ const AGENT_TEAMS_CONTROL_TOOLS = new Set([
  * Plugin-owned approval/audit state files. They live inside the trusted
  * plugin-development zone, so a plain zone-membership check would let an Auto
  * session silently overwrite its own approval history / audit trail; mutating
- * them must land on the explicit human path instead.
+ * them must land on the explicit hard-deny path instead.
+ * Canonical definitions live in paths.ts (RUNTIME_STATE_BASENAMES /
+ * runtimeStateTargetReason / runtimeStateTargetInZone), re-exported above.
  */
-export const RUNTIME_STATE_BASENAMES = new Set(['history.jsonl', 'audit.jsonl', 'approval-debug.jsonl', 'review-mode.json']);
-
-/** Reason when a normalized target names one of those state files. */
-export function runtimeStateTargetReason(normalizedPath: string): string | undefined {
-    const base = normalizedPath.split(/[\\/]/).pop()?.toLowerCase() ?? '';
-    return RUNTIME_STATE_BASENAMES.has(base) ? `plugin runtime state file ${normalizedPath}` : undefined;
-}
-
-function zoneStateTarget(normalizedPaths: string[], roots: Roots): string | undefined {
-    for (const normalized of normalizedPaths) {
-        const inZone = (roots.allowedDshSubpaths ?? []).some((root) => isWithin(root, normalized));
-        if (inZone && runtimeStateTargetReason(normalized) !== undefined)
-            return normalized;
-    }
-    return undefined;
-}
 
 /** Synchronous hard-deny reason suitable for the monotonic tool guard. */
 export function hardDenyReason(exec: ExecLike, roots: Roots): string | undefined {
@@ -268,9 +259,8 @@ export function assessTool(exec: ExecLike, roots: Roots, artifacts: unknown): To
             // Unconditional deny, never an 'ask': an ask lands in the risk-tiered
             // approval pipeline where timeoutAction=allow turns an unanswered
             // countdown into an allow, silently rewriting the audit trail.
-            const stateReason = runtimeStateTargetReason(normalized);
-            if (stateReason !== undefined)
-                return { decision: 'deny', reason: `mutation of ${stateReason} is not permitted`, classifierEligible: false };
+            if (runtimeStateTargetInZone(normalized, roots.allowedDshSubpaths))
+                return { decision: 'deny', reason: `mutation of ${runtimeStateTargetReason(normalized)} is not permitted`, classifierEligible: false };
             return { decision: 'allow', reason: 'trusted plugin development path', classifierEligible: false };
         }
         if (!isWithin(roots.workspace, normalized) || isProtectedProjectPath(normalized, roots)) {
@@ -289,7 +279,7 @@ export function assessTool(exec: ExecLike, roots: Roots, artifacts: unknown): To
             return { decision: 'ask', reason: 'apply_patch target paths are missing or unreadable', classifierEligible: false };
         }
         const normalized = targets.map((target) => normalizePath(target, roots.workspace, roots.home));
-        const patchState = zoneStateTarget(normalized, roots);
+        const patchState = normalized.find((n) => runtimeStateTargetInZone(n, roots.allowedDshSubpaths));
         if (patchState !== undefined)
             return { decision: 'deny', reason: `mutation of ${runtimeStateTargetReason(patchState)} is not permitted`, classifierEligible: false };
         if (normalized.every((n) => (roots.allowedDshSubpaths ?? []).some((root) => isWithin(root, n)))) {
@@ -314,9 +304,8 @@ export function assessTool(exec: ExecLike, roots: Roots, artifacts: unknown): To
         if ((roots.allowedDshSubpaths ?? []).some(root => isWithin(root, normalized)) && command !== 'view') {
             // Same unconditional deny as write/edit: an ask would decay into a
             // timeout allow under timeoutAction=allow.
-            const stateReason = runtimeStateTargetReason(normalized);
-            if (stateReason !== undefined)
-                return { decision: 'deny', reason: `mutation of ${stateReason} is not permitted`, classifierEligible: false };
+            if (runtimeStateTargetInZone(normalized, roots.allowedDshSubpaths))
+                return { decision: 'deny', reason: `mutation of ${runtimeStateTargetReason(normalized)} is not permitted`, classifierEligible: false };
             return { decision: 'allow', reason: 'trusted plugin development path', classifierEligible: false };
         }
         if (command === 'view') {

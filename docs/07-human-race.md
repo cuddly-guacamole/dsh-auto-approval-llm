@@ -20,6 +20,8 @@
 | 客户端自动应答（autoAnswered 标记） | `auto-allow / auto-deny` |
 | 真实人工点击 | `human-allow / human-deny` |
 | 请求被取消/会话销毁 | `abort → 永远 action=reject（不假装有人决定过）` |
+| 声明规则（G1）/静态名单（G2） | `rule-deny / rule-allow`、`denyList-deny / allowlist-allow` |
+| 策略层无条件硬拒（运行态文件等） | `policy-deny → 立即 rejected，无倒计时、不计熔断、不发布 review-status` |
 
 ::: danger 防张冠李戴
 仅仅存在一份 advisory 评审结论（表明 LLM 看过）**绝不允许**把这次决议标成 `llm-*`。只有 `claimed`（宿主侧竞速被抢占）才算 LLM 接管。同理，advisory 拒绝 **不会**计入熔断 —— 熔断只认「LLM 真正拍板的拒绝」。
