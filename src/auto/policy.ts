@@ -175,6 +175,29 @@ const AGENT_TEAMS_CONTROL_TOOLS = new Set([
     // The verified implementation archives team state instead of erasing it.
     'agent_teams_delete',
 ]);
+/**
+ * Plugin-owned approval/audit state files. They live inside the trusted
+ * plugin-development zone, so a plain zone-membership check would let an Auto
+ * session silently overwrite its own approval history / audit trail; mutating
+ * them must land on the explicit human path instead.
+ */
+export const RUNTIME_STATE_BASENAMES = new Set(['history.jsonl', 'audit.jsonl', 'approval-debug.jsonl', 'review-mode.json']);
+
+/** Reason when a normalized target names one of those state files. */
+export function runtimeStateTargetReason(normalizedPath: string): string | undefined {
+    const base = normalizedPath.split(/[\\/]/).pop()?.toLowerCase() ?? '';
+    return RUNTIME_STATE_BASENAMES.has(base) ? `plugin runtime state file ${normalizedPath}` : undefined;
+}
+
+function zoneStateTarget(normalizedPaths: string[], roots: Roots): string | undefined {
+    for (const normalized of normalizedPaths) {
+        const inZone = (roots.allowedDshSubpaths ?? []).some((root) => isWithin(root, normalized));
+        if (inZone && runtimeStateTargetReason(normalized) !== undefined)
+            return normalized;
+    }
+    return undefined;
+}
+
 /** Synchronous hard-deny reason suitable for the monotonic tool guard. */
 export function hardDenyReason(exec: ExecLike, roots: Roots): string | undefined {
     const args = record(exec.arguments);
@@ -242,6 +265,9 @@ export function assessTool(exec: ExecLike, roots: Roots, artifacts: unknown): To
             return { decision: 'ask', reason: `${exec.name} target path is missing`, classifierEligible: false };
         const normalized = normalizePath(path, roots.workspace, roots.home);
         if ((roots.allowedDshSubpaths ?? []).some(root => isWithin(root, normalized))) {
+            const stateReason = runtimeStateTargetReason(normalized);
+            if (stateReason !== undefined)
+                return { decision: 'ask', reason: `mutation of ${stateReason} requires explicit user authorization`, classifierEligible: false };
             return { decision: 'allow', reason: 'trusted plugin development path', classifierEligible: false };
         }
         if (!isWithin(roots.workspace, normalized) || isProtectedProjectPath(normalized, roots)) {
@@ -260,6 +286,9 @@ export function assessTool(exec: ExecLike, roots: Roots, artifacts: unknown): To
             return { decision: 'ask', reason: 'apply_patch target paths are missing or unreadable', classifierEligible: false };
         }
         const normalized = targets.map((target) => normalizePath(target, roots.workspace, roots.home));
+        const patchState = zoneStateTarget(normalized, roots);
+        if (patchState !== undefined)
+            return { decision: 'ask', reason: `mutation of ${runtimeStateTargetReason(patchState)} requires explicit user authorization`, classifierEligible: false };
         if (normalized.every((n) => (roots.allowedDshSubpaths ?? []).some((root) => isWithin(root, n)))) {
             return { decision: 'allow', reason: 'trusted plugin development path', classifierEligible: false };
         }
@@ -280,6 +309,9 @@ export function assessTool(exec: ExecLike, roots: Roots, artifacts: unknown): To
         }
         const normalized = normalizePath(path, roots.workspace, roots.home);
         if ((roots.allowedDshSubpaths ?? []).some(root => isWithin(root, normalized)) && command !== 'view') {
+            const stateReason = runtimeStateTargetReason(normalized);
+            if (stateReason !== undefined)
+                return { decision: 'ask', reason: `mutation of ${stateReason} requires explicit user authorization`, classifierEligible: false };
             return { decision: 'allow', reason: 'trusted plugin development path', classifierEligible: false };
         }
         if (command === 'view') {
@@ -323,5 +355,8 @@ export function assessTool(exec: ExecLike, roots: Roots, artifacts: unknown): To
     if (riskyReason !== undefined) {
         return { decision: 'ask', reason: riskyReason, classifierEligible: true };
     }
-    return { decision: 'allow', reason: `ordinary registered plugin tool: ${exec.name}`, classifierEligible: false };
+    // Fail closed on genuinely unknown names: a plugin/MCP tool this policy
+    // cannot read must be classified independently instead of silently
+    // auto-allowed just because its name carries no risk token.
+    return { decision: 'ask', reason: `unrecognized registered plugin tool requires independent classification: ${exec.name}`, classifierEligible: true };
 }

@@ -362,7 +362,7 @@ function deletionSpec(name, words, shell) {
         const targets = rest.filter(word => !word.text.startsWith('-'));
         return { recursive: flags.some(flag => flag.text === '--recursive' || /^-[^-]*r/i.test(flag.text)), targets };
     }
-    if (shell === 'pwsh' && ['remove-item', 'rm', 'ri', 'del', 'erase', 'rmdir'].includes(name)) {
+    if (shell === 'pwsh' && ['remove-item', 'rm', 'ri', 'rd', 'del', 'erase', 'rmdir'].includes(name)) {
         const targets = [];
         for (let index = 1; index < words.length; index += 1) {
             const word = words[index];

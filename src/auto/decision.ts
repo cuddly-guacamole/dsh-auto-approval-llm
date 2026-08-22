@@ -405,6 +405,20 @@ export function reviewSuggestionNote(review: {
   return `🤖 Review suggestion: ${review.decision}${risk}${reason}`
 }
 
+/**
+ * Remove client-parseable auto-answer markers from a base approval reason
+ * before the host appends its own protocol notes. The marker text doubles as
+ * the browser watcher's countdown signal; a model-controlled base reason that
+ * embedded it could otherwise arm the client's local auto-answer on asks the
+ * host deliberately publishes without one (breaker / manual / human-only).
+ */
+export function stripCountdownMarkers(reason: string): string {
+  return reason.replace(
+    /\[dsh-auto-approval-llm\]\s*⏳\s*will auto-(?:approve|reject) in \d+s/g,
+    '',
+  ).replace(/[ \t]+$/gm, '').trim()
+}
+
 export type FollowSource = 'human' | 'llm' | 'timeout' | 'abort'
 
 export interface FollowStatusInput {

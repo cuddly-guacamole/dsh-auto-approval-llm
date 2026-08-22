@@ -67,3 +67,36 @@ export function isTrustedRequest(req: { headers?: any; socket?: any }, trustedHo
     return false
   }
 }
+
+/**
+ * Validate the online-reviewer base URL before any request crosses the
+ * network. Bare "host:port" inputs are auto-prefixed with http:// so common
+ * configs are not wrongly rejected; http:// is only permitted for loopback
+ * (localhost/127.0.0.1/[::1]) so the API key never travels in cleartext over
+ * a LAN/Docker bridge. Empty string is accepted (means "follow session
+ * route"). Pure so the cleartext/SSRF fence stays contract-testable.
+ */
+export function validateReviewerBaseUrl(raw: string):
+  | { ok: false; reason: string }
+  | { ok: true; baseUrl: string; insecure: boolean } {
+  const input = String(raw ?? '').trim()
+  if (input === '') return { ok: true, baseUrl: '', insecure: false } // follow session route
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(input) ? input : `http://${input}`
+  const baseUrl = withScheme.replace(/\/+$/, '')
+  let url: URL
+  try {
+    url = new URL(baseUrl)
+  } catch {
+    return { ok: false, reason: `reviewerBaseUrl 不是合法 URL：${raw}` }
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    return { ok: false, reason: `reviewerBaseUrl 仅支持 http/https：${url.protocol}` }
+  }
+  const host = url.hostname
+  // Node's URL.hostname keeps the brackets for IPv6 ("[::1]"), so test both.
+  const isLoopback = host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]'
+  if (url.protocol === 'http:' && !isLoopback) {
+    return { ok: false, reason: `reviewerBaseUrl 使用明文 http 且非回环地址（${host}）；请改用 https:// 或本机代理` }
+  }
+  return { ok: true, baseUrl, insecure: url.protocol === 'http:' }
+}

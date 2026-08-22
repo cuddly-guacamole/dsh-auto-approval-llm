@@ -28,13 +28,13 @@ import { appendAuditLine, recordAuditClear } from './auto/audit.js'
 import { sanitizeClassifierArguments, sanitizeClassifierText, sanitizeReviewReason } from './auto/classifier.js'
 import { THRESHOLD_DEFAULTS } from './auto/constants.js'
 import { createDshClassifier } from './auto/dsh-classifier.js'
-import { type RaceHumanHandle, type ReviewResult, applyBreaker, approvalSource, breakerTripped, createKeyedMutex, extractToolPath, followResolution, frameReviewerInput, lowRiskReviewOutcome, parseReview, preserveHostKeys, raceHumanDecision, reviewSuggestionNote, reviewerAutoAllowBlocked, staticListDecision } from './auto/decision.js'
+import { type RaceHumanHandle, type ReviewResult, applyBreaker, approvalSource, breakerTripped, createKeyedMutex, extractToolPath, followResolution, frameReviewerInput, lowRiskReviewOutcome, parseReview, preserveHostKeys, raceHumanDecision, reviewSuggestionNote, reviewerAutoAllowBlocked, staticListDecision, stripCountdownMarkers } from './auto/decision.js'
 import { isWithin, normalizePath, resolveRoots } from './auto/paths.js'
 import { RISK_NAME_PATTERN, RISK_REASON_PATTERN } from './auto/risk-tokens.js'
 import { assessTool, hardDenyReason, symlinkGuardTargets } from './auto/policy.js'
 import { evaluateRules, parseRulesText } from './auto/rules.js'
 import { type ReviewMode, loadReviewModes, normalizeReviewMode, persistReviewModes } from './auto/review-mode.js'
-import { isLoopbackHostname, isTrustedRequest } from './auto/trust.js'
+import { isLoopbackHostname, isTrustedRequest, validateReviewerBaseUrl } from './auto/trust.js'
 
 export const name = 'dsh-auto-approval-llm'
 export const inject = ['approval', 'permissionPresets', 'tools', 'llm', 'agents', 'webServer', 'settings', 'commands']
@@ -156,36 +156,6 @@ function riskTimedOutAction(risk: 'LOW' | 'MEDIUM' | 'HIGH', action: string, una
   if (action === 'allow') return 'allow'
   if (action === 'low-risk-allow') return risk === 'LOW' ? 'allow' : 'reject'
   return 'reject'
-}
-
-// Validate the online-reviewer base URL before any request crosses the
-// network. Bare "host:port" inputs are auto-prefixed with http:// so common
-// configs are not wrongly rejected; http:// is only permitted for loopback
-// (localhost/127.0.0.1/[::1]) so the API key never travels in cleartext over
-// a LAN/Docker bridge. Empty string is accepted (means "follow session route").
-function validateReviewerBaseUrl(raw: string):
-  | { ok: false; reason: string }
-  | { ok: true; baseUrl: string; insecure: boolean } {
-  const input = String(raw ?? '').trim()
-  if (input === '') return { ok: true, baseUrl: '', insecure: false } // follow session route
-  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(input) ? input : `http://${input}`
-  const baseUrl = withScheme.replace(/\/+$/, '')
-  let url: URL
-  try {
-    url = new URL(baseUrl)
-  } catch {
-    return { ok: false, reason: `reviewerBaseUrl 不是合法 URL：${raw}` }
-  }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    return { ok: false, reason: `reviewerBaseUrl 仅支持 http/https：${url.protocol}` }
-  }
-  const host = url.hostname
-  // Node's URL.hostname keeps the brackets for IPv6 ("[::1]"), so test both.
-  const isLoopback = host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]'
-  if (url.protocol === 'http:' && !isLoopback) {
-    return { ok: false, reason: `reviewerBaseUrl 使用明文 http 且非回环地址（${host}）；请改用 https:// 或本机代理` }
-  }
-  return { ok: true, baseUrl, insecure: url.protocol === 'http:' }
 }
 
 function isModelRouteConfig(cfg: any): cfg is { provider: string; model: string } {
@@ -1635,7 +1605,11 @@ export function apply(ctx: Context, rawConfig: Config): void {
       notes.push(`[dsh-auto-approval-llm] ⏳ will auto-${actionText} in ${seconds}s if no response`)
     }
     const extra = notes.map((n) => `\n\n${n}`).join('')
-    req.reason = req.reason ? `${req.reason}${extra}` : extra
+    // Strip any client-parseable auto-answer markers from the model-controlled
+    // base reason first: only the notes this host appends below may arm the
+    // browser watcher's countdown.
+    const baseReason = typeof req.reason === 'string' ? stripCountdownMarkers(req.reason) : req.reason
+    req.reason = baseReason ? `${baseReason}${extra}` : extra
     let outcome: any
     let timedOut = false
     // Whether a decisive caller (an LLM takeover) authoritatively settled the

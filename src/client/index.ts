@@ -219,52 +219,29 @@ function watchApprovals(ctx: any): void {
       }
       return
     }
-    let info: CountdownInfo | null = null
-    if (status?.phase === 'countdown') {
-      info = { seconds: status.seconds, action: status.action, feedbackText: status.feedback }
-    } else {
-      info = parseCountdown(approval.payload?.reason ?? approval.reason)
-    }
-    if (!info) return
-    const meta = `${status?.phase ?? 'reason'}:${info.action}:${info.seconds}`
-    if (timerMeta.get(timerKey) === meta) return
-    if (status?.phase === 'countdown') {
-      // countdown-key: the host countdown is authoritative, so the client only
-      // observes (no local timer). The host resolves → publishes follow → the
-      // poller sees it within 500ms. A local timer here would fire with the
-      // same action but could also answer against a stale direction (R002).
-      // Also clear a local timer that may have been armed on an earlier
-      // observation when the status was still absent (status-lag: the snapshot
-      // showed the approval and the reason parsed a countdown before the host
-      // review-status published it). Once the host takes over with a real
-      // countdown, the client must not auto-answer from the stale local timer.
-      if (timers.has(timerKey)) {
-        clearTimeout(timers.get(timerKey))
-        timers.delete(timerKey)
-      }
-      timerMeta.set(timerKey, meta)
+    if (status?.phase !== 'countdown') {
+      // No host-published countdown: never arm an answer from reason text.
+      // The marker regex matches free text any command can forge, so reason
+      // parsing must not decide outcomes — status-less asks (breaker / manual
+      // / human-only) are meant to wait for a human, and every real countdown
+      // shows up here as a published review-status within one poll.
       return
     }
-    // reason-key: a status-less ask whose countdown only the client enforces.
+    const info: CountdownInfo = { seconds: status.seconds, action: status.action, feedbackText: status.feedback }
+    const meta = `countdown:${info.action}:${info.seconds}`
+    if (timerMeta.get(timerKey) === meta) return
+    // countdown-key: the host countdown is authoritative, so the client only
+    // observes (no local timer). The host resolves → publishes follow → the
+    // poller sees it within 500ms. A local timer here would fire with the
+    // same action but could also answer against a stale direction (R002).
+    // Also clear a fallback timer that may have been armed by the grace
+    // branch on an earlier observation (status-lag), so a real host countdown
+    // always supersedes any locally recorded action.
     if (timers.has(timerKey)) {
       clearTimeout(timers.get(timerKey))
       timers.delete(timerKey)
     }
     timerMeta.set(timerKey, meta)
-    const timer = setTimeout(() => {
-      timers.delete(timerKey)
-      const poller = pollers.get(timerKey)
-      if (poller) clearInterval(poller)
-      pollers.delete(timerKey)
-      timerMeta.delete(timerKey)
-      resolvedKeys.add(timerKey)
-      // The human may have answered while this timer was pending; only
-      // auto-answer when the approval is still open (R001).
-      if (approvalStillPending(sessionId, approval.key)) {
-        void autoRespond(approval, info!)
-      }
-    }, info.seconds * 1000)
-    timers.set(timerKey, timer)
   }
 
   const armApproval = (sessionId: string, approval: any) => {
@@ -1107,7 +1084,13 @@ function SettingsSection() {
 
   const clearReviewerCredential = async () => {
     try {
-      await (globalThis as any).fetch(REVIEWER_CREDENTIAL_ROUTE, { method: 'DELETE', credentials: 'same-origin' })
+      // fetch resolves on HTTP errors too; only a verified ok:true response
+      // may claim the key was cleared, otherwise the badge would lie while the
+      // credential stays live.
+      const res = await (globalThis as any).fetch(REVIEWER_CREDENTIAL_ROUTE, { method: 'DELETE', credentials: 'same-origin' })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = await res.json().catch(() => null)
+      if (data?.ok !== true) throw new Error(String(data?.error ?? 'credential clear failed'))
       setCredentialConfigured(false)
       setCardStatus({ id: 'review', kind: 'ok', text: t('settings.reviewer.apiKeyCleared') })
     } catch (e) {
