@@ -304,10 +304,14 @@ async function onlineReviewWithLLM(
     let text = ''
     if (protocol === 'anthropic') {
       if (apiKey) headers['x-api-key'] = apiKey
+      // redirect:'error' keeps the loopback fence honest: a 302 from the
+      // configured endpoint must not steer this request (and its credential
+      // headers) toward some other host.
       const res = await fetch(`${baseUrl}/messages`, {
         method: 'POST',
         headers,
         signal: combined,
+        redirect: 'error',
         body: JSON.stringify({
           model: config.reviewerModel || undefined,
           max_tokens: 256,
@@ -327,6 +331,7 @@ async function onlineReviewWithLLM(
         method: 'POST',
         headers,
         signal: combined,
+        redirect: 'error',
         body: JSON.stringify({
           model: config.reviewerModel || undefined,
           max_tokens: 256,
@@ -826,6 +831,12 @@ function installSettingsRoute(ctx: any, settings: any): void {
         if (typeof body?.value !== 'object' || body.value === null) {
           throw new TypeError('value is required')
         }
+        // Optimistic concurrency is mandatory: an omitted expectedRevision
+        // would silently degrade the save to last-write-wins and lose a
+        // concurrent editor's changes.
+        if (typeof body?.expectedRevision !== 'number') {
+          throw new TypeError('expectedRevision is required')
+        }
         const value = preserveHostKeys(settings.get(SETTINGS_NS) ?? {}, body.value)
         await settings.replace(SETTINGS_NS, value, body.expectedRevision)
         responseJson(res, 200, { ok: true, value: describeSettings() })
@@ -1081,6 +1092,9 @@ function installTestRoute(ctx: any, llm: any): void {
                 method: 'POST',
                 headers,
                 signal: controller.signal,
+                // Same redirect fence as the configured reviewer: the probe
+                // must not follow a 302 into the broader network.
+                redirect: 'error',
                 body: JSON.stringify({ model, max_tokens: 1, messages: [{ role: 'user', content: 'ping' }] }),
               })
               if (!r.ok) throw new Error(`HTTP ${r.status}`)
@@ -1089,6 +1103,7 @@ function installTestRoute(ctx: any, llm: any): void {
                 method: 'POST',
                 headers,
                 signal: controller.signal,
+                redirect: 'error',
                 body: JSON.stringify({ model, messages: [{ role: 'user', content: 'ping' }], max_tokens: 1 }),
               })
               if (!r.ok) throw new Error(`HTTP ${r.status}`)

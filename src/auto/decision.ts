@@ -210,9 +210,11 @@ export function lowRiskReviewOutcome(review: {
 
 /**
  * Fields that are configured host-side (via patch/YAML) and never edited by
- * the browser settings card. A card save must preserve whatever the current
- * stored value holds for these, otherwise the full `settings.replace` would
- * silently drop them.
+ * the browser settings card. A card save must keep whatever the current
+ * stored value holds for these — both when the submission omits them (the
+ * full `settings.replace` would silently drop them) and when it carries a
+ * value (a crafted payload must not repoint the workspace/DSH roots through
+ * the settings route).
  */
 export const HOST_ONLY_KEYS = [
   'workspaceRoot',
@@ -280,7 +282,8 @@ export function preserveHostKeys(
 ): Record<string, unknown> {
   const out: Record<string, unknown> = { ...submitted }
   for (const key of HOST_ONLY_KEYS) {
-    if (!(key in submitted) && key in current) out[key] = current[key]
+    // The stored value always wins, regardless of what was submitted.
+    if (key in current) out[key] = current[key]
   }
   return out
 }

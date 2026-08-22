@@ -185,9 +185,10 @@ test('preserveHostKeys: host-only fields survive a card save that omits them', (
   assert.equal(out.notifyUser, true)
 })
 
-test('preserveHostKeys: explicitly submitted host key wins over current', () => {
+test('preserveHostKeys: a submitted host-only value never overrides the stored one', () => {
   const out = preserveHostKeys({ workspaceRoot: 'old' }, { workspaceRoot: 'new', enabled: true })
-  assert.equal(out.workspaceRoot, 'new')
+  assert.equal(out.enabled, true)
+  assert.equal(out.workspaceRoot, 'old')
 })
 
 test('normalizeTimeoutAction: legacy/pending values collapse to reject, allow stays', () => {

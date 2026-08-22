@@ -126,7 +126,15 @@ export function isCriticalPath(target, roots) {
     // a protected-project-path 'ask' (RISK-07).
     const shellRcRoots = ['.bashrc', '.bash_profile', '.bash_login', '.bash_logout', '.profile', '.zshrc', '.zprofile', '.zlogin', '.zlogout', '.kshrc', '.cshrc', '.tcshrc']
         .map(name => normalizePath(name, roots.home, roots.home));
-    return windowsCritical || [...critical, ...credentialRoots, ...shellRcRoots].some(root => isWithin(root, normalized));
+    // OS autostart locations are persistence hooks of the same class as shell
+    // rc files: a dropped .cmd/.desktop runs on every login or startup. The
+    // all-users Windows tree is already covered by the ProgramData regex
+    // above; /etc/xdg/autostart falls under the POSIX /etc entry.
+    const autostartRoots = [
+        '.config/autostart',
+        'appdata/roaming/microsoft/windows/start menu/programs/startup',
+    ].map(path => normalizePath(path, roots.home, roots.home));
+    return windowsCritical || [...critical, ...credentialRoots, ...shellRcRoots, ...autostartRoots].some(root => isWithin(root, normalized));
 }
 /** Whether a workspace path is protected metadata rather than ordinary project content. */
 export function isProtectedProjectPath(target, roots) {

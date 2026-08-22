@@ -471,16 +471,64 @@ function routineInlineProbe(name, source) {
 function destructiveNestedSource(source) {
     return /(?:^|[\s;&|()])(?:rm|rmdir|unlink|shred|remove-item|del|erase)(?:\s|$)|\b(?:shutil\.rmtree|os\.(?:remove|unlink|rmdir|removedirs)|file\.(?:delete|unlink)|directory\.delete)\s*\(|\.(?:rm|rmsync|unlink|unlinksync|rmdir|rmdirsync|delete)\s*\(|\b(?:delete\s+from|drop\s+(?:table|database)|truncate\s+table)\b/i.test(source);
 }
+/**
+ * Bash expands `~name/…` (and `~name`) to another user's home directory — a
+ * location no configured root can statically contain. Such operands must never
+ * count as routine workspace/temp paths, in reads or in writes. Plain `~`,
+ * `~/…` and `~\…` stay with the existing home-expansion logic.
+ */
+function tildeUserTarget(text) {
+    return text.length > 1 && text.startsWith('~') && !text.startsWith('~/') && !text.startsWith('~\\');
+}
+/** Whether a bare token spells an absolute/explicit filesystem path. */
+function looksLikeExplicitPath(token) {
+    // Dot-initial tokens are explicit too: without them a protected carve-out
+    // like `.git/config` or `.env` would silently escape the routine gates.
+    return token.startsWith('/') || token.startsWith('.')
+        || token.startsWith('~') || /^[A-Za-z]:[\\/]/.test(token) || /^\\\\/.test(token);
+}
+/**
+ * Lift a path value out of a flag token. Long options carry it after `=`
+ * (`--output=C:/abs`); fused short options append it to the flag letters
+ * (`-oC:/abs`, GNU sort/tree style). Only explicit-path spellings are lifted,
+ * so values like `--pretty=format:%h` or `--parallel=2` are left alone.
+ */
+function flagEmbeddedPath(text) {
+    const eq = text.indexOf('=');
+    if (eq > 1) {
+        const value = text.slice(eq + 1);
+        return value !== '' && looksLikeExplicitPath(value) ? value : undefined;
+    }
+    // Fused short options (`-oC:/abs`, GNU sort/tree style): scan every tail
+    // after the leading '-' for an explicit-path spelling — a greedy letter
+    // match would otherwise swallow a drive letter and hide the value.
+    for (let cut = 2; cut < text.length; cut += 1) {
+        const tail = text.slice(cut);
+        if (looksLikeExplicitPath(tail))
+            return tail;
+    }
+    return undefined;
+}
 function explicitPaths(words, roots) {
-    return words
-        .map(word => word.text)
-        .filter(token => token === '~' || token.startsWith('/')
+    const out = [];
+    for (const word of words) {
+        const token = word.text;
+        if (token.startsWith('-')) {
+            // A flag token hides its value from the bare-token filter below;
+            // extract embedded absolute paths so `sort --output=C:/abs` cannot
+            // smuggle a write/read target past the routine-path checks.
+            const embedded = flagEmbeddedPath(token);
+            if (embedded !== undefined)
+                out.push(normalizePath(embedded, roots.workspace, roots.home));
+            continue;
+        }
         // Bare-relative (".git/config", ".env") and dot tokens (".", "..") are
         // explicit paths too — without them a protected carve-out like
         // `./.git/config` is silently bypassed by writing `.git/config`.
-        || token === '.' || token.startsWith('.')
-        || token.startsWith('~\\') || token.startsWith('~/') || /^[A-Za-z]:[\\/]/.test(token) || /^\\\\/.test(token))
-        .map(token => normalizePath(token, roots.workspace, roots.home));
+        if (looksLikeExplicitPath(token))
+            out.push(normalizePath(token, roots.workspace, roots.home));
+    }
+    return out;
 }
 function readPathsAreRoutine(words, roots) {
     // A variable/expansion operand cannot be statically proven to stay inside
@@ -492,6 +540,9 @@ function readPathsAreRoutine(words, roots) {
     // dynamic targets are never auto-allowed.
     if (words.some(word => word && word.dynamic))
         return false;
+    // `~user/…` expands to another user's home — never a routine root.
+    if (words.some(word => word && tildeUserTarget(word.text)))
+        return false;
     return explicitPaths(words, roots).every(path => (isWithin(roots.workspace, path) && !isProtectedProjectPath(path, roots))
         || roots.tempRoots.some(root => isWithin(root, path)));
 }
@@ -501,6 +552,10 @@ function writeTargetsAreRoutine(segment, shell, roots) {
         if (isNullSink(target, shell))
             return true;
         if (target.dynamic || target.glob)
+            return false;
+        // `> ~user/file` lands in another user's home; normalizePath cannot
+        // resolve it into any root, so it must not pass as routine content.
+        if (tildeUserTarget(target.text))
             return false;
         const normalized = normalizePath(target.text, roots.workspace, roots.home);
         return isWithin(roots.workspace, normalized) && !isProtectedProjectPath(normalized, roots);
@@ -597,7 +652,6 @@ function findActionsAreReadOnly(words) {
         const nested = words.slice(index + 1, terminator);
         const nestedName = commandName(nested[0]?.text ?? '');
         const nestedReadOnly = BASH_READ_ONLY.includes(nestedName)
-            || (nestedName === 'sed' && nested.some(word => word.text === '-n'))
             || (nestedName === 'git' && ['status', 'diff', 'log', 'show', 'rev-parse', 'ls-files', 'blame'].includes(nested[1]?.text.toLowerCase() ?? ''))
             || versionProbe(nested);
         if (!nestedReadOnly)
@@ -609,10 +663,17 @@ function findActionsAreReadOnly(words) {
 function readOnlyCommand(name, words, shell) {
     const tokens = words.map(word => word.text);
     if (shell === 'bash') {
+        // Whitelist members with mutating or executing spellings keep only
+        // their read-only forms; every other spelling falls through to
+        // independent classification instead of the static allow.
+        if (name === 'rg' && tokens.slice(1).some(token => /^--pre(?:=.*)?$/.test(token)))
+            return false;
+        if (name === 'date')
+            return !tokens.slice(1).some(token => token === '-s' || token === '--set');
+        if (name === 'hostname')
+            return tokens.length === 1;
         if (BASH_READ_ONLY.includes(name))
             return true;
-        if (name === 'sed')
-            return tokens.includes('-n');
         if (name === 'find')
             return findActionsAreReadOnly(words);
         if (name === 'git')
@@ -642,7 +703,11 @@ function creationSpec(name, words, shell, roots) {
     if (raw === undefined || raw.length === 0)
         return undefined;
     const paths = raw.map(path => normalizePath(path, roots.workspace, roots.home));
-    return { paths, protected: paths.some(path => !isWithin(roots.workspace, path) || isProtectedProjectPath(path, roots)) };
+    return {
+        paths,
+        protected: raw.some(path => tildeUserTarget(path))
+            || paths.some(path => !isWithin(roots.workspace, path) || isProtectedProjectPath(path, roots)),
+    };
 }
 /** Unconditional hard deny for one segment, independent of classifier behavior. */
 function runtimeStateWriteReason(normalizedPath, roots) {
@@ -666,6 +731,22 @@ function writeOperandCandidates(words) {
         const word = words[index];
         if (word.dynamic || word.glob || word.text.startsWith('-')) continue;
         if (index === words.length - 1) candidates.push(word);
+    }
+    // `-t DEST` / `--target-directory=DEST` invert the operand order: their
+    // value IS the destination no matter where it sits, so a runtime-state or
+    // otherwise protected target must be judged from it too.
+    for (let index = 1; index < words.length; index += 1) {
+        const text = words[index].text;
+        if (text === '-t' || text === '--target-directory') {
+            const value = words[index + 1];
+            if (value !== undefined && !value.dynamic && !value.glob)
+                candidates.push(value);
+        }
+        else if (text.startsWith('--target-directory=')) {
+            const value = text.slice('--target-directory='.length);
+            if (value !== '')
+                candidates.push({ text: value, dynamic: false, glob: false, quoted: true });
+        }
     }
     return candidates;
 }
@@ -878,8 +959,12 @@ function classifyEffectiveCommand(name, words, segment, shell, roots, artifacts,
             : allowed('create exact project-local artifacts', creation.paths);
     }
     if (shell === 'bash' && ['cp', 'mv'].includes(name)) {
-        const paths = explicitPaths(words.slice(1).filter(word => !word.text.startsWith('-')), roots);
-        return paths.length > 0 && paths.every(path => isWithin(roots.workspace, path) && !isProtectedProjectPath(path, roots))
+        // Flags stay in the list: explicitPaths lifts embedded values out of
+        // them, so `--target-directory=C:/abs` is judged like a bare operand.
+        const operands = words.slice(1);
+        const paths = explicitPaths(operands, roots);
+        const tildeUser = operands.some(word => tildeUserTarget(word.text));
+        return !tildeUser && paths.length > 0 && paths.every(path => isWithin(roots.workspace, path) && !isProtectedProjectPath(path, roots))
             ? allowed('static project-local file operation')
             : semanticReview('file move/copy target is external, protected, or unclear');
     }
