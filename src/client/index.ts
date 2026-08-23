@@ -120,6 +120,14 @@ function watchApprovals(ctx: any): void {
   const timers = new Map<string, any>()
   const pollers = new Map<string, any>()
   const timerMeta = new Map<string, string>()
+  // C1: immediate-poll references (armApproval's poll fn per timerKey), so a
+  // thaw/resume event can poll at once without waiting for the next (possibly
+  // throttled) interval tick.
+  const pollFns = new Map<string, () => void>()
+  // C2: timestamp of the last event-driven extra poll. Bursty events (fast
+  // alt-tab flapping, rapid snapshot pushes) cost at most one extra poll every
+  // 500ms, so they can never turn into a poll storm.
+  let lastExtraPollAt = 0
   // Tombstones: approvals the watcher already detached from (host resolved,
   // follow answered, or host stopped tracking). Prevents check() from
   // re-arming a poller for a stale approval and drops late in-flight poll
@@ -143,6 +151,9 @@ function watchApprovals(ctx: any): void {
         pollers.delete(key)
       }
     }
+    for (const key of [...pollFns.keys()]) {
+      if (key.startsWith(prefix)) pollFns.delete(key)
+    }
     for (const key of [...timerMeta.keys()]) {
       if (key.startsWith(prefix)) timerMeta.delete(key)
     }
@@ -165,6 +176,7 @@ function watchApprovals(ctx: any): void {
       clearInterval(poller)
       pollers.delete(timerKey)
     }
+    pollFns.delete(timerKey)
     timerMeta.delete(timerKey)
     resolvedKeys.add(timerKey)
   }
@@ -279,6 +291,7 @@ function watchApprovals(ctx: any): void {
     void poll()
     const interval = setInterval(() => { void poll() }, 500)
     pollers.set(timerKey, interval)
+    pollFns.set(timerKey, poll)
   }
 
   const check = (sessionId: string | undefined) => {
@@ -299,6 +312,25 @@ function watchApprovals(ctx: any): void {
     if (!pollers.has(timerKey) && !resolvedKeys.has(timerKey)) armApproval(sessionId, approval)
   }
 
+  // C2: event-driven immediate poll. Non-timer events (visibilitychange /
+  // pageshow / resume) are delivered even right after a thaw from Chrome's
+  // intensive throttling, so returning to the page closes an already-decided
+  // approval panel at once instead of waiting for the next interval tick.
+  // Only polls the current session's armed approvals while the tab is
+  // visible; debounced so bursty events cost at most one extra poll / 500ms.
+  const fireImmediatePoll = () => {
+    const g = globalThis as any
+    const now = Date.now()
+    if (now - lastExtraPollAt < 500) return
+    lastExtraPollAt = now
+    if (g.document?.visibilityState === 'hidden') return
+    if (currentId === undefined) return
+    const prefix = `${currentId}:`
+    for (const [key, poll] of pollFns) {
+      if (key.startsWith(prefix)) void poll()
+    }
+  }
+
   const onListChange = () => {
     const next = sessions.list?.getSnapshot?.()?.current
     if (next === currentId) {
@@ -314,7 +346,12 @@ function watchApprovals(ctx: any): void {
     if (currentId) {
       const binding = sessions.binding?.(currentId)
       const session = binding?.session
-      if (session) unsubSession = session.subscribe?.(() => check(currentId))
+      if (session) unsubSession = session.subscribe?.(() => {
+        check(currentId)
+        // A snapshot push right after the tab became visible doubles as a thaw
+        // signal (same debounce/visibility guards as fireImmediatePoll).
+        fireImmediatePoll()
+      })
       check(currentId)
     }
   }
@@ -322,13 +359,31 @@ function watchApprovals(ctx: any): void {
   const unsubList = sessions.list?.subscribe?.(onListChange)
   onListChange()
 
+  // C2: thaw/resume listeners — non-timer events are unaffected by Chrome's
+  // intensive throttling, so they fire the moment the user returns to the tab.
+  // visibilitychange lives on the document; pageshow/resume on the window.
+  const g = globalThis as any
+  const doc = g.document
+  const win = g.window
+  if (doc?.addEventListener) doc.addEventListener('visibilitychange', fireImmediatePoll)
+  if (win?.addEventListener) {
+    win.addEventListener('pageshow', fireImmediatePoll)
+    win.addEventListener('resume', fireImmediatePoll)
+  }
+
   ctx.effect(() => () => {
     unsubList?.()
     unsubSession?.()
+    if (doc?.removeEventListener) doc.removeEventListener('visibilitychange', fireImmediatePoll)
+    if (win?.removeEventListener) {
+      win.removeEventListener('pageshow', fireImmediatePoll)
+      win.removeEventListener('resume', fireImmediatePoll)
+    }
     for (const timer of timers.values()) clearTimeout(timer)
     timers.clear()
     for (const poller of pollers.values()) clearInterval(poller)
     pollers.clear()
+    for (const key of [...pollFns.keys()]) pollFns.delete(key)
     timerMeta.clear()
     resolvedKeys.clear()
     answeredApprovals.clear()
