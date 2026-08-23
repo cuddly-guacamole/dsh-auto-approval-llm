@@ -21,6 +21,7 @@
 - **熔断**：连续 `maxConsecutiveDenials` 次或累计 `maxTotalDenials` 次被 LLM 拒绝 → 转人工、不再自动倒计时；`/approval reset` 可重置。
 - **可靠的历史与审计**：内存 200 条 + `history.jsonl`，append-only `audit.jsonl`（清空留 tombstone）。
 - **LLM 响应时间统计**：「最近审批记录」子卡顶部显示最近 100 次 LLM 评审的真实响应耗时（MIN/AVG/MAX，秒），并单列「超时/无响应」次数——超时与中断不混入平均值，`llm-latency.jsonl` 持久化（1MB 轮转）。
+- **LLM 复审自动重试**：审查请求遇瞬时网关故障（限流 429 / 服务端 5xx / 传输中断 / 空响应；LOW 同步路径含审查超时）自动重试一次；重试只在审批窗口剩余内滚动——首次尝试保持原超时语义、绝不侵占倒计时——并尊重服务端 `Retry-After`；认证/配置类错误（401/403、NO_ADAPTER 等）绝不重发请求体与凭据；重试耗尽仍 fail-closed（转人 / 按 `timeoutAction` 兜底）。每次尝试的失败轨迹写入 `history.jsonl` / `audit.jsonl`（`attempts` 字段）与延迟统计。
 - **每会话评审模式**：`/approval-mode manual|smart|unattended` 持久化；`manual` 全转人、`unattended` 自动应答；**高风险超时仍转人工/失败关闭**。
 - **声明式规则**：`rulesText` 用 Claude 风格 `工具(正则) | allow|deny|human [| 字段]` 一眼看懂、实时校验。
 - **DSH 原生观感的设置卡**：4 张可折叠子卡（计时器与熔断 / 在线评审模型 / 安全规则列表 / 最近审批记录），顶层开关即时保存、每卡独立 保存/放弃/恢复默认；非法配置值有红色横幅 +「尝试修复」。
@@ -42,6 +43,7 @@
 - **LOW**：不送评审则静默放行；送评审时按 LLM 结论（ALLOW/DENY）直接裁决；LLM 无法决定（ESCALATE）转人工。
 - **MEDIUM**：弹面板 + 倒计时，同时并行跑 LLM；`llmTakeoverScope` 覆盖且 LLM 给出明确结论 → 立即跟随；否则只显示建议。
 - **HIGH**：弹面板 + 倒计时，LLM 只给建议不接管；超时严格按 `timeoutAction`（unattended 下 HIGH 超时仍转人工/失败关闭）。
+- **LLM 复审自动重试**：审查请求遇瞬时故障（429 / 5xx / 传输 / 空响应等）自动重试一次；重试受审批窗口剩余约束（不挤占倒计时）、尊重 `Retry-After`、认证/配置类错误不重发凭据；失败轨迹记入 `attempts` 审计。
 - 所有「需要人」的场景都委托官方面板显示倒计时；**超时标记唯一作者是 host 计时器**，客户端只上报 outcome，伪造不了。
 
 ---
@@ -130,6 +132,7 @@ dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 | `aiButtonPosition` | `header` | 按钮位置：标题栏 / 悬浮 |
 | `workspaceRoot` / `dshHome` / `tempRoots` | ''/''/[] | 路径根（DSH_HOME 默认保护） |
 | `classifierTimeoutMs` / `classifierMaxOutputTokens` | 8000 / 1024 | 分类器超时与输出上限 |
+| `reviewMaxRetries` | 1 | LLM 复审失败后的额外重试次数（0 单次 / 1 默认 / 2 上限；仅瞬时故障重试——限流·5xx·传输·空响应，LOW 同步含超时——重试窗口受审批倒计时剩余约束，认证/配置错误不重试） |
 | `debug` | false | 调试模式：写 `approval-debug.jsonl` 与 `[debug]` 日志 |
 
 > 顶层开关（启用/切换策略/超时动作/评审·接管范围/默认模式/按钮显示与位置）改动即保存；每张子卡有独立的 保存/放弃修改 按钮（安全规则列表另有 恢复默认）。host-only 键（workspaceRoot 等）用 patch/YAML 配置，设置卡保存不会抹掉它们。
