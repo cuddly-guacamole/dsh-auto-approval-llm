@@ -25,6 +25,7 @@
 - **每会话评审模式**：`/approval-mode manual|smart|unattended` 持久化；`manual` 全转人、`unattended` 自动应答；**高风险超时仍转人工/失败关闭**。
 - **声明式规则**：`rulesText` 用 Claude 风格 `工具(正则) | allow|deny|human [| 字段]` 一眼看懂、实时校验。支持维度限定：行首 `[agent:main]` / `[agent:!subagent]` / `[workspace:D:/proj]`（逗号组合=AND）——规则只在指定代理身份/工作区内求值。注意：规则仅作用于进入审批链的工具调用，工作区内常规写读等静态放行路径不经规则层（见下）；解析出错时**整段 rulesText 失效**（fail-open 方向，设置卡有警示）。
 - **上下文增强复审（可选开启，默认关）**：`reviewerContextFacts` 开启后，LLM 复审输入附加结构化工作区事实——目标路径存在性/类型/大小（只读元数据，绝不读内容）＋本会话最近创建的文件相对路径（最多 8 条，经脱敏与工作区过滤）。边界：工作区外目标只报存在性与类型、大小恒为 null；工作区 symlink/联接逃逸到外部时整个事实块省略；临时目录（tempRoots）文件不进 recent_creates；探测失败→事实块整体省略（fail-closed），默认关闭时复审载荷与既往逐字节一致。
+- **编辑操作 diff 预览（editDiffPreview）**：开启后，进入人工审批的编辑类工具（write/edit/str_replace_editor/apply_patch）在审批面板展示目标文件的行级红绿 diff（目标仅限工作区内非受保护路径，≤1MiB/≤200 行/约 32KiB，失败自动省略）。纯展示：不参与任何裁决，不进 LLM 复审输入；默认关闭。边界：可读的工作区内非受保护目标对比现有内容出 diff；全量写类操作（`write` / `str_replace_editor` `create`）目标不可读（工作区外/受保护/新文件等）时预览「仅新内容」的全量新增 diff——素材全部来自工具参数、零读取目标文件，外部/受保护旧内容绝不因此上屏；对比类（`edit` / `str_replace` / `insert` / `apply_patch`）目标不可读时整体省略。LCS 输入 ≤1024 行/侧，单行 >200 字符省略号，输出 ≤200 行且总字节 ≤32KiB，截断带 `…truncated` 标记；语义镜像官方工具（edit/str_replace 多匹配省略、insert 按官方 0 基 splice、create 已存在省略、apply_patch 全目标顺序应用且任一失败整体省略）；diff 块内倒计时字面量被剥离，无法伪造/劫持客户端自动应答。
 - **DSH 原生观感的设置卡**：4 张可折叠子卡（计时器与熔断 / 在线评审模型 / 安全规则列表 / 最近审批记录），顶层开关即时保存、每卡独立 保存/放弃/恢复默认；非法配置值有红色横幅 +「尝试修复」。
 
 ---
@@ -136,6 +137,7 @@ dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 | `reviewMaxRetries` | 1 | LLM 复审失败后的额外重试次数（0 单次 / 1 默认 / 2 上限；仅瞬时故障重试——限流·5xx·传输·空响应，LOW 同步含超时——重试窗口受审批倒计时剩余约束，认证/配置错误不重试） |
 | `debug` | false | 调试模式：写 `approval-debug.jsonl` 与 `[debug]` 日志 |
 | `reviewerContextFacts` | false | 上下文增强复审：给 LLM 复审输入附加结构化工作区事实（目标存在性/类型/大小 + 本会话最近创建文件，最多 8 条）；默认关（载荷与既往一致）。边界：工作区外只报存在性/类型不报大小；tempRoots 文件不入 recent_creates；探测失败整体省略 |
+| `editDiffPreview` | false | 编辑类工具（write/edit/str_replace_editor 非 view/apply_patch）进入人工审批时，面板展示目标文件行级红绿 diff。纯展示：不参与裁决、不进 LLM 复审输入；失败自动省略。边界：可读的工作区内非受保护目标对比现有内容；全量写类（write/create）目标不可读（外部/受保护/新文件）预览仅新内容全量新增（零读目标文件）；对比类（edit/str_replace/insert/apply_patch）目标不可读整体省略；≤1MiB（lstat 不跟随 + 读后字节复核，防 junction 逃逸）；LCS ≤1024 行/侧、单行 ≤200 字符省略、输出 ≤200 行且 ≤32KiB（截断带 `…truncated`）；语义镜像官方（多匹配/已存在/越界 → 省略）；diff 块内倒计时字面量剥离防伪造 |
 
 > 顶层开关（启用/切换策略/超时动作/评审·接管范围/默认模式/按钮显示与位置）改动即保存；每张子卡有独立的 保存/放弃修改 按钮（安全规则列表另有 恢复默认）。host-only 键（workspaceRoot 等）用 patch/YAML 配置，设置卡保存不会抹掉它们。
 
@@ -169,6 +171,7 @@ dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 - **reasoning-blind**：评审只看 工具名 + 结构化脱敏参数 + 有界直接用户消息（唯一授权证据）+ 工作区事实，剥离评审者的自述与工具输出。
 - **密钥不出 host**：在线评审密钥存 DSH 凭据，每操作解析、前端仅显「已配置」。
 - **倒计时按钮规则**：倒计时只贴在「会超时自动执行」的那个按钮上——`timeoutAction=通过` → 超时自动通过，「允许一次」倒计时、拒绝按钮干净；`timeoutAction=拒绝` / `低风险自动同意` → 中/高风险超时自动拒绝，「拒绝」按钮倒计时（低风险自动同意时仅低风险超时通过）。中风险默认 8 秒偏紧，建议按需调大。
+- **diff 预览只进人工面板**：编辑类 diff 文本只追加到 ask reason（人工面板可见），绝不进入 review payload / REVIEWER_SYSTEM（reasoning-blind）、不进 history/audit；diff 块内若含倒计时字面量会在注入前剥离，客户端也只解析隐藏后的文本——改不了任何自动应答路径。受保护/密钥文件（.env 等）不读旧内容（对比类整体省略；全量写类仅预览工具参数里的新内容，外层/受保护旧内容绝不上屏）；但旧内容与 tool arguments 一样随会话 approval/asked 日志明文持久化（官方契约 log-only、模型上下文不可见），与既有参数暴露面同级。
 
 ---
 

@@ -28,8 +28,9 @@ import { appendAuditLine, recordAuditClear } from './auto/audit.js'
 import { sanitizeClassifierArguments, sanitizeClassifierText, sanitizeReviewReason } from './auto/classifier.js'
 import { THRESHOLD_DEFAULTS } from './auto/constants.js'
 import { createDshClassifier } from './auto/dsh-classifier.js'
-import { type RaceHumanHandle, type ReviewResult, type StaticRisk, REVIEW_TIMEOUT_NOTICE, applyBreaker, approvalSource, assembleReviewerSystem, breakerTripped, createKeyedMutex, extractToolPath, followResolution, formatDenyFeedback, frameReviewerInput, lowRiskReviewOutcome, parseReview, preserveHostKeys, raceHumanDecision, reviewSuggestionNote, reviewerAutoAllowBlocked, riskFromAssessment, staticListDecision, stripCountdownMarkers, type ContextSummary } from './auto/decision.js'
+import { type RaceHumanHandle, type ReviewResult, type StaticRisk, REVIEW_TIMEOUT_NOTICE, applyBreaker, approvalSource, assembleReviewerSystem, breakerTripped, createKeyedMutex, extractToolPath, followResolution, formatDenyFeedback, frameReviewerInput, lowRiskReviewOutcome, parseReview, preserveHostKeys, raceHumanDecision, reviewSuggestionNote, reviewerAutoAllowBlocked, riskFromAssessment, staticListDecision, type ContextSummary } from './auto/decision.js'
 import { loadLatencySamples, pushLatencySample, summarizeLatency, type LatencySample } from './auto/latency.js'
+import { buildAskReason, buildEditDiff, buildEditDiffText, EDIT_DIFF_ARGS_MAX_CHARS, EDIT_DIFF_TOOLS } from './auto/editdiff.js'
 import { isWithin, normalizePath, resolveRoots } from './auto/paths.js'
 import { assessTool, hardDenyReason, symlinkGuardTargets } from './auto/policy.js'
 import { probeTargetFacts } from './auto/probe.js'
@@ -81,6 +82,8 @@ export interface Config {
   redactResults: boolean
   /** Attach structured workspace facts (existence/kind/size, recent creates) to the review input. */
   reviewerContextFacts: boolean
+  /** Show a line-level diff preview of edit-class targets on the human approval panel. */
+  editDiffPreview: boolean
 }
 
 export const Config: z<Config> = z.object({
@@ -126,11 +129,15 @@ export const Config: z<Config> = z.object({
   // Structured workspace-facts injection for the reviewer input (off by
   // default so the default review payload stays byte-identical).
   reviewerContextFacts: z.boolean().default(false),
+  // Line-level diff preview for edit-class approvals: display-only, fail-closed
+  // (any read/diff failure omits the block), never part of the review payload.
+  // Off by default (fail-closed): enable explicitly to see the panel diff.
+  editDiffPreview: z.boolean().default(false),
 })
 
 const AUTO_PRESET = 'auto'
 
-function resolveConfig(raw: Config): Config {
+export function resolveConfig(raw: Config): Config {
   if (raw.reviewerProvider === undefined !== (raw.reviewerModel === undefined)) {
     throw new Error('dsh-auto-approval-llm: reviewerProvider and reviewerModel must be configured together')
   }
@@ -155,6 +162,8 @@ function resolveConfig(raw: Config): Config {
     highRiskSeconds: raw.highRiskSeconds ?? THRESHOLD_DEFAULTS.highRiskSeconds,
     redactResults: raw.redactResults === true,
     reviewerContextFacts: raw.reviewerContextFacts === true,
+    // Default-off (fail-closed): only an explicit true enables the preview.
+    editDiffPreview: raw.editDiffPreview === true,
   }
 }
 
@@ -1787,11 +1796,20 @@ export function apply(ctx: Context, rawConfig: Config): void {
       notes.push(`[dsh-auto-approval-llm] ⏳ will auto-${actionText} in ${seconds}s if no response`)
     }
     const extra = notes.map((n) => `\n\n${n}`).join('')
+    // Edit-class operations get a line-level diff preview of the target file
+    // appended as a trailing marked block (display-only). Any failure, gate
+    // rejection, or disabled config omits the block entirely.
+    let editDiffText: string | undefined
+    if (config.editDiffPreview === true && EDIT_DIFF_TOOLS.has(String(req.toolName ?? ''))) {
+      const roots = rootsFor({ agent: req.agent })
+      const rawArgs = findToolCallArguments(req.agent.session, req.callId, EDIT_DIFF_ARGS_MAX_CHARS)
+      const diff = buildEditDiff(String(req.toolName ?? ''), rawArgs, roots.workspace, roots.home)
+      if (diff !== undefined) editDiffText = buildEditDiffText(diff)
+    }
     // Strip any client-parseable auto-answer markers from the model-controlled
     // base reason first: only the notes this host appends below may arm the
     // browser watcher's countdown.
-    const baseReason = typeof req.reason === 'string' ? stripCountdownMarkers(req.reason) : req.reason
-    req.reason = baseReason ? `${baseReason}${extra}` : extra
+    req.reason = buildAskReason(req.reason, extra, editDiffText)
     let outcome: any
     let timedOut = false
     // Whether a decisive caller (an LLM takeover) authoritatively settled the

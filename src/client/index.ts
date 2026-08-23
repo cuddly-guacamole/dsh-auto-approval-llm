@@ -490,6 +490,84 @@ function hijackApprovalButtons(): () => void {
     for (const el of leaves) el.style.whiteSpace = 'pre-line'
   }
 
+  // ── edit-diff preview ────────────────────────────────────────────────────
+  // The host appends a marked line-prefixed block ("[dsh-edit-diff]…[/dsh-edit-diff]")
+  // to the ask reason of edit-class approvals. The block is parsed from the
+  // panel's plain text and re-rendered as a colored line diff; the raw block
+  // text is then removed from the panel so it never double-displays.
+  const DIFF_START = '[dsh-edit-diff]'
+  const DIFF_END = '[/dsh-edit-diff]'
+
+  const extractDiffBlock = (text: string): { header: string; lines: { kind: string; text: string }[] } | null => {
+    const start = text.indexOf(DIFF_START)
+    if (start === -1) return null
+    const end = text.indexOf(DIFF_END, start)
+    if (end === -1) return null
+    const body = text.slice(start + DIFF_START.length, end).replace(/^\n/, '')
+    const [header = '', ...rawLines] = body.split('\n')
+    const lines: { kind: string; text: string }[] = []
+    for (const raw of rawLines) {
+      if (raw.startsWith('- ')) lines.push({ kind: 'del', text: raw.slice(2) })
+      else if (raw.startsWith('+ ')) lines.push({ kind: 'add', text: raw.slice(2) })
+      else if (raw.startsWith('· ')) lines.push({ kind: 'ctx', text: raw.slice(2) })
+      // Unknown-prefix lines are structural noise and stay ignored.
+    }
+    return { header, lines }
+  }
+
+  const renderDiffBlock = (panel: any, block: { header: string; lines: { kind: string; text: string }[] }) => {
+    if (panel.querySelector('[data-dsa-edit-diff]')) return
+    const wrap = doc.createElement('div')
+    wrap.setAttribute('data-dsa-edit-diff', '1')
+    wrap.className = 'dsa-diff'
+    const head = doc.createElement('div')
+    head.className = 'dsa-diffHead'
+    head.textContent = block.header
+    wrap.appendChild(head)
+    const collapsed = block.lines.length > 4
+    const body = doc.createElement('div')
+    body.className = 'dsa-diffBody'
+    if (collapsed) body.style.display = 'none'
+    for (const line of block.lines) {
+      const row = doc.createElement('div')
+      row.className = `dsa-diffLine dsa-diff${line.kind === 'del' ? 'Del' : line.kind === 'add' ? 'Add' : 'Ctx'}`
+      row.textContent = line.text
+      body.appendChild(row)
+    }
+    wrap.appendChild(body)
+    if (collapsed) {
+      const toggle = doc.createElement('button')
+      toggle.type = 'button'
+      toggle.className = 'dsa-diffToggle'
+      toggle.textContent = t('panel.diffExpand')
+      toggle.addEventListener('click', () => {
+        const open = body.style.display !== 'none'
+        body.style.display = open ? 'none' : 'block'
+        toggle.textContent = open ? t('panel.diffExpand') : t('panel.diffCollapse')
+      })
+      wrap.appendChild(toggle)
+    }
+    panel.appendChild(wrap)
+  }
+
+  // Remove the raw marker block from the panel text (idempotent). Only the
+  // deepest element carrying both markers is touched, so sibling text such as
+  // the countdown note survives intact.
+  const hideDiffBlock = (panel: any) => {
+    for (const el of Array.from(panel.querySelectorAll('*')) as any[]) {
+      const text = el.textContent ?? ''
+      if (!text.includes(DIFF_START) || !text.includes(DIFF_END)) continue
+      const childCarries = Array.from(el.children).some((c: any) =>
+        (c.textContent ?? '').includes(DIFF_START) && (c.textContent ?? '').includes(DIFF_END))
+      if (childCarries) continue
+      const start = text.indexOf(DIFF_START)
+      const end = text.indexOf(DIFF_END)
+      const cleaned = `${text.slice(0, start)}${text.slice(end + DIFF_END.length)}`.replace(/\n+$/, '')
+      el.textContent = cleaned
+      break
+    }
+  }
+
   const scan = () => {
     const panels: any[] = Array.from(doc.querySelectorAll('[data-approval-key]'))
     const liveKeys = new Set<string>()
@@ -498,6 +576,15 @@ function hijackApprovalButtons(): () => void {
       if (!key) continue
       liveKeys.add(key)
       enablePreLine(panel)
+      // Diff preview first: the raw block is hidden before the countdown is
+      // parsed, so a countdown-literal inside preview content can never arm
+      // the local auto-answer (host strips it too; this is the second fence).
+      const rawText = panel.textContent ?? ''
+      const block = extractDiffBlock(rawText)
+      if (block) {
+        renderDiffBlock(panel, block)
+        hideDiffBlock(panel)
+      }
       const text = panel.textContent ?? ''
       if (/熔断/.test(text)) applyBreakerGuard(panel, key)
       const info = parseCountdown(text)
@@ -574,6 +661,7 @@ interface Draft {
   debug: 'on' | 'off'
   redactResults: 'on' | 'off'
   reviewerContextFacts: 'on' | 'off'
+  editDiffPreview: 'on' | 'off'
 }
 
 function draftOf(value: any): Draft {
@@ -605,6 +693,7 @@ function draftOf(value: any): Draft {
     debug: value?.debug === true ? 'on' : 'off',
     redactResults: value?.redactResults === true ? 'on' : 'off',
     reviewerContextFacts: value?.reviewerContextFacts === true ? 'on' : 'off',
+    editDiffPreview: value?.editDiffPreview === true ? 'on' : 'off',
   }
 }
 
@@ -634,6 +723,7 @@ function valueOf(draft: Draft): any {
     debug: draft.debug === 'on',
     redactResults: draft.redactResults === 'on',
     reviewerContextFacts: draft.reviewerContextFacts === 'on',
+    editDiffPreview: draft.editDiffPreview === 'on',
   }
   if (draft.reviewerProvider.trim()) value.reviewerProvider = draft.reviewerProvider.trim()
   if (draft.reviewerModel.trim()) value.reviewerModel = draft.reviewerModel.trim()
@@ -667,7 +757,7 @@ function formatLatencySeconds(ms: number | null): string {
 // unknown enum, out-of-range number). The settings card shows a red banner and
 // offers to delete those keys so the schema defaults recover.
 const INVALID_CONFIG_TYPES: Record<string, string> = {
-  enabled: 'boolean', autoSwitchPolicyToAsk: 'boolean', rulesDryRun: 'boolean', notifyUser: 'boolean', debug: 'boolean', redactResults: 'boolean', reviewerContextFacts: 'boolean',
+  enabled: 'boolean', autoSwitchPolicyToAsk: 'boolean', rulesDryRun: 'boolean', notifyUser: 'boolean', debug: 'boolean', redactResults: 'boolean', reviewerContextFacts: 'boolean', editDiffPreview: 'boolean',
   lowRiskSeconds: 'number', mediumRiskSeconds: 'number', highRiskSeconds: 'number',
   maxConsecutiveDenials: 'number', maxTotalDenials: 'number', breakerAntiHijackMs: 'number',
   maxArgsChars: 'number', classifierTimeoutMs: 'number', classifierMaxOutputTokens: 'number',
@@ -941,7 +1031,7 @@ function SettingsSection() {
   const TOP_KEYS = ['enabled', 'autoSwitchPolicyToAsk', 'timeoutAction', 'llmReviewScope', 'llmTakeoverScope', 'defaultReviewMode', 'showSessionPanel', 'aiButtonPosition']
   const TIMER_KEYS = ['breakerAntiHijackMs', 'lowRiskSeconds', 'mediumRiskSeconds', 'highRiskSeconds', 'maxConsecutiveDenials', 'maxTotalDenials']
   const REVIEW_KEYS = ['reviewerProtocol', 'reviewerBaseUrl', 'reviewerModel']
-  const SECURITY_KEYS = ['safetyPrompt', 'allowlist', 'denyList', 'humanOnlyList', 'rulesText', 'rulesDryRun', 'redactResults', 'reviewerContextFacts']
+  const SECURITY_KEYS = ['safetyPrompt', 'allowlist', 'denyList', 'humanOnlyList', 'rulesText', 'rulesDryRun', 'redactResults', 'reviewerContextFacts', 'editDiffPreview']
   const pick = (keys: string[], from: Draft): Partial<Draft> => {
     const out: any = {}
     for (const k of keys) out[k] = (from as any)[k]
@@ -1476,6 +1566,11 @@ function SettingsSection() {
       options: onOffOptions(),
       onChange: (v: any) => update({ reviewerContextFacts: v as 'on' | 'off' }),
     }), t('settings.rules.reviewerContextFactsHint')),
+    row(t('settings.rules.editDiffPreview'), React.createElement(CapsuleSelect, {
+      value: draft.editDiffPreview,
+      options: onOffOptions(),
+      onChange: (v: any) => update({ editDiffPreview: v as 'on' | 'off' }),
+    }), t('settings.rules.editDiffPreviewHint')),
     field(t('settings.rules.rulesText'), React.createElement('textarea', {
       value: draft.rulesText,
       onChange: (e: any) => update({ rulesText: e.target.value }),
@@ -2210,6 +2305,19 @@ function installSettingsCardStyles(): () => void {
 .dsa-alertError{color:var(--dsw-alias-state-error-primary);background:rgba(var(--dsw-alias-state-error-primary,229 72 77),0.08);border:1px solid var(--dsw-alias-state-error-primary)}
 .dsa-alertText{flex:1;min-width:0;overflow-wrap:anywhere}
 .dsa-resetButton{border-radius:8px!important;height:auto!important;padding:5px 14px!important}
+.dsa-diff{border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2);margin:8px 0;padding:6px 10px;font-family:var(--ds-font-family-code,monospace);font-size:12px;line-height:1.6;max-height:280px;overflow:auto}
+.dsa-diffHead{color:var(--dsw-alias-label-primary);font-weight:600;padding:2px 0 4px;white-space:pre-line}
+.dsa-diffBody{display:grid}
+.dsa-diffLine{white-space:pre-wrap;word-break:break-word;padding:0 6px;border-left:3px solid transparent}
+.dsa-diffLine::before{display:inline-block;width:1.4em;margin-left:-6px;color:var(--dsw-alias-label-tertiary)}
+.dsa-diffDel{color:var(--dsw-alias-label-secondary);background:rgba(var(--dsw-alias-state-error-primary,229 72 77),0.10);border-left-color:var(--dsw-alias-state-error-primary)}
+.dsa-diffDel::before{content:'−';color:var(--dsw-alias-state-error-primary)}
+.dsa-diffAdd{color:var(--dsw-alias-label-secondary);background:rgba(var(--dsw-alias-state-success-primary,48 164 108),0.10);border-left-color:var(--dsw-alias-state-success-primary)}
+.dsa-diffAdd::before{content:'+';color:var(--dsw-alias-state-success-primary)}
+.dsa-diffCtx{color:var(--dsw-alias-label-tertiary)}
+.dsa-diffCtx::before{content:'·'}
+.dsa-diffToggle{appearance:none;background:transparent;border:0;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;cursor:pointer;padding:3px 6px;border-radius:6px}
+.dsa-diffToggle:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}
 `
   g.document.head.appendChild(style)
   return () => { style.remove() }
