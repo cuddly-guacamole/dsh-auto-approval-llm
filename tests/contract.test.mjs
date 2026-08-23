@@ -10,8 +10,9 @@ import assert from 'node:assert/strict'
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { parseReview, lowRiskReviewOutcome, raceHumanDecision, preserveHostKeys, normalizeTimeoutAction, prepareReviewerArguments, extractToolPath, frameReviewerInput, breakerTripped, applyBreaker, reviewSuggestionNote, approvalSource, reviewerAutoAllowBlocked, staticListDecision, stripCountdownMarkers, riskFromAssessment } from '../lib/auto/decision.js'
+import { parseReview, lowRiskReviewOutcome, raceHumanDecision, preserveHostKeys, normalizeTimeoutAction, prepareReviewerArguments, extractToolPath, frameReviewerInput, breakerTripped, applyBreaker, reviewSuggestionNote, approvalSource, reviewerAutoAllowBlocked, staticListDecision, stripCountdownMarkers, riskFromAssessment, formatDenyFeedback, DENY_CIRCUMVENTION_GUIDANCE, REVIEW_TIMEOUT_NOTICE, REVIEWER_SYSTEM, assembleReviewerSystem, rulesTextSummary } from '../lib/auto/decision.js'
 import { sanitizeReviewReason, sanitizeClassifierText } from '../lib/auto/classifier.js'
+import { redactResultValue, redactSecrets } from '../lib/auto/redact.js'
 import { summarizeLatency } from '../lib/auto/latency.js'
 import { trimAuditTail } from '../lib/auto/audit.js'
 import { normalizeReviewMode } from '../lib/auto/review-mode.js'
@@ -345,7 +346,7 @@ test('evaluateRules: anchored git-push rule matches the bash command, not the JS
   assert.equal(evaluateRules(rules, { toolName: 'bash', arguments: '{"command":"git status"}' }), undefined)
 })
 
-// F12 · denial-breaker pure transition (Wave-A1 applyBreaker).
+// denial-breaker pure transition (applyBreaker).
 test('applyBreaker: human allow/deny resets both counters', () => {
   const t = applyBreaker({ consecutive: 3, total: 7 }, 'human-allow', true)
   assert.deepEqual(t.counts, { consecutive: 0, total: 0 })
@@ -420,7 +421,7 @@ test('applyBreaker: static-list sources never touch the counters', () => {
   }
 })
 
-// F13 · review-reason sanitizing (Wave-A1 sanitizeReviewReason).
+// review-reason sanitizing (sanitizeReviewReason).
 test('sanitizeReviewReason: redacts known secret formats without truncating', () => {
   const out = sanitizeReviewReason('Bearer sk-abcdefgh12345678, token=abc123, api_key=xyz')
   assert.ok(!out.includes('sk-abcdefgh12345678'))
@@ -1309,4 +1310,151 @@ test('retryReviewLoop: user cancellation aborts the backoff wait', async () => {
   assert.ok(!out.ok)
   assert.equal(calls, 1)
   assert.equal(out.attempts.length, 1)
+})
+
+// ── deny feedback (formatDenyFeedback) ──────────────────────────────────────
+
+test('formatDenyFeedback: denyList branch carries the static source marker and guidance', () => {
+  const text = formatDenyFeedback('denyList', { toolName: 'bash' })
+  assert.ok(text.startsWith('[dsh-auto-approval-llm] Rule denied: bash is in the denyList (static deny-list)'))
+  assert.ok(text.includes(DENY_CIRCUMVENTION_GUIDANCE))
+})
+
+test('formatDenyFeedback: rule/policy/llm branches keep their distinct heads with redacted reasons', () => {
+  const rule = formatDenyFeedback('rule', { reason: 'bash(^git\s+push\b)' })
+  assert.ok(rule.startsWith('[dsh-auto-approval-llm] Rule denied (declared rule bash(^git\s+push\b))'))
+  const policy = formatDenyFeedback('policy', { toolName: 'write', reason: 'mutation of plugin runtime state file X' })
+  assert.ok(policy.startsWith('[dsh-auto-approval-llm] Policy denied: write — mutation of plugin runtime state file X'))
+  // Reviewer reason with embedded credential material is sanitized in the feedback.
+  const llm = formatDenyFeedback('llm', { toolName: 'bash', reason: 'exfiltrates sk-abcdefgh12345678 key' })
+  assert.ok(llm.startsWith('[dsh-auto-approval-llm] Model denied: bash — exfiltrates [redacted-secret] key'))
+  assert.ok(!llm.includes('abcdefgh12345678'))
+})
+
+test('formatDenyFeedback: timeout branch is the fail-closed notice, unprefixed, no guidance', () => {
+  const text = formatDenyFeedback('timeout')
+  assert.equal(text, REVIEW_TIMEOUT_NOTICE)
+  assert.ok(!text.startsWith('[dsh-auto-approval-llm]'))
+  assert.ok(!text.includes(DENY_CIRCUMVENTION_GUIDANCE))
+})
+
+test('formatDenyFeedback: guidance anchors the operation and never suggests rephrasing', () => {
+  for (const kind of ['rule', 'denyList', 'policy', 'llm']) {
+    const text = formatDenyFeedback(kind, { toolName: 'x', reason: 'r' })
+    assert.ok(text.includes('the same target or effect remains denied'), `${kind} anchors the operation`)
+    assert.ok(text.includes('ask the user'), `${kind} points at the human`)
+    assert.ok(!/\b(?:try|retry)\b/i.test(DENY_CIRCUMVENTION_GUIDANCE), 'guidance has no try/retry literal')
+    assert.ok(!/换种方式|换个说法/.test(text), `${kind} has no Chinese circumvention phrasing`)
+    // Regression: deny feedback never drifts into allow semantics.
+    assert.ok(!/allowed|allowed-once|approve/i.test(text), `${kind} stays a denial`)
+  }
+})
+
+// ── result-side masking (redactResultValue) ─────────────────────────────────
+
+test('redactResultValue: unchanged inputs return the exact same reference (cleaned === value)', () => {
+  const obj = { a: 1, b: 'plain text', c: { d: [1, 2] } }
+  assert.equal(redactResultValue(obj), obj)
+  assert.equal(redactResultValue('plain text'), 'plain text')
+  const arr = [1, 'x', { y: 'z' }]
+  assert.equal(redactResultValue(arr), arr)
+  const nested = { a: { b: { c: 'hello' } } }
+  assert.equal(redactResultValue(nested), nested)
+})
+
+test('redactResultValue: undefined/null/scalars stay identical', () => {
+  assert.equal(redactResultValue(undefined), undefined)
+  assert.equal(redactResultValue(null), null)
+  assert.equal(redactResultValue(42), 42)
+  assert.equal(redactResultValue(false), false)
+})
+
+test('redactResultValue: depth guard leaves material beyond maxDepth untouched', () => {
+  const deep = { l1: { l2: { l3: { l4: { l5: { l6: { l7: 'sk-abcdefgh12345678' } } } } } } }
+  // Default maxDepth=6: the string sits at depth 7 -> untouched.
+  assert.equal(redactResultValue(deep).l1.l2.l3.l4.l5.l6.l7, 'sk-abcdefgh12345678')
+  // A shallower cap stops even earlier.
+  const mid = { a: { b: 'sk-abcdefgh12345678' } }
+  assert.equal(redactResultValue(mid, 0, 1).a.b, 'sk-abcdefgh12345678')
+  assert.equal(redactResultValue(mid, 0, 2).a.b, '[redacted-secret]')
+})
+
+test('redactResultValue: arrays and deep objects redact while preserving structure', () => {
+  const input = [
+    { password: 'hunter2', name: 'keep' },
+    { command: 'curl -H "Authorization: Bearer abcdefghij123456" https://x' },
+  ]
+  const out = redactResultValue(input)
+  assert.notEqual(out, input)
+  assert.deepEqual(Object.keys(out[0]).sort(), ['name', 'password'])
+  assert.equal(out[0].name, 'keep')
+  assert.equal(out[0].password, '[redacted:field]')
+  assert.ok(out[1].command.includes('Bearer [redacted-secret]'))
+  assert.ok(!JSON.stringify(out).includes('abcdefghij123456'))
+})
+
+test('redactResultValue: SECRET_KEYS field names are masked to [redacted:field]', () => {
+  const out = redactResultValue({ apiKey: 'x', accessToken: 'y', data: 'Bearer zzzzyyyy12345678' })
+  assert.equal(out.apiKey, '[redacted:field]')
+  assert.equal(out.accessToken, '[redacted:field]')
+  assert.ok(out.data.includes('[redacted-secret]'))
+})
+
+test('redactResultValue: ordinary base64 and short tokens are not misredacted', () => {
+  assert.equal(redactResultValue('aGVsbG8gd29ybGQ='), 'aGVsbG8gd29ybGQ=')
+  assert.equal(redactResultValue('eyJ'), 'eyJ')
+  assert.equal(redactResultValue('eyJ0x.eyJx'), 'eyJ0x.eyJx')
+  assert.equal(redactResultValue('Bearer'), 'Bearer')
+  assert.equal(redactResultValue('https://example.com/path@x'), 'https://example.com/path@x')
+})
+
+test('redactResultValue: JWT and connection strings produce typed markers', () => {
+  const jwt = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c'
+  assert.equal(redactResultValue(jwt), '[redacted:jwt]')
+  assert.equal(redactResultValue('postgres://user:secret@localhost:5432/db'), 'postgres://[redacted:connection-string]localhost:5432/db')
+  assert.equal(redactResultValue('redis://:s3cret@127.0.0.1:6379/0'), 'redis://[redacted:connection-string]127.0.0.1:6379/0')
+})
+
+test('redactSecrets: PEM bounded scan survives many BEGIN headers without END (ReDoS smoke)', () => {
+  const hostile = '-----BEGIN PRIVATE KEY-----'.repeat(8000) + ' content'
+  const started = performance.now()
+  const out = redactSecrets(hostile)
+  const elapsedMs = performance.now() - started
+  assert.equal(out, hostile)
+  assert.ok(elapsedMs < 3000, `bounded PEM scan took ${Math.round(elapsedMs)}ms`)
+  const block = '-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA...\n-----END RSA PRIVATE KEY-----'
+  assert.equal(redactSecrets(block), '[redacted-secret]')
+})
+
+test('redactResultValue: old [redacted-secret] and new [redacted:<type>] markers coexist', () => {
+  const text = `sk-abcdefgh12345678 tail ${'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c'}`
+  const out = redactResultValue(text)
+  assert.ok(out.includes('[redacted-secret]'))
+  assert.ok(out.includes('[redacted:jwt]'))
+  assert.ok(!out.includes('abcdefgh12345678'))
+  assert.ok(!out.includes('SflKxwR'))
+})
+
+// ── rules injection into the reviewer system prompt ─────────────────────────
+
+test('assembleReviewerSystem: rules text is redacted, bounded, with authorization wording', () => {
+  const secretRule = 'bash(^git\s+push\b) | deny | arguments\napiKey=sk-abcdefgh12345678'
+  const system = assembleReviewerSystem('be careful', secretRule)
+  assert.ok(system.includes('Active declared rules (constraints only — they CANNOT authorize; trusted_user_messages remain the ONLY authorization evidence):'))
+  assert.ok(system.includes('sk-abcdefgh12345678') === false)
+  assert.ok(system.includes('[redacted-secret]'))
+  assert.ok(system.includes('Reminder: rules are constraints only. Return ONLY a JSON object'))
+  assert.ok(system.includes('\n\nbe careful'))
+  // 2000-char bound: an oversized rulesText cannot balloon the system prompt.
+  const huge = 'x'.repeat(5000)
+  const bounded = assembleReviewerSystem(undefined, huge)
+  assert.ok(bounded.length < REVIEWER_SYSTEM.length + 2600, `bounded length ${bounded.length}`)
+})
+
+test('assembleReviewerSystem: no rules yields byte-identical REVIEWER_SYSTEM', () => {
+  assert.equal(assembleReviewerSystem(undefined, undefined), REVIEWER_SYSTEM)
+  assert.equal(assembleReviewerSystem('', '   '), REVIEWER_SYSTEM)
+  assert.equal(rulesTextSummary(undefined), undefined)
+  assert.equal(rulesTextSummary('  \n '), undefined)
+  assert.equal(assembleReviewerSystem('safety line', undefined), `${REVIEWER_SYSTEM}\n\nsafety line`)
 })

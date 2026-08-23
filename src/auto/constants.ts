@@ -14,4 +14,6 @@ export const THRESHOLD_DEFAULTS = {
   classifierTimeoutMs: 8_000,
   classifierMaxOutputTokens: 1_024,
   reviewMaxRetries: 1,
+  /** Cap for rule text injected into the reviewer system prompt. */
+  rulesSummaryMaxChars: 2_000,
 } as const

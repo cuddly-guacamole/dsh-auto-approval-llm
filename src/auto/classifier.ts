@@ -2,6 +2,9 @@
 // Ported from @nanmicoder/dsh-auto-mode (classifier.js).
 // MIT License, Copyright (c) 2026 程序员阿江-Relakkes (https://github.com/NanmiCoder/dsh-auto-mode).
 // Retained per the MIT License: this is a substantial portion of the original.
+// redactSecrets and SECRET_KEYS now live in ./redact.js (single implementation
+// shared with the result-side masker); the MIT attribution moved with them.
+import { redactSecrets, SECRET_KEYS } from './redact.js'
 /** Shared policy for native and OpenAI-compatible classifier calls. */
 export const CLASSIFIER_SYSTEM_PROMPT = [
     'You are an independent security classifier for a coding agent tool call.',
@@ -18,21 +21,6 @@ export const CLASSIFIER_SYSTEM_PROMPT = [
     'Judge the concrete effect instead of treating an unfamiliar command name as dangerous by itself. Prefer allow for ordinary development when no protected effect applies.',
 ].join('\n');
 const CONTENT_KEYS = /^(?:content|body|payload|data|text|old_string|new_string|description|justification)$/i;
-const SECRET_KEYS = /(?:api|auth|access|secret|private|credential|password|token|cookie|authorization).*?(?:key|value|token)?$/i;
-/** Redact likely secrets (key formats, bearer tokens, key=value pairs). */
-function redactSecrets(value) {
-    return value
-        .replace(/\b(?:sk|ghp|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{8,}\b/g, '[redacted-secret]')
-        .replace(/\bBearer\s+[A-Za-z0-9._~+\/-]{8,}/gi, 'Bearer [redacted-secret]')
-        .replace(/((?:api[_-]?key|token|secret|password)=)[^&\s]+/gi, '$1[redacted-secret]')
-        // AWS access-key IDs (`AKIA...`) and AWS secret material (the
-        // `aws_secret_access_key=`/`secret_access_key=` forms are NOT caught by
-        // the `secret=` pattern above because `_access_key` sits between).
-        .replace(/\bAKIA[0-9A-Z]{16}\b/g, '[redacted-secret]')
-        .replace(/((?:aws_secret_access_key|aws_access_key_id|secret_access_key|access_key_id|aws_session_token)\s*=\s*)[A-Za-z0-9/+=_-]{16,}/gi, '$1[redacted-secret]')
-        // PEM private-key blocks (whole block, not just the header line).
-        .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/gi, '[redacted-secret]');
-}
 /** Redact likely secrets and bound one classifier-visible text value. */
 export function sanitizeClassifierText(value) {
     return redactSecrets(value).slice(0, 1_000);

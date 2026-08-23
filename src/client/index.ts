@@ -572,6 +572,7 @@ interface Draft {
   breakerAntiHijackMs: string
   aiButtonPosition: 'header' | 'floating'
   debug: 'on' | 'off'
+  redactResults: 'on' | 'off'
 }
 
 function draftOf(value: any): Draft {
@@ -601,6 +602,7 @@ function draftOf(value: any): Draft {
     breakerAntiHijackMs: String(value?.breakerAntiHijackMs ?? THRESHOLD_DEFAULTS.breakerAntiHijackMs),
     aiButtonPosition: value?.aiButtonPosition === 'floating' ? 'floating' : 'header',
     debug: value?.debug === true ? 'on' : 'off',
+    redactResults: value?.redactResults === true ? 'on' : 'off',
   }
 }
 
@@ -628,6 +630,7 @@ function valueOf(draft: Draft): any {
     breakerAntiHijackMs: Math.max(0, Number(draft.breakerAntiHijackMs) || 0),
     aiButtonPosition: draft.aiButtonPosition,
     debug: draft.debug === 'on',
+    redactResults: draft.redactResults === 'on',
   }
   if (draft.reviewerProvider.trim()) value.reviewerProvider = draft.reviewerProvider.trim()
   if (draft.reviewerModel.trim()) value.reviewerModel = draft.reviewerModel.trim()
@@ -661,7 +664,7 @@ function formatLatencySeconds(ms: number | null): string {
 // unknown enum, out-of-range number). The settings card shows a red banner and
 // offers to delete those keys so the schema defaults recover.
 const INVALID_CONFIG_TYPES: Record<string, string> = {
-  enabled: 'boolean', autoSwitchPolicyToAsk: 'boolean', rulesDryRun: 'boolean', notifyUser: 'boolean', debug: 'boolean',
+  enabled: 'boolean', autoSwitchPolicyToAsk: 'boolean', rulesDryRun: 'boolean', notifyUser: 'boolean', debug: 'boolean', redactResults: 'boolean',
   lowRiskSeconds: 'number', mediumRiskSeconds: 'number', highRiskSeconds: 'number',
   maxConsecutiveDenials: 'number', maxTotalDenials: 'number', breakerAntiHijackMs: 'number',
   maxArgsChars: 'number', classifierTimeoutMs: 'number', classifierMaxOutputTokens: 'number',
@@ -935,7 +938,7 @@ function SettingsSection() {
   const TOP_KEYS = ['enabled', 'autoSwitchPolicyToAsk', 'timeoutAction', 'llmReviewScope', 'llmTakeoverScope', 'defaultReviewMode', 'showSessionPanel', 'aiButtonPosition']
   const TIMER_KEYS = ['breakerAntiHijackMs', 'lowRiskSeconds', 'mediumRiskSeconds', 'highRiskSeconds', 'maxConsecutiveDenials', 'maxTotalDenials']
   const REVIEW_KEYS = ['reviewerProtocol', 'reviewerBaseUrl', 'reviewerModel']
-  const SECURITY_KEYS = ['safetyPrompt', 'allowlist', 'denyList', 'humanOnlyList', 'rulesText', 'rulesDryRun']
+  const SECURITY_KEYS = ['safetyPrompt', 'allowlist', 'denyList', 'humanOnlyList', 'rulesText', 'rulesDryRun', 'redactResults']
   const pick = (keys: string[], from: Draft): Partial<Draft> => {
     const out: any = {}
     for (const k of keys) out[k] = (from as any)[k]
@@ -1460,6 +1463,11 @@ function SettingsSection() {
       options: onOffOptions(),
       onChange: (v: any) => update({ rulesDryRun: v as 'on' | 'off' }),
     }), t('settings.rules.dryRunHint')),
+    row(t('settings.rules.redactResults'), React.createElement(CapsuleSelect, {
+      value: draft.redactResults,
+      options: onOffOptions(),
+      onChange: (v: any) => update({ redactResults: v as 'on' | 'off' }),
+    }), t('settings.rules.redactResultsHint')),
     field(t('settings.rules.rulesText'), React.createElement('textarea', {
       value: draft.rulesText,
       onChange: (e: any) => update({ rulesText: e.target.value }),
