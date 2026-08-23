@@ -3,11 +3,17 @@
 // MIT License, Copyright (c) 2026 程序员阿江-Relakkes (https://github.com/NanmiCoder/dsh-auto-mode).
 // Retained per the MIT License: this is a substantial portion of the original.
 import { existsSync } from 'node:fs';
-import { isArtifactArea, normalizePath } from './paths.js';
+import { posix, win32 } from 'node:path';
+import { sanitizeClassifierText } from './classifier.js';
+import { isArtifactArea, isWithin, normalizePath } from './paths.js';
+/** How many workspace-relative recent creates the parallel index keeps per owner. */
+const RECENT_CREATES_CAP = 8;
 /** In-memory provenance for exact paths created successfully during the live session. */
 export class ArtifactRegistry {
     created = new WeakMap();
     pending = new Map();
+    /** Parallel insertion-ordered recent-creates index (workspace-only, per owner). */
+    createdRecent = new WeakMap();
     /** Whether a path was observed as created in this exact live session. */
     has(owner, path, roots) {
         if (owner === undefined)
@@ -38,19 +44,56 @@ export class ArtifactRegistry {
             && 'exitCode' in value && value.exitCode === 0;
         if (pending !== undefined && pending.owner === owner && shellSucceeded) {
             for (const path of pending.paths)
-                this.add(owner, path);
+                this.add(owner, path, roots);
         }
         if (exec.name === 'write' && typeof value === 'object' && value !== null
             && 'operation' in value && value.operation === 'create'
             && 'path' in value && typeof value.path === 'string') {
             const path = normalizePath(value.path, roots.workspace, roots.home);
             if (isArtifactArea(path, roots))
-                this.add(owner, path);
+                this.add(owner, path, roots);
         }
     }
-    add(owner, path) {
+    add(owner, path, roots) {
         const paths = this.created.get(owner) ?? new Set();
         paths.add(path);
         this.created.set(owner, paths);
+        this.indexRecent(owner, path, roots);
+    }
+    /** Workspace-only recent-creates slot: relative-to-workspace, tempRoots rejected. */
+    indexRecent(owner, path, roots) {
+        if (owner === undefined || path === undefined || roots === undefined)
+            return;
+        const workspace = normalizePath(roots.workspace, roots.workspace, roots.home);
+        if (!isWithin(workspace, path)
+            || (roots.tempRoots ?? []).some(root => isWithin(normalizePath(root, workspace, roots.home), path)))
+            return;
+        const arr = this.createdRecent.get(owner) ?? [];
+        const at = arr.indexOf(path);
+        if (at !== -1)
+            arr.splice(at, 1);
+        arr.push(path);
+        while (arr.length > RECENT_CREATES_CAP)
+            arr.shift();
+        this.createdRecent.set(owner, arr);
+    }
+    /** Most recent N workspace-relative created paths, sanitized, newest first. */
+    list(owner, roots, limit = RECENT_CREATES_CAP) {
+        if (owner === undefined || roots === undefined)
+            return [];
+        const arr = this.createdRecent.get(owner);
+        if (arr === undefined || arr.length === 0)
+            return [];
+        const workspace = normalizePath(roots.workspace, roots.workspace, roots.home);
+        const api = /^[A-Za-z]:[\\/]/.test(workspace) || /^\\\\/.test(workspace) ? win32 : posix;
+        const relative = path => api.relative(workspace, path);
+        const out = [];
+        for (let i = arr.length - 1; i >= 0 && out.length < limit; i -= 1) {
+            const path = arr[i];
+            if (!isWithin(workspace, path))
+                continue;
+            out.push(sanitizeClassifierText(relative(path)));
+        }
+        return out;
     }
 }

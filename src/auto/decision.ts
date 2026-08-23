@@ -229,6 +229,7 @@ export const HOST_ONLY_KEYS = [
   'classifierMaxOutputTokens',
   'maxArgsChars',
   'notifyUser',
+  'reviewerContextFacts',
 ]
 
 /**
@@ -366,6 +367,15 @@ export function extractToolPath(raw: string | undefined | null): string | undefi
   return undefined
 }
 
+/** Structured workspace facts for the reviewer (metadata only, never content). */
+export interface ContextSummary {
+  targetExists: boolean
+  targetKind: 'file' | 'dir' | 'missing'
+  targetSize: number | null
+  /** Session-created workspace-relative paths, newest first; absent → none. */
+  recentCreates?: string[]
+}
+
 export interface ReviewerInput {
   toolName: string
   description?: string | null
@@ -374,6 +384,7 @@ export interface ReviewerInput {
   workspaceRoot?: string
   targetRelative?: string | null
   inWorkspace?: boolean | null
+  contextSummary?: ContextSummary | null
 }
 
 /** Frame the reasoning-blind reviewer payload as one JSON text. */
@@ -392,6 +403,20 @@ export function frameReviewerInput(input: ReviewerInput): string {
       root: input.workspaceRoot ?? null,
       target_relative: input.targetRelative ?? null,
       in_workspace: input.inWorkspace ?? null,
+      // Omit-if-empty: with no context the payload stays byte-identical to the
+      // previous five-key workspace shape (cross-version freeze).
+      ...(input.contextSummary === undefined || input.contextSummary === null
+        ? {}
+        : {
+            context_summary: {
+              target_exists: input.contextSummary.targetExists,
+              target_kind: input.contextSummary.targetKind,
+              target_size: input.contextSummary.targetSize,
+              recent_creates: (input.contextSummary.recentCreates ?? [])
+                .map((p) => sanitizeClassifierText(p))
+                .slice(0, 8),
+            },
+          }),
     },
   })
 }

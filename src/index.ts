@@ -28,10 +28,11 @@ import { appendAuditLine, recordAuditClear } from './auto/audit.js'
 import { sanitizeClassifierArguments, sanitizeClassifierText, sanitizeReviewReason } from './auto/classifier.js'
 import { THRESHOLD_DEFAULTS } from './auto/constants.js'
 import { createDshClassifier } from './auto/dsh-classifier.js'
-import { type RaceHumanHandle, type ReviewResult, type StaticRisk, REVIEW_TIMEOUT_NOTICE, applyBreaker, approvalSource, assembleReviewerSystem, breakerTripped, createKeyedMutex, extractToolPath, followResolution, formatDenyFeedback, frameReviewerInput, lowRiskReviewOutcome, parseReview, preserveHostKeys, raceHumanDecision, reviewSuggestionNote, reviewerAutoAllowBlocked, riskFromAssessment, staticListDecision, stripCountdownMarkers } from './auto/decision.js'
+import { type RaceHumanHandle, type ReviewResult, type StaticRisk, REVIEW_TIMEOUT_NOTICE, applyBreaker, approvalSource, assembleReviewerSystem, breakerTripped, createKeyedMutex, extractToolPath, followResolution, formatDenyFeedback, frameReviewerInput, lowRiskReviewOutcome, parseReview, preserveHostKeys, raceHumanDecision, reviewSuggestionNote, reviewerAutoAllowBlocked, riskFromAssessment, staticListDecision, stripCountdownMarkers, type ContextSummary } from './auto/decision.js'
 import { loadLatencySamples, pushLatencySample, summarizeLatency, type LatencySample } from './auto/latency.js'
 import { isWithin, normalizePath, resolveRoots } from './auto/paths.js'
 import { assessTool, hardDenyReason, symlinkGuardTargets } from './auto/policy.js'
+import { probeTargetFacts } from './auto/probe.js'
 import { redactResultValue } from './auto/redact.js'
 import { agentKind, evaluateRules, parseRulesText } from './auto/rules.js'
 import { isReviewRetryable, retryAfterMs, retryReviewLoop, toLlmFailure, type RetryAttempt, type ReviewFailure } from './auto/retry.js'
@@ -78,6 +79,8 @@ export interface Config {
   debug: boolean
   /** Mask credential-shaped material in successful tool results. */
   redactResults: boolean
+  /** Attach structured workspace facts (existence/kind/size, recent creates) to the review input. */
+  reviewerContextFacts: boolean
 }
 
 export const Config: z<Config> = z.object({
@@ -120,6 +123,9 @@ export const Config: z<Config> = z.object({
   // Result-side credential masking: off until the first-day value/content
   // read-path measurements are in (fail-closed default; opt-in per deployment).
   redactResults: z.boolean().default(false),
+  // Structured workspace-facts injection for the reviewer input (off by
+  // default so the default review payload stays byte-identical).
+  reviewerContextFacts: z.boolean().default(false),
 })
 
 const AUTO_PRESET = 'auto'
@@ -148,6 +154,7 @@ function resolveConfig(raw: Config): Config {
     mediumRiskSeconds: raw.mediumRiskSeconds ?? THRESHOLD_DEFAULTS.mediumRiskSeconds,
     highRiskSeconds: raw.highRiskSeconds ?? THRESHOLD_DEFAULTS.highRiskSeconds,
     redactResults: raw.redactResults === true,
+    reviewerContextFacts: raw.reviewerContextFacts === true,
   }
 }
 
@@ -235,7 +242,13 @@ interface ReviewSnapshot {
 
 async function buildReviewSnapshot(
   credentials: any, tools: any, session: any, req: any, config: Config,
-  opts: { userMessages?: string[]; workspaceRoot?: string; home?: string },
+  opts: {
+    userMessages?: string[]
+    workspaceRoot?: string
+    home?: string
+    /** Context-fact sources, consumed only while `reviewerContextFacts` is on. */
+    contextFacts?: { artifacts: ArtifactRegistry; owner?: unknown }
+  },
 ): Promise<ReviewSnapshot | { failure: string }> {
   // Reasoning-blind payload: tool identity + sanitized args + bounded direct
   // user messages + workspace facts only. req.reason (which can carry model
@@ -249,6 +262,23 @@ async function buildReviewSnapshot(
     inWorkspace = isWithin(opts.workspaceRoot, normalized)
     targetRelative = normalized
   }
+  // Structured facts channel: deterministic metadata only, assembled after the
+  // normalized target is known. Any probe/list failure omits the whole summary
+  // (fail closed); the flag gate keeps the default payload unchanged.
+  let contextSummary: ContextSummary | undefined
+  if (config.reviewerContextFacts === true && typeof targetRelative === 'string'
+    && opts.workspaceRoot && opts.contextFacts !== undefined) {
+    const facts = probeTargetFacts(targetRelative, opts.workspaceRoot)
+    if (facts !== undefined) {
+      contextSummary = {
+        ...facts,
+        recentCreates: opts.contextFacts.artifacts.list(opts.contextFacts.owner, {
+          workspace: opts.workspaceRoot,
+          home: opts.home ?? opts.workspaceRoot,
+        }),
+      }
+    }
+  }
   const payload = frameReviewerInput({
     toolName: req.toolName,
     description: findToolDescription(tools, req.toolName),
@@ -257,6 +287,7 @@ async function buildReviewSnapshot(
     workspaceRoot: opts.workspaceRoot ?? undefined,
     targetRelative,
     inWorkspace,
+    contextSummary,
   })
   // system = REVIEWER_SYSTEM + safetyPrompt + sanitized/bounded rules
   // summary (rules are constraints only; they can never authorize).
@@ -416,7 +447,12 @@ function parseReviewTextOrThrow(text: string): ReviewResult {
 async function reviewWithLLM(
   credentials: any, llm: any, tools: any, session: any, req: any, config: Config,
   timeoutMs = 5_000,
-  opts: { userMessages?: string[]; workspaceRoot?: string; home?: string } = {},
+  opts: {
+    userMessages?: string[]
+    workspaceRoot?: string
+    home?: string
+    contextFacts?: { artifacts: ArtifactRegistry; owner?: unknown }
+  } = {},
   retry: { maxRetries: number; budgetMs: number; asyncPath: boolean } = { maxRetries: 0, budgetMs: 5_000, asyncPath: false },
 ): Promise<{ review: ReviewResult; attempts: RetryAttempt[] }> {
   const snapshot = await buildReviewSnapshot(credentials, tools, session, req, config, opts)
@@ -1927,6 +1963,9 @@ export function apply(ctx: Context, rawConfig: Config): void {
       userMessages: trustedUserMessages(authority),
       workspaceRoot: rootsFor({ agent: req.agent }).workspace,
       home: rootsFor({ agent: req.agent }).home,
+      ...(config.reviewerContextFacts === true
+        ? { contextFacts: { artifacts, owner: req.agent?.session } }
+        : {}),
     }
 
     const toolName = req.toolName

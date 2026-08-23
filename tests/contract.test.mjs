@@ -7,8 +7,9 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseReview, lowRiskReviewOutcome, raceHumanDecision, preserveHostKeys, normalizeTimeoutAction, prepareReviewerArguments, extractToolPath, frameReviewerInput, breakerTripped, applyBreaker, reviewSuggestionNote, approvalSource, reviewerAutoAllowBlocked, staticListDecision, stripCountdownMarkers, riskFromAssessment, formatDenyFeedback, DENY_CIRCUMVENTION_GUIDANCE, REVIEW_TIMEOUT_NOTICE, REVIEWER_SYSTEM, assembleReviewerSystem, rulesTextSummary } from '../lib/auto/decision.js'
 import { sanitizeReviewReason, sanitizeClassifierText } from '../lib/auto/classifier.js'
@@ -20,6 +21,8 @@ import { parseRulesText, evaluateRules, extractRuleTarget, agentKind } from '../
 import { hardDenyShellReason, assessShell } from '../lib/auto/shell.js'
 import { hardDenyReason, assessTool } from '../lib/auto/policy.js'
 import { isCriticalPath } from '../lib/auto/paths.js'
+import { probeTargetFacts } from '../lib/auto/probe.js'
+import { ArtifactRegistry } from '../lib/auto/artifacts.js'
 import { isTrustedRequest, isLoopbackIp, validateReviewerBaseUrl } from '../lib/auto/trust.js'
 import { parseClassifierDecision } from '../lib/auto/classifier.js'
 import { RISK_NAME_PATTERN, RISK_REASON_PATTERN } from '../lib/auto/risk-tokens.js'
@@ -251,6 +254,193 @@ test('frameReviewerInput: trusted user messages are bounded at 4 and redacted', 
   const payload = JSON.parse(frameReviewerInput({ toolName: 'edit', rawArguments: '{"file_path":"a"}', trustedUserMessages: msgs }))
   assert.equal(payload.trusted_user_messages.length, 4)
   assert.ok(!JSON.stringify(payload).includes('abcdefgh'))
+})
+
+// ── structured workspace facts (context_summary) ──────────────────────────
+test('frameReviewerInput: no context summary stays byte-identical to the frozen golden string', () => {
+  const input = {
+    toolName: 'write',
+    description: 'Write a file',
+    rawArguments: JSON.stringify({ file_path: 'C:/ws/a.txt' }),
+    trustedUserMessages: ['please create the file'],
+    workspaceRoot: 'C:/ws',
+    targetRelative: 'C:/ws/a.txt',
+    inWorkspace: true,
+  }
+  const frozen = '{"tool_name":"write","description":"Write a file","arguments":{"file_path":"C:/ws/a.txt"},"trusted_user_messages":["please create the file"],"workspace":{"root":"C:/ws","target_relative":"C:/ws/a.txt","in_workspace":true}}'
+  assert.equal(frameReviewerInput(input), frozen)
+})
+
+test('frameReviewerInput: context_summary keeps the 5-key top level and snake_case anchors', () => {
+  const payload = JSON.parse(frameReviewerInput({
+    toolName: 'write',
+    description: null,
+    rawArguments: JSON.stringify({ file_path: 'C:/ws/a.txt' }),
+    trustedUserMessages: [],
+    workspaceRoot: 'C:/ws',
+    targetRelative: 'C:/ws/a.txt',
+    inWorkspace: true,
+    contextSummary: { targetExists: true, targetKind: 'file', targetSize: 42, recentCreates: ['a.txt', 'b.txt'] },
+  }))
+  assert.deepEqual(Object.keys(payload).sort(), ['arguments', 'description', 'tool_name', 'trusted_user_messages', 'workspace'])
+  const summary = payload.workspace.context_summary
+  assert.equal(summary.target_exists, true)
+  assert.equal(summary.target_kind, 'file')
+  assert.equal(summary.target_size, 42)
+  assert.deepEqual(summary.recent_creates, ['a.txt', 'b.txt'])
+})
+
+test('frameReviewerInput: null/undefined contextSummary is omitted byte-identically', () => {
+  const base = {
+    toolName: 'write',
+    description: null,
+    rawArguments: JSON.stringify({ file_path: 'C:/ws/a.txt' }),
+    trustedUserMessages: [],
+    workspaceRoot: 'C:/ws',
+    targetRelative: 'C:/ws/a.txt',
+    inWorkspace: true,
+  }
+  const plain = frameReviewerInput(base)
+  assert.equal(frameReviewerInput({ ...base, contextSummary: undefined }), plain)
+  assert.equal(frameReviewerInput({ ...base, contextSummary: null }), plain)
+  assert.ok(!plain.includes('context_summary'))
+})
+
+test('frameReviewerInput: file probe facts flow into context_summary', () => {
+  const ws = mkdtempSync(join(tmpdir(), 'dsa-ctx-'))
+  try {
+    const target = join(ws, 'notes.txt')
+    writeFileSync(target, 'hello')
+    const facts = probeTargetFacts(target, ws)
+    assert.deepEqual(facts, { targetExists: true, targetKind: 'file', targetSize: 5 })
+    const payload = JSON.parse(frameReviewerInput({
+      toolName: 'write',
+      description: null,
+      rawArguments: JSON.stringify({ file_path: target }),
+      trustedUserMessages: [],
+      workspaceRoot: ws,
+      targetRelative: target,
+      inWorkspace: true,
+      contextSummary: facts,
+    }))
+    assert.equal(payload.workspace.context_summary.target_exists, true)
+    assert.equal(payload.workspace.context_summary.target_kind, 'file')
+    assert.equal(payload.workspace.context_summary.target_size, 5)
+  } finally {
+    rmSync(ws, { recursive: true, force: true })
+  }
+})
+
+test('frameReviewerInput: directory probe facts flow into context_summary', () => {
+  const ws = mkdtempSync(join(tmpdir(), 'dsa-ctx-'))
+  try {
+    const target = join(ws, 'sub')
+    mkdirSync(target)
+    const payload = JSON.parse(frameReviewerInput({
+      toolName: 'write',
+      description: null,
+      rawArguments: JSON.stringify({ file_path: target }),
+      trustedUserMessages: [],
+      workspaceRoot: ws,
+      targetRelative: target,
+      inWorkspace: true,
+      contextSummary: probeTargetFacts(target, ws),
+    }))
+    assert.equal(payload.workspace.context_summary.target_kind, 'dir')
+  } finally {
+    rmSync(ws, { recursive: true, force: true })
+  }
+})
+
+test('frameReviewerInput: missing target facts never throw and stay complete', () => {
+  const ws = mkdtempSync(join(tmpdir(), 'dsa-ctx-'))
+  try {
+    const target = join(ws, 'nope.txt')
+    const facts = probeTargetFacts(target, ws)
+    assert.deepEqual(facts, { targetExists: false, targetKind: 'missing', targetSize: null })
+    const payload = JSON.parse(frameReviewerInput({
+      toolName: 'write',
+      description: null,
+      rawArguments: JSON.stringify({ file_path: target }),
+      trustedUserMessages: [],
+      workspaceRoot: ws,
+      targetRelative: target,
+      inWorkspace: true,
+      contextSummary: facts,
+    }))
+    assert.equal(payload.workspace.context_summary.target_kind, 'missing')
+    assert.equal(payload.workspace.context_summary.target_size, null)
+  } finally {
+    rmSync(ws, { recursive: true, force: true })
+  }
+})
+
+test('frameReviewerInput: out-of-workspace target stays size-null in context_summary', () => {
+  const ws = mkdtempSync(join(tmpdir(), 'dsa-ctx-'))
+  const outer = mkdtempSync(join(tmpdir(), 'dsa-ctx-out-'))
+  try {
+    const target = join(outer, 'big.bin')
+    writeFileSync(target, 'x'.repeat(4096))
+    const facts = probeTargetFacts(target, ws)
+    assert.deepEqual(facts, { targetExists: true, targetKind: 'file', targetSize: null })
+    const payload = JSON.parse(frameReviewerInput({
+      toolName: 'write',
+      description: null,
+      rawArguments: JSON.stringify({ file_path: target }),
+      trustedUserMessages: [],
+      workspaceRoot: ws,
+      targetRelative: target,
+      inWorkspace: false,
+      contextSummary: facts,
+    }))
+    assert.equal(payload.workspace.context_summary.target_exists, true)
+    assert.equal(payload.workspace.context_summary.target_size, null)
+  } finally {
+    rmSync(ws, { recursive: true, force: true })
+    rmSync(outer, { recursive: true, force: true })
+  }
+})
+
+test('preserveHostKeys: reviewerContextFacts survives a card save + secret filenames are redacted before framing', () => {
+  // Host-only survival: a save that carries (or omits) the key can never reset
+  // the stored value back to the schema default.
+  const kept = preserveHostKeys(
+    { reviewerContextFacts: true, workspaceRoot: 'C:/ws' },
+    { enabled: true, reviewerContextFacts: false },
+  )
+  assert.equal(kept.reviewerContextFacts, true)
+  assert.equal(kept.enabled, true)
+  // Injection sample: a secret-shaped filename must never cross the review
+  // boundary raw — list() sanitizes and the framer re-checks at the boundary.
+  const ws = mkdtempSync(join(tmpdir(), 'dsa-ctx-'))
+  try {
+    const owner = { id: 's1' }
+    const roots = { workspace: ws, home: ws, tempRoots: [] }
+    const registry = new ArtifactRegistry()
+    registry.add(owner, join(ws, 'report-sk-live-12345678.txt'), roots)
+    const payload = JSON.parse(frameReviewerInput({
+      toolName: 'write',
+      description: null,
+      rawArguments: JSON.stringify({ file_path: 'x' }),
+      trustedUserMessages: [],
+      workspaceRoot: ws,
+      targetRelative: join(ws, 'report-sk-live-12345678.txt'),
+      inWorkspace: true,
+      contextSummary: {
+        targetExists: true,
+        targetKind: 'file',
+        targetSize: 1,
+        recentCreates: registry.list(owner, roots),
+      },
+    }))
+    assert.deepEqual(payload.workspace.context_summary.recent_creates, ['report-[redacted-secret].txt'])
+    // The fact channel never crosses the boundary with the raw token; the
+    // pre-existing target_relative field intentionally stays as-is (path text,
+    // not a facts payload — its exposure is unchanged by this feature).
+    assert.ok(!JSON.stringify(payload.workspace.context_summary).includes('sk-live-12345678'))
+  } finally {
+    rmSync(ws, { recursive: true, force: true })
+  }
 })
 
 test('breakerTripped: consecutive rail (0 disables)', () => {
