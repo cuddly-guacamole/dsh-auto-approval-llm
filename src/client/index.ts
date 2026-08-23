@@ -596,6 +596,11 @@ function formatShortDateTime(at: number): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
+/** Render a millisecond latency as seconds with one decimal ("1.2s"). */
+function formatLatencySeconds(ms: number | null): string {
+  return ms === null ? '–' : `${(ms / 1000).toFixed(1)}s`
+}
+
 // ── invalid-config detection (mirrors the host Config schema) ──────────────
 // Flags stored values that are present but violate the schema (wrong type,
 // unknown enum, out-of-range number). The settings card shows a red banner and
@@ -785,6 +790,7 @@ function SettingsSection() {
   const [error, setError] = React.useState('')
   const [open, setOpen] = React.useState(false)
   const [history, setHistory] = React.useState<any[]>([])
+  const [llmLatency, setLlmLatency] = React.useState<any>(null)
   const [historyError, setHistoryError] = React.useState('')
   const [testResult, setTestResult] = React.useState('')
   const [credentialConfigured, setCredentialConfigured] = React.useState(false)
@@ -833,6 +839,7 @@ function SettingsSection() {
       .then((data: any) => {
         if (disposed || !data?.ok) return
         setHistory(data.value.records ?? [])
+        setLlmLatency(data.value.llmLatency ?? null)
       })
       .catch((e: any) => {
         if (!disposed) setHistoryError(String(e))
@@ -1413,6 +1420,19 @@ function SettingsSection() {
 
   const buildHistoryBody = () => React.createElement('div', { style: { display: 'grid', gap: 8 } },
     historyError ? React.createElement('p', { style: { color: 'var(--dsw-alias-state-error-primary)', fontSize: 12, margin: 0 } }, historyError) : null,
+    llmLatency === null || (llmLatency.count ?? 0) === 0
+      ? React.createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center', fontSize: 12, color: 'var(--dsw-alias-label-tertiary)', padding: '2px 0' } },
+          React.createElement('span', null, t('settings.history.llmLatencyEmpty')),
+        )
+      : React.createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center', fontSize: 12, color: 'var(--dsw-alias-label-tertiary)', padding: '2px 0', flexWrap: 'wrap' } },
+          React.createElement('span', null, t('settings.history.llmLatency', {
+            count: String(llmLatency.count),
+            min: formatLatencySeconds(llmLatency.minMs),
+            avg: formatLatencySeconds(llmLatency.avgMs),
+            max: formatLatencySeconds(llmLatency.maxMs),
+            aborted: String(llmLatency.abortedCount ?? 0),
+          })),
+        ),
     React.createElement('input', {
       placeholder: t('settings.history.searchPlaceholder'),
       value: search,

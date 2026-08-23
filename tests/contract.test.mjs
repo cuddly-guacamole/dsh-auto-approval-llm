@@ -12,6 +12,7 @@ import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseReview, lowRiskReviewOutcome, raceHumanDecision, preserveHostKeys, normalizeTimeoutAction, prepareReviewerArguments, extractToolPath, frameReviewerInput, breakerTripped, applyBreaker, reviewSuggestionNote, approvalSource, reviewerAutoAllowBlocked, staticListDecision, stripCountdownMarkers, riskFromAssessment } from '../lib/auto/decision.js'
 import { sanitizeReviewReason, sanitizeClassifierText } from '../lib/auto/classifier.js'
+import { summarizeLatency } from '../lib/auto/latency.js'
 import { trimAuditTail } from '../lib/auto/audit.js'
 import { normalizeReviewMode } from '../lib/auto/review-mode.js'
 import { parseRulesText, evaluateRules, extractRuleTarget } from '../lib/auto/rules.js'
@@ -1039,4 +1040,68 @@ test('applyBreaker: policy-deny never touches the breaker counters', () => {
   assert.equal(t.increment, false)
   assert.equal(t.reset, false)
   assert.deepEqual(t.counts, { consecutive: 2, total: 5 })
+})
+
+// ── LLM latency telemetry (B+): min/avg/max over settled samples only ─────
+const sample = (at, tookMs, settled = true) => ({ at, tookMs, settled })
+
+test('summarizeLatency: settled-only min/avg/max with aborted counted separately', () => {
+  const out = summarizeLatency([
+    sample(1, 1200),
+    sample(2, 800),
+    sample(3, 5000, false), // aborted (timeout) — must NOT pollute the average
+    sample(4, 2400),
+  ])
+  assert.equal(out.count, 3)
+  assert.equal(out.minMs, 800)
+  assert.equal(out.avgMs, Math.round((1200 + 800 + 2400) / 3))
+  assert.equal(out.maxMs, 2400)
+  assert.equal(out.abortedCount, 1)
+  assert.equal(out.windowStartAt, 1)
+})
+
+test('summarizeLatency: empty window yields null stats and zero counts', () => {
+  const out = summarizeLatency([])
+  assert.equal(out.count, 0)
+  assert.equal(out.minMs, null)
+  assert.equal(out.avgMs, null)
+  assert.equal(out.maxMs, null)
+  assert.equal(out.abortedCount, 0)
+  assert.equal(out.windowStartAt, null)
+})
+
+test('summarizeLatency: window takes the trailing 100 samples in order', () => {
+  const many = Array.from({ length: 150 }, (_, i) => sample(i, 1000 + i))
+  const out = summarizeLatency(many, 100)
+  // Trailing 100 → indices 50..149.
+  assert.equal(out.count, 100)
+  assert.equal(out.minMs, 1050)
+  assert.equal(out.maxMs, 1149)
+  assert.equal(out.windowStartAt, 50)
+  assert.equal(out.abortedCount, 0)
+})
+
+test('summarizeLatency: all-aborted window reports count 0 and its aborted count', () => {
+  const out = summarizeLatency([
+    sample(1, 5000, false),
+    sample(2, 5000, false),
+  ])
+  assert.equal(out.count, 0)
+  assert.equal(out.minMs, null)
+  assert.equal(out.avgMs, null)
+  assert.equal(out.maxMs, null)
+  assert.equal(out.abortedCount, 2)
+  assert.equal(out.windowStartAt, 1)
+})
+
+test('summarizeLatency: abort spikes cannot masquerade as healthy latency', () => {
+  // 2 healthy fast calls + 8 aborted at the 5s ceiling: avg must stay on the
+  // healthy calls, never converge toward the timeout ceiling.
+  const out = summarizeLatency([
+    sample(1, 200), sample(2, 300),
+    ...[1, 2, 3, 4, 5, 6, 7, 8].map((i) => sample(10 + i, 5000, false)),
+  ], 100)
+  assert.equal(out.count, 2)
+  assert.equal(out.avgMs, 250)
+  assert.equal(out.abortedCount, 8)
 })

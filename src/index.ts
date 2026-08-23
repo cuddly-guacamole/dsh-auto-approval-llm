@@ -29,6 +29,7 @@ import { sanitizeClassifierArguments, sanitizeClassifierText, sanitizeReviewReas
 import { THRESHOLD_DEFAULTS } from './auto/constants.js'
 import { createDshClassifier } from './auto/dsh-classifier.js'
 import { type RaceHumanHandle, type ReviewResult, type StaticRisk, applyBreaker, approvalSource, breakerTripped, createKeyedMutex, extractToolPath, followResolution, frameReviewerInput, lowRiskReviewOutcome, parseReview, preserveHostKeys, raceHumanDecision, reviewSuggestionNote, reviewerAutoAllowBlocked, riskFromAssessment, staticListDecision, stripCountdownMarkers } from './auto/decision.js'
+import { loadLatencySamples, pushLatencySample, summarizeLatency, type LatencySample } from './auto/latency.js'
 import { isWithin, normalizePath, resolveRoots } from './auto/paths.js'
 import { assessTool, hardDenyReason, symlinkGuardTargets } from './auto/policy.js'
 import { evaluateRules, parseRulesText } from './auto/rules.js'
@@ -542,6 +543,15 @@ function pushHistory(entry: Omit<HistoryRecord, 'id' | 'at'>): void {
 
 loadHistory()
 
+// ── LLM review latency telemetry ──────────────────────────────────────────
+// Independent of approval history: history records adjudicated facts, latency
+// records how long each reviewer call actually took. Every attempt is sampled
+// (including aborted ones and late responses that lost the countdown race),
+// so the recent-100 min/avg/max cannot suffer survivor bias. Persisted in
+// llm-latency.jsonl (same append+rotate pattern as history.jsonl); clear
+// history intentionally leaves it alone — telemetry is not an approval record.
+const llmLatency: LatencySample[] = loadLatencySamples()
+
 // ── same-origin feedback route ────────────────────────────────────────────
 // The browser client cannot use `host.call` here (this is a static bundle, not
 // a dynamic Cordis Package). Instead it POSTs the timeout marker to this route
@@ -930,7 +940,7 @@ function installHistoryRoute(ctx: any): void {
         return
       }
       if (req.method === 'GET') {
-        responseJson(res, 200, { ok: true, value: { records: [...approvalHistory].reverse() } })
+        responseJson(res, 200, { ok: true, value: { records: [...approvalHistory].reverse(), llmLatency: summarizeLatency(llmLatency) } })
         return
       }
       if (req.method === 'DELETE') {
@@ -1914,6 +1924,10 @@ export function apply(ctx: Context, rawConfig: Config): void {
       const lowReviewStart = Date.now()
       const review = await reviewWithLLM(credentials, llm, tools, req.agent.session, req, config, seconds * 1000, reviewOpts)
       debugLog({ ev: 'review', callId: req.callId, decision: review.decision, risk: review.riskLevel ?? null, startAt: lowReviewStart, tookMs: Date.now() - lowReviewStart, scope: 'low' })
+      // Latency telemetry is sampled for every attempt, settled or not; only
+      // `failure` marks an aborted call (timeout/network/parse), never the
+      // verdict itself — an ESCALATE is still a real response.
+      pushLatencySample(llmLatency, { at: Date.now(), tookMs: Date.now() - lowReviewStart, settled: review.failure === undefined })
       const verdict = lowRiskReviewOutcome(review)
       if (verdict.kind === 'allow') {
         // Serialize the reset so a concurrent denial for this session cannot
@@ -2014,6 +2028,10 @@ export function apply(ctx: Context, rawConfig: Config): void {
       void reviewWithLLM(credentials, llm, tools, req.agent.session, req, config, seconds * 1000, reviewOpts)
         .then((review) => {
           debugLog({ ev: 'review', callId: req.callId, decision: review.decision, risk: review.riskLevel ?? null, startAt: reviewStart, tookMs: Date.now() - reviewStart, scope: 'medium' })
+          // Sample before the phase guard: a late response that lost the
+          // countdown race is still a real latency observation (and the most
+          // diagnostic one — the reviewer was slow).
+          pushLatencySample(llmLatency, { at: Date.now(), tookMs: Date.now() - reviewStart, settled: review.failure === undefined })
           if (!req.callId || reviewStates.get(req.callId)?.phase !== 'countdown') return
           const note = reviewSuggestionNote(review)
           // Remember the verdict for history whether or not it takes over.
@@ -2056,6 +2074,9 @@ export function apply(ctx: Context, rawConfig: Config): void {
         })
         .catch((error) => {
           debugLog({ ev: 'review-error', callId: req.callId, scope: 'medium', error: error instanceof Error ? error.message : String(error) })
+          // An unexpected rejection is still an aborted attempt: sample it so
+          // the latency window never silently drops failures.
+          pushLatencySample(llmLatency, { at: Date.now(), tookMs: Date.now() - reviewStart, settled: false })
         })
       return await askPromise
     }
@@ -2075,6 +2096,9 @@ export function apply(ctx: Context, rawConfig: Config): void {
       void reviewWithLLM(credentials, llm, tools, req.agent.session, req, config, seconds * 1000, reviewOpts)
         .then((review) => {
           debugLog({ ev: 'review', callId: req.callId, decision: review.decision, risk: review.riskLevel ?? null, startAt: reviewStart, tookMs: Date.now() - reviewStart, scope: 'high' })
+          // Sample before the phase guard (see MEDIUM: late responses are the
+          // most diagnostic latency observations and must not be dropped).
+          pushLatencySample(llmLatency, { at: Date.now(), tookMs: Date.now() - reviewStart, settled: review.failure === undefined })
           if (!req.callId || reviewStates.get(req.callId)?.phase !== 'countdown') return
           const note = reviewSuggestionNote(review)
           reviewVerdicts.set(req.callId, review)
@@ -2087,6 +2111,9 @@ export function apply(ctx: Context, rawConfig: Config): void {
         })
         .catch((error) => {
           debugLog({ ev: 'review-error', callId: req.callId, scope: 'high', error: error instanceof Error ? error.message : String(error) })
+          // Unexpected rejection = aborted attempt; sample so failures stay
+          // visible in the latency window (see MEDIUM).
+          pushLatencySample(llmLatency, { at: Date.now(), tookMs: Date.now() - reviewStart, settled: false })
         })
     }
     return await askPromise
