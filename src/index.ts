@@ -33,7 +33,7 @@ import { loadLatencySamples, pushLatencySample, summarizeLatency, type LatencySa
 import { isWithin, normalizePath, resolveRoots } from './auto/paths.js'
 import { assessTool, hardDenyReason, symlinkGuardTargets } from './auto/policy.js'
 import { redactResultValue } from './auto/redact.js'
-import { evaluateRules, parseRulesText } from './auto/rules.js'
+import { agentKind, evaluateRules, parseRulesText } from './auto/rules.js'
 import { isReviewRetryable, retryAfterMs, retryReviewLoop, toLlmFailure, type RetryAttempt, type ReviewFailure } from './auto/retry.js'
 import { type ReviewMode, loadReviewModes, normalizeReviewMode, persistReviewModes } from './auto/review-mode.js'
 import { isLoopbackHostname, isTrustedRequest, validateReviewerBaseUrl } from './auto/trust.js'
@@ -1937,9 +1937,17 @@ export function apply(ctx: Context, rawConfig: Config): void {
     if (config.rulesText.trim() !== '') {
       const declared = parseRulesText(config.rulesText)
       if (declared.errors.length > 0) {
-        console.warn('[dsh-auto-approval-llm] rulesText 解析错误，跳过声明规则', declared.errors)
+        console.error('[dsh-auto-approval-llm] rulesText 解析错误，跳过声明规则', declared.errors)
       } else {
-        const matched = evaluateRules(declared.rules, { toolName, reason: req.reason, arguments: args })
+        const subject = {
+          toolName,
+          reason: req.reason,
+          arguments: args,
+          agentName: req.agent?.session?.id,
+          agentKind: agentKind(req.agent?.session?.header?.origin),
+          workspaceRoot: rootsFor({ agent: req.agent }).workspace,
+        }
+        const matched = evaluateRules(declared.rules, subject)
         if (matched) {
           if (config.rulesDryRun) {
             console.log(`[dsh-auto-approval-llm][rules-dry-run] ${toolName} matched rule ${matched.rule.source} (would ${matched.policy}); dry-run: not enforced`)
@@ -1967,6 +1975,21 @@ export function apply(ctx: Context, rawConfig: Config): void {
           } else {
             return askHuman(req, undefined, next)
           }
+        } else if ((subject.agentKind === 'unknown' || subject.workspaceRoot === undefined) &&
+            declared.rules.some((r) => r.dimensions !== undefined && r.policy !== 'allow')) {
+          // Scope rules exist but the agent context (kind/workspace root)
+          // cannot be established today: a deny/human scope rule may apply,
+          // so hand the request to a human instead of letting downstream
+          // auto-answer paths decide it (fail closed, allow rules untouched).
+          console.warn('[dsh-auto-approval-llm] rulesText 维度规则上下文缺失（agentKind 或 workspaceRoot 不可用），deny/human 维度规则降级人工审批')
+          appendAuditLine(JSON.stringify({
+            type: 'rules-context-missing',
+            at: Date.now(),
+            toolName: toolName ?? null,
+            agentKind: subject.agentKind ?? null,
+            workspaceRoot: subject.workspaceRoot ?? null,
+          }))
+          return askHuman(req, undefined, next)
         }
       }
     }

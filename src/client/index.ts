@@ -1479,6 +1479,12 @@ function SettingsSection() {
       key: er.line,
       style: { color: 'var(--dsw-alias-state-error-primary)', fontSize: 12, margin: '2px 0 0' },
     }, `L${er.line}: ${er.message}`))),
+    ...(parseRulesText(draft.rulesText).errors.length > 0
+      ? [React.createElement('p', {
+          key: 'rules-blocked',
+          style: { color: 'var(--dsw-alias-state-error-primary)', fontSize: 12, margin: '2px 0 0' },
+        }, t('settings.rules.rulesTextBlocked'))]
+      : []),
   )
 
   const buildHistoryBody = () => React.createElement('div', { style: { display: 'grid', gap: 8 } },

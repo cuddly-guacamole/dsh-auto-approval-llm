@@ -16,7 +16,7 @@ import { redactResultValue, redactSecrets } from '../lib/auto/redact.js'
 import { summarizeLatency } from '../lib/auto/latency.js'
 import { trimAuditTail } from '../lib/auto/audit.js'
 import { normalizeReviewMode } from '../lib/auto/review-mode.js'
-import { parseRulesText, evaluateRules, extractRuleTarget } from '../lib/auto/rules.js'
+import { parseRulesText, evaluateRules, extractRuleTarget, agentKind } from '../lib/auto/rules.js'
 import { hardDenyShellReason, assessShell } from '../lib/auto/shell.js'
 import { hardDenyReason, assessTool } from '../lib/auto/policy.js'
 import { isCriticalPath } from '../lib/auto/paths.js'
@@ -344,6 +344,158 @@ test('evaluateRules: anchored git-push rule matches the bash command, not the JS
   assert.equal(errors.length, 0)
   assert.equal(evaluateRules(rules, { toolName: 'bash', arguments: '{"command":"git push -f"}' }).policy, 'deny')
   assert.equal(evaluateRules(rules, { toolName: 'bash', arguments: '{"command":"git status"}' }), undefined)
+})
+
+// ── dimension scopes: agent/workspace prefix syntax -------------------------
+test('parseRulesText: dimension header parsed (value/negated)', () => {
+  const { rules, errors } = parseRulesText(
+    '[agent:main] bash(git.push) | deny | arguments\n' +
+    '[agent:!subagent] write | human | toolName\n' +
+    '[workspace:D:/proj-a] edit | allow\n' +
+    '[agent:main,workspace:D:/proj-a] bash | deny | toolName')
+  assert.equal(errors.length, 0)
+  assert.equal(rules.length, 4)
+  assert.deepEqual(rules[0].dimensions, { agent: { value: 'main', negated: false } })
+  assert.deepEqual(rules[0].tools, ['bash'])
+  assert.equal(rules[0].policy, 'deny')
+  assert.equal(rules[0].field, 'arguments')
+  assert.equal(rules[0].pattern.source, 'git.push')
+  assert.deepEqual(rules[1].dimensions, { agent: { value: 'subagent', negated: true } })
+  assert.equal(rules[1].policy, 'human')
+  assert.equal(rules[1].field, 'toolName')
+  assert.deepEqual(rules[2].dimensions, { workspace: 'D:/proj-a' })
+  assert.deepEqual(rules[3].dimensions, { agent: { value: 'main', negated: false }, workspace: 'D:/proj-a' })
+})
+
+test('parseRulesText: dimension errors — unknown key / empty value / bang forms / trailing comma', () => {
+  const cases = [
+    '[foo:bar] a | deny',
+    '[agent:main,unknown:y] a | deny',
+    '[agent:] a | deny',
+    '[workspace:] a | deny',
+    '[agent:!!] a | deny',
+    '[agent:!] a | deny',
+    '[agent:!*] a | deny',
+    '[agent:!workspace] a | deny',
+    '[agent:main,] a | deny',
+    '[workspace:!x] a | deny',
+    '[workspace:../x] a | deny',
+    '[workspace:D:/x/] a | deny',
+    '[Agent:main] a | deny',
+  ]
+  for (const text of cases) {
+    const { rules, errors } = parseRulesText(text)
+    assert.equal(errors.length, 1, text)
+    assert.equal(rules.length, 0, text)
+  }
+})
+
+test('parseRulesText: legacy patterns starting with [ stay byte-identical', () => {
+  const r1 = parseRulesText('[a-z]+ | deny')
+  const r2 = parseRulesText('[0-9]{4} | deny')
+  assert.equal(r1.errors.length, 0)
+  assert.equal(r2.errors.length, 0)
+  for (const rule of [r1.rules[0], r2.rules[0]]) {
+    assert.deepEqual(
+      { pattern: rule.pattern, source: rule.source, policy: rule.policy, field: rule.field, tools: rule.tools, dimensions: rule.dimensions },
+      { pattern: rule.pattern, source: rule.source, policy: rule.policy, field: rule.field, tools: undefined, dimensions: undefined })
+  }
+  assert.equal(r1.rules[0].source, '[a-z]+')
+  assert.equal(r1.rules[0].policy, 'deny')
+  assert.equal(r1.rules[0].field, 'arguments')
+  assert.equal(r1.rules[0].tools, undefined)
+  assert.equal(r2.rules[0].source, '[0-9]{4}')
+  assert.equal(evaluateRules(r1.rules, { toolName: 'bash', arguments: 'abc' }).policy, 'deny')
+  assert.equal(evaluateRules(r2.rules, { toolName: 'bash', arguments: '12345' }).policy, 'deny')
+  assert.equal(evaluateRules(r2.rules, { toolName: 'bash', arguments: 'abc' }), undefined)
+})
+
+test('parseRulesText: dimension + tool scope + field compose', () => {
+  const { rules, errors } = parseRulesText('[agent:main,workspace:D:/proj-a] bash(^git push) | human | arguments')
+  assert.equal(errors.length, 0)
+  assert.deepEqual(rules[0].dimensions, { agent: { value: 'main', negated: false }, workspace: 'D:/proj-a' })
+  assert.deepEqual(rules[0].tools, ['bash'])
+  assert.equal(rules[0].policy, 'human')
+  assert.equal(rules[0].field, 'arguments')
+  const hit = { toolName: 'bash', arguments: '{"command":"git push -f"}', agentKind: 'main', workspaceRoot: 'D:/proj-a' }
+  assert.equal(evaluateRules(rules, hit).policy, 'human')
+  assert.equal(evaluateRules(rules, { ...hit, arguments: '{"command":"git status"}' }), undefined)
+  assert.equal(evaluateRules(rules, { ...hit, agentKind: 'subagent' }), undefined)
+})
+
+test('evaluateRules: agent main/subagent/glob/negation', () => {
+  const { rules, errors } = parseRulesText(
+    '[agent:main] bash | deny | toolName\n' +
+    '[agent:subagent] bash | human | toolName\n' +
+    '[agent:node-*] edit | deny | toolName\n' +
+    '[agent:!bash-*] edit | human | toolName')
+  assert.equal(errors.length, 0)
+  assert.equal(evaluateRules(rules, { toolName: 'bash', agentKind: 'main', agentName: 'main-s0' }).policy, 'deny')
+  assert.equal(evaluateRules(rules, { toolName: 'bash', agentKind: 'subagent', agentName: 'child-s1' }).policy, 'human')
+  assert.equal(evaluateRules(rules, { toolName: 'edit', agentKind: 'main', agentName: 'node-abc' }).policy, 'deny')
+  // negation: a name matching the negated glob skips the rule, others match
+  assert.equal(evaluateRules(rules, { toolName: 'edit', agentKind: 'main', agentName: 'bash-1' }), undefined)
+  assert.equal(evaluateRules(rules, { toolName: 'edit', agentKind: 'main', agentName: 'web-1' }).policy, 'human')
+  // keyword scope with an undetermined kind fails closed
+  assert.equal(evaluateRules(rules, { toolName: 'bash', agentKind: 'unknown' }), undefined)
+})
+
+test('evaluateRules: subject without agentName → dimension rule skipped (fail-closed)', () => {
+  const a = parseRulesText('[agent:secret-host] bash | deny | toolName').rules
+  assert.equal(evaluateRules(a, { toolName: 'bash' }), undefined)
+  const b = parseRulesText('[agent:!secret-host] bash | deny | toolName').rules
+  // an absent name must not flip a negated scope into a match
+  assert.equal(evaluateRules(b, { toolName: 'bash' }), undefined)
+  const c = parseRulesText('[agent:main] bash | deny | toolName').rules
+  assert.equal(evaluateRules(c, { toolName: 'bash', agentKind: 'unknown' }), undefined)
+})
+
+test('evaluateRules: workspace case/separator normalization', () => {
+  const r1 = parseRulesText('[workspace:D:\\PROJ-A] bash | deny | toolName').rules
+  assert.equal(r1.length, 1)
+  assert.equal(evaluateRules(r1, { toolName: 'bash', workspaceRoot: 'D:/Proj-A' }).policy, 'deny')
+  assert.equal(evaluateRules(r1, { toolName: 'bash', workspaceRoot: 'D:/PROJ-A/sub' }).policy, 'deny')
+  const r2 = parseRulesText('[workspace:D:/proj-a\\sub] bash | human | toolName').rules
+  assert.equal(evaluateRules(r2, { toolName: 'bash', workspaceRoot: 'D:/Proj-A/SUB' }).policy, 'human')
+  const r3 = parseRulesText('[workspace:rel-proj] bash | allow | toolName').rules
+  assert.equal(evaluateRules(r3, { toolName: 'bash', workspaceRoot: 'D:/root/rel-proj' }).policy, 'allow')
+  assert.equal(evaluateRules(r3, { toolName: 'bash', workspaceRoot: 'D:/root/other' }), undefined)
+})
+
+test('evaluateRules: workspaceRoot missing → skipped; prefix collision pinned', () => {
+  const { rules, errors } = parseRulesText('[workspace:D:/proj] bash | deny | toolName')
+  assert.equal(errors.length, 0)
+  assert.equal(evaluateRules(rules, { toolName: 'bash' }), undefined)
+  assert.equal(evaluateRules(rules, { toolName: 'bash', workspaceRoot: 'D:/proj' }).policy, 'deny')
+  assert.equal(evaluateRules(rules, { toolName: 'bash', workspaceRoot: 'D:/proj/sub' }).policy, 'deny')
+  assert.equal(evaluateRules(rules, { toolName: 'bash', workspaceRoot: 'D:/proj-evil' }), undefined)
+})
+
+test('evaluateRules: dimension mismatch continues to next rule', () => {
+  const { rules, errors } = parseRulesText('[agent:subagent] bash | deny | toolName\n[agent:main] bash | human | toolName')
+  assert.equal(errors.length, 0)
+  const main = { toolName: 'bash', agentKind: 'main', agentName: 'm0' }
+  // subagent scope skipped, plain main scope matches
+  assert.equal(evaluateRules(rules, main).policy, 'human')
+})
+
+test('evaluateRules: dimensions AND tools AND pattern all must pass', () => {
+  const { rules, errors } = parseRulesText('[agent:main,workspace:D:/proj] bash(^git push) | deny | arguments')
+  assert.equal(errors.length, 0)
+  const base = { toolName: 'bash', arguments: '{"command":"git push -f"}', agentKind: 'main', agentName: 'm0', workspaceRoot: 'D:/proj' }
+  assert.equal(evaluateRules(rules, base).policy, 'deny')
+  assert.equal(evaluateRules(rules, { ...base, agentKind: 'subagent' }), undefined)
+  assert.equal(evaluateRules(rules, { ...base, workspaceRoot: 'D:/other' }), undefined)
+  assert.equal(evaluateRules(rules, { ...base, toolName: 'write' }), undefined)
+  assert.equal(evaluateRules(rules, { ...base, arguments: '{"command":"git status"}' }), undefined)
+})
+
+test('agentKind: origin strings classify main/subagent/unknown', () => {
+  assert.equal(agentKind(undefined), 'main')
+  assert.equal(agentKind(null), 'main')
+  assert.equal(agentKind('subagent'), 'subagent')
+  assert.equal(agentKind('other'), 'unknown')
+  assert.equal(agentKind(''), 'unknown')
 })
 
 // denial-breaker pure transition (applyBreaker).

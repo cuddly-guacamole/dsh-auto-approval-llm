@@ -23,7 +23,7 @@
 - **LLM 响应时间统计**：「最近审批记录」子卡顶部显示最近 100 次 LLM 评审的真实响应耗时（MIN/AVG/MAX，秒），并单列「超时/无响应」次数——超时与中断不混入平均值，`llm-latency.jsonl` 持久化（1MB 轮转）。
 - **LLM 复审自动重试**：审查请求遇瞬时网关故障（限流 429 / 服务端 5xx / 传输中断 / 空响应；LOW 同步路径含审查超时）自动重试一次；重试只在审批窗口剩余内滚动——首次尝试保持原超时语义、绝不侵占倒计时——并尊重服务端 `Retry-After`；认证/配置类错误（401/403、NO_ADAPTER 等）绝不重发请求体与凭据；重试耗尽仍 fail-closed（转人 / 按 `timeoutAction` 兜底）。每次尝试的失败轨迹写入 `history.jsonl` / `audit.jsonl`（`attempts` 字段）与延迟统计。
 - **每会话评审模式**：`/approval-mode manual|smart|unattended` 持久化；`manual` 全转人、`unattended` 自动应答；**高风险超时仍转人工/失败关闭**。
-- **声明式规则**：`rulesText` 用 Claude 风格 `工具(正则) | allow|deny|human [| 字段]` 一眼看懂、实时校验。
+- **声明式规则**：`rulesText` 用 Claude 风格 `工具(正则) | allow|deny|human [| 字段]` 一眼看懂、实时校验。支持维度限定：行首 `[agent:main]` / `[agent:!subagent]` / `[workspace:D:/proj]`（逗号组合=AND）——规则只在指定代理身份/工作区内求值。注意：规则仅作用于进入审批链的工具调用，工作区内常规写读等静态放行路径不经规则层（见下）；解析出错时**整段 rulesText 失效**（fail-open 方向，设置卡有警示）。
 - **DSH 原生观感的设置卡**：4 张可折叠子卡（计时器与熔断 / 在线评审模型 / 安全规则列表 / 最近审批记录），顶层开关即时保存、每卡独立 保存/放弃/恢复默认；非法配置值有红色横幅 +「尝试修复」。
 
 ---
@@ -124,7 +124,7 @@ dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 | `reviewerModel`（＋旧 `reviewerProvider`） | '' | 在线评审模型名（旧 Provider 路由保留兼容，不再 UI 暴露） |
 | `safetyPrompt` | '' | 附加给评审模型的额外策略（保存即热生效） |
 | `allowlist` / `denyList` / `humanOnlyList` | [] | 工具名精确匹配 |
-| `rulesText` | '' | 声明式规则（优先于内置列表执行） |
+| `rulesText` | '' | 声明式规则（优先于内置列表执行；支持 `[agent:main|subagent|名]`、`[workspace:路径]` 维度前缀，逗号组合=AND；解析错误=整段失效） |
 | `rulesDryRun` | false | 规则干跑：只记命中不执法 |
 | `maxArgsChars` | 4000 | 取回工具参数的最大长度 |
 | `notifyUser` | true | 「模型通过」通知进会话 |

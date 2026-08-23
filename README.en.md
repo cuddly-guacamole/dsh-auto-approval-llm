@@ -17,7 +17,7 @@
 - **LLM response-time stats**: the "Recent approvals" sub-card shows min/avg/max real response times for the latest 100 LLM reviews (seconds) plus a separate "timed out / no response" count — timeouts and interruptions never pollute the average; persisted in `llm-latency.jsonl` (1 MB rotation).
 - **Automatic LLM review retry**: transient gateway failures (rate-limit 429 / server 5xx / transport hiccups / empty responses; the LOW sync path also includes review timeouts) retry once automatically. Retries only run inside the leftover approval window — the first attempt keeps the original timeout semantics and never eats into the countdown — and honor the server's `Retry-After`; auth/config-class errors (401/403, NO_ADAPTER, …) never resend the request body or credentials; when retries are exhausted the outcome still fails closed (human / `timeoutAction` fallback). The per-attempt failure trail lands in `history.jsonl` / `audit.jsonl` (`attempts` field) and the latency stats.
 - **Per-session review mode**: `/approval-mode manual|smart|unattended` persisted; `manual` always asks a human, `unattended` auto-answers; **high-risk timeouts still go to a human / fail closed**.
-- **Declarative rules**: `rulesText` uses Claude-style `Tool(pattern) | allow|deny|human [| field]`, validated live.
+- **Declarative rules**: `rulesText` uses Claude-style `Tool(pattern) | allow|deny|human [| field]`, validated live. Dimension prefixes narrow a rule to an agent identity or workspace: `[agent:main]` / `[agent:!subagent]` / `[workspace:D:/proj]` (comma = AND). Rules are evaluated only for tool calls that enter the approval chain — statically auto-allowed routines bypass them; a parse error voids the **whole** rulesText (fail-open direction, flagged in the settings card).
 - **Native-looking settings card**: 4 collapsible sub-cards (Timers & breaker / Online review model / Safety rules / Recent approvals), top-level switches save instantly, each card has independent Save/Discard (Safety card also Restore defaults); illegal config values show a red banner with a "Try to fix" button.
 
 ---
@@ -124,7 +124,7 @@ Session approval stats — the "Auto Approval" header-button popup: totals / all
 | `reviewerModel` (+ legacy `reviewerProvider`) | '' | Online review model (legacy Provider route kept for compatibility, no longer in the UI) |
 | `safetyPrompt` | '' | Extra policy appended to the review model (hot-applied after save) |
 | `allowlist` / `denyList` / `humanOnlyList` | [] | Exact tool-name match |
-| `rulesText` | '' | Declarative rules (take precedence over the built-in lists) |
+| `rulesText` | '' | Declarative rules (take precedence over the built-in lists; optional `[agent:…]` / `[workspace:…]` dimension prefix, comma = AND; parse error voids the whole text) |
 | `rulesDryRun` | false | Dry-run: log rule hits without enforcing |
 | `maxArgsChars` | 4000 | Max length of recovered tool arguments |
 | `notifyUser` | true | "Model approved" notice into the session |
