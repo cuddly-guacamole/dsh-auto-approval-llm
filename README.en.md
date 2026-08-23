@@ -14,6 +14,7 @@
 - **LLM takeover**: for medium risk, if the LLM returns a decisive verdict within the countdown, the client follows it immediately — no click needed.
 - **Breaker**: after `maxConsecutiveDenials` consecutive or `maxTotalDenials` cumulative LLM denials → hand to a human with no auto-countdown; `/approval reset` can reset it.
 - **Reliable history & audit**: in-memory window of 200 records + `history.jsonl`; append-only `audit.jsonl` (clear leaves a tombstone).
+- **LLM response-time stats**: the "Recent approvals" sub-card shows min/avg/max real response times for the latest 100 LLM reviews (seconds) plus a separate "timed out / no response" count — timeouts and interruptions never pollute the average; persisted in `llm-latency.jsonl` (1 MB rotation).
 - **Per-session review mode**: `/approval-mode manual|smart|unattended` persisted; `manual` always asks a human, `unattended` auto-answers; **high-risk timeouts still go to a human / fail closed**.
 - **Declarative rules**: `rulesText` uses Claude-style `Tool(pattern) | allow|deny|human [| field]`, validated live.
 - **Native-looking settings card**: 4 collapsible sub-cards (Timers & breaker / Online review model / Safety rules / Recent approvals), top-level switches save instantly, each card has independent Save/Discard (Safety card also Restore defaults); illegal config values show a red banner with a "Try to fix" button.
@@ -177,6 +178,6 @@ This project references or derives from the following open-source projects — t
 
 ## Version / publishing
 
-- Current: `0.0.7` (**upcoming release**) — npm: [@quill507/dsh-auto-approval-llm](https://www.npmjs.com/package/@quill507/dsh-auto-approval-llm), GitHub: [Release v0.0.7](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/releases/tag/v0.0.7).
+- Current: `0.0.8` (**upcoming release**) — npm: [@quill507/dsh-auto-approval-llm](https://www.npmjs.com/package/@quill507/dsh-auto-approval-llm), GitHub: [Release v0.0.8](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/releases/tag/v0.0.8).
 - Install: `dsh plugin --profile web add @quill507/dsh-auto-approval-llm`
 - License: BSD-3-Clause.

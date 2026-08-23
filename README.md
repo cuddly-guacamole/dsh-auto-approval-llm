@@ -20,6 +20,7 @@
 - **LLM 接管**：中风险且 LLM 在倒计时内给出明确结论时，客户端立即按 LLM 结论裁决，无需你点。
 - **熔断**：连续 `maxConsecutiveDenials` 次或累计 `maxTotalDenials` 次被 LLM 拒绝 → 转人工、不再自动倒计时；`/approval reset` 可重置。
 - **可靠的历史与审计**：内存 200 条 + `history.jsonl`，append-only `audit.jsonl`（清空留 tombstone）。
+- **LLM 响应时间统计**：「最近审批记录」子卡顶部显示最近 100 次 LLM 评审的真实响应耗时（MIN/AVG/MAX，秒），并单列「超时/无响应」次数——超时与中断不混入平均值，`llm-latency.jsonl` 持久化（1MB 轮转）。
 - **每会话评审模式**：`/approval-mode manual|smart|unattended` 持久化；`manual` 全转人、`unattended` 自动应答；**高风险超时仍转人工/失败关闭**。
 - **声明式规则**：`rulesText` 用 Claude 风格 `工具(正则) | allow|deny|human [| 字段]` 一眼看懂、实时校验。
 - **DSH 原生观感的设置卡**：4 张可折叠子卡（计时器与熔断 / 在线评审模型 / 安全规则列表 / 最近审批记录），顶层开关即时保存、每卡独立 保存/放弃/恢复默认；非法配置值有红色横幅 +「尝试修复」。
@@ -177,6 +178,6 @@ dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 
 ## 版本 / 发布
 
-- 当前：`0.0.7`（**即将发布**）—— npm：[@quill507/dsh-auto-approval-llm](https://www.npmjs.com/package/@quill507/dsh-auto-approval-llm)，GitHub：[Release v0.0.7](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/releases/tag/v0.0.7)。
+- 当前：`0.0.8`（**即将发布**）—— npm：[@quill507/dsh-auto-approval-llm](https://www.npmjs.com/package/@quill507/dsh-auto-approval-llm)，GitHub：[Release v0.0.8](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/releases/tag/v0.0.8)。
 - 安装：`dsh plugin --profile web add @quill507/dsh-auto-approval-llm`
 - 许可证：BSD-3-Clause。
