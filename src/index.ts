@@ -326,10 +326,13 @@ async function runReviewAttempt(
       source: { kind: 'plugin', plugin: 'dsh-auto-approval-llm' },
     })]
     const assembler = new BlockAssembler()
+    // The stream options must match the prepared call's resolved config field
+    // for field (provider/model/reasoningEffort/temperature/maxTokens/stop —
+    // callConfigEquals), otherwise the adapter rejects the dispatch with
+    // INVALID_PREPARED_CALL. Spreading prepared.config guarantees equality
+    // even when adapter defaults filled optional fields.
     for await (const chunk of prepared.stream({
-      provider: route.provider,
-      model: route.model,
-      maxTokens: 256,
+      ...(prepared.config as any),
       messages,
       system: snapshot.system,
       sessionId: session.id,
