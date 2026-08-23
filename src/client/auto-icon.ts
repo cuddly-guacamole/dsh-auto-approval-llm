@@ -385,7 +385,16 @@ export function decorateAutoPermissionIcons(document) {
     for (const marked of document.querySelectorAll(`[${ICON_ATTRIBUTE}]`)) {
         const kind = marked.getAttribute(ICON_ATTRIBUTE);
         if ((kind === 'menu' && !isAutoMenuItem(marked)) || (kind === 'trigger' && !isAutoTrigger(marked))) {
+            // The official UI keeps the trigger/menu DOM node across mode
+            // switches and re-renders its children in place, so an abandoned
+            // glyph span would linger until reload.
             marked.removeAttribute(ICON_ATTRIBUTE);
+            for (const glyph of Array.from(marked.children).filter(child => child.classList?.contains('dsa-autoIcon'))) {
+                glyph.remove();
+            }
+            for (const label of marked.querySelectorAll(`[${LABEL_ATTRIBUTE}]`)) {
+                label.removeAttribute(LABEL_ATTRIBUTE);
+            }
         }
     }
     for (const menu of document.querySelectorAll('[role="menu"]')) {
@@ -431,6 +440,19 @@ export function decorateAutoPermissionIcons(document) {
             continue;
         if (directText(button) === 'Auto' || directText(button) === '自动审批')
             decorateSelector(document, button);
+    }
+    // Sweep abandoned glyphs: a mode switch whose marker was already dropped
+    // by an earlier scan still leaves the injected span attached to the
+    // re-rendered trigger. Any glyph outside a currently valid marked surface
+    // is stale and must go.
+    for (const glyph of document.querySelectorAll('.dsa-autoIcon')) {
+        const owner = glyph.parentElement;
+        if (owner === null)
+            continue;
+        const kind = owner.getAttribute(ICON_ATTRIBUTE);
+        const valid = kind === 'menu' ? isAutoMenuItem(owner) : kind === 'trigger' ? isAutoTrigger(owner) : false;
+        if (!valid)
+            glyph.remove();
     }
 }
 /** Install the Auto icon and explicit risk gate, then return their disposer. */
