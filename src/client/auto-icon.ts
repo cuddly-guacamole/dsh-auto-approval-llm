@@ -400,13 +400,37 @@ export function decorateAutoPermissionIcons(document) {
     for (const menu of document.querySelectorAll('[role="menu"]')) {
         if (!isPermissionMenu(menu))
             continue;
+        // The composer permission menu draws an official item glyph on every
+        // preset row; the settings "权限" selector dropdown is label-only.
+        // Join the Auto glyph only where the official UI draws glyphs and keep
+        // the label-only surface as plain text (localization still applies).
+        let drawsGlyphs = false;
+        for (const other of menu.querySelectorAll('button[role="menuitem"]')) {
+            if (!autoNames.includes(normalizedText(other)) && other.querySelector('svg') !== null) {
+                drawsGlyphs = true;
+                break;
+            }
+        }
         for (const item of menu.querySelectorAll('button[role="menuitem"]')) {
             if (!autoNames.includes(normalizedText(item)))
                 continue;
-            item.setAttribute(ICON_ATTRIBUTE, 'menu');
             // Label span = a text-carrying span without an embedded glyph/check.
             const label = Array.from(item.children).find(child => child.tagName === 'SPAN' && child.querySelector('svg') === null && autoNames.includes(normalizedText(child))) ?? null;
-            decorateSurface(document, item, label, 'menu');
+            if (drawsGlyphs) {
+                item.setAttribute(ICON_ATTRIBUTE, 'menu');
+                decorateSurface(document, item, label, 'menu');
+            }
+            else {
+                // Label-only menu: drop any previously injected glyph/marker
+                // (an earlier scan or an older bundle may have left one) and
+                // localize the label without an icon.
+                item.removeAttribute(ICON_ATTRIBUTE);
+                for (const glyph of Array.from(item.children).filter(child => child.classList?.contains('dsa-autoIcon'))) {
+                    glyph.remove();
+                }
+                if (label !== null)
+                    decorateSurface(document, item, label, 'option');
+            }
         }
     }
     for (const button of document.querySelectorAll('button[aria-label]')) {
