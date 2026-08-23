@@ -178,6 +178,6 @@ This project references or derives from the following open-source projects — t
 
 ## Version / publishing
 
-- Current: `0.0.8` (**upcoming release**) — npm: [@quill507/dsh-auto-approval-llm](https://www.npmjs.com/package/@quill507/dsh-auto-approval-llm), GitHub: [Release v0.0.8](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/releases/tag/v0.0.8).
+- Current: `0.0.8` — npm: [@quill507/dsh-auto-approval-llm](https://www.npmjs.com/package/@quill507/dsh-auto-approval-llm), GitHub: [Release v0.0.8](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/releases/tag/v0.0.8).
 - Install: `dsh plugin --profile web add @quill507/dsh-auto-approval-llm`
 - License: BSD-3-Clause.
