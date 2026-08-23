@@ -33,6 +33,7 @@ import { loadLatencySamples, pushLatencySample, summarizeLatency, type LatencySa
 import { isWithin, normalizePath, resolveRoots } from './auto/paths.js'
 import { assessTool, hardDenyReason, symlinkGuardTargets } from './auto/policy.js'
 import { evaluateRules, parseRulesText } from './auto/rules.js'
+import { isReviewRetryable, retryAfterMs, retryReviewLoop, toLlmFailure, type RetryAttempt, type ReviewFailure } from './auto/retry.js'
 import { type ReviewMode, loadReviewModes, normalizeReviewMode, persistReviewModes } from './auto/review-mode.js'
 import { isLoopbackHostname, isTrustedRequest, validateReviewerBaseUrl } from './auto/trust.js'
 
@@ -71,6 +72,8 @@ export interface Config {
   tempRoots?: string[]
   classifierTimeoutMs?: number
   classifierMaxOutputTokens?: number
+  /** Extra LLM review attempts after the first (0 = single-shot, 1 = default). */
+  reviewMaxRetries?: number
   debug: boolean
 }
 
@@ -107,6 +110,10 @@ export const Config: z<Config> = z.object({
   tempRoots: z.array(z.string()).default([]),
   classifierTimeoutMs: z.number().default(8_000).min(100).max(60_000),
   classifierMaxOutputTokens: z.number().default(1_024).min(64).max(4_096),
+  // Extra LLM review attempts after the first (0 = off, matching the old
+  // single-shot behavior). Calibrated against measured review latency (p95 ≈
+  // 3.06s): the rolling budget keeps 1 retry affordable on every risk path.
+  reviewMaxRetries: z.number().default(THRESHOLD_DEFAULTS.reviewMaxRetries).min(0).max(2),
 })
 
 const AUTO_PRESET = 'auto'
@@ -204,13 +211,36 @@ function findToolDescription(tools: any, toolName: string): string | undefined {
   return tools?.schemas().find((schema: any) => schema.name === toolName)?.description
 }
 
-async function reviewWithLLM(
-  credentials: any, llm: any, tools: any, session: any, req: any, config: Config,
-  timeoutMs = 5_000,
-  opts: { userMessages?: string[]; workspaceRoot?: string; home?: string } = {},
-): Promise<ReviewResult> {
-  const online = String(config.reviewerBaseUrl ?? '').trim().length > 0
+/**
+ * Retry calibration: measured review latency p95 ≈ 3.06s with every settled
+ * sample under 3.2s (llm-latency.jsonl, 2026-08-23), so the per-attempt
+ * timeout is 3.5s — long enough for a healthy review, short enough that the
+ * rolling-remainder budget still fits one retry inside every countdown.
+ */
+const REVIEW_ATTEMPT_TIMEOUT_MS = 3_500
+const REVIEW_RETRY_BACKOFF_MS = 500
+const REVIEW_RETRY_GUARD_MS = 1_500
 
+/**
+ * Frozen review context. Route/baseUrl/protocol/model/system/payload and the
+ * API key are resolved ONCE before the first attempt; every retry reuses the
+ * snapshot so a credential rotation or settings change mid-review can never
+ * steer a retry toward a different endpoint or key.
+ */
+interface ReviewSnapshot {
+  online: boolean
+  payload: string
+  system: string
+  route?: { provider: string; model: string }
+  baseUrl?: string
+  protocol?: 'openai' | 'anthropic'
+  apiKey?: string
+}
+
+async function buildReviewSnapshot(
+  credentials: any, tools: any, session: any, req: any, config: Config,
+  opts: { userMessages?: string[]; workspaceRoot?: string; home?: string },
+): Promise<ReviewSnapshot | { failure: string }> {
   // Reasoning-blind payload: tool identity + sanitized args + bounded direct
   // user messages + workspace facts only. req.reason (which can carry model
   // prose / the classifier's own words) is deliberately NOT forwarded.
@@ -232,129 +262,184 @@ async function reviewWithLLM(
     targetRelative,
     inWorkspace,
   })
+  const system = config.safetyPrompt ? `${REVIEWER_SYSTEM}\n\n${config.safetyPrompt}` : REVIEWER_SYSTEM
 
   // Online reviewer: a direct HTTP call to the configured OpenAI-compatible
-  // (chat/completions) or Anthropic (messages) endpoint, with the API key
-  // resolved from the DSH credential store per operation (never cached).
-  if (online) {
-    return onlineReviewWithLLM(credentials, config, payload, timeoutMs, req?.signal)
+  // (chat/completions) or Anthropic (messages) endpoint. The API key is
+  // resolved once into the snapshot (never cached beyond one review).
+  if (String(config.reviewerBaseUrl ?? '').trim().length > 0) {
+    const validated = validateReviewerBaseUrl(config.reviewerBaseUrl ?? '')
+    if (!validated.ok) {
+      console.warn(`[dsh-auto-approval-llm] ${validated.reason}`)
+      return { failure: validated.reason }
+    }
+    let apiKey: string | undefined
+    try {
+      const resolved = await credentials?.resolve?.(REVIEWER_CREDENTIAL_REF)
+      apiKey = resolved?.value
+    } catch {
+      apiKey = undefined
+    }
+    return {
+      online: true,
+      payload,
+      system,
+      baseUrl: validated.baseUrl,
+      protocol: config.reviewerProtocol === 'anthropic' ? 'anthropic' : 'openai',
+      apiKey,
+    }
   }
 
   const route = config.reviewerProvider && config.reviewerModel
     ? { provider: config.reviewerProvider, model: config.reviewerModel }
     : sessionModelRoute(session)
-  if (!route) return { decision: 'ESCALATE', failure: 'no reviewer route' }
+  if (!route) return { failure: 'no reviewer route' }
+  return { online: false, payload, system, route }
+}
 
-  const timeoutSignal = AbortSignal.timeout(timeoutMs)
-  const combined = req.signal ? AbortSignal.any([req.signal, timeoutSignal]) : timeoutSignal
-  const messages = [createUserMessage({
-    content: [{ type: 'text', text: payload }],
-    source: { kind: 'plugin', plugin: 'dsh-auto-approval-llm' },
-  })]
+/** Map a non-2xx HTTP status to a stable review failure code. */
+function httpStatusFailure(status: number, message: string, response: any): ReviewFailure {
+  const code =
+    status === 429 ? 'RATE_LIMIT'
+      : status >= 500 ? 'SERVER'
+        : status === 401 || status === 403 ? 'AUTH'
+          : status === 400 || status === 413 ? 'INVALID_REQUEST'
+            : `HTTP_${status}`
+  const providerRetryAfterMs = retryAfterMs(response?.headers?.get?.('retry-after') ?? null)
+  return {
+    code,
+    message,
+    status,
+    ...(providerRetryAfterMs === undefined ? {} : { providerRetryAfterMs }),
+  }
+}
 
-  try {
+/** One single-shot review attempt; throws a `ReviewFailure`-shaped error on failure. */
+async function runReviewAttempt(
+  snapshot: ReviewSnapshot, llm: any, session: any, req: any, config: Config, signal: AbortSignal,
+): Promise<ReviewResult> {
+  if (!snapshot.online) {
+    const route = snapshot.route!
+    const prepared = await llm.prepareCall({ provider: route.provider, model: route.model, maxTokens: 256 }, signal)
+    const messages = [createUserMessage({
+      content: [{ type: 'text', text: snapshot.payload }],
+      source: { kind: 'plugin', plugin: 'dsh-auto-approval-llm' },
+    })]
     const assembler = new BlockAssembler()
-    for await (const chunk of llm.stream({
+    for await (const chunk of prepared.stream({
       provider: route.provider,
       model: route.model,
-      messages,
-      system: config.safetyPrompt ? `${REVIEWER_SYSTEM}\n\n${config.safetyPrompt}` : REVIEWER_SYSTEM,
       maxTokens: 256,
+      messages,
+      system: snapshot.system,
       sessionId: session.id,
-      signal: combined,
+      signal,
     })) {
-      combined.throwIfAborted()
+      signal.throwIfAborted()
       assembler.push(chunk)
     }
-    combined.throwIfAborted()
+    signal.throwIfAborted()
     const text = assembler.blocks()
       .filter((block: any) => block.type === 'text')
       .map((block: any) => block.text)
       .join(' ')
+    return parseReviewTextOrThrow(text)
+  }
+
+  // Online (custom endpoint): raw fetch with redirect:'error' keeping the
+  // loopback fence honest — a 302 must not steer this request (and its
+  // credential headers) toward some other host.
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  let text = ''
+  if (snapshot.protocol === 'anthropic') {
+    if (snapshot.apiKey) headers['x-api-key'] = snapshot.apiKey
+    const res = await fetch(`${snapshot.baseUrl}/messages`, {
+      method: 'POST',
+      headers,
+      signal,
+      redirect: 'error',
+      body: JSON.stringify({
+        model: config.reviewerModel || undefined,
+        max_tokens: 256,
+        system: snapshot.system,
+        messages: [{ role: 'user', content: snapshot.payload }],
+      }),
+    })
+    if (!res.ok) throw httpStatusFailure(res.status, `HTTP ${res.status}`, res)
+    const json: any = await res.json()
+    const content = json?.content
+    text = Array.isArray(content)
+      ? content.map((block: any) => (block?.type === 'text' ? block.text ?? '' : '')).join('')
+      : ''
+  } else {
+    if (snapshot.apiKey) headers.Authorization = `Bearer ${snapshot.apiKey}`
+    const res = await fetch(`${snapshot.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers,
+      signal,
+      redirect: 'error',
+      body: JSON.stringify({
+        model: config.reviewerModel || undefined,
+        max_tokens: 256,
+        messages: [
+          { role: 'system', content: snapshot.system },
+          { role: 'user', content: snapshot.payload },
+        ],
+      }),
+    })
+    if (!res.ok) throw httpStatusFailure(res.status, `HTTP ${res.status}`, res)
+    const json: any = await res.json()
+    text = json?.choices?.[0]?.message?.content ?? ''
+  }
+  return parseReviewTextOrThrow(text)
+}
+
+/** Parse review JSON; empty output = EMPTY_RESPONSE, malformed = BAD_RESPONSE (not retried). */
+function parseReviewTextOrThrow(text: string): ReviewResult {
+  if (text.trim() === '') {
+    throw { code: 'EMPTY_RESPONSE', message: 'reviewer returned no text' }
+  }
+  try {
     return parseReview(text)
-  } catch {
-    return {
-      decision: 'ESCALATE',
-      failure: 'reviewer call failed',
-    }
+  } catch (error) {
+    throw { code: 'BAD_RESPONSE', message: error instanceof Error ? error.message : String(error) }
   }
 }
 
-async function onlineReviewWithLLM(
-  credentials: any, config: Config, payload: string, timeoutMs: number, signal?: AbortSignal,
-): Promise<ReviewResult> {
-  const validated = validateReviewerBaseUrl(config.reviewerBaseUrl ?? '')
-  if (!validated.ok) {
-    console.warn(`[dsh-auto-approval-llm] ${validated.reason}`)
-    return { decision: 'ESCALATE', failure: validated.reason }
+/**
+ * Run the review with a bounded retry loop. Returns the settled review plus
+ * the per-attempt failure trail. Retry policy: whitelisted transient codes
+ * only, rolling-remainder budget, per-attempt timeout (gateway timeouts are
+ * the retryable scenario; user cancellation aborts the loop immediately).
+ */
+async function reviewWithLLM(
+  credentials: any, llm: any, tools: any, session: any, req: any, config: Config,
+  timeoutMs = 5_000,
+  opts: { userMessages?: string[]; workspaceRoot?: string; home?: string } = {},
+  retry: { maxRetries: number; budgetMs: number; asyncPath: boolean } = { maxRetries: 0, budgetMs: 5_000, asyncPath: false },
+): Promise<{ review: ReviewResult; attempts: RetryAttempt[] }> {
+  const snapshot = await buildReviewSnapshot(credentials, tools, session, req, config, opts)
+  if ('failure' in snapshot) {
+    return { review: { decision: 'ESCALATE', failure: snapshot.failure }, attempts: [] }
   }
-  const baseUrl = validated.baseUrl
-  const protocol = config.reviewerProtocol === 'anthropic' ? 'anthropic' : 'openai'
-  const system = config.safetyPrompt ? `${REVIEWER_SYSTEM}\n\n${config.safetyPrompt}` : REVIEWER_SYSTEM
-  let apiKey: string | undefined
-  try {
-    const resolved = await credentials?.resolve?.(REVIEWER_CREDENTIAL_REF)
-    apiKey = resolved?.value
-  } catch {
-    apiKey = undefined
-  }
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  const timeoutSignal = AbortSignal.timeout(timeoutMs)
-  const combined = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal
-  try {
-    let text = ''
-    if (protocol === 'anthropic') {
-      if (apiKey) headers['x-api-key'] = apiKey
-      // redirect:'error' keeps the loopback fence honest: a 302 from the
-      // configured endpoint must not steer this request (and its credential
-      // headers) toward some other host.
-      const res = await fetch(`${baseUrl}/messages`, {
-        method: 'POST',
-        headers,
-        signal: combined,
-        redirect: 'error',
-        body: JSON.stringify({
-          model: config.reviewerModel || undefined,
-          max_tokens: 256,
-          system,
-          messages: [{ role: 'user', content: payload }],
-        }),
-      })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const json: any = await res.json()
-      const content = json?.content
-      text = Array.isArray(content)
-        ? content.map((block: any) => (block?.type === 'text' ? block.text ?? '' : '')).join('')
-        : ''
-    } else {
-      if (apiKey) headers.Authorization = `Bearer ${apiKey}`
-      const res = await fetch(`${baseUrl}/chat/completions`, {
-        method: 'POST',
-        headers,
-        signal: combined,
-        redirect: 'error',
-        body: JSON.stringify({
-          model: config.reviewerModel || undefined,
-          max_tokens: 256,
-          messages: [
-            { role: 'system', content: system },
-            { role: 'user', content: payload },
-          ],
-        }),
-      })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const json: any = await res.json()
-      text = json?.choices?.[0]?.message?.content ?? ''
-    }
-    if (typeof text !== 'string' || text.trim() === '') {
-      return { decision: 'ESCALATE', failure: 'online reviewer returned no text' }
-    }
-    return parseReview(text)
-  } catch (error) {
-    return {
-      decision: 'ESCALATE',
-      failure: `online reviewer failed: ${error instanceof Error ? error.message : String(error)}`,
-    }
+  const outcome = await retryReviewLoop({
+    budgetMs: retry.budgetMs,
+    maxRetries: retry.maxRetries,
+    attemptTimeoutMs: REVIEW_ATTEMPT_TIMEOUT_MS,
+    backoffMs: REVIEW_RETRY_BACKOFF_MS,
+    guardMs: REVIEW_RETRY_GUARD_MS,
+    userSignal: req?.signal,
+    retryable: (failure) => isReviewRetryable(failure, { asyncPath: retry.asyncPath }),
+    onRetry: (info) => debugLog({
+      ev: 'review-retry', callId: req.callId,
+      attempt: info.n, code: info.code, delayMs: info.delayMs, remainingMs: info.remainingMs,
+    }),
+    attempt: (signal) => runReviewAttempt(snapshot, llm, session, req, config, signal),
+  })
+  if (outcome.ok) return { review: outcome.value, attempts: outcome.attempts }
+  return {
+    review: { decision: 'ESCALATE', failure: outcome.failure.message, attempts: outcome.attempts },
+    attempts: outcome.attempts,
   }
 }
 
@@ -468,6 +553,8 @@ interface HistoryRecord {
   llmDecision?: string
   llmRisk?: string
   llmReason?: string
+  /** Per-attempt failure trail when the review was retried (1-based `n`). */
+  attempts?: RetryAttempt[]
   breaker?: boolean
   breakerReasons?: string[]
 }
@@ -1720,7 +1807,12 @@ export function apply(ctx: Context, rawConfig: Config): void {
     const follow = (review as any) ?? (req.callId !== undefined ? reviewVerdicts.get(req.callId) : undefined)
     const followDecidable = follow && (follow.decision === 'ALLOW' || follow.decision === 'DENY')
     const llmMeta = follow && follow.decision
-      ? { llmDecision: follow.decision, llmRisk: follow.riskLevel, llmReason: follow.reason }
+      ? {
+          llmDecision: follow.decision,
+          llmRisk: follow.riskLevel,
+          llmReason: follow.reason,
+          ...(Array.isArray(follow.attempts) && follow.attempts.length > 0 ? { attempts: follow.attempts } : {}),
+        }
       : {}
     const auto = req.callId !== undefined && autoAnswered.has(req.callId)
     // Honest provenance: only a genuine LLM takeover (the caller's claim
@@ -1922,12 +2014,18 @@ export function apply(ctx: Context, rawConfig: Config): void {
         return 'allowed-once'
       }
       const lowReviewStart = Date.now()
-      const review = await reviewWithLLM(credentials, llm, tools, req.agent.session, req, config, seconds * 1000, reviewOpts)
-      debugLog({ ev: 'review', callId: req.callId, decision: review.decision, risk: review.riskLevel ?? null, startAt: lowReviewStart, tookMs: Date.now() - lowReviewStart, scope: 'low' })
+      const lowReview = await reviewWithLLM(credentials, llm, tools, req.agent.session, req, config, seconds * 1000, reviewOpts, {
+        maxRetries: config.reviewMaxRetries ?? THRESHOLD_DEFAULTS.reviewMaxRetries,
+        budgetMs: seconds * 1000,
+        asyncPath: false,
+      })
+      const { review, attempts } = lowReview
+      debugLog({ ev: 'review', callId: req.callId, decision: review.decision, risk: review.riskLevel ?? null, startAt: lowReviewStart, tookMs: Date.now() - lowReviewStart, scope: 'low', attempts: attempts.length })
       // Latency telemetry is sampled for every attempt, settled or not; only
       // `failure` marks an aborted call (timeout/network/parse), never the
-      // verdict itself — an ESCALATE is still a real response.
-      pushLatencySample(llmLatency, { at: Date.now(), tookMs: Date.now() - lowReviewStart, settled: review.failure === undefined })
+      // verdict itself — an ESCALATE is still a real response. `attempts`
+      // records how many tries the settled outcome took.
+      pushLatencySample(llmLatency, { at: Date.now(), tookMs: Date.now() - lowReviewStart, settled: review.failure === undefined, attempts: Math.max(1, attempts.length) })
       const verdict = lowRiskReviewOutcome(review)
       if (verdict.kind === 'allow') {
         // Serialize the reset so a concurrent denial for this session cannot
@@ -1946,6 +2044,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
           llmDecision: review.decision,
           llmRisk: review.riskLevel,
           llmReason: review.reason,
+          ...(attempts.length > 0 ? { attempts } : {}),
         })
         return 'allowed-once'
       }
@@ -1974,6 +2073,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
             llmDecision: review.decision,
             llmRisk: review.riskLevel,
             llmReason: review.reason,
+            ...(attempts.length > 0 ? { attempts } : {}),
           })
         } else {
           // Reviewer unavailable/crashed: fail closed on LOW, never auto-allow
@@ -1985,6 +2085,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
             outcome: 'rejected',
             source: 'llm-failed',
             llmReason: review.failure ?? 'reviewer unavailable',
+            ...(attempts.length > 0 ? { attempts } : {}),
           })
         }
         return 'rejected'
@@ -2025,17 +2126,21 @@ export function apply(ctx: Context, rawConfig: Config): void {
       const mediumHandle: RaceHumanHandle = { claim: () => {} }
       const askPromise = askHuman(req, undefined, next, false, status, mediumHandle, true)
       const reviewStart = Date.now()
-      void reviewWithLLM(credentials, llm, tools, req.agent.session, req, config, seconds * 1000, reviewOpts)
-        .then((review) => {
-          debugLog({ ev: 'review', callId: req.callId, decision: review.decision, risk: review.riskLevel ?? null, startAt: reviewStart, tookMs: Date.now() - reviewStart, scope: 'medium' })
+      void reviewWithLLM(credentials, llm, tools, req.agent.session, req, config, seconds * 1000, reviewOpts, {
+        maxRetries: config.reviewMaxRetries ?? THRESHOLD_DEFAULTS.reviewMaxRetries,
+        budgetMs: seconds * 1000,
+        asyncPath: true,
+      })
+        .then(({ review, attempts }) => {
+          debugLog({ ev: 'review', callId: req.callId, decision: review.decision, risk: review.riskLevel ?? null, startAt: reviewStart, tookMs: Date.now() - reviewStart, scope: 'medium', attempts: attempts.length })
           // Sample before the phase guard: a late response that lost the
           // countdown race is still a real latency observation (and the most
           // diagnostic one — the reviewer was slow).
-          pushLatencySample(llmLatency, { at: Date.now(), tookMs: Date.now() - reviewStart, settled: review.failure === undefined })
+          pushLatencySample(llmLatency, { at: Date.now(), tookMs: Date.now() - reviewStart, settled: review.failure === undefined, attempts: Math.max(1, attempts.length) })
           if (!req.callId || reviewStates.get(req.callId)?.phase !== 'countdown') return
           const note = reviewSuggestionNote(review)
           // Remember the verdict for history whether or not it takes over.
-          reviewVerdicts.set(req.callId, review)
+          reviewVerdicts.set(req.callId, { ...review, attempts })
           // A CRITICAL-flagged ALLOW is contradictory (the reviewer is told to
           // deny CRITICAL); it must NOT take over and auto-allow — surface to a
           // human instead. DENY stays decisive.
@@ -2093,15 +2198,19 @@ export function apply(ctx: Context, rawConfig: Config): void {
     const askPromise = askHuman(req, undefined, next, false, status)
     if (llmReviews) {
       const reviewStart = Date.now()
-      void reviewWithLLM(credentials, llm, tools, req.agent.session, req, config, seconds * 1000, reviewOpts)
-        .then((review) => {
-          debugLog({ ev: 'review', callId: req.callId, decision: review.decision, risk: review.riskLevel ?? null, startAt: reviewStart, tookMs: Date.now() - reviewStart, scope: 'high' })
+      void reviewWithLLM(credentials, llm, tools, req.agent.session, req, config, seconds * 1000, reviewOpts, {
+        maxRetries: config.reviewMaxRetries ?? THRESHOLD_DEFAULTS.reviewMaxRetries,
+        budgetMs: seconds * 1000,
+        asyncPath: true,
+      })
+        .then(({ review, attempts }) => {
+          debugLog({ ev: 'review', callId: req.callId, decision: review.decision, risk: review.riskLevel ?? null, startAt: reviewStart, tookMs: Date.now() - reviewStart, scope: 'high', attempts: attempts.length })
           // Sample before the phase guard (see MEDIUM: late responses are the
           // most diagnostic latency observations and must not be dropped).
-          pushLatencySample(llmLatency, { at: Date.now(), tookMs: Date.now() - reviewStart, settled: review.failure === undefined })
+          pushLatencySample(llmLatency, { at: Date.now(), tookMs: Date.now() - reviewStart, settled: review.failure === undefined, attempts: Math.max(1, attempts.length) })
           if (!req.callId || reviewStates.get(req.callId)?.phase !== 'countdown') return
           const note = reviewSuggestionNote(review)
-          reviewVerdicts.set(req.callId, review)
+          reviewVerdicts.set(req.callId, { ...review, attempts })
           // Re-check the phase at set time: a late advisory must never revert a
           // follow the host already published (human/timeout resolution) back
           // to a countdown.

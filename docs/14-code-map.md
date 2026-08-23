@@ -6,10 +6,10 @@
 
 ```text
 src/
-├─ index.ts           宿主编排：apply()、事件接线、10 路由、命令、评审器、审计  ≈ 2189 行
-├─ auto/              静态评估纯函数层（§03 已列 13 文件）                        ≈ 2529 行
+├─ index.ts           宿主编排：apply()、事件接线、10 路由、命令、评审器、审计  ≈ 2329 行
+├─ auto/              静态评估纯函数层（§03 已列 14 文件）                        ≈ 2714 行
 │    ├─ policy.ts  assessTool 第一次分类       shell.ts  bash/pwsh 分析（最大 862 行）
-│    ├─ decision.ts 纯决策函数 520 行          paths.ts 路径保护 185 行
+│    ├─ decision.ts 纯决策函数 520 行          paths.ts 路径保护 185 行        retry.ts 审查重试 185 行
 │    └─ rules.ts/classifier.ts/dsh-classifier.ts/trust.ts/artifacts.ts/audit.ts/review-mode.ts/constants.ts/risk-tokens.ts
 └─ client/
      ├─ index.ts      React 客户端主体 2170 行（设置卡/面板增强/轮询/浮动按钮/CSS）
@@ -17,8 +17,8 @@ src/
      └─ locale.ts     zh/en 双语 262 行
 
 tests/
-├─ contract.test.mjs        100 例（host 纯函数契约）
-└─ contract-devloop.test.mjs 13 例（开发闭环回归）
+├─ contract.test.mjs        145 例（host 纯函数契约，含 review retry 14 例）
+└─ contract-devloop.test.mjs 19 例（开发闭环回归）
 scripts/
 ├─ build.sh         （DSH 源码仓库布局）tsc 编译 src→lib
 ├─ audit-query.mjs   审计查询 CLI

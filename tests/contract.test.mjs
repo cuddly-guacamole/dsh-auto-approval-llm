@@ -1105,3 +1105,208 @@ test('summarizeLatency: abort spikes cannot masquerade as healthy latency', () =
   assert.equal(out.avgMs, 250)
   assert.equal(out.abortedCount, 8)
 })
+
+
+// ── review retry (2026-08-23, docs/2026-08-23-review-retry-plan-insight.md) ──
+import { toLlmFailure, isReviewRetryable, retryAfterMs, retryReviewLoop, REVIEW_RETRYABLE_CODES } from '../lib/auto/retry.js'
+
+test('toLlmFailure: LlmError-shaped error keeps code/status/retry-after', () => {
+  const f = toLlmFailure({ code: 'RATE_LIMIT', message: 'slow down', status: 429, providerRetryAfterMs: 500 })
+  assert.deepEqual(f, { code: 'RATE_LIMIT', message: 'slow down', status: 429, providerRetryAfterMs: 500 })
+  assert.equal(toLlmFailure({ code: 'SERVER', message: 'boom' }).status, undefined)
+  assert.equal(toLlmFailure(new Error('nope')).code, 'TRANSPORT')
+  assert.equal(toLlmFailure(null).code, 'TRANSPORT')
+})
+
+test('isReviewRetryable: whitelist + async TIMEOUT exclusion', () => {
+  for (const code of REVIEW_RETRYABLE_CODES) {
+    assert.ok(isReviewRetryable({ code, message: 'x' }, { asyncPath: false }), code + ' retryable on sync path')
+  }
+  for (const code of ['AUTH', 'INVALID_REQUEST', 'NO_ADAPTER', 'BAD_RESPONSE', 'HTTP_418', 'UNSUPPORTED_REASONING_EFFORT']) {
+    assert.ok(!isReviewRetryable({ code, message: 'x' }, { asyncPath: false }), code + ' not retryable')
+  }
+  assert.ok(!isReviewRetryable({ code: 'TIMEOUT', message: 'x' }, { asyncPath: true }))
+  assert.ok(isReviewRetryable({ code: 'TIMEOUT', message: 'x' }, { asyncPath: false }))
+})
+
+test('retryAfterMs: seconds and HTTP-date forms', () => {
+  assert.equal(retryAfterMs('2'), 2000)
+  assert.equal(retryAfterMs(null), undefined)
+  assert.equal(retryAfterMs(''), undefined)
+  assert.equal(retryAfterMs('abc'), undefined)
+  const future = new Date(Date.now() + 60_000).toUTCString()
+  const ms = retryAfterMs(future)
+  assert.ok(ms !== undefined && ms > 50_000 && ms <= 61_000)
+})
+
+test('retryReviewLoop: first-attempt success needs no retry records', async () => {
+  const out = await retryReviewLoop({
+    attempt: async () => ({ decision: 'ALLOW' }),
+    budgetMs: 5000, maxRetries: 1, attemptTimeoutMs: 3500, backoffMs: 1, guardMs: 1500,
+    retryable: () => true,
+  })
+  assert.ok(out.ok && out.value.decision === 'ALLOW')
+  assert.deepEqual(out.attempts, [])
+})
+
+test('retryReviewLoop: flaky failure then success retries once and trails it', async () => {
+  let calls = 0
+  const retried = []
+  const out = await retryReviewLoop({
+    attempt: async () => {
+      calls += 1
+      if (calls === 1) throw { code: 'SERVER', message: 'boom' }
+      return { decision: 'DENY' }
+    },
+    budgetMs: 5000, maxRetries: 1, attemptTimeoutMs: 3500, backoffMs: 1, guardMs: 1500,
+    retryable: (f) => isReviewRetryable(f, { asyncPath: false }),
+    onRetry: (info) => retried.push(info),
+  })
+  assert.ok(out.ok && out.value.decision === 'DENY')
+  assert.equal(calls, 2)
+  assert.equal(out.attempts.length, 1)
+  assert.equal(out.attempts[0].n, 1)
+  assert.equal(out.attempts[0].code, 'SERVER')
+  assert.equal(retried.length, 1)
+  assert.equal(retried[0].code, 'SERVER')
+})
+
+test('retryReviewLoop: persistent failure gives up after maxRetries with full trail', async () => {
+  const out = await retryReviewLoop({
+    attempt: async () => { throw { code: 'SERVER', message: 'still down' } },
+    budgetMs: 60_000, maxRetries: 1, attemptTimeoutMs: 3500, backoffMs: 1, guardMs: 0,
+    retryable: () => true,
+  })
+  assert.ok(!out.ok)
+  assert.equal(out.failure.code, 'SERVER')
+  assert.equal(out.attempts.length, 2)
+  assert.deepEqual(out.attempts.map((a) => a.n), [1, 2])
+  assert.equal(out.attempts[1].code, 'SERVER')
+})
+
+test('retryReviewLoop: maxRetries=0 keeps single-shot behavior (old semantics)', async () => {
+  let calls = 0
+  const out = await retryReviewLoop({
+    attempt: async () => { calls += 1; throw { code: 'SERVER', message: 'x' } },
+    budgetMs: 5000, maxRetries: 0, attemptTimeoutMs: 3500, backoffMs: 1, guardMs: 0,
+    retryable: () => true,
+  })
+  assert.ok(!out.ok)
+  assert.equal(calls, 1)
+  assert.equal(out.attempts.length, 1)
+})
+
+test('retryReviewLoop: whitelist veto (AUTH) never re-sends the request', async () => {
+  let calls = 0
+  const out = await retryReviewLoop({
+    attempt: async () => { calls += 1; throw { code: 'AUTH', message: 'bad key' } },
+    budgetMs: 60_000, maxRetries: 5, attemptTimeoutMs: 3500, backoffMs: 1, guardMs: 0,
+    retryable: (f) => isReviewRetryable(f, { asyncPath: false }),
+  })
+  assert.ok(!out.ok)
+  assert.equal(calls, 1)
+  assert.equal(out.attempts.length, 1)
+  assert.equal(out.attempts[0].code, 'AUTH')
+})
+
+test('retryReviewLoop: budget under the deadline guard never starts an attempt', async () => {
+  let calls = 0
+  const out = await retryReviewLoop({
+    attempt: async () => { calls += 1; throw { code: 'RATE_LIMIT', message: 'x' } },
+    budgetMs: 100, maxRetries: 5, attemptTimeoutMs: 3500, backoffMs: 1, guardMs: 1500,
+    retryable: () => true,
+  })
+  assert.ok(!out.ok)
+  assert.equal(calls, 0)
+  assert.equal(out.attempts.length, 0)
+  assert.equal(out.failure.code, 'TIMEOUT')
+})
+
+test('retryReviewLoop: gateway timeout is retried on the sync path (the core ask)', async () => {
+  let calls = 0
+  const out = await retryReviewLoop({
+    attempt: async (signal) => {
+      calls += 1
+      if (calls === 1) {
+        // Slow gateway: the per-attempt timeout (20ms) aborts while this
+        // sleep is still pending, so the failure maps to TIMEOUT and the sync
+        // path retries it. (A plain abort-listener hang would starve the test
+        // event loop: AbortSignal.timeout timers are unref'd.)
+        await new Promise((resolve) => setTimeout(resolve, 30))
+        if (signal.aborted) throw new Error('gateway hung')
+      }
+      return { decision: 'ALLOW' }
+    },
+    budgetMs: 60_000, maxRetries: 1, attemptTimeoutMs: 20, backoffMs: 1, guardMs: 0,
+    retryable: (f) => isReviewRetryable(f, { asyncPath: false }),
+  })
+  assert.ok(out.ok && out.value.decision === 'ALLOW')
+  assert.equal(calls, 2)
+  assert.equal(out.attempts.length, 1)
+  assert.equal(out.attempts[0].code, 'TIMEOUT')
+})
+
+test('retryReviewLoop: async path does not retry TIMEOUT', async () => {
+  let calls = 0
+  const out = await retryReviewLoop({
+    attempt: async (signal) => {
+      calls += 1
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      if (signal.aborted) throw new Error('hung')
+    },
+    budgetMs: 60_000, maxRetries: 5, attemptTimeoutMs: 20, backoffMs: 1, guardMs: 0,
+    retryable: (f) => isReviewRetryable(f, { asyncPath: true }),
+  })
+  assert.ok(!out.ok)
+  assert.equal(calls, 1)
+  assert.equal(out.attempts[0].code, 'TIMEOUT')
+})
+
+test('retryReviewLoop: Retry-After wins over the fixed backoff', async () => {
+  const retried = []
+  let attemptNo = 0
+  const out = await retryReviewLoop({
+    attempt: async () => {
+      attemptNo += 1
+      if (attemptNo === 1) throw { code: 'RATE_LIMIT', message: '429', providerRetryAfterMs: 30 }
+      return 'ok'
+    },
+    budgetMs: 60_000, maxRetries: 2, attemptTimeoutMs: 1000, backoffMs: 5000, guardMs: 0,
+    retryable: () => true,
+    onRetry: (info) => retried.push(info),
+  })
+  assert.ok(out.ok)
+  assert.equal(retried.length, 1)
+  assert.ok(retried[0].delayMs <= 100, 'provider retry-after should win, got ' + retried[0].delayMs)
+})
+
+test('retryReviewLoop: Retry-After beyond the remaining window gives up', async () => {
+  let calls = 0
+  const out = await retryReviewLoop({
+    attempt: async () => { calls += 1; throw { code: 'RATE_LIMIT', message: '429', providerRetryAfterMs: 60_000 } },
+    budgetMs: 1000, maxRetries: 5, attemptTimeoutMs: 1000, backoffMs: 1, guardMs: 500,
+    retryable: () => true,
+  })
+  assert.ok(!out.ok)
+  assert.equal(calls, 1)
+  assert.equal(out.attempts.length, 1)
+})
+
+test('retryReviewLoop: user cancellation aborts the backoff wait', async () => {
+  const controller = new AbortController()
+  let calls = 0
+  const pending = retryReviewLoop({
+    attempt: async () => { calls += 1; throw { code: 'SERVER', message: 'x' } },
+    budgetMs: 60_000, maxRetries: 3, attemptTimeoutMs: 3500, backoffMs: 10_000, guardMs: 0,
+    userSignal: controller.signal,
+    retryable: () => true,
+  })
+  // Let the first attempt fail and the loop enter the 10s backoff, then cancel:
+  // the wait must resolve immediately and the loop must give up (no retry).
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  controller.abort()
+  const out = await pending
+  assert.ok(!out.ok)
+  assert.equal(calls, 1)
+  assert.equal(out.attempts.length, 1)
+})

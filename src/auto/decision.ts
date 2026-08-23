@@ -8,12 +8,15 @@
 
 import { sanitizeClassifierArguments, sanitizeClassifierText, sanitizeReviewReason } from './classifier.js'
 import { RISK_NAME_PATTERN, RISK_REASON_PATTERN } from './risk-tokens.js'
+import type { RetryAttempt } from './retry.js'
 
 export interface ReviewResult {
   decision: 'ALLOW' | 'DENY' | 'ESCALATE'
   riskLevel?: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'
   reason?: string
   failure?: string
+  /** Per-attempt failure trail when the review was retried (1-based `n`). */
+  attempts?: RetryAttempt[]
 }
 
 /**

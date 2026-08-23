@@ -27,6 +27,8 @@ export interface LatencySample {
   at: number
   tookMs: number
   settled: boolean
+  /** Total attempts (1 = single call); present once retries are in play. */
+  attempts?: number
 }
 
 export interface LatencySummary {

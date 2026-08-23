@@ -1,5 +1,5 @@
 # 12 · 配置全景
-> *32 keys, one source of truth*
+> *33 keys, one source of truth*
 
 ### 全部配置键（src/index.ts Config schema Z.object 原文）
 
@@ -29,7 +29,8 @@
 | `showSessionPanel` | off | on/auto/off（客户端消费） |
 | `breakerAntiHijackMs` | 0 | 熔断弹窗防误点（客户端消费） |
 | `aiButtonPosition` | header | header/floating（客户端消费） |
-| `<span class="badgeok">host-only ×5</span>` | — | workspaceRoot / dshHome / tempRoots / classifierTimeoutMs(8s,100-60000) / classifierMaxOutputTokens(1024,64-4096) |
+| `reviewMaxRetries` | 1 | LLM 审查首次失败后的额外重试次数（0-2；0=单次，1=默认；滚动剩余预算，见 src/auto/retry.ts） |
+| `<span class="badgeok">host-only ×6</span>` | — | workspaceRoot / dshHome / tempRoots / classifierTimeoutMs(8s,100-60000) / classifierMaxOutputTokens(1024,64-4096) / reviewMaxRetries(0-2) |
 
 ### 三处设计亮点
 

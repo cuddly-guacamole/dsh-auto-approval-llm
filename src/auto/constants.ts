@@ -13,4 +13,5 @@ export const THRESHOLD_DEFAULTS = {
   breakerAntiHijackMs: 0,
   classifierTimeoutMs: 8_000,
   classifierMaxOutputTokens: 1_024,
+  reviewMaxRetries: 1,
 } as const
