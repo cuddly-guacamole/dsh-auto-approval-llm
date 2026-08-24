@@ -863,19 +863,20 @@ function timeoutOptions(): CapsuleOption[] {
   ]
 }
 
-function llmReviewOptions(): CapsuleOption[] {
-  return [
-    { value: 'low-or-above', label: t('option.llmReview.lowOrAbove') },
-    { value: 'medium-or-above', label: t('option.llmReview.mediumOrAbove') },
-    { value: 'high', label: t('option.llmReview.high') },
-  ]
-}
+// Scope presets pair the review/takeover keys into one-click profiles. Each
+// entry pins the exact enum values written on selection; a stored combination
+// outside this table falls back to the display-only custom entry, which never
+// writes config.
+const SCOPE_PRESETS: { id: string; review: 'low-or-above' | 'medium-or-above' | 'high'; takeover: 'low' | 'medium-or-below' | 'high-or-below' }[] = [
+  { id: 'standard', review: 'low-or-above', takeover: 'medium-or-below' },
+  { id: 'steady', review: 'low-or-above', takeover: 'low' },
+  { id: 'strict', review: 'high', takeover: 'low' },
+]
 
-function llmTakeoverOptions(): CapsuleOption[] {
+function scopePresetOptions(): CapsuleOption[] {
   return [
-    { value: 'low', label: t('option.llmTakeover.low') },
-    { value: 'medium-or-below', label: t('option.llmTakeover.mediumOrBelow') },
-    { value: 'high-or-below', label: t('option.llmTakeover.highOrBelow') },
+    ...SCOPE_PRESETS.map((p) => ({ value: p.id, label: t(`option.scopePreset.${p.id}`) })),
+    { value: 'custom', label: t('option.scopePreset.custom') },
   ]
 }
 
@@ -999,6 +1000,8 @@ function SettingsSection() {
   const [search, setSearch] = React.useState('')
   const [page, setPage] = React.useState(0)
   const PAGE_SIZE = 10
+  // Which exact-list textarea the segmented tabs currently show.
+  const [listTab, setListTab] = React.useState<'allow' | 'deny' | 'human'>('allow')
 
   React.useEffect(() => {
     let disposed = false
@@ -1073,9 +1076,9 @@ function SettingsSection() {
     return out
   }
   const sliceValueOf = (keys: string[]): any => valueOf({ ...draftOf(snapshot.value), ...pick(keys, draft) })
-  const sliceWith = (key: string, value: any): any => {
+  const sliceWithKeys = (patch: Record<string, unknown>): any => {
     const base = draftOf(snapshot.value) as any
-    base[key] = value
+    Object.assign(base, patch)
     return valueOf(base)
   }
   const cardDirty = (keys: string[]): boolean => {
@@ -1155,11 +1158,16 @@ function SettingsSection() {
     if (cardId === 'security') setSecurityForcedDirty(false)
   }
 
+  // Derived preset id: matches a profile only for the exact stored pair;
+  // anything else renders as the inert custom entry.
+  const scopePresetId = SCOPE_PRESETS.find((p) => p.review === draft.llmReviewScope && p.takeover === draft.llmTakeoverScope)?.id ?? 'custom'
   // Top-level capsule toggles save immediately (original behavior). Only the
   // toggled key is committed on the saved baseline, so unsaved edits inside the
   // other cards are never persisted or lost; the local draft keeps them.
-  const instantSaveKey = async (key: string, value: any) => {
-    setDraft({ ...draft, [key]: value })
+  // Instant-save accepts a multi-key patch so one control can commit several
+  // keys atomically (single POST, single expectedRevision check).
+  const instantSaveKeys = async (patch: Record<string, unknown>) => {
+    setDraft({ ...draft, ...(patch as Partial<Draft>) })
     setSaving(true)
     setMessage('')
     setError('')
@@ -1167,7 +1175,7 @@ function SettingsSection() {
       const res = await (globalThis as any).fetch(SETTINGS_ROUTE, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ expectedRevision: snapshot.revision, value: sliceWith(key, value) }),
+        body: JSON.stringify({ expectedRevision: snapshot.revision, value: sliceWithKeys(patch) }),
         credentials: 'same-origin',
       })
       const data = await res.json()
@@ -1180,6 +1188,9 @@ function SettingsSection() {
       setSaving(false)
     }
   }
+
+  // Single-key convenience wrapper kept for the existing toggle rows.
+  const instantSaveKey = (key: string, value: unknown) => instantSaveKeys({ [key]: value })
 
   const resetCard = () => {
     setDraft({ ...draft, ...pick(SECURITY_KEYS, draftOf({})) })
@@ -1383,6 +1394,14 @@ function SettingsSection() {
       hint ? React.createElement('small', { className: 'dsa-desc' }, hint) : null,
     )
 
+  // Segmented pill that picks which exact-list textarea is visible.
+  const listTabButton = (id: 'allow' | 'deny' | 'human', label: string) =>
+    React.createElement('button', {
+      type: 'button',
+      className: listTab === id ? 'dsa-segBtn dsa-segBtnActive' : 'dsa-segBtn',
+      onClick: () => setListTab(id),
+    }, label)
+
   // ── cards ────────────────────────────────────────────────────────────────
   // Four sub-cards inside the plugin card, each with its own save/discard
   // (and, for the safety list, a restore-defaults action). The UI borrows the
@@ -1443,16 +1462,15 @@ function SettingsSection() {
       options: timeoutOptions(),
       onChange: (v: string) => { void instantSaveKey('timeoutAction', v as string) },
     }), t('settings.timeoutActionHint')),
-    row(t('settings.llmReviewScope'), React.createElement(CapsuleSelect, {
-      value: draft.llmReviewScope,
-      options: llmReviewOptions(),
-      onChange: (v: string) => { void instantSaveKey('llmReviewScope', v as any) },
-    }), t('settings.llmReviewScopeHint')),
-    row(t('settings.llmTakeoverScope'), React.createElement(CapsuleSelect, {
-      value: draft.llmTakeoverScope,
-      options: llmTakeoverOptions(),
-      onChange: (v: string) => { void instantSaveKey('llmTakeoverScope', v as any) },
-    }), t('settings.llmTakeoverScopeHint')),
+    row(t('settings.llmScope.preset'), React.createElement(CapsuleSelect, {
+      value: scopePresetId,
+      options: scopePresetOptions(),
+      onChange: (v: string) => {
+        const preset = SCOPE_PRESETS.find((p) => p.id === v)
+        if (!preset) return
+        void instantSaveKeys({ llmReviewScope: preset.review, llmTakeoverScope: preset.takeover })
+      },
+    }), t(`settings.llmScope.hint.${scopePresetId}`)),
     row(t('settings.defaultReviewMode'), React.createElement(CapsuleSelect, {
       value: draft.defaultReviewMode,
       options: reviewModeOptions(),
@@ -1472,41 +1490,55 @@ function SettingsSection() {
 
   // Timers & breaker card body (the numeric/dangerous group).
   const buildTimerBody = () => React.createElement('div', { style: { display: 'grid', gap: 10 } },
-    row(t('settings.lowRiskSeconds'), React.createElement('input', {
-      type: 'number',
-      min: 1,
-      value: draft.lowRiskSeconds,
-      onChange: (e: any) => update({ lowRiskSeconds: e.target.value }),
-      className: 'dsa-input',
-    })),
-    row(t('settings.mediumRiskSeconds'), React.createElement('input', {
-      type: 'number',
-      min: 1,
-      value: draft.mediumRiskSeconds,
-      onChange: (e: any) => update({ mediumRiskSeconds: e.target.value }),
-      className: 'dsa-input',
-    })),
-    row(t('settings.highRiskSeconds'), React.createElement('input', {
-      type: 'number',
-      min: 1,
-      value: draft.highRiskSeconds,
-      onChange: (e: any) => update({ highRiskSeconds: e.target.value }),
-      className: 'dsa-input',
-    })),
-    row(t('settings.maxConsecutiveDenials'), React.createElement('input', {
-      type: 'number',
-      min: 0,
-      value: draft.maxConsecutiveDenials,
-      onChange: (e: any) => update({ maxConsecutiveDenials: e.target.value }),
-      className: 'dsa-input',
-    })),
-    row(t('settings.maxTotalDenials'), React.createElement('input', {
-      type: 'number',
-      min: 0,
-      value: draft.maxTotalDenials,
-      onChange: (e: any) => update({ maxTotalDenials: e.target.value }),
-      className: 'dsa-input',
-    })),
+    row(t('settings.riskSeconds'), React.createElement('div', { style: { display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' } },
+      React.createElement('span', { className: 'dsa-inlineTag' }, t('option.risk.low')),
+      React.createElement('input', {
+        type: 'number',
+        min: 1,
+        value: draft.lowRiskSeconds,
+        onChange: (e: any) => update({ lowRiskSeconds: e.target.value }),
+        className: 'dsa-input',
+        style: { width: 80 },
+      }),
+      React.createElement('span', { className: 'dsa-inlineTag' }, t('option.risk.medium')),
+      React.createElement('input', {
+        type: 'number',
+        min: 1,
+        value: draft.mediumRiskSeconds,
+        onChange: (e: any) => update({ mediumRiskSeconds: e.target.value }),
+        className: 'dsa-input',
+        style: { width: 80 },
+      }),
+      React.createElement('span', { className: 'dsa-inlineTag' }, t('option.risk.high')),
+      React.createElement('input', {
+        type: 'number',
+        min: 1,
+        value: draft.highRiskSeconds,
+        onChange: (e: any) => update({ highRiskSeconds: e.target.value }),
+        className: 'dsa-input',
+        style: { width: 80 },
+      }),
+    )),
+    row(t('settings.denialBreaker'), React.createElement('div', { style: { display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' } },
+      React.createElement('span', { className: 'dsa-inlineTag' }, t('option.breaker.consecutive')),
+      React.createElement('input', {
+        type: 'number',
+        min: 0,
+        value: draft.maxConsecutiveDenials,
+        onChange: (e: any) => update({ maxConsecutiveDenials: e.target.value }),
+        className: 'dsa-input',
+        style: { width: 80 },
+      }),
+      React.createElement('span', { className: 'dsa-inlineTag' }, t('option.breaker.cumulative')),
+      React.createElement('input', {
+        type: 'number',
+        min: 0,
+        value: draft.maxTotalDenials,
+        onChange: (e: any) => update({ maxTotalDenials: e.target.value }),
+        className: 'dsa-input',
+        style: { width: 80 },
+      }),
+    ), t('settings.denialBreakerHint')),
   )
 
   const buildReviewBody = () => React.createElement('div', { style: { display: 'grid', gap: 10 } },
@@ -1561,24 +1593,26 @@ function SettingsSection() {
       placeholder: t('settings.rules.safetyPromptPlaceholder'),
       className: 'dsa-textarea',
     })),
-    field(t('settings.rules.allowlist'), React.createElement('textarea', {
-      value: draft.allowlist,
-      onChange: (e: any) => update({ allowlist: e.target.value }),
-      rows: 3,
-      className: 'dsa-textarea',
-    })),
-    field(t('settings.rules.denyList'), React.createElement('textarea', {
-      value: draft.denyList,
-      onChange: (e: any) => update({ denyList: e.target.value }),
-      rows: 3,
-      className: 'dsa-textarea',
-    })),
-    field(t('settings.rules.humanOnlyList'), React.createElement('textarea', {
-      value: draft.humanOnlyList,
-      onChange: (e: any) => update({ humanOnlyList: e.target.value }),
-      rows: 3,
-      className: 'dsa-textarea',
-    })),
+    field(t('settings.rules.lists'),
+      React.createElement(React.Fragment, null,
+        React.createElement('div', { className: 'dsa-segRow' },
+          listTabButton('allow', t('settings.rules.listAllow')),
+          listTabButton('deny', t('settings.rules.listDeny')),
+          listTabButton('human', t('settings.rules.listHuman')),
+        ),
+        React.createElement('textarea', {
+          value: listTab === 'allow' ? draft.allowlist : listTab === 'deny' ? draft.denyList : draft.humanOnlyList,
+          onChange: (e: any) => update(
+            listTab === 'allow' ? { allowlist: e.target.value }
+              : listTab === 'deny' ? { denyList: e.target.value }
+                : { humanOnlyList: e.target.value },
+          ),
+          rows: 4,
+          className: 'dsa-textarea',
+        }),
+      ),
+      t('settings.rules.listsHint'),
+    ),
     row(t('settings.rules.redactResults'), React.createElement(CapsuleSelect, {
       value: draft.redactResults,
       options: onOffOptions(),
@@ -2350,6 +2384,12 @@ function installSettingsCardStyles(): () => void {
 .dsa-btn:disabled{opacity:.4;cursor:default}
 .dsa-pageBtn{display:inline-flex;align-items:center;justify-content:center;min-width:28px;padding:4px 6px}
 .dsa-pageBtn svg{display:block}
+.dsa-segRow{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+.dsa-segBtn{appearance:none;font:inherit;cursor:pointer;border:1px solid var(--dsw-alias-border-l2);border-radius:999px;padding:3px 12px;font-size:12px;line-height:1.5;background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-secondary)}
+.dsa-segBtn:hover{color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-label-dimmed)}
+.dsa-segBtn:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}
+.dsa-segBtnActive,.dsa-segBtnActive:hover{background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-label-dimmed)}
+.dsa-inlineTag{white-space:nowrap;color:var(--dsw-alias-label-tertiary);font-size:12px}
 .dsa-recordClamp{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}
 .dsa-closeBtn{appearance:none;display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:none;border-radius:6px;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer}
 .dsa-closeBtn:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
