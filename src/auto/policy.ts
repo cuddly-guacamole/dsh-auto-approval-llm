@@ -8,6 +8,7 @@
 // the logic stays the single source of truth.
 import { hardDestructiveTargetReason, isProtectedProjectPath, isWithin, normalizePath, runtimeStateTargetInZone, runtimeStateTargetReason, } from './paths.js';
 import { assessShell, hardDenyShellReason } from './shell.js';
+import { isEffectiveRoutine, sensitiveBasenameAt } from './category.js';
 
 // Re-exported for callers/tests that referenced the policy-owned names; the
 // canonical definitions now live in paths.ts so shell.ts can share them
@@ -21,6 +22,10 @@ export interface Roots {
     dshHome?: string
     tempRoots?: string[]
     allowedDshSubpaths?: string[]
+    /** Position-gate mode injected live by rootsFor; absent = standard. */
+    mode?: 'standard' | 'aggressive'
+    /** Extra trusted directories injected live by rootsFor (standard mode only). */
+    trustedDirs?: string[]
 }
 
 /** Minimal shape of a tool execution the classifier inspects. */
@@ -240,7 +245,7 @@ export function assessTool(exec: ExecLike, roots: Roots, artifacts: unknown): To
         if (path === undefined)
             return { decision: 'allow', reason: 'read-only project inspection', classifierEligible: false };
         const normalized = normalizePath(path, roots.workspace, roots.home);
-        if (!isWithin(roots.workspace, normalized))
+        if (!isEffectiveRoutine(normalized, roots))
             return { decision: 'ask', reason: `reading outside the workspace requires semantic review: ${normalized}`, classifierEligible: true };
         // Protected workspace metadata (.env, .npmrc, .git/*, …) must not be
         // silently read through the `read` tool family. The shell path is gated
@@ -248,6 +253,11 @@ export function assessTool(exec: ExecLike, roots: Roots, artifacts: unknown): To
         // here closes the mismatch (mirror of the F1 contract).
         if (isProtectedProjectPath(normalized, roots))
             return { decision: 'ask', reason: `reading protected project metadata requires semantic review: ${normalized}`, classifierEligible: true };
+        // A relaxation that newly admits a path outside the (position) workspace
+        // must still fuse sensitive basenames anywhere (G1): trusted-dir or
+        // aggressive reads of `.env`/`.ssh/...` stay gated.
+        if (!isWithin(roots.workspace, normalized) && sensitiveBasenameAt(normalized, roots))
+            return { decision: 'ask', reason: `reading a sensitive path outside the workspace requires semantic review: ${normalized}`, classifierEligible: true };
         return { decision: 'allow', reason: 'read-only project inspection', classifierEligible: false };
     }
     if (exec.name === 'write' || exec.name === 'edit') {
@@ -263,7 +273,8 @@ export function assessTool(exec: ExecLike, roots: Roots, artifacts: unknown): To
                 return { decision: 'deny', reason: `mutation of ${runtimeStateTargetReason(normalized)} is not permitted`, classifierEligible: false };
             return { decision: 'allow', reason: 'trusted plugin development path', classifierEligible: false };
         }
-        if (!isWithin(roots.workspace, normalized) || isProtectedProjectPath(normalized, roots)) {
+        if (!isEffectiveRoutine(normalized, roots) || isProtectedProjectPath(normalized, roots)
+            || (!isWithin(roots.workspace, normalized) && sensitiveBasenameAt(normalized, roots))) {
             return { decision: 'ask', reason: `mutation of external or protected path requires specific user authorization: ${normalized}`, classifierEligible: true };
         }
         return { decision: 'allow', reason: 'routine project-local file edit', classifierEligible: false };
@@ -285,7 +296,8 @@ export function assessTool(exec: ExecLike, roots: Roots, artifacts: unknown): To
         if (normalized.every((n) => (roots.allowedDshSubpaths ?? []).some((root) => isWithin(root, n)))) {
             return { decision: 'allow', reason: 'trusted plugin development path', classifierEligible: false };
         }
-        const allRoutine = normalized.every((n) => isWithin(roots.workspace, n) && !isProtectedProjectPath(n, roots));
+        const allRoutine = normalized.every((n) => isEffectiveRoutine(n, roots) && !isProtectedProjectPath(n, roots)
+            && !(!isWithin(roots.workspace, n) && sensitiveBasenameAt(n, roots)));
         if (allRoutine) {
             return { decision: 'allow', reason: 'routine project-local file edit', classifierEligible: false };
         }
@@ -309,11 +321,14 @@ export function assessTool(exec: ExecLike, roots: Roots, artifacts: unknown): To
             return { decision: 'allow', reason: 'trusted plugin development path', classifierEligible: false };
         }
         if (command === 'view') {
-            return isWithin(roots.workspace, normalized)
-                ? { decision: 'allow', reason: 'read-only project inspection', classifierEligible: false }
-                : { decision: 'ask', reason: `reading outside the workspace requires semantic review: ${normalized}`, classifierEligible: true };
+            if (!isEffectiveRoutine(normalized, roots))
+                return { decision: 'ask', reason: `reading outside the workspace requires semantic review: ${normalized}`, classifierEligible: true };
+            if (!isWithin(roots.workspace, normalized) && sensitiveBasenameAt(normalized, roots))
+                return { decision: 'ask', reason: `reading a sensitive path outside the workspace requires semantic review: ${normalized}`, classifierEligible: true };
+            return { decision: 'allow', reason: 'read-only project inspection', classifierEligible: false };
         }
-        if (!isWithin(roots.workspace, normalized) || isProtectedProjectPath(normalized, roots)) {
+        if (!isEffectiveRoutine(normalized, roots) || isProtectedProjectPath(normalized, roots)
+            || (!isWithin(roots.workspace, normalized) && sensitiveBasenameAt(normalized, roots))) {
             return { decision: 'ask', reason: `mutation of external or protected path requires specific user authorization: ${normalized}`, classifierEligible: true };
         }
         return { decision: 'allow', reason: 'routine project-local file edit', classifierEligible: false };

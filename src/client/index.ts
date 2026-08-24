@@ -662,6 +662,9 @@ interface Draft {
   redactResults: 'on' | 'off'
   reviewerContextFacts: 'on' | 'off'
   editDiffPreview: 'on' | 'off'
+  categoryPolicy: Record<string, 'auto' | 'ask' | 'deny'>
+  categoryMode: 'standard' | 'aggressive'
+  trustedDirs: string[]
 }
 
 function draftOf(value: any): Draft {
@@ -694,6 +697,11 @@ function draftOf(value: any): Draft {
     redactResults: value?.redactResults === true ? 'on' : 'off',
     reviewerContextFacts: value?.reviewerContextFacts === true ? 'on' : 'off',
     editDiffPreview: value?.editDiffPreview === true ? 'on' : 'off',
+    categoryPolicy: (typeof value?.categoryPolicy === 'object' && value.categoryPolicy !== null)
+      ? { ...value.categoryPolicy }
+      : {},
+    categoryMode: value?.categoryMode === 'aggressive' ? 'aggressive' : 'standard',
+    trustedDirs: Array.isArray(value?.trustedDirs) ? [...value.trustedDirs] : [],
   }
 }
 
@@ -724,6 +732,9 @@ function valueOf(draft: Draft): any {
     redactResults: draft.redactResults === 'on',
     reviewerContextFacts: draft.reviewerContextFacts === 'on',
     editDiffPreview: draft.editDiffPreview === 'on',
+    categoryPolicy: draft.categoryPolicy,
+    categoryMode: draft.categoryMode,
+    trustedDirs: draft.trustedDirs,
   }
   if (draft.reviewerProvider.trim()) value.reviewerProvider = draft.reviewerProvider.trim()
   if (draft.reviewerModel.trim()) value.reviewerModel = draft.reviewerModel.trim()
@@ -764,6 +775,7 @@ const INVALID_CONFIG_TYPES: Record<string, string> = {
   workspaceRoot: 'string', dshHome: 'string', safetyPrompt: 'string', rulesText: 'string',
   reviewerProvider: 'string', reviewerModel: 'string', reviewerBaseUrl: 'string', timeoutAction: 'string',
   allowlist: 'array', denyList: 'array', humanOnlyList: 'array', tempRoots: 'array',
+  categoryPolicy: 'object', categoryMode: 'string', trustedDirs: 'array',
 }
 const INVALID_CONFIG_ENUMS: Record<string, string[]> = {
   timeoutAction: ['reject', 'allow', 'low-risk-allow'],
@@ -773,6 +785,7 @@ const INVALID_CONFIG_ENUMS: Record<string, string[]> = {
   showSessionPanel: ['on', 'auto', 'off'],
   aiButtonPosition: ['header', 'floating'],
   reviewerProtocol: ['openai', 'anthropic'],
+  categoryMode: ['standard', 'aggressive'],
 }
 const INVALID_CONFIG_RANGES: Record<string, [number, number]> = {
   lowRiskSeconds: [1, Infinity], mediumRiskSeconds: [1, Infinity], highRiskSeconds: [1, Infinity],
@@ -874,6 +887,18 @@ function protocolOptions(): CapsuleOption[] {
   ]
 }
 
+function categoryModeOptions(): CapsuleOption[] {
+  return [
+    { value: 'standard', label: t('option.category.mode.standard') },
+    { value: 'aggressive', label: t('option.category.mode.aggressive') },
+  ]
+}
+
+// Category card model: the 11 tri-state keys and the locked subset (only
+// "ask" is configurable there). Mirrors the host category module constants.
+const CATEGORY_KEY_LIST = ['fileEdit', 'gitLocal', 'build', 'readOnly', 'delete', 'protected', 'privilege', 'networkExec', 'gitPush', 'publish', 'disk']
+const CATEGORY_LOCKED_LIST = ['delete', 'protected', 'privilege', 'disk']
+
 const CHEVRON_PATH = 'M11.8486 5.5L11.4238 5.92383L8.69727 8.65137C8.44157 8.90706 8.21562 9.13382 8.01172 9.29785C7.79912 9.46883 7.55595 9.61756 7.25 9.66602C7.08435 9.69222 6.91565 9.69222 6.75 9.66602C6.44405 9.61756 6.20088 9.46883 5.98828 9.29785C5.78438 9.13382 5.55843 8.90706 5.30273 8.65137L2.57617 5.92383L2.15137 5.5L3 4.65137L3.42383 5.07617L6.15137 7.80273C6.42595 8.07732 6.59876 8.24849 6.74023 8.3623C6.87291 8.46904 6.92272 8.47813 6.9375 8.48047C6.97895 8.48703 7.02105 8.48703 7.0625 8.48047C7.07728 8.47813 7.12709 8.46904 7.25977 8.3623C7.40124 8.24849 7.57405 8.07732 7.84863 7.80273L10.5762 5.07617L11 4.65137L11.8486 5.5Z'
 
 const CHECK_PATH = 'M11.5635 4.58984L7.61426 9.07715C7.35154 9.37561 7.11346 9.64812 6.89453 9.84668C6.66593 10.054 6.38519 10.2506 6.01465 10.3164C5.82079 10.3508 5.62207 10.3529 5.42773 10.3213C5.0561 10.2609 4.77266 10.0674 4.54102 9.86328C4.31926 9.66791 4.07752 9.39911 3.81055 9.10449L2.44531 7.59863L3.55664 6.59082L4.92188 8.09766C5.21256 8.41844 5.38878 8.61191 5.53223 8.73828C5.61022 8.80699 5.65253 8.83192 5.66895 8.83984C5.69648 8.84429 5.72449 8.84467 5.75195 8.83984C5.72657 8.84451 5.75564 8.85422 5.88672 8.73535C6.02833 8.60692 6.20225 8.41088 6.48828 8.08594L10.4385 3.59961L11.5635 4.58984Z'
@@ -953,6 +978,7 @@ function SettingsSection() {
   const [openReview, setOpenReview] = React.useState(false)
   const [openSecurity, setOpenSecurity] = React.useState(false)
   const [openHistory, setOpenHistory] = React.useState(false)
+  const [openCategory, setOpenCategory] = React.useState(false)
   // In-card feedback: the most recent ok/error text for each sub-card, shown
   // inside that card's footer (not piled at the bottom of the plugin body).
   const [cardStatus, setCardStatus] = React.useState<{ id: string; kind: 'ok' | 'err'; text: string } | null>(null)
@@ -1051,6 +1077,10 @@ function SettingsSection() {
   const reviewDirty = cardDirty(REVIEW_KEYS) || reviewerApiKey.trim().length > 0
   const securityDirty = cardDirty(SECURITY_KEYS)
   const securityDirtyEff = securityDirty || securityForcedDirty
+  const baseDraft = draftOf(snapshot.value) as any
+  const categoryDirty =
+    JSON.stringify(draft.categoryPolicy) !== JSON.stringify(baseDraft.categoryPolicy ?? {})
+    || draft.categoryMode !== baseDraft.categoryMode
   const invalidKeys = findInvalidConfigKeys(snapshot.value)
   const configError = (snapshot as any)?.configError ?? null
   const bannerMessage = configError
@@ -1058,7 +1088,7 @@ function SettingsSection() {
     : invalidKeys.length > 0
       ? t('settings.invalidConfig', { keys: invalidKeys.join(', ') })
       : null
-  const anyDirty = timerDirty || reviewDirty || securityDirtyEff
+  const anyDirty = timerDirty || reviewDirty || securityDirtyEff || categoryDirty
 
   const broadcastSettings = (saved: any) => {
     breakerAntiHijackMs = saved?.value?.breakerAntiHijackMs ?? THRESHOLD_DEFAULTS.breakerAntiHijackMs
@@ -1590,6 +1620,59 @@ function SettingsSection() {
       : []),
   )
 
+  const buildCategoryBody = () => React.createElement('div', { style: { display: 'grid', gap: 10 } },
+    row(t('settings.category.mode'), React.createElement(CapsuleSelect, {
+      value: draft.categoryMode,
+      options: categoryModeOptions(),
+      onChange: (v: string) => update({ categoryMode: v as 'standard' | 'aggressive' }),
+    }), t('settings.category.modeHint')),
+    draft.categoryMode === 'aggressive'
+      ? React.createElement('p', { className: 'dsa-hint', style: { margin: 0, color: 'var(--dsw-alias-state-warn-primary)' } }, t('settings.category.aggressiveNotice'))
+      : null,
+    React.createElement('p', { className: 'dsa-hint', style: { margin: 0 } }, t('settings.category.policyHint')),
+    ...CATEGORY_KEY_LIST.map((key) => {
+      const locked = CATEGORY_LOCKED_LIST.includes(key)
+      const options: CapsuleOption[] = [
+        { value: '', label: t('settings.category.inherit') },
+        { value: 'auto', label: t('option.category.value.auto') },
+        { value: 'ask', label: t('option.category.value.ask') },
+        { value: 'deny', label: t('option.category.value.deny') },
+      ]
+      return row(t(`category.${key}` as any),
+        React.createElement(CapsuleSelect, {
+          value: draft.categoryPolicy[key] ?? '',
+          options: locked ? options.filter((o) => o.value === '' || o.value === 'ask') : options,
+          onChange: (v: string) => {
+            const next = { ...draft.categoryPolicy }
+            if (v === '') delete next[key]
+            else next[key] = v as 'auto' | 'ask' | 'deny'
+            update({ categoryPolicy: next })
+          },
+        }),
+        locked ? t('settings.category.lockedHint') : undefined,
+      )
+    }),
+  )
+
+  const buildCategoryFooter = () => React.createElement(React.Fragment, null,
+    statusLine('category'),
+    React.createElement(Button, {
+      variant: 'outline',
+      size: 'sm',
+      disabled: saving || !snapshot.writable,
+      onClick: () => {
+        setDraft({ ...draft, categoryPolicy: baseDraft.categoryPolicy ?? {}, categoryMode: baseDraft.categoryMode ?? 'standard' })
+        setCardStatus({ id: 'category', kind: 'ok', text: '' })
+      },
+    }, t('settings.discard')),
+    React.createElement(Button, {
+      variant: 'primary',
+      size: 'sm',
+      disabled: saving || !snapshot.writable || !categoryDirty,
+      onClick: () => saveCard(['categoryPolicy', 'categoryMode'], 'category'),
+    }, saving ? t('settings.saving') : t('settings.save')),
+  )
+
   const buildHistoryBody = () => React.createElement('div', { style: { display: 'grid', gap: 8 } },
     historyError ? React.createElement('p', { style: { color: 'var(--dsw-alias-state-error-primary)', fontSize: 12, margin: 0 } }, historyError) : null,
     llmLatency === null || (llmLatency.count ?? 0) === 0
@@ -1778,6 +1861,7 @@ function SettingsSection() {
         : securityActive
           ? React.createElement('span', { className: 'dsa-pending', title: t('settings.notYetEffectiveHint') }, t('settings.notYetEffective'))
           : null),
+    subcard(t('settings.category.title'), openCategory, categoryDirty, () => setOpenCategory((o) => !o), buildCategoryBody, buildCategoryFooter),
     subcard(t('settings.history.title'), openHistory, false, () => setOpenHistory((o) => !o), buildHistoryBody, buildHistoryFooter),
     React.createElement('div', { style: { borderTop: '1px solid var(--dsw-alias-border-l2)', marginTop: 4 } },
       row(t('settings.debug'), React.createElement(CapsuleSelect, {

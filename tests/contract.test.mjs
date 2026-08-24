@@ -28,6 +28,7 @@ import { parseClassifierDecision } from '../lib/auto/classifier.js'
 import { RISK_NAME_PATTERN, RISK_REASON_PATTERN } from '../lib/auto/risk-tokens.js'
 import { buildAskReason, buildEditDiffText } from '../lib/auto/editdiff.js'
 import { Config, resolveConfig } from '../lib/index.js'
+import { categorizeCommand } from '../lib/auto/category.js'
 
 test('parseClassifierDecision: valid allow/ask/deny', () => {
   assert.deepEqual(parseClassifierDecision({ decision: 'allow', reason: 'ok' }), { decision: 'allow', reason: 'ok' })
@@ -196,6 +197,17 @@ test('preserveHostKeys: a submitted host-only value never overrides the stored o
   const out = preserveHostKeys({ workspaceRoot: 'old' }, { workspaceRoot: 'new', enabled: true })
   assert.equal(out.enabled, true)
   assert.equal(out.workspaceRoot, 'old')
+})
+
+test('preserveHostKeys: trustedDirs is host-only and survives a card save that omits it (T68)', () => {
+  const out = preserveHostKeys({ trustedDirs: ['D:/t'], workspaceRoot: 'C:/ws' }, { enabled: true })
+  assert.deepEqual(out.trustedDirs, ['D:/t'])
+  assert.equal(out.workspaceRoot, 'C:/ws')
+})
+
+test('preserveHostKeys: a submitted trustedDirs never overrides the stored one (T69)', () => {
+  const out = preserveHostKeys({ trustedDirs: ['old'] }, { trustedDirs: ['evil'], enabled: true })
+  assert.deepEqual(out.trustedDirs, ['old'])
 })
 
 test('normalizeTimeoutAction: legacy/pending values collapse to reject, allow stays', () => {
@@ -758,6 +770,15 @@ test('staticListDecision: bypasses a tripped breaker (intentional isolation)', (
 })
 test('applyBreaker: static-list sources never touch the counters', () => {
   for (const source of ['denyList-deny', 'allowlist-allow', 'rule-deny', 'rule-allow']) {
+    const t = applyBreaker({ consecutive: 2, total: 5 }, source, true)
+    assert.equal(t.increment, false, source)
+    assert.equal(t.reset, false, source)
+    assert.deepEqual(t.counts, { consecutive: 2, total: 5 }, source)
+  }
+})
+
+test('applyBreaker: category sources are breaker-isolated too (T24)', () => {
+  for (const source of ['category-deny', 'category-allow']) {
     const t = applyBreaker({ consecutive: 2, total: 5 }, source, true)
     assert.equal(t.increment, false, source)
     assert.equal(t.reset, false, source)
@@ -1359,6 +1380,21 @@ test('assessShell: same runtime-state basename outside the zone is NOT over-bloc
   assert.equal(assessShell(`echo x > ${ZONE}/src/index.ts`, 'bash', roots, HO(), undefined).decision, 'ask')
 })
 
+test('T6 double anchor: git reset/clean is delete(LOCKED) in the category layer while assessShell keeps asking', () => {
+  const roots = { workspace: 'C:/ws', home: 'C:/Users/u', dshHome: 'C:/Users/u/.dsh', tempRoots: [] }
+  for (const cmd of ['git reset --hard', 'git clean -fd']) {
+    // Old layer: shell.ts:972-974 register asks (eligible, risk MEDIUM) — no regression.
+    const verdict = assessShell(cmd, 'bash', roots, HO(), undefined)
+    assert.equal(verdict.decision, 'ask', cmd)
+    assert.equal(verdict.classifierEligible, true, cmd)
+    assert.equal(riskFromAssessment(verdict, 'bash'), 'MEDIUM', cmd)
+    // New layer: the category label is delete (LOCKED, never auto).
+    const label = categorizeCommand(cmd, 'bash', roots, { categoryPolicy: {}, categoryMode: 'standard' })
+    assert.equal(label.category, 'delete', cmd)
+    assert.equal(label.directive, 'inherit', cmd)
+  }
+})
+
 // ── M2: hard-deny verdicts map to a terminal policy-deny, never a countdown ──
 test('riskFromAssessment: deny maps to DENY, allow maps to LOW', () => {
   assert.equal(riskFromAssessment({ decision: 'deny', reason: 'mutation of plugin runtime state file … is not permitted' }, 'write'), 'DENY')
@@ -1694,6 +1730,13 @@ test('formatDenyFeedback: guidance anchors the operation and never suggests reph
   }
 })
 
+test('formatDenyFeedback: category branch carries the tri-state deny head and guidance (new kind)', () => {
+  const text = formatDenyFeedback('category', { toolName: 'write' })
+  assert.ok(text.startsWith('[dsh-auto-approval-llm] Category denied: write is denied by its category policy (tri-state category deny)'))
+  assert.ok(text.includes(DENY_CIRCUMVENTION_GUIDANCE))
+  assert.ok(!/allowed|allowed-once|approve/i.test(text), 'category deny stays a denial')
+})
+
 // ── result-side masking (redactResultValue) ─────────────────────────────────
 
 test('redactResultValue: unchanged inputs return the exact same reference (cleaned === value)', () => {
@@ -1872,6 +1915,58 @@ test('Config schema: editDiffPreview defaults to false and rejects non-boolean v
   assert.equal(Config({ editDiffPreview: false }).editDiffPreview, false)
   assert.equal(Config({ editDiffPreview: true }).editDiffPreview, true)
   assert.throws(() => Config({ editDiffPreview: 'yes' }))
+})
+
+test('Config schema: categoryPolicy dict / categoryMode / trustedDirs defaults and shapes (T72 side)', () => {
+  assert.deepEqual(Config({}).categoryPolicy, {})
+  assert.equal(Config({}).categoryMode, 'standard')
+  assert.deepEqual(Config({}).trustedDirs, [])
+  assert.equal(Config({ categoryMode: 'aggressive' }).categoryMode, 'aggressive')
+  assert.deepEqual(Config({ categoryPolicy: { fileEdit: 'auto', delete: 'ask' } }).categoryPolicy, { fileEdit: 'auto', delete: 'ask' })
+  assert.throws(() => Config({ categoryMode: 'wild' }))
+  assert.throws(() => Config({ categoryPolicy: { fileEdit: 'maybe' } }))
+  assert.throws(() => Config({ trustedDirs: 'C:/x' }))
+})
+
+test('resolveConfig: categoryPolicy clamps LOCKED auto AND deny to inherit (T37/T75)', () => {
+  const auto = resolveConfig({ timeoutAction: 'reject', categoryPolicy: { delete: 'auto' } })
+  assert.equal(auto.categoryPolicy.delete, undefined)
+  const deny = resolveConfig({ timeoutAction: 'reject', categoryPolicy: { delete: 'deny' } })
+  assert.equal(deny.categoryPolicy.delete, undefined)
+  const mixed = resolveConfig({ timeoutAction: 'reject', categoryPolicy: { delete: 'auto', protected: 'deny', privilege: 'ask', disk: 'auto' } })
+  assert.deepEqual(mixed.categoryPolicy, { privilege: 'ask' })
+})
+
+test('resolveConfig: locked ask values survive; non-locked tri-state keys pass through (T38/T39)', () => {
+  const locked = resolveConfig({ timeoutAction: 'reject', categoryPolicy: { protected: 'ask', privilege: 'ask', disk: 'ask', delete: 'ask' } })
+  assert.deepEqual(locked.categoryPolicy, { protected: 'ask', privilege: 'ask', disk: 'ask', delete: 'ask' })
+  const plain = resolveConfig({ timeoutAction: 'reject', categoryPolicy: { fileEdit: 'auto', gitLocal: 'deny', readOnly: 'ask' } })
+  assert.deepEqual(plain.categoryPolicy, { fileEdit: 'auto', gitLocal: 'deny', readOnly: 'ask' })
+})
+
+test('resolveConfig: unknown / harnessInternal / typo category keys are warned and dropped (T40/T19)', () => {
+  const out = resolveConfig({ timeoutAction: 'reject', categoryPolicy: { unknown: 'auto', harnessInternal: 'deny', 拼写漂移键: 'auto' } })
+  assert.equal('unknown' in out.categoryPolicy, false)
+  assert.equal('harnessInternal' in out.categoryPolicy, false)
+  assert.equal('拼写漂移键' in out.categoryPolicy, false)
+})
+
+test('resolveConfig: non-tri-state values are warned and dropped (= inherit)', () => {
+  const out = resolveConfig({ timeoutAction: 'reject', categoryPolicy: { fileEdit: 'bogus', gitLocal: 'auto', readOnly: 'sometimes' } })
+  assert.deepEqual(out.categoryPolicy, { gitLocal: 'auto' })
+})
+
+test('resolveConfig: trustedDirs keeps only absolute, non-critical, non-home paths (T42)', () => {
+  const out = resolveConfig({
+    timeoutAction: 'reject',
+    trustedDirs: ['rel/path', 'C:/ok', '', 'C:/Users/u/.ssh'],
+  })
+  assert.deepEqual(out.trustedDirs, ['c:\\ok'])
+})
+
+test('resolveConfig: trustedDirs are normalized (folded) before storage (D-3)', () => {
+  const out = resolveConfig({ timeoutAction: 'reject', trustedDirs: ['C:/Others/../ok2', 'D:/Trusted Dir/'] })
+  assert.deepEqual(out.trustedDirs, ['c:\\ok2', 'd:\\trusted dir\\'])
 })
 
 test('frameReviewerInput: the reviewer payload can never carry the diff block (5-key invariant)', () => {

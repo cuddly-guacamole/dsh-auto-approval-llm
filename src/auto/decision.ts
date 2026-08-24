@@ -225,6 +225,7 @@ export const HOST_ONLY_KEYS = [
   'workspaceRoot',
   'dshHome',
   'tempRoots',
+  'trustedDirs',
   'classifierTimeoutMs',
   'classifierMaxOutputTokens',
   'maxArgsChars',
@@ -549,7 +550,7 @@ export function assembleReviewerSystem(safetyPrompt: string | undefined, rulesTe
 export const DENY_CIRCUMVENTION_GUIDANCE =
   'The denial applies to this operation: the same target or effect remains denied regardless of tool, wording, or alias. The same operation expressed differently remains denied; ask the user if you believe the denial is wrong.'
 
-export type DenyFeedbackKind = 'rule' | 'denyList' | 'policy' | 'llm' | 'timeout'
+export type DenyFeedbackKind = 'rule' | 'denyList' | 'policy' | 'llm' | 'timeout' | 'category'
 
 /** Fail-closed reviewer-unavailable notice (shared by feedback and status). */
 export const REVIEW_TIMEOUT_NOTICE =
@@ -585,6 +586,11 @@ const DENY_FEEDBACK_TABLE: Record<DenyFeedbackKind, DenyFeedbackRow> = {
     styled: true,
     build: ({ toolName, reason }) =>
       `[dsh-auto-approval-llm] Model denied: ${toolName ?? 'unknown'}${reason ? ` — ${sanitizeReviewReason(reason)}` : ''}`,
+  },
+  category: {
+    styled: true,
+    build: ({ toolName }) =>
+      `[dsh-auto-approval-llm] Category denied: ${toolName ?? 'unknown'} is denied by its category policy (tri-state category deny)`,
   },
   timeout: {
     // Fail-closed notice, not a denial: no plugin prefix, no guidance.

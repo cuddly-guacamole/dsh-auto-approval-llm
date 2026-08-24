@@ -20,18 +20,19 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { appendFileSync, existsSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs'
-import { networkInterfaces } from 'node:os'
+import { networkInterfaces, homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { ArtifactRegistry } from './auto/artifacts.js'
 import { appendAuditLine, recordAuditClear } from './auto/audit.js'
+import { applyCategoryDirective, CATEGORY_KEYS, categoryDirectiveFor, LOCKED_CATEGORIES, realpathCriticalReason } from './auto/category.js'
 import { sanitizeClassifierArguments, sanitizeClassifierText, sanitizeReviewReason } from './auto/classifier.js'
 import { THRESHOLD_DEFAULTS } from './auto/constants.js'
 import { createDshClassifier } from './auto/dsh-classifier.js'
 import { type RaceHumanHandle, type ReviewResult, type StaticRisk, REVIEW_TIMEOUT_NOTICE, applyBreaker, approvalSource, assembleReviewerSystem, breakerTripped, createKeyedMutex, extractToolPath, followResolution, formatDenyFeedback, frameReviewerInput, lowRiskReviewOutcome, parseReview, preserveHostKeys, raceHumanDecision, reviewSuggestionNote, reviewerAutoAllowBlocked, riskFromAssessment, staticListDecision, type ContextSummary } from './auto/decision.js'
 import { loadLatencySamples, pushLatencySample, summarizeLatency, type LatencySample } from './auto/latency.js'
 import { buildAskReason, buildEditDiff, buildEditDiffText, EDIT_DIFF_ARGS_MAX_CHARS, EDIT_DIFF_TOOLS } from './auto/editdiff.js'
-import { isWithin, normalizePath, resolveRoots } from './auto/paths.js'
+import { isWithin, isCriticalPath, normalizePath, resolveRoots, runtimeStateTargetInZone } from './auto/paths.js'
 import { assessTool, hardDenyReason, symlinkGuardTargets } from './auto/policy.js'
 import { probeTargetFacts } from './auto/probe.js'
 import { redactResultValue } from './auto/redact.js'
@@ -84,6 +85,12 @@ export interface Config {
   reviewerContextFacts: boolean
   /** Show a line-level diff preview of edit-class targets on the human approval panel. */
   editDiffPreview: boolean
+  /** Per-category tri-state override; empty = inherit current behavior. */
+  categoryPolicy: Record<string, 'auto' | 'ask' | 'deny'>
+  /** Position-gate mode: 'standard' (current) | 'aggressive' (location-unrestricted, hardened). */
+  categoryMode: 'standard' | 'aggressive'
+  /** Extra trusted directories for Standard mode (host-only, absolute paths). */
+  trustedDirs: string[]
 }
 
 export const Config: z<Config> = z.object({
@@ -133,6 +140,11 @@ export const Config: z<Config> = z.object({
   // (any read/diff failure omits the block), never part of the review payload.
   // Off by default (fail-closed): enable explicitly to see the panel diff.
   editDiffPreview: z.boolean().default(false),
+  // Per-category tri-state override: a dict accepts any key but resolveConfig
+  // clamps unknown/LOCKED keys (see resolveConfig); empty = inherit.
+  categoryPolicy: z.dict(z.union(['auto', 'ask', 'deny'] as const), z.string()).default({}),
+  categoryMode: z.union(['standard', 'aggressive'] as const).default('standard'),
+  trustedDirs: z.array(z.string()).default([]),
 })
 
 const AUTO_PRESET = 'auto'
@@ -152,9 +164,66 @@ export function resolveConfig(raw: Config): Config {
       throw new Error(`dsh-auto-approval-llm: unknown timeoutAction "${timeoutAction}"`)
     }
   }
+  // Category policy clamp: unknown keys (including 'unknown'/'harnessInternal'
+  // and spelling drift) are warned and dropped, so no category key can ever
+  // become 'auto' by accident; LOCKED categories accept only 'ask' (auto/deny
+  // are warned and dropped = inherit). Mirrors the timeoutAction migration
+  // pattern: warn + normalize, never throw.
+  const categoryPolicy: Record<string, 'auto' | 'ask' | 'deny'> = {}
+  for (const [key, value] of Object.entries(raw.categoryPolicy ?? {})) {
+    if (!CATEGORY_KEYS.includes(key as (typeof CATEGORY_KEYS)[number])) {
+      console.warn(`[dsh-auto-approval-llm] ignoring unknown categoryPolicy key "${key}"`)
+      continue
+    }
+    // Value-level clamp too: the settings schema enforces the tri-state union
+    // on its own validation flow, but resolveConfig also consumes plain
+    // objects (patch defaults, hand-edited storage) that never passed the
+    // schema, so a non-tri-state value is warned and dropped here = inherit.
+    if (value !== 'auto' && value !== 'ask' && value !== 'deny') {
+      console.warn(`[dsh-auto-approval-llm] ignoring ${key}=${String(value)}: expected "auto" | "ask" | "deny"`)
+      continue
+    }
+    if (LOCKED_CATEGORIES.includes(key as (typeof LOCKED_CATEGORIES)[number]) && value !== 'ask') {
+      console.warn(`[dsh-auto-approval-llm] ignoring ${key}=${String(value)}: locked categories accept only "ask"`)
+      continue
+    }
+    categoryPolicy[key] = value
+  }
+  // Trusted-directory clamp: only absolute paths (win32 drive/UNC, posix '/');
+  // relative / '~' / environment-variable spellings, empties, and directories
+  // inside the user home / DSH_HOME / a critical tree are warned and dropped.
+  // Stored normalized so later containment checks use one spelling.
+  const trustedDirs: string[] = []
+  const home = homedir()
+  const dshHome = (process.env.DSH_HOME?.trim() || join(home, '.dsh'))
+  // A trusted directory must never sit inside (or itself be) a credential or
+  // home-relative sensitive tree — checked independent of the real home so a
+  // spelling under any user profile is caught too.
+  const SENSITIVE_TRUST_SEGMENTS = ['.ssh', '.gnupg', '.aws', '.azure', '.kube']
+  for (const dir of raw.trustedDirs ?? []) {
+    if (typeof dir !== 'string' || dir.trim() === '' || !/^(?:[A-Za-z]:[\\/]|\\\\|\/)/.test(dir)) {
+      console.warn(`[dsh-auto-approval-llm] ignoring non-absolute trustedDir "${String(dir)}"`)
+      continue
+    }
+    const normalized = normalizePath(dir, dir, home)
+    const parts: string[] = normalized.split(/[\\/]/).filter(Boolean)
+    if (parts.some((part) => SENSITIVE_TRUST_SEGMENTS.includes(part))) {
+      console.warn(`[dsh-auto-approval-llm] ignoring trustedDir in a credential tree: ${normalized}`)
+      continue
+    }
+    const roots = { workspace: normalized, home, dshHome }
+    if (isWithin(home, normalized) || isWithin(dshHome, normalized) || isCriticalPath(normalized, roots)) {
+      console.warn(`[dsh-auto-approval-llm] ignoring trustedDir inside a protected tree: ${normalized}`)
+      continue
+    }
+    trustedDirs.push(normalized)
+  }
   return {
     ...raw,
     timeoutAction,
+    categoryPolicy,
+    categoryMode: raw.categoryMode === 'aggressive' ? 'aggressive' : 'standard',
+    trustedDirs,
     llmReviewScope: raw.llmReviewScope ?? 'low-or-above',
     llmTakeoverScope: raw.llmTakeoverScope ?? 'medium-or-below',
     lowRiskSeconds: raw.lowRiskSeconds ?? THRESHOLD_DEFAULTS.lowRiskSeconds,
@@ -599,7 +668,7 @@ function sweepFeedback(
 }
 
 // ── approval history ──────────────────────────────────────────────────────
-interface HistoryRecord {
+export interface HistoryRecord {
   id: string
   at: number
   sessionId: string
@@ -613,6 +682,10 @@ interface HistoryRecord {
   attempts?: RetryAttempt[]
   breaker?: boolean
   breakerReasons?: string[]
+  /** Category-layer decisions carry their label/decision/mode for the audit. */
+  category?: string
+  categoryDecision?: string
+  mode?: string
 }
 
 const approvalHistory: HistoryRecord[] = []
@@ -1453,6 +1526,10 @@ export function apply(ctx: Context, rawConfig: Config): void {
     anyCtx.on('settings/updated', (ns: string, next: any) => {
       if (ns !== SETTINGS_NS) return
       try {
+        // Host-only keys (workspaceRoot/dshHome/tempRoots/trustedDirs/…) are
+        // preserved by the settings route itself (preserveHostKeys). A second
+        // construction-snapshot overwrite here against other plugins writing the
+        // same namespace directly is tracked as backlog, not implemented yet.
         config = resolveConfig(next)
         configError = null
         debugOn = config.debug
@@ -1473,9 +1550,22 @@ export function apply(ctx: Context, rawConfig: Config): void {
     ...(config.tempRoots ? { tempRoots: config.tempRoots } : {}),
   }
   const parentAgent = (sessionId: any) => anyCtx.get('agents')?.get(sessionId)
+  // Every roots consumer re-reads mode/trustedDirs from the LIVE config (G4):
+  // neither key enters the frozen rootOptions, so a settings/updated hot swap
+  // is reflected by the very next call into policy/shell/category.
   const rootsFor = (exec: any) => {
-    const roots = resolveRoots(exec.agent?.session.header.cwd, rootOptions)
+    const roots = resolveRoots(exec.agent?.session.header.cwd, rootOptions) as {
+      workspace: string
+      home: string
+      dshHome: string
+      tempRoots?: string[]
+      allowedDshSubpaths?: string[]
+      mode?: 'standard' | 'aggressive'
+      trustedDirs?: string[]
+    }
     roots.allowedDshSubpaths = [normalizePath(join(roots.dshHome, 'plugins', 'dsh-auto-approval-llm'), roots.workspace, roots.home)]
+    roots.mode = config.categoryMode
+    roots.trustedDirs = (config.trustedDirs ?? []).map((dir) => normalizePath(dir, roots.workspace, roots.home))
     return roots
   }
   const authorityFor = (exec: any) => autoPermissionAuthority(exec, parentAgent, permissionPresets, AUTO_PRESET)
@@ -1486,7 +1576,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
   const authorityKeyFor = (exec: any): string =>
     (authorityFor(exec) ?? exec.agent)?.session?.id ?? 'unknown'
 
-  const classifyStaticRisk = (req: any, args: any): { risk: StaticRisk; reason?: string } => {
+  const classifyStaticRisk = (req: any, args: any): { risk: StaticRisk; reason?: string; assessment?: any; category?: string; directive?: string; mode?: string } => {
     // Approval args come from the session log as a JSON string; parse them so
     // policy sees the real shape (external-write/destructive tools → HIGH)
     // instead of degrading every string arg to MEDIUM. Parse failure keeps the
@@ -1500,10 +1590,20 @@ export function apply(ctx: Context, rawConfig: Config): void {
       }
     }
     const exec = { name: req.toolName, agent: req.agent, arguments: parsedArgs }
-    const assessment = assessTool(exec, rootsFor(exec), artifacts)
+    const roots = rootsFor(exec)
+    const assessment = assessTool(exec, roots, artifacts)
+    // Category layer: recomputed from scratch at this wiring point (no state
+    // crosses over from pre-execute). auto ≡ LOW tier, and only for an
+    // ask-classified, classifier-eligible call; HIGH and DENY stay put.
+    // directive + category come from the same classification (no re-derivation).
+    const { directive, category } = categoryDirectiveFor(exec, roots, config)
+    let risk = riskFromAssessment(assessment, req.toolName)
+    const applied = applyCategoryDirective(risk, directive, assessment)
+    if (applied !== 'DENY' && applied !== 'ask-human') risk = applied
+    debugLog({ ev: 'category', callId: req.callId ?? null, toolName: req.toolName, category, decision: directive, mode: config.categoryMode })
     // Carry the policy reason out for the policy-deny feedback; the
     // public riskFromAssessment / StaticRisk contract stays untouched.
-    return { risk: riskFromAssessment(assessment, req.toolName), reason: assessment.reason }
+    return { risk, reason: assessment.reason, assessment, category, directive, mode: config.categoryMode }
   }
 
   const riskReviewed = (risk: 'LOW' | 'MEDIUM' | 'HIGH', scope: Config['llmReviewScope']): boolean => {
@@ -1560,6 +1660,11 @@ export function apply(ctx: Context, rawConfig: Config): void {
     if (realWorkspace === undefined) realWorkspace = resolveDeepest(roots.workspace)
     if (realWorkspace === undefined) return undefined
     const realWsNormalized = normalizePath(realWorkspace, roots.workspace, roots.home)
+    const aggressive = roots.mode === 'aggressive'
+    // Custom trusted directories join both zone checks (G8): a target that is
+    // textually inside a trustedDir is still hard-denied when its realpath
+    // escapes every allowed zone (workspace ∪ plugin zone ∪ trustedDirs).
+    const trustedZone: string[] = [...(roots.allowedDshSubpaths ?? []), ...(roots.trustedDirs ?? [])]
     for (const target of targets) {
       const textual = normalizePath(target, roots.workspace, roots.home)
       // Only a target that is textually inside the workspace (or inside a
@@ -1568,19 +1673,25 @@ export function apply(ctx: Context, rawConfig: Config): void {
       // when the textual target pretended to be local/trusted. Any other
       // textually-external target is judged by the normal hard-deny / 'ask'
       // escalation instead of being turned into an unconditional hard deny.
-      const trustedZone: string[] = roots.allowedDshSubpaths ?? []
+      // Under aggressive the position gate is relaxed, so the realpath re-check
+      // covers every textual target — the remaining credential/system fence.
       const inTrustedZone = trustedZone.some(root => isWithin(root, textual))
-      if (!isWithin(roots.workspace, textual) && !inTrustedZone) continue
+      if (!isWithin(roots.workspace, textual) && !inTrustedZone && !aggressive) continue
       const resolved = resolveDeepest(target)
       if (resolved === undefined) continue
       const normalized = normalizePath(resolved, roots.workspace, roots.home)
-      // The trusted-zone exemption holds only while the resolved target stays
-      // inside the trusted zone: a symlink/junction planted there that resolves
-      // into a credential or home tree must still be hard-denied.
-      const withinTrustedZone = trustedZone.some(root => isWithin(root, normalized))
-      if (!isWithin(realWsNormalized, normalized) && !withinTrustedZone) {
-        return `target resolves outside the workspace via a symlink: ${resolved}`
+      const escape = realpathCriticalReason(textual, normalized, roots, roots.trustedDirs, realWsNormalized)
+      if (escape === undefined) continue
+      if (aggressive) {
+        // An escape outside every allowed zone keeps its hard deny only when
+        // it lands on a critical tree, DSH_HOME, or plugin runtime state; a
+        // plain external target is the aggressive design goal and stays open.
+        if (isCriticalPath(normalized, roots) || isWithin(roots.dshHome, normalized) || runtimeStateTargetInZone(normalized, roots.allowedDshSubpaths)) {
+          return escape
+        }
+        continue
       }
+      return escape
     }
     return undefined
   }
@@ -1599,6 +1710,30 @@ export function apply(ctx: Context, rawConfig: Config): void {
     const assessment = assessTool(exec, roots, artifacts)
     if (assessment.plannedCreates !== undefined) artifacts.plan(exec, assessment.plannedCreates, roots)
     if (assessment.decision === 'deny') return { kind: 'deny', reason: `[auto-mode hard deny] ${assessment.reason}` }
+    // Category tightening (only deny/ask; auto/inherit never intercept here).
+    // Deny/ask apply to every non-hard-denied result, including static allows,
+    // so a routine read/write cannot slip past a category deny/ask. deny
+    // performs the full rejection dialogue (feedback + history) itself; ask
+    // returns immediately so the LLM classifier fast path can never answer a
+    // category ask — a category ask is an explicit human decision.
+    const { directive, category } = categoryDirectiveFor(exec, roots, config)
+    if (directive === 'deny') {
+      recordDecisionFeedback(exec.callId, formatDenyFeedback('category', { toolName: exec.name }))
+      pushHistory({
+        sessionId: authorityKeyFor(exec),
+        toolName: exec.name,
+        outcome: 'rejected',
+        source: 'category-deny',
+        category,
+        categoryDecision: 'deny',
+        mode: config.categoryMode,
+      })
+      debugLog({ ev: 'category', callId: exec.callId ?? null, toolName: exec.name, category, decision: 'deny', mode: config.categoryMode })
+      return { kind: 'deny', reason: `[auto-mode category deny] ${exec.name}` }
+    }
+    if (directive === 'ask') {
+      return { kind: 'ask', reason: `[auto-mode category ask] ${exec.name}` }
+    }
     if (assessment.decision === 'allow') return next()
     if (!assessment.classifierEligible) return { kind: 'ask', reason: `[auto-mode approval required] ${assessment.reason}` }
     try {
@@ -2062,6 +2197,29 @@ export function apply(ctx: Context, rawConfig: Config): void {
       })
       return 'rejected'
     }
+    // Category layer (Q2 order: denyList → category-deny → allowlist →
+    // humanOnly → category-ask → manual → breaker → risk application). The
+    // directive is recomputed here from scratch (same pure function as
+    // pre-execute, no state crosses between the wiring points); the auto→LOW
+    // injection already happened inside classifyStaticRisk.
+    const classified = classifyStaticRisk(req, args)
+    const staticRisk = classified.risk
+    const policyReason = classified.reason
+    if (classified.directive === 'deny') {
+      // Defense-in-depth terminal (pre-execute normally rejects first); same
+      // shape as the denyList/policy deny: feedback + history + rejected.
+      recordDecisionFeedback(req.callId, formatDenyFeedback('category', { toolName }))
+      pushHistory({
+        sessionId: sessionKey,
+        toolName,
+        outcome: 'rejected',
+        source: 'category-deny',
+        category: classified.category,
+        categoryDecision: 'deny',
+        mode: classified.mode,
+      })
+      return 'rejected'
+    }
     if (staticDecision.kind === 'allow') {
       // Static-policy allow: the approval trail must not be silent about a
       // decision that permitted a tool call.
@@ -2074,6 +2232,12 @@ export function apply(ctx: Context, rawConfig: Config): void {
       return 'allowed-once'
     }
     if (staticDecision.kind === 'ask-human') {
+      return askHuman(req, undefined, next)
+    }
+    if (classified.directive === 'ask') {
+      // Category ask ≡ explicit human decision: status-less askHuman (no
+      // countdown, no LLM takeover, no timeout auto-allow), same path as
+      // humanOnlyList / manual review mode.
       return askHuman(req, undefined, next)
     }
 
@@ -2092,7 +2256,6 @@ export function apply(ctx: Context, rawConfig: Config): void {
       return askHuman(req, undefined, next, true)
     }
 
-    const { risk: staticRisk, reason: policyReason } = classifyStaticRisk(req, args)
     // Terminal hard-deny from the policy layer (e.g. a plugin runtime-state
     // mutation): answer with an immediate rejection — never a countdown
     // status, so timeoutAction=allow and LLM takeovers can neither answer it
@@ -2117,11 +2280,16 @@ export function apply(ctx: Context, rawConfig: Config): void {
 
     if (staticRisk === 'LOW') {
       if (!llmReviews) {
+        // An auto-directive LOW that reaches this branch without an LLM
+        // reviewer is a category-driven allow: label the history honestly
+        // (G6/G11) and never show a countdown.
+        const categoryAllow = classified.directive === 'auto'
         pushHistory({
           sessionId: sessionKey,
           toolName,
           outcome: 'allowed-once',
-          source: 'auto-allow',
+          source: categoryAllow ? 'category-allow' : 'auto-allow',
+          ...(categoryAllow ? { category: classified.category, categoryDecision: 'auto', mode: classified.mode } : {}),
         })
         return 'allowed-once'
       }

@@ -1,0 +1,644 @@
+/**
+ * dsh-auto-approval-llm · category tri-state layer + trust-directory modes.
+ *
+ * Contract tests over the compiled lib (L1 pure functions, L2 fs fixtures for
+ * the symlink/junction escape, L3 source-wiring assertions against
+ * lib/index.js). Run: node --test tests/category.test.mjs
+ */
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import {
+  CATEGORY_KEYS, LOCKED_CATEGORIES, CATEGORY_PRECEDENCE,
+  categorizeTool, categorizeCommand, mergeCommandDecisions,
+  categoryDirective, categoryDirectiveFor, applyCategoryDirective,
+  isEffectiveRoutine, sensitiveBasenameAt, realpathCriticalReason,
+} from '../lib/auto/category.js'
+import { isWithin, normalizePath } from '../lib/auto/paths.js'
+import { assessShell, hardDenyShellReason } from '../lib/auto/shell.js'
+import { assessTool } from '../lib/auto/policy.js'
+import { riskFromAssessment, HOST_ONLY_KEYS } from '../lib/auto/decision.js'
+
+const roots = { workspace: 'C:/ws', home: 'C:/Users/u', dshHome: 'C:/Users/u/.dsh', tempRoots: [] }
+const aggressive = { ...roots, mode: 'aggressive' }
+const stdCfg = { categoryPolicy: {}, categoryMode: 'standard' }
+const artifacts = { has: () => false }
+
+const cat = (source, shell = 'bash', r = roots, c = stdCfg) => categorizeCommand(source, shell, r, c).category
+const dir = (source, shell = 'bash', r = roots, c = stdCfg) => categorizeCommand(source, shell, r, c).directive
+const tool = (name, args = {}, r = roots) => categorizeTool({ name, arguments: args }, r)
+
+// ── C1 · 11-category mapping: tools ────────────────────────────────────────
+test('C1 categorizeTool: write/edit/apply_patch/str_replace_editor map to fileEdit', () => {
+  assert.equal(tool('write', { file_path: 'C:/ws/a.ts' }), 'fileEdit')
+  assert.equal(tool('edit', { file_path: 'C:/ws/a.ts' }), 'fileEdit')
+  assert.equal(tool('apply_patch', { patches: [{ file_path: 'C:/ws/a.ts' }] }), 'fileEdit')
+  assert.equal(tool('str_replace_editor', { command: 'create', path: 'C:/ws/a.ts' }), 'fileEdit')
+  assert.equal(tool('str_replace_editor', { command: 'str_replace', path: 'C:/ws/a.ts' }), 'fileEdit')
+  assert.equal(tool('str_replace_editor', { command: 'insert', path: 'C:/ws/a.ts' }), 'fileEdit')
+})
+
+test('C1 categorizeTool: read family / view / time / weather map to readOnly', () => {
+  assert.equal(tool('read', { file_path: 'C:/ws/src/a.ts' }), 'readOnly')
+  assert.equal(tool('read_image', { file_path: 'C:/ws/x.png' }), 'readOnly')
+  assert.equal(tool('grep', { path: 'C:/ws' }), 'readOnly')
+  assert.equal(tool('glob', { path: 'C:/ws' }), 'readOnly')
+  assert.equal(tool('lsp', { cwd: 'C:/ws' }), 'readOnly')
+  assert.equal(tool('str_replace_editor', { command: 'view', path: 'C:/ws/a.ts' }), 'readOnly')
+  assert.equal(tool('time'), 'readOnly')
+  assert.equal(tool('weather'), 'readOnly')
+})
+
+test('C1 categorizeTool: sensitive/protected operands fuse to protected (T10)', () => {
+  assert.equal(tool('write', { file_path: 'C:/ws/.env' }), 'protected')
+  assert.equal(tool('write', { file_path: 'D:/users/u/.env' }), 'protected')
+  assert.equal(tool('write', { file_path: 'C:/ws/.git/config' }), 'protected')
+  assert.equal(tool('read', { file_path: 'C:/Users/u/.ssh/config' }), 'protected')
+  assert.equal(tool('apply_patch', { patches: [{ file_path: 'C:/ws/.npmrc' }] }), 'protected')
+  assert.equal(tool('str_replace_editor', { command: 'view', path: 'C:/ws/.env' }), 'protected')
+})
+
+test('C1 categorizeTool: delete/publish/privilege via exact and name-pattern tools', () => {
+  assert.equal(tool('delete_agent'), 'delete')
+  assert.equal(tool('terminal_open'), 'privilege')
+  assert.equal(tool('terminal_send'), 'privilege')
+  assert.equal(tool('web_search'), 'networkExec')
+  assert.equal(tool('web_fetch'), 'networkExec')
+  assert.equal(tool('git_push'), 'gitPush')
+  assert.equal(tool('deploy'), 'publish')
+  assert.equal(tool('publish'), 'publish')
+  assert.equal(tool('send_email'), 'publish')
+  assert.equal(tool('create_issue'), 'publish')
+  assert.equal(tool('create_pull_request'), 'publish')
+  assert.equal(tool('my_upload_thing'), 'publish')
+  assert.equal(tool('chmod_thing'), 'privilege')
+})
+
+test('C1 categorizeTool: harness-internal tools are never configurable (T18)', () => {
+  for (const name of ['todo_write', 'job_kill', 'cordis_inspect_list', 'subagent', 'get_goal', 'ask_user_question', 'workflow', 'interrupt_agent']) {
+    assert.equal(tool(name), 'harnessInternal', name)
+  }
+  assert.equal(categoryDirective(stdCfg, 'harnessInternal', { decision: 'ask', classifierEligible: true }), 'inherit')
+  assert.equal(categoryDirective({ categoryPolicy: { harnessInternal: 'deny' } }, 'harnessInternal', { decision: 'ask', classifierEligible: true }), 'inherit')
+})
+
+test('C1 categorizeTool: unknown names / failed classification → unknown (T19/T60/T62)', () => {
+  assert.equal(tool('mcp__playwright__browser_run_code_unsafe'), 'unknown')
+  assert.equal(tool('some_future_plugin_tool'), 'unknown')
+  assert.equal(tool('my_read_tool'), 'unknown')
+  assert.equal(tool('notgit_status'), 'unknown')
+  assert.equal(tool('write'), 'unknown')
+  assert.equal(tool('apply_patch', { patches: [] }), 'unknown')
+  assert.equal(tool('str_replace_editor', { command: 'bogus', path: 'C:/ws/a.ts' }), 'unknown')
+})
+
+test('C1 categorizeTool: bash executions delegate to the command classifier', () => {
+  assert.equal(tool('bash', { command: 'rm C:/ws/x' }), 'delete')
+  assert.equal(tool('pwsh', { command: 'git push origin main' }), 'gitPush')
+  assert.equal(categorizeTool({ name: 'bash', arguments: {} }, roots), 'unknown')
+})
+
+// ── C1 · 11-category mapping: shell commands ───────────────────────────────
+test('C1 categorizeCommand: fileEdit (creation / copy / move)', () => {
+  assert.equal(cat('mkdir C:/ws/newdir'), 'fileEdit')
+  assert.equal(cat('mkdir -p C:/ws/a/b'), 'fileEdit')
+  assert.equal(cat('touch C:/ws/a.ts'), 'fileEdit')
+  assert.equal(cat('cp a.txt C:/ws/b.txt'), 'fileEdit')
+  assert.equal(cat('mv a.txt C:/ws/b.txt'), 'fileEdit')
+})
+
+test('C1 categorizeCommand: gitLocal subcommand family (T4)', () => {
+  for (const cmd of [
+    'git commit -m x', 'git merge t', 'git checkout -b f', 'git switch f', 'git branch x',
+    'git tag v1', 'git fetch', 'git pull', 'git stash', 'git revert HEAD', 'git restore x',
+    'git cherry-pick abc', 'git am x.patch', 'git rebase main', 'git stash pop',
+  ]) {
+    assert.equal(cat(cmd), 'gitLocal', cmd)
+  }
+})
+
+test('C1 categorizeCommand: git read-only subcommands are readOnly, not gitLocal (T5)', () => {
+  for (const cmd of ['git status', 'git diff', 'git log', 'git blame', 'git show HEAD', 'git rev-parse HEAD', 'git ls-files']) {
+    assert.equal(cat(cmd), 'readOnly', cmd)
+  }
+})
+
+test('C1 categorizeCommand: git reset/clean map to delete (T6, category side)', () => {
+  assert.equal(cat('git reset --hard'), 'delete')
+  assert.equal(cat('git reset HEAD~1'), 'delete')
+  assert.equal(cat('git clean -fd'), 'delete')
+  assert.equal(cat('git clean -n'), 'delete')
+})
+
+test('C1 categorizeCommand: build/test/version-probe class (T7)', () => {
+  for (const cmd of ['npm run build', 'npm test', 'tsc --noEmit', 'pytest', 'make', 'make check', 'node --version', 'cargo build', 'go test', 'pnpm run lint']) {
+    assert.equal(cat(cmd), 'build', cmd)
+  }
+})
+
+test('C1 categorizeCommand: read-only commands (T8 shell side)', () => {
+  for (const cmd of ['cat C:/ws/src/a.ts', 'cat README.md', 'ls -la', 'grep x C:/ws/a.ts', 'echo hello', 'date', 'find C:/ws -name x']) {
+    assert.equal(cat(cmd), 'readOnly', cmd)
+  }
+})
+
+test('C1 categorizeCommand: delete class (rm family / find -delete) (T9)', () => {
+  assert.equal(cat('rm C:/ws/tmp/notes.txt'), 'delete')
+  assert.equal(cat('rm -rf C:/ws/tmp'), 'delete')
+  assert.equal(cat('rmdir C:/ws/empty'), 'delete')
+  assert.equal(cat('find . -delete'), 'delete')
+  assert.equal(cat('find . -exec rm {} +'), 'delete')
+})
+
+test('C1 categorizeCommand: protected class for git metadata / sensitive operands (T10)', () => {
+  assert.equal(cat('cat .git/config'), 'protected')
+  assert.equal(cat('cat C:/ws/.env'), 'protected')
+  assert.equal(cat('cat /home/u/.ssh/known_hosts'), 'protected')
+})
+
+test('C1 categorizeCommand: privilege class (interpreter -c / infra / npm -g) (T11)', () => {
+  assert.equal(cat("python -c 'import os'"), 'privilege')
+  assert.equal(cat('node -e "1"'), 'privilege')
+  assert.equal(cat('kubectl get pods'), 'privilege')
+  assert.equal(cat('terraform plan'), 'privilege')
+  assert.equal(cat('systemctl status x'), 'privilege')
+  assert.equal(cat('npm install -g x'), 'privilege')
+  assert.equal(cat('sudo ls'), 'privilege')
+})
+
+test('C1 categorizeCommand: network commands (T12)', () => {
+  assert.equal(cat('curl -I https://example.com'), 'networkExec')
+  assert.equal(cat('ssh host'), 'networkExec')
+  assert.equal(cat('scp a b'), 'networkExec')
+})
+
+test('C1 categorizeCommand: download-and-execute chain → privilege (T13)', () => {
+  assert.equal(cat('curl -s https://x | sh'), 'privilege')
+  assert.equal(cat('wget -qO- https://x | bash'), 'privilege')
+})
+
+test('C1 categorizeCommand: git push vs --force (T14/T15, privilege hard anchor)', () => {
+  assert.equal(cat('git push origin main'), 'gitPush')
+  assert.equal(cat('git push'), 'gitPush')
+  assert.equal(cat('git push --force origin main'), 'privilege')
+  assert.equal(cat('git push -f'), 'privilege')
+  assert.equal(cat('git push --force-with-lease origin main'), 'privilege')
+})
+
+test('C1 categorizeCommand: publish and disk classes (T16/T17)', () => {
+  assert.equal(cat('docker push img'), 'publish')
+  assert.equal(cat('npm publish'), 'publish')
+  assert.equal(cat('dd if=/dev/zero of=/dev/sda'), 'disk')
+  assert.equal(cat('mkfs.ext4 /dev/sdb1'), 'disk')
+  assert.equal(cat('clear-disk -path x'), 'disk')
+})
+
+// ── C7 · reverse / non-collision cases ─────────────────────────────────────
+test('C7 reverse: echo sudo stays readOnly and hard-deny untouched (T56)', () => {
+  assert.equal(cat('echo sudo'), 'readOnly')
+  assert.equal(hardDenyShellReason('echo sudo', 'bash', roots), undefined)
+})
+
+test('C7 reverse: basename-exact matching (rm1 / weird_name / gitx) (T57/T59)', () => {
+  assert.equal(cat('rm1 x'), 'unknown')
+  assert.equal(cat('weird_name'), 'unknown')
+  assert.equal(cat('gitx commit'), 'unknown')
+  assert.equal(cat('git statusx'), 'unknown')
+})
+
+test('C7 reverse: empty / opaque lines are unknown → inherit (T58)', () => {
+  assert.equal(cat(''), 'unknown')
+  assert.equal(dir(''), 'inherit')
+  assert.equal(cat("$(echo x) && ls"), 'unknown')
+  const verdict = assessShell('', 'bash', roots, artifacts, undefined)
+  assert.equal(verdict.decision, 'ask')
+})
+
+test('C7 reverse: .env.example template stays readOnly (T61)', () => {
+  assert.equal(cat('cat C:/ws/.env.example'), 'readOnly')
+  assert.equal(cat('cat C:/ws/.env.example.local'), 'readOnly')
+  assert.equal(cat('cat C:/ws/.env.production'), 'protected')
+  assert.equal(assessShell('cat C:/ws/.env.example', 'bash', roots, artifacts, undefined).decision, 'allow')
+})
+
+test('C7 reverse: assessTool contract unchanged for the same inputs (T1)', () => {
+  const verdict = assessTool({ name: 'write', arguments: { file_path: 'C:/ws/a.ts' } }, roots, artifacts)
+  assert.equal(verdict.decision, 'allow')
+  assert.equal(categorizeTool({ name: 'write', arguments: { file_path: 'C:/ws/a.ts' } }, roots), 'fileEdit')
+})
+
+// ── C2 · directive derivation + precedence ─────────────────────────────────
+test('C2 categoryDirective: LOCKED clamps auto/deny to ask, unset inherits (T41)', () => {
+  const askEligible = { decision: 'ask', classifierEligible: true }
+  assert.equal(categoryDirective({ categoryPolicy: { delete: 'auto' } }, 'delete', askEligible), 'ask')
+  assert.equal(categoryDirective({ categoryPolicy: { delete: 'deny' } }, 'delete', askEligible), 'ask')
+  assert.equal(categoryDirective({ categoryPolicy: { protected: 'auto' } }, 'protected', askEligible), 'ask')
+  assert.equal(categoryDirective({ categoryPolicy: { privilege: 'deny' } }, 'privilege', askEligible), 'ask')
+  assert.equal(categoryDirective({ categoryPolicy: { disk: 'auto' } }, 'disk', askEligible), 'ask')
+  assert.equal(categoryDirective(stdCfg, 'delete', askEligible), 'inherit')
+  assert.equal(categoryDirective({ categoryPolicy: { delete: 'ask' } }, 'delete', askEligible), 'ask')
+})
+
+test('C2 categoryDirective: aggressive builtins (P2) and explicit-config precedence', () => {
+  const agg = { categoryPolicy: {}, categoryMode: 'aggressive' }
+  const askEligible = { decision: 'ask', classifierEligible: true }
+  assert.equal(categoryDirective(stdCfg, 'networkExec', askEligible), 'inherit')
+  assert.equal(categoryDirective(stdCfg, 'gitPush', askEligible), 'inherit')
+  assert.equal(categoryDirective(stdCfg, 'publish', askEligible), 'inherit')
+  assert.equal(categoryDirective(agg, 'networkExec', askEligible), 'auto')
+  assert.equal(categoryDirective(agg, 'gitPush', askEligible), 'auto')
+  assert.equal(categoryDirective(agg, 'publish', askEligible), 'auto')
+  assert.equal(categoryDirective(agg, 'fileEdit', askEligible), 'inherit')
+  assert.equal(categoryDirective(agg, 'readOnly', askEligible), 'inherit')
+  // Explicit config always beats the builtin.
+  assert.equal(categoryDirective({ categoryPolicy: { networkExec: 'deny' }, categoryMode: 'aggressive' }, 'networkExec', askEligible), 'deny')
+  assert.equal(categoryDirective({ categoryPolicy: { gitPush: 'ask' }, categoryMode: 'aggressive' }, 'gitPush', askEligible), 'ask')
+  // LOCKED unconfigured: standard=inherit, aggressive=ask (UI: 删除/受保护/提权/磁盘仍人工).
+  assert.equal(categoryDirective({ categoryPolicy: {}, categoryMode: 'aggressive' }, 'delete', askEligible), 'ask')
+  assert.equal(categoryDirective({ categoryPolicy: {}, categoryMode: 'aggressive' }, 'privilege', askEligible), 'ask')
+})
+
+test('C2 categoryDirective: auto only applies to ask && classifierEligible (R4 gate)', () => {
+  const cfg = { categoryPolicy: { readOnly: 'auto' }, categoryMode: 'standard' }
+  assert.equal(categoryDirective(cfg, 'readOnly', { decision: 'ask', classifierEligible: true }), 'auto')
+  assert.equal(categoryDirective(cfg, 'readOnly', { decision: 'ask', classifierEligible: false }), 'inherit')
+  assert.equal(categoryDirective(cfg, 'readOnly', { decision: 'allow' }), 'inherit')
+  assert.equal(categoryDirective(cfg, 'readOnly', { decision: 'deny' }), 'inherit')
+})
+
+test('C2 categoryDirective: ask/deny flow through every non-hard-denied assessment (Q1 gate)', () => {
+  const askCfg = { categoryPolicy: { readOnly: 'ask' } }
+  const denyCfg = { categoryPolicy: { readOnly: 'deny' } }
+  assert.equal(categoryDirective(askCfg, 'readOnly', { decision: 'allow' }), 'ask')
+  assert.equal(categoryDirective(denyCfg, 'readOnly', { decision: 'allow' }), 'deny')
+  assert.equal(categoryDirective(askCfg, 'readOnly', { decision: 'ask', classifierEligible: false }), 'ask')
+  assert.equal(categoryDirective(denyCfg, 'readOnly', { decision: 'ask', classifierEligible: false }), 'deny')
+})
+
+test('C2 categoryDirective / categoryDirectiveFor: unknown → inherit forever', () => {
+  const askEligible = { decision: 'ask', classifierEligible: true }
+  assert.equal(categoryDirective({ categoryPolicy: { readOnly: 'auto' } }, 'unknown', askEligible), 'inherit')
+  assert.equal(categoryDirectiveFor({ name: 'some_future_plugin_tool' }, aggressive, stdCfg).directive, 'inherit')
+  assert.equal(categoryDirectiveFor({ name: 'some_future_plugin_tool' }, aggressive, stdCfg).category, 'unknown')
+  assert.equal(categoryDirectiveFor({ name: 'todo_write' }, aggressive, stdCfg).directive, 'inherit')
+  assert.equal(categoryDirectiveFor({ name: 'todo_write' }, aggressive, stdCfg).category, 'harnessInternal')
+})
+
+test('C2 applyCategoryDirective: hard DENY is a non-configurable floor (T20)', () => {
+  assert.equal(applyCategoryDirective('DENY', 'auto', { decision: 'ask', classifierEligible: true }), 'DENY')
+  assert.equal(applyCategoryDirective('DENY', 'ask', { decision: 'ask', classifierEligible: true }), 'DENY')
+})
+
+test('C2 applyCategoryDirective: deny > ask > auto > inherit ladder (T22)', () => {
+  const eligible = { decision: 'ask', classifierEligible: true }
+  assert.equal(applyCategoryDirective('MEDIUM', 'deny', eligible), 'DENY')
+  assert.equal(applyCategoryDirective('MEDIUM', 'ask', eligible), 'ask-human')
+  assert.equal(applyCategoryDirective('MEDIUM', 'auto', eligible), 'LOW')
+  assert.equal(applyCategoryDirective('MEDIUM', 'inherit', eligible), 'MEDIUM')
+  assert.equal(applyCategoryDirective('LOW', 'auto', eligible), 'LOW')
+})
+
+test('C2 applyCategoryDirective: auto never drops HIGH and never touches manual/opaque (T23/R4)', () => {
+  assert.equal(applyCategoryDirective('HIGH', 'auto', { decision: 'ask', classifierEligible: true }), 'HIGH')
+  assert.equal(applyCategoryDirective('MEDIUM', 'auto', { decision: 'ask', classifierEligible: false }), 'MEDIUM')
+  assert.equal(applyCategoryDirective('MEDIUM', 'auto', { decision: 'allow' }), 'MEDIUM')
+})
+
+// ── C3 · unknown semantics under aggressive roots ──────────────────────────
+test('C3 unknown tool stays ask under aggressive roots and is inherited (T29)', () => {
+  const rootsA = { ...aggressive, trustedDirs: ['D:/any'] }
+  const verdict = assessTool({ name: 'some_future_plugin_tool', arguments: {} }, rootsA, artifacts)
+  assert.equal(verdict.decision, 'ask')
+  assert.equal(verdict.classifierEligible, true)
+  assert.equal(categorizeTool({ name: 'some_future_plugin_tool', arguments: {} }, rootsA), 'unknown')
+  assert.equal(categoryDirectiveFor({ name: 'some_future_plugin_tool', arguments: {} }, rootsA, { categoryPolicy: {}, categoryMode: 'aggressive' }).directive, 'inherit')
+})
+
+test('C3 unknown command stays ambiguous-ask under aggressive roots (T30)', () => {
+  const rootsA = { ...aggressive, trustedDirs: ['D:/any'] }
+  const verdict = assessShell('blorp --x', 'bash', rootsA, artifacts, undefined)
+  assert.equal(verdict.decision, 'ask')
+  assert.equal(verdict.classifierEligible, true)
+  assert.equal(cat('blorp --x', 'bash', rootsA), 'unknown')
+  assert.equal(dir('blorp --x', 'bash', rootsA), 'inherit')
+})
+
+test('C3 aggressive: sensitive basenames anywhere stay gated (T31)', () => {
+  const verdict = (name, args) => assessTool({ name, arguments: args }, aggressive, artifacts)
+  assert.equal(verdict('write', { file_path: 'D:/users/u/.env' }).decision, 'ask')
+  assert.equal(verdict('write', { file_path: 'C:/Users/u/.bashrc' }).decision, 'deny')
+  assert.equal(verdict('write', { file_path: 'C:/Windows/System32/x' }).decision, 'deny')
+  assert.equal(verdict('read', { file_path: 'D:/users/u/.env' }).decision, 'ask')
+  assert.equal(verdict('read', { file_path: 'D:/users/u/.ssh/config' }).decision, 'ask')
+})
+
+test('C3 aggressive: ordinary external targets are position-relaxed (T32 per G2)', () => {
+  // Standard keeps the ask; aggressive relaxes the whitelist position predicate.
+  assert.equal(assessShell('cat D:/elsewhere/readme.md', 'bash', roots, artifacts, undefined).decision, 'ask')
+  assert.equal(assessShell('cat D:/elsewhere/readme.md', 'bash', aggressive, artifacts, undefined).decision, 'allow')
+  assert.equal(assessShell('echo x > D:/elsewhere/f.txt', 'bash', aggressive, artifacts, undefined).decision, 'allow')
+  // Composition: an ask-classified call under an auto directive lands on LOW.
+  assert.equal(applyCategoryDirective('MEDIUM', 'auto', { decision: 'ask', classifierEligible: true }), 'LOW')
+})
+
+test('C3 workdir does not participate in position gating (T33, documented)', () => {
+  const verdict = assessShell('cat D:/other/x', 'bash', roots, artifacts, undefined)
+  assert.equal(verdict.decision, 'ask')
+  assert.equal(cat('cat D:/other/x'), 'readOnly')
+})
+
+test('C3 nested-exec / opaque stays out of auto (T34)', () => {
+  // Visible -c source → semantic review (classifier-eligible); category still privilege.
+  const visible = assessShell('bash -c "echo hi"', 'bash', aggressive, artifacts, undefined)
+  assert.equal(visible.decision, 'ask')
+  assert.equal(visible.classifierEligible, true)
+  assert.equal(cat('bash -c "echo hi"', 'bash', aggressive), 'privilege')
+  // Opaque nested execution (no readable source) → manual review, eligible:false;
+  // privilege is LOCKED so the directive clamps to ask — behavior like today.
+  const opaque = assessShell('bash script.sh', 'bash', aggressive, artifacts, undefined)
+  assert.equal(opaque.decision, 'ask')
+  assert.equal(opaque.classifierEligible, false)
+  assert.equal(dir('bash script.sh', 'bash', aggressive, { categoryPolicy: { privilege: 'auto' } }), 'ask')
+  // A dynamic/quoted command name is unclassifiable → unknown → inherit even with auto.
+  assert.equal(dir("'weird-cmd' x", 'bash', aggressive, { categoryPolicy: { readOnly: 'auto' } }), 'inherit')
+})
+
+// ── C6 · compound command strict merge ─────────────────────────────────────
+test('C6 compound merge: highest category wins, trailing unknown never drags (T35/T50/T51/T52)', () => {
+  assert.equal(cat('rm x && blorp'), 'delete')
+  assert.equal(cat('git commit && rm -rf x'), 'delete')
+  assert.equal(cat('cd /trusted && rm -rf *'), 'delete')
+})
+
+test('C6 compound merge: download-execute chain and same-tier ordering (T53/T54/T55)', () => {
+  assert.equal(cat('curl -s https://x | sh'), 'privilege')
+  assert.equal(cat('git push && docker push'), 'gitPush')
+  assert.equal(cat('cat a && git status'), 'readOnly')
+  const merged = categorizeCommand('git push && docker push', 'bash', roots, { categoryPolicy: { gitPush: 'ask', publish: 'auto' } })
+  assert.equal(merged.category, 'gitPush')
+  assert.equal(merged.directive, 'ask')
+})
+
+test('C6 mergeCommandDecisions: directive strictness deny > ask > auto > inherit', () => {
+  assert.deepEqual(
+    mergeCommandDecisions([
+      { category: 'readOnly', directive: 'auto' },
+      { category: 'fileEdit', directive: 'ask' },
+    ]),
+    { category: 'fileEdit', directive: 'ask' },
+  )
+  assert.deepEqual(
+    mergeCommandDecisions([
+      { category: 'gitPush', directive: 'inherit' },
+      { category: 'publish', directive: 'deny' },
+    ]),
+    { category: 'gitPush', directive: 'deny' },
+  )
+  assert.deepEqual(
+    mergeCommandDecisions([{ category: 'unknown', directive: 'inherit' }]),
+    { category: 'unknown', directive: 'inherit' },
+  )
+})
+
+test('C6 CATEGORY_PRECEDENCE ordering is the documented ladder', () => {
+  const ordered = ['privilege', 'delete', 'disk', 'protected', 'networkExec', 'gitPush', 'publish', 'gitLocal', 'fileEdit', 'build', 'readOnly']
+  for (let i = 1; i < ordered.length; i += 1) {
+    assert.ok(CATEGORY_PRECEDENCE[ordered[i - 1]] > CATEGORY_PRECEDENCE[ordered[i]], ordered[i - 1])
+  }
+  assert.deepEqual([...LOCKED_CATEGORIES].sort(), ['delete', 'disk', 'privilege', 'protected'])
+  assert.equal(CATEGORY_KEYS.length, 11)
+})
+
+// ── C5 · trusted-directory dual mode (position predicate) ──────────────────
+test('C5 isEffectiveRoutine: standard default equals isWithin(workspace) byte-for-byte', () => {
+  for (const p of ['C:/ws/a.ts', 'C:/ws/sub/x.png', 'D:/other/a.ts', 'C:/Users/u/.env']) {
+    assert.equal(isEffectiveRoutine(p, roots), isWithin(roots.workspace, normalizePath(p, roots.workspace, roots.home)), p)
+  }
+  assert.equal(isEffectiveRoutine('D:/other/x', { ...roots, mode: undefined }), false)
+  assert.equal(isEffectiveRoutine('C:/ws/x', { ...roots, mode: undefined }), true)
+})
+
+test('C5 isEffectiveRoutine: trustedDirs extend standard mode only (T43/T44/T45)', () => {
+  const trusted = { ...roots, trustedDirs: ['D:/trusted'] }
+  assert.equal(isEffectiveRoutine('D:/trusted/x.ts', trusted), true)
+  assert.equal(isEffectiveRoutine('D:/trusted/sub/deep.ts', trusted), true)
+  assert.equal(isEffectiveRoutine('D:/other/x.ts', trusted), false)
+  assert.equal(isEffectiveRoutine('D:/other/x.ts', { ...roots, mode: 'aggressive' }), true)
+  // Aggressive never double-expands trustedDirs (no extra effect).
+  assert.equal(isEffectiveRoutine('D:/trusted/x.ts', { ...trusted, mode: 'aggressive' }), true)
+  assert.equal(isEffectiveRoutine('D:/elsewhere/x.ts', { ...trusted, mode: 'aggressive' }), true)
+})
+
+test('C5 isEffectiveRoutine: three path spellings judge identically (T46)', () => {
+  const target = 'C:/Users/X/Dev/sub/f.ts'
+  for (const spelling of ['C:/Users/X/Dev/', 'c:/users/x/dev', 'C:\\Users\\X\\Dev\\..\\Dev']) {
+    assert.equal(isEffectiveRoutine(target, { ...roots, trustedDirs: [spelling] }), true, spelling)
+  }
+  assert.equal(isEffectiveRoutine('C:/Users/X/Other/f.ts', { ...roots, trustedDirs: ['C:/Users/X/Dev/'] }), false)
+})
+
+test('C5 runtime-state precedence: trustedDirs can never unlock runtime state (T48)', () => {
+  const zone = 'C:/Users/u/.dsh/plugins/dsh-auto-approval-llm'
+  const rootsT = { ...roots, allowedDshSubpaths: [zone], trustedDirs: ['C:/Users/u/.dsh'] }
+  const verdict = assessTool({ name: 'write', arguments: { file_path: `${zone}/history.jsonl` } }, rootsT, artifacts)
+  assert.equal(verdict.decision, 'deny')
+})
+
+test('C5 isEffectiveRoutine semantics flow into the policy allow branches', () => {
+  const verdict = assessTool({ name: 'write', arguments: { file_path: 'D:/trusted/x.ts' } }, { ...roots, trustedDirs: ['D:/trusted'] }, artifacts)
+  assert.equal(verdict.decision, 'allow')
+  assert.equal(assessShell('echo x > D:/trusted/f.txt', 'bash', { ...roots, trustedDirs: ['D:/trusted'] }, artifacts, undefined).decision, 'allow')
+})
+
+// ── G1 · sensitive-basename fuse ───────────────────────────────────────────
+test('G1 sensitiveBasenameAt: exact basename and directory-segment coverage', () => {
+  const nm = (p) => normalizePath(p, roots.workspace, roots.home)
+  const s = (p) => sensitiveBasenameAt(nm(p), roots)
+  // .env family (+ .example exemption)
+  assert.equal(s('C:/ws/.env'), true)
+  assert.equal(s('C:/ws/.env.local'), true)
+  assert.equal(s('C:/ws/.env.production'), true)
+  assert.equal(s('C:/ws/.env.example'), false)
+  assert.equal(s('C:/ws/.env.example.local'), false)
+  // static-sensitive basenames
+  assert.equal(s('C:/ws/.gitconfig'), true)
+  assert.equal(s('C:/ws/.gitmodules'), true)
+  assert.equal(s('C:/ws/.netrc'), true)
+  assert.equal(s('C:/ws/.npmrc'), true)
+  assert.equal(s('C:/ws/.pypirc'), true)
+  assert.equal(s('C:/ws/.mcp.json'), true)
+  assert.equal(s('C:/Users/u/.bashrc'), true)
+  assert.equal(s('C:/ws/.bash_history'), true)
+  assert.equal(s('C:/ws/plain.txt'), false)
+  // sensitive directory segments at any position
+  assert.equal(s('C:/Users/u/.ssh/id_rsa'), true)
+  assert.equal(s('C:/ws/.aws/config'), true)
+  assert.equal(s('D:/x/.kube/config'), true)
+  assert.equal(s('C:/ws/.gnupg/gpg.conf'), true)
+  assert.equal(s('C:/ws/.azure/az.json'), true)
+  assert.equal(s('C:/ws/notssh/x'), false)
+})
+
+// ── L2 · symlink/junction escape fixture (T47) ─────────────────────────────
+function fixture() {
+  const root = mkdtempSync(join(tmpdir(), 'dsa-category-'))
+  const workspace = join(root, 'ws')
+  const trustedDir = join(root, 'trusted')
+  const outside = join(root, 'outside')
+  mkdirSync(workspace)
+  mkdirSync(trustedDir)
+  mkdirSync(outside)
+  return {
+    root,
+    workspace,
+    trustedDir,
+    outside,
+    cleanup: () => rmSync(root, { recursive: true, force: true }),
+  }
+}
+
+test('L2 realpathCriticalReason: trustedDir symlink/junction escape is a hard-deny reason', () => {
+  const f = fixture()
+  try {
+    writeFileSync(join(f.outside, 'sec.txt'), 'secret')
+    let used = ''
+    try {
+      symlinkSync(join(f.outside, 'sec.txt'), join(f.trustedDir, 'link-file'), 'file')
+      used = 'file'
+    } catch {
+      symlinkSync(f.outside, join(f.trustedDir, 'link-dir'), 'junction')
+      used = 'junction'
+    }
+    const link = join(f.trustedDir, used === 'file' ? 'link-file' : 'link-dir')
+    const r = { workspace: f.workspace, home: f.root, dshHome: join(f.root, '.dsh'), allowedDshSubpaths: [] }
+    const textual = normalizePath(link, f.workspace, f.root)
+    const resolved = normalizePath(realpathSync(link), f.workspace, f.root)
+    assert.notEqual(textual, resolved)
+    const reason = realpathCriticalReason(textual, resolved, r, [f.trustedDir])
+    assert.match(reason ?? '', /resolves outside the workspace via a symlink/)
+    // Same trustedDir, non-escaping realpath: no reason.
+    writeFileSync(join(f.trustedDir, 'real.txt'), 'x')
+    assert.equal(realpathCriticalReason(join(f.trustedDir, 'real.txt'), join(f.trustedDir, 'real.txt'), r, [f.trustedDir]), undefined)
+  } finally {
+    f.cleanup()
+  }
+})
+
+test('L2 realpathCriticalReason: textually-external targets are not its business (standard)', () => {
+  const r = { workspace: 'C:/ws', home: 'C:/Users/u', dshHome: 'C:/Users/u/.dsh', allowedDshSubpaths: [] }
+  assert.equal(realpathCriticalReason('D:/other/x', 'D:/other/real/x', r, ['D:/trusted']), undefined)
+  assert.match(realpathCriticalReason('C:/ws/ln/x', 'D:/outside/x', r) ?? '', /resolves outside/)
+  assert.equal(realpathCriticalReason('C:/ws/ln/x', 'C:/ws/real/x', r), undefined)
+})
+
+// ── L3 · wiring assertions against the compiled host ───────────────────────
+const HOST_SRC = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
+
+test('L3 T63: the category decision function is called once per wiring point (2 total)', () => {
+  const occurrences = [...HOST_SRC.matchAll(/categoryDirectiveFor\(/g)]
+  assert.equal(occurrences.length, 2, 'pre-execute + classifyStaticRisk only, no state crossing')
+  const preIndex = HOST_SRC.indexOf("'tools/pre-execute'")
+  assert.ok(occurrences[0].index < preIndex, 'classifyStaticRisk call site precedes pre-execute')
+  assert.ok(occurrences[1].index > preIndex, 'pre-execute recomputes the directive itself')
+})
+
+test('L3 T64: pre-execute tightens only with deny/ask returns, never auto→next', () => {
+  const start = HOST_SRC.indexOf("'tools/pre-execute'")
+  const end = HOST_SRC.indexOf("'tools/result'")
+  const pre = HOST_SRC.slice(start, end > start ? end : start + 4000)
+  assert.ok(pre.includes('[auto-mode category deny]'), 'category deny return exists')
+  assert.ok(pre.includes('[auto-mode category ask]'), 'category ask return exists')
+  assert.ok(!pre.includes('[auto-mode category auto]'), 'no category auto branch in pre-execute')
+  assert.ok(!/directive === 'auto'/.test(pre), 'auto never intercepts in pre-execute')
+})
+
+test('L3 T74: the pre-execute category-ask branch precedes the classifier call', () => {
+  const start = HOST_SRC.indexOf("'tools/pre-execute'")
+  const end = HOST_SRC.indexOf("'tools/result'")
+  const pre = HOST_SRC.slice(start, end > start ? end : start + 4000)
+  const askIdx = pre.indexOf('[auto-mode category ask]')
+  const classifyIdx = pre.indexOf('classifier.classify')
+  assert.ok(askIdx !== -1 && classifyIdx !== -1)
+  assert.ok(askIdx < classifyIdx, 'a category ask returns before the LLM classifier fast path')
+})
+
+test('L3 T65: answerer decision order follows Q2 (denyList → category-deny → allowlist → humanOnly → manual → breaker → category-allow)', () => {
+  const answererStart = HOST_SRC.indexOf("ev: 'request'")
+  assert.ok(answererStart !== -1)
+  const answerer = HOST_SRC.slice(answererStart)
+  const at = (needle) => answerer.indexOf(needle)
+  const chain = [
+    "staticDecision.kind === 'reject'",
+    "'category-deny'",
+    "staticDecision.kind === 'allow'",
+    "staticDecision.kind === 'ask-human'",
+    "reviewMode === 'manual'",
+    'breakerTripped(',
+    "'category-allow'",
+  ]
+  let prev = -1
+  for (const needle of chain) {
+    const idx = at(needle)
+    assert.ok(idx !== -1, `answerer contains ${needle}`)
+    assert.ok(idx > prev, `order broken at ${needle}: ${idx} not after ${prev}`)
+    prev = idx
+  }
+})
+
+test('L3 T66: rootsFor reads category mode/trustedDirs from the live config', () => {
+  const rootsForIdx = HOST_SRC.indexOf('const rootsFor')
+  const rootsForBlock = HOST_SRC.slice(rootsForIdx, HOST_SRC.indexOf('const authorityFor'))
+  assert.ok(rootsForBlock.includes('config.categoryMode'), 'mode injected per call')
+  assert.ok(rootsForBlock.includes('config.trustedDirs'), 'trustedDirs injected per call')
+  const rootOptionsIdx = HOST_SRC.indexOf('const rootOptions')
+  const rootOptionsBlock = HOST_SRC.slice(rootOptionsIdx, rootsForIdx)
+  assert.ok(!rootOptionsBlock.includes('config.categoryMode'), 'frozen rootOptions stays mode-free')
+  assert.ok(!rootOptionsBlock.includes('config.trustedDirs'), 'frozen rootOptions stays trustedDir-free')
+})
+
+test('L3 T76: HistoryRecord declares the optional category fields (declaration output)', () => {
+  const dts = readFileSync(new URL('../lib/types/index.d.ts', import.meta.url), 'utf8')
+  const block = dts.match(/interface HistoryRecord \{[\s\S]*?\n\}/)
+  assert.ok(block !== null, 'HistoryRecord interface is emitted')
+  assert.ok(/\bcategory\?:/.test(block[0]))
+  assert.ok(/\bcategoryDecision\?:/.test(block[0]))
+  assert.ok(/\bmode\?:/.test(block[0]))
+})
+
+test('L3: risk flow composes (git reset → delete(locked) + old-layer ask unchanged, risk MEDIUM)', () => {
+  const verdict = assessShell('git reset --hard', 'bash', roots, artifacts, undefined)
+  assert.equal(verdict.decision, 'ask')
+  assert.equal(verdict.classifierEligible, true)
+  assert.equal(cat('git reset --hard'), 'delete')
+  assert.equal(riskFromAssessment(verdict, 'bash'), 'MEDIUM')
+})
+
+test('L3: directive wiring end-to-end via categoryDirectiveFor on real executions', () => {
+  const cfg = { categoryPolicy: { fileEdit: 'deny', readOnly: 'ask', networkExec: 'auto' }, categoryMode: 'standard' }
+  assert.equal(categoryDirectiveFor({ name: 'write', arguments: { file_path: 'C:/ws/a.ts' } }, roots, cfg).directive, 'deny')
+  assert.equal(categoryDirectiveFor({ name: 'write', arguments: { file_path: 'C:/ws/a.ts' } }, roots, cfg).category, 'fileEdit')
+  assert.equal(categoryDirectiveFor({ name: 'read', arguments: { file_path: 'C:/ws/a.ts' } }, roots, cfg).directive, 'ask')
+  assert.equal(categoryDirectiveFor({ name: 'web_search', arguments: {} }, roots, cfg).directive, 'auto')
+  assert.equal(categoryDirectiveFor({ name: 'bash', arguments: { command: 'curl -I https://x' } }, roots, cfg).directive, 'auto')
+  assert.equal(categoryDirectiveFor({ name: 'bash', arguments: { command: 'git push x' } }, aggressive, { categoryPolicy: {}, categoryMode: 'aggressive' }).directive, 'auto')
+})
+
+// ── C9/C10 · host-only ownership + client tables ───────────────────────────
+test('C9 T70: trustedDirs is host-only; categoryPolicy/categoryMode are not', () => {
+  assert.ok(HOST_ONLY_KEYS.includes('trustedDirs'))
+  assert.ok(!HOST_ONLY_KEYS.includes('categoryPolicy'))
+  assert.ok(!HOST_ONLY_KEYS.includes('categoryMode'))
+})
+
+test('C10 T72: client invalid-config tables gain the three keys (compiled bundle)', () => {
+  const client = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
+  assert.ok(client.includes('categoryPolicy: "object"'), 'categoryPolicy type row')
+  assert.ok(client.includes('categoryMode: "string"'), 'categoryMode type row')
+  assert.ok(client.includes('trustedDirs: "array"'), 'trustedDirs type row')
+  const categoryModeEnum = client.indexOf('categoryMode: ["standard"')
+  assert.ok(categoryModeEnum !== -1, 'categoryMode enum row')
+  assert.ok(client.slice(categoryModeEnum, categoryModeEnum + 200).includes('"aggressive"'), 'aggressive mode value')
+})

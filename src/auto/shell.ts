@@ -4,6 +4,7 @@
 // Retained per the MIT License: this is a substantial portion of the original.
 import { basename } from 'node:path';
 import { hardDestructiveTargetReason, isArtifactArea, isProtectedProjectPath, isWithin, normalizePath, runtimeStateTargetInZone, runtimeStateTargetReason, } from './paths.js';
+import { isEffectiveRoutine, sensitiveBasenameAt } from './category.js';
 function ambiguous(reason) {
     return { decision: 'ask', reason, classifierEligible: true };
 }
@@ -543,7 +544,8 @@ function readPathsAreRoutine(words, roots) {
     // `~user/…` expands to another user's home — never a routine root.
     if (words.some(word => word && tildeUserTarget(word.text)))
         return false;
-    return explicitPaths(words, roots).every(path => (isWithin(roots.workspace, path) && !isProtectedProjectPath(path, roots))
+    return explicitPaths(words, roots).every(path => (isEffectiveRoutine(path, roots) && !isProtectedProjectPath(path, roots)
+        && !(!isWithin(roots.workspace, path) && sensitiveBasenameAt(path, roots)))
         || roots.tempRoots.some(root => isWithin(root, path)));
 }
 /** Every redirection target must be a discard sink or ordinary project content. */
@@ -558,7 +560,8 @@ function writeTargetsAreRoutine(segment, shell, roots) {
         if (tildeUserTarget(target.text))
             return false;
         const normalized = normalizePath(target.text, roots.workspace, roots.home);
-        return isWithin(roots.workspace, normalized) && !isProtectedProjectPath(normalized, roots);
+        return isEffectiveRoutine(normalized, roots) && !isProtectedProjectPath(normalized, roots)
+            && !(!isWithin(roots.workspace, normalized) && sensitiveBasenameAt(normalized, roots));
     });
 }
 function buildOrTest(words) {
@@ -706,7 +709,8 @@ function creationSpec(name, words, shell, roots) {
     return {
         paths,
         protected: raw.some(path => tildeUserTarget(path))
-            || paths.some(path => !isWithin(roots.workspace, path) || isProtectedProjectPath(path, roots)),
+            || paths.some(path => !isEffectiveRoutine(path, roots) || isProtectedProjectPath(path, roots)
+                || (!isWithin(roots.workspace, path) && sensitiveBasenameAt(path, roots))),
     };
 }
 /** Unconditional hard deny for one segment, independent of classifier behavior. */
@@ -964,7 +968,8 @@ function classifyEffectiveCommand(name, words, segment, shell, roots, artifacts,
         const operands = words.slice(1);
         const paths = explicitPaths(operands, roots);
         const tildeUser = operands.some(word => tildeUserTarget(word.text));
-        return !tildeUser && paths.length > 0 && paths.every(path => isWithin(roots.workspace, path) && !isProtectedProjectPath(path, roots))
+        return !tildeUser && paths.length > 0 && paths.every(path => isEffectiveRoutine(path, roots) && !isProtectedProjectPath(path, roots)
+            && !(!isWithin(roots.workspace, path) && sensitiveBasenameAt(path, roots)))
             ? allowed('static project-local file operation')
             : semanticReview('file move/copy target is external, protected, or unclear');
     }
