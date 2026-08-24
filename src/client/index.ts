@@ -1242,7 +1242,25 @@ function SettingsSection() {
     }
   }
 
+  // Direct-channel completeness precheck, mirroring the host-side snapshot
+  // rule: a base URL only enables the online reviewer together with a model
+  // name and an API key (already configured in the store, or freshly typed
+  // into the key field — saving persists it). Returns the localized missing
+  // pieces for the banner, or null when the channel is complete/unused.
+  const reviewerDirectMissing = (): string[] | null => {
+    if (!draft.reviewerBaseUrl.trim()) return null
+    const missing: string[] = []
+    if (!draft.reviewerModel.trim()) missing.push(t('settings.reviewer.missingModel'))
+    if (!credentialConfigured && !reviewerApiKey.trim()) missing.push(t('settings.reviewer.missingKey'))
+    return missing.length > 0 ? missing : null
+  }
+
   const testOnline = async () => {
+    const incomplete = reviewerDirectMissing()
+    if (incomplete) {
+      setTestResult(t('settings.reviewer.incompleteDirect', { missing: incomplete.join(', ') }))
+      return
+    }
     const baseUrl = draft.reviewerBaseUrl.trim()
     const model = draft.reviewerModel.trim()
     if (!baseUrl || !model) {
@@ -1308,6 +1326,14 @@ function SettingsSection() {
   }
 
   const saveReviewCard = async () => {
+    // Block the whole save when the direct trio is incomplete: persisting a
+    // half-configured base URL would only demote reviews to the session model
+    // host-side, so the user gets the missing pieces listed instead.
+    const incomplete = reviewerDirectMissing()
+    if (incomplete) {
+      setCardStatus({ id: 'review', kind: 'err', text: t('settings.reviewer.incompleteDirect', { missing: incomplete.join(', ') }) })
+      return
+    }
     await saveCard(REVIEW_KEYS, 'review')
     if (reviewerApiKey.trim()) await saveReviewerCredential()
   }

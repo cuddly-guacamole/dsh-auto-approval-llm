@@ -27,7 +27,7 @@ import { isTrustedRequest, isLoopbackIp, validateReviewerBaseUrl } from '../lib/
 import { parseClassifierDecision } from '../lib/auto/classifier.js'
 import { RISK_NAME_PATTERN, RISK_REASON_PATTERN } from '../lib/auto/risk-tokens.js'
 import { buildAskReason, buildEditDiffText } from '../lib/auto/editdiff.js'
-import { Config, resolveConfig, sessionModelRoute } from '../lib/index.js'
+import { Config, resolveConfig, sessionModelRoute, buildReviewSnapshot } from '../lib/index.js'
 import { categorizeCommand } from '../lib/auto/category.js'
 
 test('parseClassifierDecision: valid allow/ask/deny', () => {
@@ -2487,4 +2487,75 @@ test('reviewer route gate: the three-source disjunction stays pinned at both pip
   const host = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
   const matches = host.match(/\!\!\(\(config\.reviewerProvider && config\.reviewerModel\) \|\| config\.reviewerBaseUrl \|\| sessionModelRoute\(req\.agent\.session\)\)/g) ?? []
   assert.equal(matches.length, 2, 'route-availability expression must gate both the learning path and the main review pipeline')
+})
+
+// ── direct-review snapshot completeness: base URL + model + key, or fall through ──
+
+const snapshotSession = { events: [{ type: 'request/header', data: { header: { config: { provider: 'sess-provider', model: 'sess-model' } } } }] }
+const snapshotReq = { callId: 'call-snapshot', toolName: 'bash' }
+const snapshotTools = { schemas: () => [] }
+const snapshotCredentials = (value) => ({ resolve: async () => ({ value }) })
+const snapshotConfig = (over = {}) => ({
+  maxArgsChars: 4000,
+  reviewerContextFacts: false,
+  safetyPrompt: '',
+  rulesText: '',
+  reviewerProtocol: 'openai',
+  reviewerProvider: '',
+  reviewerModel: '',
+  reviewerBaseUrl: '',
+  ...over,
+})
+const runSnapshot = (credentialValue, over = {}) =>
+  buildReviewSnapshot(snapshotCredentials(credentialValue), snapshotTools, snapshotSession, snapshotReq, snapshotConfig(over), {})
+
+test('direct review snapshot: base URL and model without a stored key skip the doomed online attempt and follow the session model', async () => {
+  const snap = await runSnapshot(undefined, { reviewerBaseUrl: 'http://127.0.0.1:9999', reviewerModel: 'direct-model' })
+  assert.equal(snap.online, false)
+  assert.deepEqual(snap.route, { provider: 'sess-provider', model: 'sess-model' })
+  assert.equal('baseUrl' in snap, false)
+  assert.equal('apiKey' in snap, false)
+})
+
+test('direct review snapshot: base URL with a blank model name counts as unconfigured and follows the session model', async () => {
+  const snap = await runSnapshot('sk-test', { reviewerBaseUrl: 'http://127.0.0.1:9999', reviewerModel: '' })
+  assert.equal(snap.online, false)
+  assert.deepEqual(snap.route, { provider: 'sess-provider', model: 'sess-model' })
+})
+
+test('direct review snapshot: base URL + model name + stored key yield the online snapshot carrying baseUrl and apiKey', async () => {
+  const snap = await runSnapshot('sk-test', { reviewerBaseUrl: 'http://127.0.0.1:9999/', reviewerModel: 'direct-model' })
+  assert.equal(snap.online, true)
+  assert.equal(snap.baseUrl, 'http://127.0.0.1:9999')
+  assert.equal(snap.apiKey, 'sk-test')
+  assert.equal(snap.protocol, 'openai')
+})
+
+test('direct review snapshot: explicit provider+model pair without a base URL stays the offline explicit route', async () => {
+  const snap = await runSnapshot(undefined, { reviewerProvider: 'pair-provider', reviewerModel: 'pair-model' })
+  assert.equal(snap.online, false)
+  assert.deepEqual(snap.route, { provider: 'pair-provider', model: 'pair-model' })
+})
+
+test('direct review snapshot: fully empty reviewer config follows the session model route', async () => {
+  const snap = await runSnapshot(undefined)
+  assert.equal(snap.online, false)
+  assert.deepEqual(snap.route, { provider: 'sess-provider', model: 'sess-model' })
+})
+
+test('resolveConfig: base URL without model name resolves usable config with the stored values intact and emits a warning instead of throwing', () => {
+  const warnings = []
+  const originalWarn = console.warn
+  console.warn = (...parts) => { warnings.push(parts.map(String).join(' ')) }
+  let resolved
+  try {
+    resolved = resolveConfig({ timeoutAction: 'reject', reviewerBaseUrl: 'https://api.example.com/v1' })
+  } finally {
+    console.warn = originalWarn
+  }
+  assert.equal(resolved.reviewerBaseUrl, 'https://api.example.com/v1')
+  assert.equal(resolved.timeoutAction, 'reject')
+  assert.equal(resolved.reviewerModel ?? '', '')
+  const hits = warnings.filter((line) => line.includes('reviewerBaseUrl') && line.includes('reviewerModel'))
+  assert.equal(hits.length, 1, `expected exactly one half-configured-direct warning, got: ${JSON.stringify(warnings)}`)
 })

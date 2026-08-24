@@ -259,6 +259,13 @@ export function resolveConfig(raw: Config): Config {
   ) {
     console.warn(`[dsh-auto-approval-llm] clamping learningThreshold ${String(raw.learningThreshold)} to ${learningThreshold} (valid range: integer 2..10)`)
   }
+  // Half-configured direct endpoint advisory: reviewerBaseUrl without
+  // reviewerModel no longer produces a doomed online attempt — the snapshot
+  // treats the incomplete trio as unconfigured and review follows the session
+  // model. Warn at resolve time; the stored values themselves stay untouched.
+  if (String(raw.reviewerBaseUrl ?? '').trim().length > 0 && String(raw.reviewerModel ?? '').trim().length === 0) {
+    console.warn('[dsh-auto-approval-llm] reviewerBaseUrl set without reviewerModel: direct review needs base URL + model name + API key, so this combination counts as unconfigured and review follows the session model')
+  }
   return {
     ...raw,
     timeoutAction,
@@ -362,7 +369,7 @@ interface ReviewSnapshot {
   apiKey?: string
 }
 
-async function buildReviewSnapshot(
+export async function buildReviewSnapshot(
   credentials: any, tools: any, session: any, req: any, config: Config,
   opts: {
     userMessages?: string[]
@@ -431,14 +438,26 @@ async function buildReviewSnapshot(
     } catch {
       apiKey = undefined
     }
-    return {
-      online: true,
-      payload,
-      system,
-      baseUrl: validated.baseUrl,
-      protocol: config.reviewerProtocol === 'anthropic' ? 'anthropic' : 'openai',
-      apiKey,
+    // The direct channel exists only when all three pieces are configured:
+    // base URL + model name + a resolved API key. A half-configured endpoint
+    // can only produce a doomed request (empty model → INVALID_REQUEST, no
+    // key → AUTH), so an incomplete trio is treated as unconfigured: log what
+    // is missing and fall through to session-model review below. A malformed
+    // URL above is different — that is wrong configuration, not half of one.
+    const missing: string[] = []
+    if (String(config.reviewerModel ?? '').trim().length === 0) missing.push('model')
+    if (!apiKey) missing.push('key')
+    if (missing.length === 0) {
+      return {
+        online: true,
+        payload,
+        system,
+        baseUrl: validated.baseUrl,
+        protocol: config.reviewerProtocol === 'anthropic' ? 'anthropic' : 'openai',
+        apiKey,
+      }
     }
+    debugLog({ ev: 'reviewer-incomplete', callId: req.callId, baseUrl: validated.baseUrl, missing })
   }
 
   const route = config.reviewerProvider && config.reviewerModel

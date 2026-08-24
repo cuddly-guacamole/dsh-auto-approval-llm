@@ -125,8 +125,8 @@ Session approval stats — the "Auto Approval" header-button popup: totals / all
 | `maxConsecutiveDenials` | 3 | Consecutive LLM-denial breaker threshold; 0 off |
 | `maxTotalDenials` | 20 | Cumulative denial breaker threshold; 0 off |
 | `reviewerProtocol` | `openai` | Online review protocol: `openai` (chat/completions) / `anthropic` (messages) |
-| `reviewerBaseUrl` | '' | Online review API base URL; non-empty enables online review, empty follows the session model |
-| `reviewerModel` (+ legacy `reviewerProvider`) | '' | Online review model (legacy Provider route kept for compatibility, no longer in the UI) |
+| `reviewerBaseUrl` | '' | Online review API base URL; non-empty enables online review, empty follows the session model. Direct connection activates only with all three pieces (base URL + model name + configured key); any missing piece automatically follows the session model |
+| `reviewerModel` (+ legacy `reviewerProvider`) | '' | Online review model (legacy Provider route kept for compatibility, no longer in the UI). Direct connection activates only with all three pieces (base URL + model name + configured key); any missing piece automatically follows the session model |
 | `safetyPrompt` | '' | Extra policy appended to the review model (hot-applied after save) |
 | `allowlist` / `denyList` / `humanOnlyList` | [] | Exact tool-name match |
 | `rulesText` | '' | Declarative rules (take precedence over the built-in lists; optional `[agent:…]` / `[workspace:…]` dimension prefix, comma = AND; parse error voids the whole text) |

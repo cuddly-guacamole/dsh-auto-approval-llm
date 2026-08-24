@@ -59,7 +59,7 @@
 :::
 
 ::: warning 容易误解的六件事
-1. **`reviewerBaseUrl` 留空 ≠ 离线**。评审路由可用性是三源析取：显式 `reviewerProvider+reviewerModel` ∥ `reviewerBaseUrl` ∥ 会话模型兜底（<span class="lnum">index.ts:L2561</span>、路由快照 <span class="lnum">L421-448</span>）；三源全空时 LOW 档不送审、按类别/自动直接放行（<span class="lnum">index.ts:L2566-2580</span>）。
+1. **直连评审三件齐备才成立，缺任一自动跟随会话模型**。`reviewerBaseUrl` 非空只是入口——还需 `reviewerModel` 非空且凭据存储已配置 API 密钥，三件齐备快照层才返回在线通道；缺任一件按未配置处理（debug 记 `reviewer-incomplete`），评审直接走会话模型路由，不再发出注定失败的请求吃 AUTH 后转人工（<span class="lnum">index.ts:L428-460</span>；URL 形状非法仍按原校验失败语义处理）。评审路由可用性门仍是三源析取：显式 `reviewerProvider+reviewerModel` ∥ `reviewerBaseUrl` ∥ 会话模型兜底（<span class="lnum">index.ts:L2580</span>）；三源全空时 LOW 档不送审、按类别/自动直接放行。
 2. **`timeoutAction` 的 legacy 枚举迁移分支不可删**（`llm-low-risk-only` → `reject`，<span class="lnum">index.ts:L183-192</span>）：resolveConfig 是全有全无闸门——删掉映射后旧值走 throw，启动路径整库回落 patch 默认（<span class="lnum">index.ts:L1543-1548</span>；热更新路径则保留旧 config），不是只重置这一个键。
 3. **移除顶层配置键后，旧 settings.yaml 的残留键被静默忽略**：残留键不会被剥离，而是随解析结果原样透传进运行时配置、只是再没有任何代码读取它——无警告无报错（`{...raw}` 透传 <span class="lnum">index.ts:L263</span> 起；Config schema <span class="lnum">index.ts:L117</span> 起）；弃用公告只能靠文档，不会有迁移提示。
 4. **`safetyPrompt` 与 `rulesText` 分工不同**：前者拼进评审 system 提示词，保存即热生效（<span class="lnum">index.ts:L416</span>）；后者是声明式执法规则，先于内置 allowlist/denyList 终局裁决 allow/deny/human（<span class="lnum">index.ts:L2405-2465</span>）。
