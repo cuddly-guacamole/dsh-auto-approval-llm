@@ -13,7 +13,7 @@
 
 **触发**（`breakerTripped`）：`maxConsecutiveDenials > 0 && 连续 ≥ 阈值`（默认 3）**或** `maxTotalDenials > 0 && 累计 ≥ 阈值`（默认 20）；任一轨为 0 = 关闭。
 
-## 8.2　状态转移表 `applyBreaker` <span class="lnum">decision.ts:L258-274</span>
+## 8.2　状态转移表 `applyBreaker` <span class="lnum">decision.ts:L268-284</span>
 
 | 本次决议来源 | 连续 | 累计 | denialLog |
 |---|---|---|---|
@@ -23,7 +23,7 @@
 | `timeout-* / auto-* / advisory 拒绝 / llm-failed / 静态名单` | 不变 | 不变 | 不变 |
 
 ::: tip 并发安全
-**并发安全**：计数器读-改-写（连续两个 await 之间）用 `createKeyedMutex`（<span class="lnum">decision.ts:L491-519</span>，per-key Promise 链）串行化——同会话并发审批不会丢失一次 +1；不同会话保持并发。
+**并发安全**：计数器读-改-写（连续两个 await 之间）用 `createKeyedMutex`（<span class="lnum">decision.ts:L693-721</span>，接口 KeyedMutex L689-691，per-key Promise 链）串行化——同会话并发审批不会丢失一次 +1；不同会话保持并发。
 :::
 
 ::: tip 生命周期

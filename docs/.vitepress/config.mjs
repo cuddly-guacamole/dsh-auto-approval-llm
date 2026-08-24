@@ -34,7 +34,9 @@ export default withMermaid(defineConfig({
           { text: '05 风险分档与倒计时', link: '/05-risk-matrix' },
           { text: '06 LLM 评审器', link: '/06-llm-reviewer' },
           { text: '07 人机竞速与超时仲裁', link: '/07-human-race' },
-          { text: '08 熔断器状态机', link: '/08-breaker' }
+          { text: '08 熔断器状态机', link: '/08-breaker' },
+          { text: '17 类别开关与信任目录', link: '/17-category-switches' },
+          { text: '18 确认制学习', link: '/18-confirm-learning' }
         ]
       },
       {

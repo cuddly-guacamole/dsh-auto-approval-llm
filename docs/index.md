@@ -54,6 +54,8 @@ hero:
   <a class="navcard" href="/dsh-auto-approval-llm/06-llm-reviewer"><span class="nn">06</span><span class="nt">LLM 评审器</span><span class="nd">reasoning-blind 双通道</span></a>
   <a class="navcard" href="/dsh-auto-approval-llm/07-human-race"><span class="nn">07</span><span class="nt">人机竞速与超时仲裁</span><span class="nd">谁说了算</span></a>
   <a class="navcard" href="/dsh-auto-approval-llm/08-breaker"><span class="nn">08</span><span class="nt">熔断器状态机</span><span class="nd">3 次连续 / 20 次累计</span></a>
+  <a class="navcard" href="/dsh-auto-approval-llm/17-category-switches"><span class="nn">17</span><span class="nt">类别开关与信任目录</span><span class="nd">11 类三态 · standard/aggressive</span></a>
+  <a class="navcard" href="/dsh-auto-approval-llm/18-confirm-learning"><span class="nn">18</span><span class="nt">确认制学习</span><span class="nd">反复人工确认 → 学习放行（默认关）</span></a>
 </div>
 
 ### 安全与界面
@@ -61,8 +63,8 @@ hero:
 <div class="navgrid">
   <a class="navcard" href="/dsh-auto-approval-llm/09-defense-in-depth"><span class="nn">09</span><span class="nt">安全纵深九层</span><span class="nd">从预设门到审计碑</span></a>
   <a class="navcard" href="/dsh-auto-approval-llm/10-client-ui"><span class="nn">10</span><span class="nt">客户端 UI 结构</span><span class="nd">设置卡 + 面板劫持 + 轮询</span></a>
-  <a class="navcard" href="/dsh-auto-approval-llm/11-data-persistence"><span class="nn">11</span><span class="nt">数据与持久化</span><span class="nd">四个 JSONL 文件</span></a>
-  <a class="navcard" href="/dsh-auto-approval-llm/12-config"><span class="nn">12</span><span class="nt">配置全景</span><span class="nd">32 键 schema + bundle 覆盖</span></a>
+  <a class="navcard" href="/dsh-auto-approval-llm/11-data-persistence"><span class="nn">11</span><span class="nt">数据与持久化</span><span class="nd">六个运行态数据文件</span></a>
+  <a class="navcard" href="/dsh-auto-approval-llm/12-config"><span class="nn">12</span><span class="nt">配置全景</span><span class="nd">41 键 schema + bundle 覆盖</span></a>
   <a class="navcard" href="/dsh-auto-approval-llm/13-http-api"><span class="nn">13</span><span class="nt">HTTP API 面</span><span class="nd">10 条路由与其信任平面</span></a>
 </div>
 
@@ -70,6 +72,6 @@ hero:
 
 <div class="navgrid">
   <a class="navcard" href="/dsh-auto-approval-llm/14-code-map"><span class="nn">14</span><span class="nt">代码地图与构建发布</span><span class="nd">tsc + tsdown + patch 层</span></a>
-  <a class="navcard" href="/dsh-auto-approval-llm/15-quality"><span class="nn">15</span><span class="nt">质量保障体系</span><span class="nd">113 测试 + 运行时验证</span></a>
+  <a class="navcard" href="/dsh-auto-approval-llm/15-quality"><span class="nn">15</span><span class="nt">质量保障体系</span><span class="nd">363 测试 + 运行时验证</span></a>
   <a class="navcard" href="/dsh-auto-approval-llm/16-axioms"><span class="nn">16</span><span class="nt">设计公理</span><span class="nd">为什么不追求完美</span></a>
 </div>

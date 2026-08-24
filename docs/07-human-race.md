@@ -2,7 +2,7 @@
 
 > *Who decides what*
 
-枪声一响，三方赛跑：**人**（点官方面板按钮）、**宿主倒计时**（唯一权威作者）、**LLM 结论**（scope 内可抢占）。`raceHumanDecision`（<span class="lnum">decision.ts:L94-135</span>）是仲裁器：
+枪声一响，三方赛跑：**人**（点官方面板按钮）、**宿主倒计时**（唯一权威作者）、**LLM 结论**（scope 内可抢占）。`raceHumanDecision`（<span class="lnum">decision.ts:L100-141</span>）是仲裁器：
 
 <ol class="seq">
   <li><span class="who">启动 <code>raceHumanDecision(() =&gt; next(), {seconds, action}, handle)</code></span><div class="cap">把「求人」委托给官方 ApprovalPanel（<code>next()</code>），同时宿主开一个 <code>setTimeout(seconds*1000)</code>。</div></li>
@@ -11,7 +11,7 @@
   <li><span class="who">LLM 抢先（仅 MEDIUM+scope 内）</span><div class="cap"><code>handle.claim('allowed-once'|'rejected')</code>：清定时器、<code>claimed=true</code>、立即结案 —— 这就是「LLM 接管」的唯一可信信号。</div></li>
 </ol>
 
-## 7.1　诚实来源标注 `approvalSource` <span class="lnum">decision.ts:L152-169</span> —— 谁决定，就标谁
+## 7.1　诚实来源标注 `approvalSource` <span class="lnum">decision.ts:L158-175</span> —— 谁决定，就标谁
 
 | 条件 | source 标签 |
 |---|---|

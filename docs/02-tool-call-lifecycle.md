@@ -7,23 +7,23 @@
 <ol class="seq">
   <li><span class="who">① 模型 → DSH</span><div class="cap">模型发出工具调用（如 `bash`、`write`、`apply_patch`、`web_fetch`）。</div></li>
 
-  <li><span class="who">② 同步硬拒闸门 · `ctx.tools.guard()` <span class="lnum">index.ts:L1450-1456</span></span>
-    <div class="cap">不是事件，而是 tools 服务的**同步注册守卫**：`isAutoExecution` 后先 `hardDenyReason`（凭据物质 / 受保护路径 / shell 熔断），再 `symlinkEscapeReason`（realpath 逃逸工作区）。命中即返回原因字符串 → 直接拒，**不弹窗**。</div></li>
+  <li><span class="who">② 同步硬拒闸门 · <code>ctx.tools.guard()</code> <span class="lnum">index.ts:L1848-1854</span></span>
+    <div class="cap">不是事件，而是 tools 服务的**同步注册守卫**：`isAutoExecution` 后先 `hardDenyReason`（凭据物质 / 受保护路径 / shell 熔断），再 `symlinkEscapeReason`（realpath 逃逸工作区）。命中即返回原因字符串 → 直接拒，**不弹窗**。这一层只做硬拒，永不挂类别分类。</div></li>
 
-  <li><span class="who">③ 静态评估 · `tools/pre-execute` <span class="lnum">index.ts:L1458-1487</span></span>
-    <div class="cap">`assessTool` → `deny`（硬拒 `[auto-mode hard deny]`）/ `allow`（直接放行）/ `ask`。若 `classifierEligible`，交给 LLM 预分类器（`classifier.classify`）再定 `allow | deny | ask`；分类器不可用 → 一律向人工（`classifier unavailable`）。</div></li>
+  <li><span class="who">③ 静态评估 + 类别收紧 · <code>tools/pre-execute</code> <span class="lnum">index.ts:L1856-1909</span></span>
+    <div class="cap">`assessTool` → `deny`（硬拒 `[auto-mode hard deny]`）/ `allow`（直接放行）/ `ask`。中间还有一层**类别收紧**（<span class="lnum">index.ts:L1868-1885</span>）：三态开关配成 `deny` 的类别在这里终端拒绝、配成 `ask` 的无条件跳过 classifier 快径直接转人工（详见 [§17](./17-category-switches)）。之后若 `classifierEligible`，交给 LLM 预分类器（`classifier.classify`）再定 `allow | deny | ask`；分类器不可用 → 一律向人工（`classifier unavailable`）。</div></li>
 
-  <li><span class="who">④ 终局裁决 · `approval/request` <span class="lnum">index.ts:L1792-2089（prepend+global）</span></span>
-    <div class="cap">本插件的**核心决策管线**（详见 [§04](./04-adjudicator-pipeline)）：声明规则 → 名单 → 评审模式 → 熔断 → 风险分档 → LLM 复审 + 人工倒计时。产出 `allowed-once` 或 `rejected`，或委托官方面板走人工竞速。</div></li>
+  <li><span class="who">④ 终局裁决 · <code>approval/request</code> <span class="lnum">index.ts:L2379-2794（prepend+global）</span></span>
+    <div class="cap">本插件的**核心决策管线**（详见 [§04](./04-adjudicator-pipeline)）：声明规则 → 名单 → 类别开关 → 评审模式 → 熔断 → 策略硬拒 → 学习放行 → 风险分档 → LLM 复审 + 人工倒计时。产出 `allowed-once` 或 `rejected`，或委托官方面板走人工竞速。</div></li>
 
-  <li><span class="who">⑤ 执行与产物登记 · `tools/result` <span class="lnum">index.ts:L1489-1492</span></span>
+  <li><span class="who">⑤ 执行与产物登记 · <code>tools/result</code> <span class="lnum">index.ts:L1911-1914</span></span>
     <div class="cap">`artifacts.settle`：把本会话**成功创建**的文件登记进 `ArtifactRegistry`（后续删除该文件时可豁免）——入参 `plannedCreates` 来自评估阶段的 `artifacts.plan`。</div></li>
 
-  <li><span class="who">⑥ 喂回模型 · `tools/post-execute` <span class="lnum">index.ts:L1513-1523（global）</span></span>
-    <div class="cap">若这次工具结果 `isError` 且有超时/决策标记（`timeoutFeedback` / `decisionFeedback`），注入 `{kind:'block', feedback}` —— 让模型知道「不是因为命令错，而是被审批挡下（超时 / 规则 / 模型拒绝）」。</div></li>
+  <li><span class="who">⑥ 喂回模型 · <code>tools/post-execute</code> <span class="lnum">index.ts:L1935-1965（global）</span></span>
+    <div class="cap">若这次工具结果 `isError` 且有超时/决策标记（`timeoutFeedback` / `decisionFeedback`），注入 `{kind:'block', feedback}` —— 让模型知道「不是因为命令错，而是被审批挡下（超时 / 规则 / 模型拒绝）」。另有独立一段**结果脱敏**（<span class="lnum">index.ts:L1946-1958</span>）：`redactResults` 开启时，成功结果同样过一遍脱敏器并记审计——喂回模型的文本不夹带秘密。</div></li>
 
-  <li><span class="who">⑦ 通知冲刷 · `step/end` <span class="lnum">index.ts:L414-444</span></span>
-    <div class="cap">`flushNotices`：把「✅ Model approved」这类通知写进会话日志（`notifyUser` 开启时）；已看到 tool/result 的才写（否则在 tool-calls 序列中间插入用户消息会破坏 OpenAI 消息序列 → 只打控制台）。</div></li>
+  <li><span class="who">⑦ 通知冲刷 · <code>step/end</code> <span class="lnum">index.ts:L649-663（watchNotices 内 L656-658 分流）</span></span>
+    <div class="cap">没有独立的 `on('step/end')` 注册：`watchNotices` 监听 `session/event`，在事件流里分流出 `step/end` 分支调 `flushNotices`——把「✅ Model approved」这类通知写进会话日志（`notifyUser` 开启时）；已看到 tool/result 的才写（否则在 tool-calls 序列中间插入用户消息会破坏 OpenAI 消息序列 → 只打控制台）。</div></li>
 </ol>
 
 ::: tip 注意

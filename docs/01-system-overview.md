@@ -39,7 +39,11 @@
 | `audit.jsonl` | append-only 审计，清空留 tombstone，>5MB 保尾 5000 行 | 宿主 appendAuditLine |
 | `review-mode.json` | 每会话评审模式快照（smart 不落盘，原子 tmp+rename） | 宿主 persistReviewModes |
 | `approval-debug.jsonl` | 仅 `debug=true` 时写入的评审时序，>1MB 保尾 2000 行 | 宿主 debugLog（request/review/follow/resolve） |
+| `llm-latency.jsonl` | LLM 评审耗时遥测（环形缓冲 200 条，>1MB 轮转；与审批历史分离） | 宿主 pushLatencySample |
+| `learning.json` | 确认制学习条目（SHA-256 键、TTL 30 天/100 条上限，原子 tmp+rename） | 宿主 persistLearning |
+
+以上六个文件同属运行态保护名单（<span class="lnum">paths.ts:L202</span>），任何工具调用都改不了它们。
 
 ::: tip 唯一终结者
-`approval/request` 以 `{prepend:true, global:true}` 注册（<span class="lnum">index.ts:L2089</span>）—— 对命中的 ask，本插件就是最终裁决，不会开第二个弹窗、不会双写、不会让审计断裂。
+`approval/request` 以 `{prepend:true, global:true}` 注册（<span class="lnum">index.ts:L2379</span>，options 行 <span class="lnum">index.ts:L2794</span>）—— 对命中的 ask，本插件就是最终裁决，不会开第二个弹窗、不会双写、不会让审计断裂。
 :::

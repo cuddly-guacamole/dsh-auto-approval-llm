@@ -50,16 +50,20 @@ li.dsa-card（可折叠；任一卡脏 → 头部「未保存」徽标）
 ├─ 顶层开关区（8 个即时保存 CapsuleSelect）
 │    enabled · autoSwitchPolicyToAsk · timeoutAction · llmReviewScope
 │    · llmTakeoverScope · defaultReviewMode · showSessionPanel · aiButtonPosition(条件显示)
-├─ 4 张可折叠子卡（均独立 保存/放弃/恢复默认）
+├─ 6 张可折叠子卡（均独立 保存/放弃；安全规则卡另有 恢复默认）
 │    ├─ 计时器与熔断   低/中/高秒数 · 熔断防劫持ms · 连续/累计阈值（重置=THRESHOLD_DEFAULTS）
 │    ├─ 在线评审模型   协议(openai/anthropic) · API地址 · 模型 · 密钥(password型)「已配置|未配置」· 测试连接
 │    ├─ 安全规则列表   safetyPrompt · allowlist/denyList/humanOnlyList · rulesDryRun · rulesText(实时语法校验)
-│    └─ 最近审批记录   搜索 · 分页(PAGE_SIZE=10) · 记录+[熔断]+原因(warn色) · 清空历史(confirm)
+│    │                · redactResults · reviewerContextFacts · editDiffPreview（三个默认关的增强开关）
+│    ├─ 分类开关与信任模式   categoryMode(standard/aggressive，切 aggressive 弹放开范围警示)
+│    │                · 11 类逐行三态 CapsuleSelect（LOCKED 四类只剩 继承/人工询问 可选）
+│    ├─ 确认制学习     learningEnabled(on/off) · learningThreshold(数字输入 min2 max10，保存钳回 2..10)（<span class="lnum">client/index.ts:L1689-1711</span>）
+│    └─ 最近审批记录   搜索 · 分页(PAGE_SIZE=10) · 记录+[熔断]+原因(warn色) + LLM 响应耗时统计 · 清空历史(confirm)
 └─ 底部 footer：恢复默认 · 重启提示(applies=restart) · 全局错误行
 ```
 
-- **保存语义**：每卡只 POST 自己拥有的键（`sliceValueOf`），叠加到「最后保存基线」上 —— 保存 A 卡不会吞掉 B 卡未保存的编辑；顶层开关即时保存（单键 + `expectedRevision` 乐观并发控制）。
-- **host-only 键保护**：`workspaceRoot/dshHome/tempRoots/classifierTimeoutMs/classifierMaxOutputTokens/maxArgsChars/notifyUser` 是 patch/YAML 配置，卡片保存时经 `preserveHostKeys` 回填，绝不被抹掉。
+- **保存语义**：每卡只 POST 自己拥有的键（`sliceValueOf`），叠加到「最后保存基线」上 —— 保存 A 卡不会吞掉 B 卡未保存的编辑；顶层开关即时保存（单键 + `expectedRevision` 乐观并发控制）。学习子卡只提交 `LEARNING_KEYS = ['learningEnabled','learningThreshold']` 两键（<span class="lnum">client/index.ts:L1072</span>），threshold 保存时钳入 2..10。
+- **host-only 键保护**：九员名单 `workspaceRoot / dshHome / tempRoots / trustedDirs / classifierTimeoutMs / classifierMaxOutputTokens / maxArgsChars / notifyUser / reviewerContextFacts`（<span class="lnum">decision.ts:L224-234</span>）走 patch/YAML 配置；保存时 `preserveHostKeys` 让存储值**恒胜出**，卡片改不掉它们。其中 `trustedDirs` 完全没有设置卡控件；`reviewerContextFacts` 虽在安全规则卡有一个开关（提交键集含它），但服务端仍按 host-only 规则回填——真正生效的改动入口是 YAML。
 - **密钥永不出现在 settings value**：独立 `/reviewer-credential` 路由；输入框 password + new-password 自动完成；保存后立即清空不回显。
 
 ## 10.3　会话标题栏「自动审批」统计

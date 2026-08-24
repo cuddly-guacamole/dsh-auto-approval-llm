@@ -12,8 +12,8 @@ flowchart TD
     A2 -->|↓ 都没有| A3["没有评审路由 → 返回 ESCALATE/failure='no reviewer route'，fail-closed 交人 [escalate]"]
 ```
 
-::: tip 在线通道安全约束（<span class="lnum">index.ts:L166-189</span>）
-仅 http/https；**明文 http 只允许回环地址**（localhost/127.0.0.1/[::1]），否则密钥会裸奔在局域网/Docker 桥上。
+::: tip 在线通道安全约束（<span class="lnum">src/auto/trust.ts:L79-102</span>，validateReviewerBaseUrl）
+仅 http/https；**明文 http 只允许回环地址**（localhost/127.0.0.1/[::1]，栅栏在 <span class="lnum">trust.ts:L92-100</span>），否则密钥会裸奔在局域网/Docker 桥上。
 :::
 
 ## 6.2　发给模型的载荷（frameReviewerInput 产出）
