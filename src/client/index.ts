@@ -665,6 +665,8 @@ interface Draft {
   categoryPolicy: Record<string, 'auto' | 'ask' | 'deny'>
   categoryMode: 'standard' | 'aggressive'
   trustedDirs: string[]
+  learningEnabled: 'on' | 'off'
+  learningThreshold: string
 }
 
 function draftOf(value: any): Draft {
@@ -702,11 +704,17 @@ function draftOf(value: any): Draft {
       : {},
     categoryMode: value?.categoryMode === 'aggressive' ? 'aggressive' : 'standard',
     trustedDirs: Array.isArray(value?.trustedDirs) ? [...value.trustedDirs] : [],
+    learningEnabled: value?.learningEnabled === true ? 'on' : 'off',
+    learningThreshold: String(value?.learningThreshold ?? THRESHOLD_DEFAULTS.learningThreshold),
   }
 }
 
 function valueOf(draft: Draft): any {
   const list = (raw: string) => raw.split(/\r?\n/).map((s) => s.trim()).filter(Boolean)
+  const intOr = (raw: string, fallback: number) => {
+    const n = Math.round(Number(raw))
+    return Number.isFinite(n) ? n : fallback
+  }
   const value: any = {
     enabled: draft.enabled === 'on',
     autoSwitchPolicyToAsk: draft.autoSwitchPolicyToAsk === 'on',
@@ -735,6 +743,8 @@ function valueOf(draft: Draft): any {
     categoryPolicy: draft.categoryPolicy,
     categoryMode: draft.categoryMode,
     trustedDirs: draft.trustedDirs,
+    learningEnabled: draft.learningEnabled === 'on',
+    learningThreshold: Math.max(2, Math.min(10, intOr(draft.learningThreshold, THRESHOLD_DEFAULTS.learningThreshold))),
   }
   if (draft.reviewerProvider.trim()) value.reviewerProvider = draft.reviewerProvider.trim()
   if (draft.reviewerModel.trim()) value.reviewerModel = draft.reviewerModel.trim()
@@ -768,8 +778,8 @@ function formatLatencySeconds(ms: number | null): string {
 // unknown enum, out-of-range number). The settings card shows a red banner and
 // offers to delete those keys so the schema defaults recover.
 const INVALID_CONFIG_TYPES: Record<string, string> = {
-  enabled: 'boolean', autoSwitchPolicyToAsk: 'boolean', rulesDryRun: 'boolean', notifyUser: 'boolean', debug: 'boolean', redactResults: 'boolean', reviewerContextFacts: 'boolean', editDiffPreview: 'boolean',
-  lowRiskSeconds: 'number', mediumRiskSeconds: 'number', highRiskSeconds: 'number',
+  enabled: 'boolean', autoSwitchPolicyToAsk: 'boolean', rulesDryRun: 'boolean', notifyUser: 'boolean', debug: 'boolean', redactResults: 'boolean', reviewerContextFacts: 'boolean', editDiffPreview: 'boolean', learningEnabled: 'boolean',
+  lowRiskSeconds: 'number', mediumRiskSeconds: 'number', highRiskSeconds: 'number', learningThreshold: 'number',
   maxConsecutiveDenials: 'number', maxTotalDenials: 'number', breakerAntiHijackMs: 'number',
   maxArgsChars: 'number', classifierTimeoutMs: 'number', classifierMaxOutputTokens: 'number',
   workspaceRoot: 'string', dshHome: 'string', safetyPrompt: 'string', rulesText: 'string',
@@ -979,6 +989,7 @@ function SettingsSection() {
   const [openSecurity, setOpenSecurity] = React.useState(false)
   const [openHistory, setOpenHistory] = React.useState(false)
   const [openCategory, setOpenCategory] = React.useState(false)
+  const [openLearning, setOpenLearning] = React.useState(false)
   // In-card feedback: the most recent ok/error text for each sub-card, shown
   // inside that card's footer (not piled at the bottom of the plugin body).
   const [cardStatus, setCardStatus] = React.useState<{ id: string; kind: 'ok' | 'err'; text: string } | null>(null)
@@ -1058,6 +1069,7 @@ function SettingsSection() {
   const TIMER_KEYS = ['breakerAntiHijackMs', 'lowRiskSeconds', 'mediumRiskSeconds', 'highRiskSeconds', 'maxConsecutiveDenials', 'maxTotalDenials']
   const REVIEW_KEYS = ['reviewerProtocol', 'reviewerBaseUrl', 'reviewerModel']
   const SECURITY_KEYS = ['safetyPrompt', 'allowlist', 'denyList', 'humanOnlyList', 'rulesText', 'rulesDryRun', 'redactResults', 'reviewerContextFacts', 'editDiffPreview']
+  const LEARNING_KEYS = ['learningEnabled', 'learningThreshold']
   const pick = (keys: string[], from: Draft): Partial<Draft> => {
     const out: any = {}
     for (const k of keys) out[k] = (from as any)[k]
@@ -1081,6 +1093,7 @@ function SettingsSection() {
   const categoryDirty =
     JSON.stringify(draft.categoryPolicy) !== JSON.stringify(baseDraft.categoryPolicy ?? {})
     || draft.categoryMode !== baseDraft.categoryMode
+  const learningDirty = cardDirty(LEARNING_KEYS)
   const invalidKeys = findInvalidConfigKeys(snapshot.value)
   const configError = (snapshot as any)?.configError ?? null
   const bannerMessage = configError
@@ -1088,7 +1101,7 @@ function SettingsSection() {
     : invalidKeys.length > 0
       ? t('settings.invalidConfig', { keys: invalidKeys.join(', ') })
       : null
-  const anyDirty = timerDirty || reviewDirty || securityDirtyEff || categoryDirty
+  const anyDirty = timerDirty || reviewDirty || securityDirtyEff || categoryDirty || learningDirty
 
   const broadcastSettings = (saved: any) => {
     breakerAntiHijackMs = saved?.value?.breakerAntiHijackMs ?? THRESHOLD_DEFAULTS.breakerAntiHijackMs
@@ -1673,6 +1686,30 @@ function SettingsSection() {
     }, saving ? t('settings.saving') : t('settings.save')),
   )
 
+  const buildLearningBody = () => React.createElement('div', { style: { display: 'grid', gap: 10 } },
+    row(t('settings.learning.enabled'), React.createElement(CapsuleSelect, {
+      value: draft.learningEnabled,
+      options: onOffOptions(),
+      onChange: (v: string) => update({ learningEnabled: v as 'on' | 'off' }),
+    }), t('settings.learning.enabledHint')),
+    row(t('settings.learning.threshold'), React.createElement('input', {
+      type: 'number',
+      min: 2,
+      max: 10,
+      step: 1,
+      value: draft.learningThreshold,
+      onChange: (e: any) => update({ learningThreshold: e.target.value }),
+      className: 'dsa-input',
+    }), t('settings.learning.thresholdHint')),
+    React.createElement('p', { className: 'dsa-hint', style: { margin: 0 } }, t('settings.learning.howItWorks')),
+    React.createElement('p', { className: 'dsa-hint', style: { margin: 0 } }, t('settings.learning.safetyNote')),
+    React.createElement('p', { className: 'dsa-hint', style: { margin: 0 } }, t('settings.learning.fallbackNote')),
+    React.createElement('p', { className: 'dsa-hint', style: { margin: 0 } }, t('settings.learning.scopeNote')),
+    React.createElement('p', { className: 'dsa-hint', style: { margin: 0 } }, t('settings.learning.capNote')),
+    React.createElement('p', { className: 'dsa-hint', style: { margin: 0 } }, t('settings.learning.ttlNote')),
+    React.createElement('p', { className: 'dsa-hint', style: { margin: 0 } }, t('settings.learning.denyResetNote')),
+  )
+
   const buildHistoryBody = () => React.createElement('div', { style: { display: 'grid', gap: 8 } },
     historyError ? React.createElement('p', { style: { color: 'var(--dsw-alias-state-error-primary)', fontSize: 12, margin: 0 } }, historyError) : null,
     llmLatency === null || (llmLatency.count ?? 0) === 0
@@ -1862,6 +1899,7 @@ function SettingsSection() {
           ? React.createElement('span', { className: 'dsa-pending', title: t('settings.notYetEffectiveHint') }, t('settings.notYetEffective'))
           : null),
     subcard(t('settings.category.title'), openCategory, categoryDirty, () => setOpenCategory((o) => !o), buildCategoryBody, buildCategoryFooter),
+    subcard(t('settings.learning.title'), openLearning, learningDirty, () => setOpenLearning((o) => !o), buildLearningBody, () => cardFooter(LEARNING_KEYS, 'learning', learningDirty)),
     subcard(t('settings.history.title'), openHistory, false, () => setOpenHistory((o) => !o), buildHistoryBody, buildHistoryFooter),
     React.createElement('div', { style: { borderTop: '1px solid var(--dsw-alias-border-l2)', marginTop: 4 } },
       row(t('settings.debug'), React.createElement(CapsuleSelect, {

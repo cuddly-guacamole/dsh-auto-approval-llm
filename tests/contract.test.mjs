@@ -1291,7 +1291,7 @@ test('assessTool: write to plugin runtime state inside the zone is hard-denied (
   const roots = { workspace: 'C:/ws', home: 'C:/Users/u', dshHome: 'C:/Users/u/.dsh', tempRoots: [], allowedDshSubpaths: ['C:/Users/u/.dsh/plugins/dsh-auto-approval-llm'] }
   const artifacts = { has: () => false }
   const zone = 'C:/Users/u/.dsh/plugins/dsh-auto-approval-llm'
-  for (const name of ['history.jsonl', 'audit.jsonl', 'approval-debug.jsonl', 'review-mode.json']) {
+  for (const name of ['history.jsonl', 'audit.jsonl', 'approval-debug.jsonl', 'review-mode.json', 'llm-latency.jsonl', 'learning.json']) {
     const verdict = assessTool({ name: 'write', arguments: { file_path: `${zone}/${name}`, content: 'x' } }, roots, artifacts)
     assert.equal(verdict.decision, 'deny', name)
     assert.match(verdict.reason ?? '', /runtime state/)
@@ -1307,6 +1307,9 @@ test('assessTool: apply_patch and str_replace_editor honor the runtime-state gua
   assert.equal(sre.decision, 'deny')
   // Ordinary zone sources stay allowed.
   assert.equal(assessTool({ name: 'edit', arguments: { file_path: `${zone}/src/index.ts` } }, roots, artifacts).decision, 'allow')
+  // Learning-store variants join the same guard (member-append only).
+  assert.equal(assessTool({ name: 'apply_patch', arguments: { patches: [{ file_path: `${zone}/learning.json` }] } }, roots, artifacts).decision, 'deny')
+  assert.equal(assessTool({ name: 'str_replace_editor', arguments: { command: 'str_replace', path: `${zone}/learning.json`, old_string: 'a', new_string: 'b' } }, roots, artifacts).decision, 'deny')
 })
 test('assessTool: same basenames in the ordinary workspace are not over-blocked', () => {
   const roots = { workspace: 'C:/ws', home: 'C:/Users/u', dshHome: 'C:/Users/u/.dsh', tempRoots: [], allowedDshSubpaths: [] }
@@ -1334,7 +1337,7 @@ const HO = () => ({ has: () => false })
 
 test('hardDenyShellReason: redirection into a zone runtime-state file is an unconditional deny', () => {
   const roots = zoneRoots()
-  for (const name of ['history.jsonl', 'audit.jsonl', 'approval-debug.jsonl', 'review-mode.json']) {
+  for (const name of ['history.jsonl', 'audit.jsonl', 'approval-debug.jsonl', 'review-mode.json', 'llm-latency.jsonl', 'learning.json']) {
     const out = hardDenyShellReason(`echo x > ${ZONE}/${name}`, 'bash', roots)
     assert.match(out ?? '', /runtime state/, name)
     const out2 = hardDenyShellReason(`printf x >> ${ZONE}/${name}`, 'bash', roots)
@@ -1360,17 +1363,20 @@ test('assessShell: cp/mv/touch/mkdir into a zone runtime-state file deny', () =>
   assert.match(assessShell(`mv ${ZONE}/tmp.txt ${ZONE}/history.jsonl`, 'bash', roots, HO(), undefined).reason ?? '', /runtime state/)
   assert.match(assessShell(`touch ${ZONE}/approval-debug.jsonl`, 'bash', roots, HO(), undefined).reason ?? '', /runtime state/)
   assert.match(assessShell(`mkdir ${ZONE}/review-mode.json`, 'bash', roots, HO(), undefined).reason ?? '', /runtime state/)
+  assert.match(assessShell(`touch ${ZONE}/learning.json`, 'bash', roots, HO(), undefined).reason ?? '', /runtime state/)
 })
 test('assessShell: pwsh write cmdlets into a zone runtime-state file deny', () => {
   const roots = zoneRoots()
   assert.match(assessShell(`Set-Content ${ZONE}/history.jsonl evil`, 'pwsh', roots, HO(), undefined).reason ?? '', /runtime state/)
   assert.match(assessShell(`Out-File -FilePath ${ZONE}/audit.jsonl -InputObject x`, 'pwsh', roots, HO(), undefined).reason ?? '', /runtime state/)
   assert.match(assessShell(`Copy-Item evil.txt ${ZONE}/history.jsonl`, 'pwsh', roots, HO(), undefined).reason ?? '', /runtime state/)
+  assert.match(assessShell(`Set-Content ${ZONE}/learning.json evil`, 'pwsh', roots, HO(), undefined).reason ?? '', /runtime state/)
 })
 test('assessShell: deletion of a zone runtime-state file denies', () => {
   const roots = zoneRoots()
   assert.match(assessShell(`rm ${ZONE}/history.jsonl`, 'bash', roots, HO(), undefined).reason ?? '', /runtime state/)
   assert.match(assessShell(`rd ${ZONE}/review-mode.json`, 'pwsh', roots, HO(), undefined).reason ?? '', /runtime state/)
+  assert.match(assessShell(`rm ${ZONE}/learning.json`, 'bash', roots, HO(), undefined).reason ?? '', /runtime state/)
 })
 test('assessShell: same runtime-state basename outside the zone is NOT over-blocked', () => {
   const roots = zoneRoots()
@@ -2000,4 +2006,446 @@ test('askHuman wiring (G9): the diff text is consumed only by the reason assembl
   assert.ok(!llmMetaBlock.includes('editDiff'), 'history llmMeta never carries the diff text')
   const callSites = [...src.matchAll(/buildAskReason\(/g)]
   assert.equal(callSites.length, 1, 'the diff builder feeds exactly one consumer: the ask reason')
+})
+
+// ── confirmation learning: signature / gate / store contracts ──────────────
+import {
+  LEARNING_KINDS,
+  LEARNING_SIG_VERSION,
+  LEARNING_NON_LEARNABLE_COMMAND_HEADS,
+  clampLearningThreshold,
+  confirmActionFor,
+  emptyLearningStore,
+  evictLearning,
+  learningCapState,
+  learningKey,
+  learnDecision,
+  learnGateEligible,
+  loadLearning,
+  lookupLearning,
+  persistLearning,
+  recordConfirm,
+  resetConfirmation,
+  signatureFor,
+  validateLearningEntry,
+} from '../lib/auto/learning.js'
+import { RUNTIME_STATE_BASENAMES, runtimeStateTargetReason } from '../lib/auto/paths.js'
+import { HOST_ONLY_KEYS } from '../lib/auto/decision.js'
+import { THRESHOLD_DEFAULTS } from '../lib/auto/constants.js'
+
+const LEARN_DAY = 86_400_000
+
+test('signatureFor: equivalent command spellings collapse to one normalized template', () => {
+  const sig = (command) => signatureFor({ kind: 'shell-bash', command })?.signature
+  assert.equal(sig('git push origin main'), sig('git push up down'), 'literal operands share one slot')
+  assert.equal(sig('git commit -m hello'), sig('git commit -m world'), 'flag values are discarded')
+  assert.equal(sig('GIT PUSH origin'), sig('git PUSH upstream'), 'head/subcommand case folds')
+  assert.equal(sig('ls -l -a'), sig('ls -a -l'), 'flag set order does not matter')
+  assert.notEqual(sig('git push --force'), sig('git push'), 'a new flag = a new signature')
+  assert.notEqual(sig('ls -la'), sig('ls -al'), 'distinct flag tokens stay distinct (fail-closed)')
+})
+
+test('signatureFor: flag values fold into the flag name and env prefixes are transparent', () => {
+  const sig = (command) => signatureFor({ kind: 'shell-bash', command })?.signature
+  assert.equal(sig('git commit --message=one two'), sig('git commit --message=x y'))
+  assert.ok(sig('FOO=1 git status'))
+  assert.equal(sig('FOO=1 git status'), sig('git status'), 'VAR=value prefix never enters the template')
+})
+
+test('signatureFor: dynamic / glob / quoted words prune the whole line', () => {
+  const bash = (command) => signatureFor({ kind: 'shell-bash', command })
+  assert.equal(bash('echo "$HOME/x"'), undefined, 'quoted word prunes')
+  assert.equal(bash('cat $HOME/notes.txt'), undefined, 'dynamic expansion prunes')
+  assert.equal(bash('cat *.txt'), undefined, 'glob prunes')
+  assert.equal(bash('ls build/??.js'), undefined, 'single-char glob prunes')
+  assert.equal(signatureFor({ kind: 'shell-pwsh', command: 'Write-Output "hi there"' }), undefined)
+})
+
+test('signatureFor: opaque decompositions prune entirely (unreadable = unlearnable)', () => {
+  const bash = (command) => signatureFor({ kind: 'shell-bash', command })
+  assert.equal(bash('echo $(whoami)'), undefined, 'command substitution is opaque')
+  assert.equal(bash('echo `id`'), undefined, 'backtick substitution is opaque')
+  assert.equal(bash("echo 'unterminated"), undefined, 'unbalanced quote is opaque')
+})
+
+test('signatureFor: pwsh colon-style parameters prune; space-separated form stays learnable', () => {
+  assert.equal(signatureFor({ kind: 'shell-pwsh', command: 'Copy-Item -Path:C:\\a -Destination:C:\\b' }), undefined)
+  const spaced = signatureFor({ kind: 'shell-pwsh', command: 'Copy-Item -Path C:\\a -Destination C:\\b' })
+  assert.ok(spaced !== undefined, 'plain flags keep the template')
+  assert.match(spaced.signature, /^copy-item /)
+})
+
+test('signatureFor: uncovered write-vector heads never become signatures (npm install stays learnable)', () => {
+  for (const cmd of ['tee out.txt', 'dd if=a of=b', 'sed -i s/a/b/ f.txt', 'truncate -s 0 f.bin', 'install -m 644 a b']) {
+    assert.equal(signatureFor({ kind: 'shell-bash', command: cmd }), undefined, cmd)
+  }
+  const npmInstall = signatureFor({ kind: 'shell-bash', command: 'npm install pkg' })
+  assert.ok(npmInstall !== undefined, 'the head is npm, not install')
+  assert.match(npmInstall.signature, /^npm install/)
+  assert.ok(LEARNING_NON_LEARNABLE_COMMAND_HEADS.has('tee') && LEARNING_NON_LEARNABLE_COMMAND_HEADS.has('install'))
+})
+
+test('signatureFor: whole-line participation — a sub-segment alone is never an equivalent key', () => {
+  const sig = (command) => signatureFor({ kind: 'shell-bash', command })?.signature
+  const line = sig('cat a.txt | grep foo')
+  const single = sig('cat a.txt')
+  assert.ok(line !== undefined && single !== undefined)
+  assert.notEqual(line, single)
+  assert.ok(line.includes(single ?? ''), 'the compound template embeds every segment')
+  assert.notEqual(sig('cat x | grep y'), sig('grep y | cat x'), 'segment order participates')
+})
+
+test('signatureFor: redirect targets join as typed read/write slots', () => {
+  const sig = (command) => signatureFor({ kind: 'shell-bash', command })?.signature
+  assert.notEqual(sig('echo x > out.txt'), sig('echo x'), 'the write target participates')
+  assert.ok(sig('echo x > out.txt').includes('<out:literal>'))
+  assert.ok(sig('grep foo < in.list').includes('<in:literal>'))
+  assert.equal(
+    signatureFor({ kind: 'shell-pwsh', command: 'Get-Content notes.md' })?.signature,
+    signatureFor({ kind: 'shell-pwsh', command: 'get-content NOTES.MD' })?.signature,
+    'pwsh cmdlet heads fold case identically',
+  )
+})
+
+test('signatureFor: deterministic output and structured tool shape keys', () => {
+  const once = signatureFor({ kind: 'tool', toolName: 'write', args: { file_path: 'C:/ws/a.ts', content: 'hello' } })
+  const twice = signatureFor({ kind: 'tool', toolName: 'write', args: { file_path: 'D:/other/b.ts', content: 'world!!' } })
+  assert.deepEqual(once, twice, 'raw values never enter a tool template')
+  assert.match(once?.signature ?? '', /^write\(content:<literal>,file_path:<path>\)$/)
+  const fewerKeys = signatureFor({ kind: 'tool', toolName: 'write', args: { file_path: 'C:/ws/a.ts' } })
+  assert.notDeepEqual(once, fewerKeys, 'a different argument shape = a different signature')
+  const patches = signatureFor({ kind: 'tool', toolName: 'apply_patch', args: { patches: [{ file_path: 'x' }] } })
+  assert.match(patches?.signature ?? '', /patches:<list>/)
+  assert.equal(signatureFor({ kind: 'tool', toolName: 'bash', args: 'not-an-object' }), undefined)
+  assert.equal(signatureFor({ kind: 'tool', toolName: '', args: {} }), undefined)
+  assert.equal(
+    signatureFor({ kind: 'shell-bash', command: 'git status' })?.signature,
+    signatureFor({ kind: 'shell-bash', command: 'git status' })?.signature,
+    'same input, same output',
+  )
+  assert.deepEqual(LEARNING_KINDS, ['shell-bash', 'shell-pwsh', 'tool'])
+})
+
+test('learningKey: sha256 binds version|kind|workspace|signature into one hex key', () => {
+  const base = learningKey('shell-bash', 'c:/ws', 'git status')
+  assert.equal(base, learningKey('shell-bash', 'c:/ws', 'git status'))
+  assert.match(base, /^[0-9a-f]{64}$/)
+  assert.notEqual(base, learningKey('shell-pwsh', 'c:/ws', 'git status'))
+  assert.notEqual(base, learningKey('shell-bash', 'd:/other', 'git status'))
+  assert.notEqual(base, learningKey('shell-bash', 'c:/ws', 'git push'))
+})
+
+test('clampLearningThreshold: NaN/non-integers fall back; integers clamp into [2,10]', () => {
+  assert.equal(clampLearningThreshold(undefined), 3)
+  assert.equal(clampLearningThreshold(Number.NaN), 3)
+  assert.equal(clampLearningThreshold(4.5), 3)
+  assert.equal(clampLearningThreshold(Number.POSITIVE_INFINITY), 3)
+  assert.equal(clampLearningThreshold('7'), 7)
+  assert.equal(clampLearningThreshold(1), 2)
+  assert.equal(clampLearningThreshold(0), 2)
+  assert.equal(clampLearningThreshold(-5), 2)
+  assert.equal(clampLearningThreshold(11), 10)
+  assert.equal(clampLearningThreshold(99), 10)
+  assert.equal(clampLearningThreshold(5), 5)
+})
+
+test('learnGateEligible: only LOW/MEDIUM × non-locked × non-unknown × fuse-free passes', () => {
+  const gate = (over = {}) => learnGateEligible({ enabled: true, staticRisk: 'MEDIUM', category: 'fileEdit', ...over })
+  assert.equal(gate(), true)
+  assert.equal(gate({ staticRisk: 'LOW' }), true)
+  assert.equal(gate({ enabled: false }), false, 'switch off = never eligible')
+  assert.equal(gate({ staticRisk: 'HIGH' }), false, 'HIGH never learns')
+  assert.equal(gate({ staticRisk: 'DENY' }), false)
+  for (const locked of ['delete', 'protected', 'privilege', 'disk']) {
+    assert.equal(gate({ category: locked }), false, locked)
+  }
+  assert.equal(gate({ category: 'unknown' }), false, 'unknown v1 stays unlearnable')
+  assert.equal(gate({ category: 'harnessInternal' }), false)
+  assert.equal(gate({ category: undefined }), false)
+  assert.equal(gate({ fuseHit: true }), false, 'sensitive fuse vetoes even LOW/readOnly')
+})
+
+test('confirmActionFor: closed source vocabulary — only human decisions touch counts', () => {
+  assert.equal(confirmActionFor('human-allow'), 'increment')
+  assert.equal(confirmActionFor('human-deny'), 'reset')
+  for (const source of ['timeout-allow', 'timeout-deny', 'llm-allow', 'llm-deny', 'auto-allow', 'auto-deny', 'abort', 'learned-allow', '', 'weird-source']) {
+    assert.equal(confirmActionFor(source), 'ignore', source)
+  }
+})
+
+function seededLearningStore() {
+  const store = emptyLearningStore()
+  const workspace = 'c:/ws'
+  const key = learningKey('shell-bash', workspace, 'git status')
+  recordConfirm(store, key, { workspace, kind: 'shell-bash', skeleton: 'git status' }, 10_000)
+  recordConfirm(store, key, { workspace, kind: 'shell-bash', skeleton: 'git status' }, 20_000)
+  return { store, key, workspace }
+}
+
+test('learnDecision: disabled / gate-fail / below-threshold / cap-sleep all miss', () => {
+  const { store, key, workspace } = seededLearningStore()
+  const input = { enabled: true, staticRisk: 'MEDIUM', category: 'gitLocal', key, workspace, threshold: 2, now: 30 * LEARN_DAY, store }
+  assert.equal(learnDecision(input).hit, true, 'two confirmations meet threshold 2')
+  assert.equal(learnDecision({ ...input, enabled: false }).hit, false)
+  assert.equal(learnDecision({ ...input, staticRisk: 'HIGH' }).hit, false)
+  assert.equal(learnDecision({ ...input, category: 'delete' }).hit, false)
+  assert.equal(learnDecision({ ...input, fuseHit: true }).hit, false)
+  assert.equal(learnDecision({ ...input, threshold: 3 }).hit, false, 'count < threshold misses')
+  assert.equal(learnDecision({ ...input, capUsed: 50 }).hit, false, 'cap sleep forces a miss')
+  assert.equal(learnDecision({ ...input, key: undefined }).hit, false, 'unconstructible signature never hits')
+})
+
+test('lookupLearning: TTL expiry, foreign workspace, unknown key, stale sigVersion can never hit', () => {
+  const { store, key, workspace } = seededLearningStore()
+  const input = { enabled: true, staticRisk: 'MEDIUM', category: 'gitLocal', key, workspace, threshold: 2, store }
+  assert.equal(learnDecision({ ...input, now: 29 * LEARN_DAY + 20_000 }).hit, true, 'fresh within the 30-day TTL')
+  assert.equal(learnDecision({ ...input, now: 31 * LEARN_DAY + 20_000 }).hit, false, 'past the TTL')
+  assert.equal(lookupLearning(store, { key, workspace: 'd:/elsewhere', threshold: 1, now: 25 * LEARN_DAY }), false, 'per-workspace isolation')
+  assert.equal(lookupLearning(store, { key: 'deadbeef', workspace, threshold: 1, now: 25 * LEARN_DAY }), false)
+  const stale = JSON.parse(JSON.stringify(store))
+  stale.entries[key].sigVersion = LEARNING_SIG_VERSION + 1
+  assert.equal(lookupLearning(stale, { key, workspace, threshold: 1, now: 25 * LEARN_DAY }), false, 'version drift fails closed')
+  assert.equal(lookupLearning(store, { key, workspace, threshold: 2, now: 25 * LEARN_DAY }), true, 'inclusive threshold boundary')
+})
+
+function learningFixture() {
+  const dir = mkdtempSync(join(tmpdir(), 'dsa-learning-'))
+  return { dir, file: join(dir, 'learning.json'), cleanup: () => rmSync(dir, { recursive: true, force: true }) }
+}
+
+test('loadLearning/persistLearning: round-trip preserves validated entries (path-parameterized)', () => {
+  const f = learningFixture()
+  try {
+    const store = emptyLearningStore()
+    const ws = 'c:/ws'
+    const key = learningKey('tool', ws, 'write(<literal>,<path>)')
+    recordConfirm(store, key, { workspace: ws, kind: 'tool', skeleton: 'write(<literal>,<path>)' }, Date.now())
+    persistLearning(f.file, store)
+    assert.equal(existsSync(`${f.file}.tmp`), false, 'atomic rename leaves no temp behind')
+    const loaded = loadLearning(f.file)
+    assert.equal(loaded.version, 1)
+    assert.deepEqual(loaded.entries[key], store.entries[key])
+  } finally {
+    f.cleanup()
+  }
+})
+
+test('loadLearning: corrupt file / wrong root version / missing file degrade to an empty store', () => {
+  const f = learningFixture()
+  try {
+    writeFileSync(f.file, '{ this is not json')
+    assert.deepEqual(loadLearning(f.file).entries, {})
+    writeFileSync(f.file, JSON.stringify({
+      version: 2,
+      entries: { x: { sigVersion: 1, workspace: 'w', kind: 'tool', skeleton: 't()', count: 9, firstAt: 1, lastAt: 2 } },
+    }))
+    const drifted = loadLearning(f.file)
+    assert.equal(drifted.version, 1)
+    assert.deepEqual(drifted.entries, {}, 'root version drift discards everything')
+    assert.deepEqual(loadLearning(join(f.dir, 'missing.json')), { version: 1, entries: {} })
+  } finally {
+    f.cleanup()
+  }
+})
+
+test('validateLearningEntry: poisoned metacharacters and timestamp violations are dropped', () => {
+  const now = 1_000_000
+  const good = { sigVersion: LEARNING_SIG_VERSION, workspace: 'c:/ws', kind: 'shell-bash', skeleton: 'git status', count: 3, firstAt: 900, lastAt: 999 }
+  assert.notEqual(validateLearningEntry(good, now), undefined)
+  for (const kind of LEARNING_KINDS) {
+    assert.notEqual(validateLearningEntry({ ...good, kind }, now), undefined, kind)
+  }
+  const bad = [
+    { ...good, skeleton: '*' },
+    { ...good, skeleton: 'git st?tus' },
+    { ...good, skeleton: 'git [status]' },
+    { ...good, skeleton: 'git \\w+ status' },
+    { ...good, count: -1 },
+    { ...good, count: 1.5 },
+    { ...good, count: 'many' },
+    { ...good, lastAt: 800 },
+    { ...good, lastAt: now + 61_000 },
+    { ...good, sigVersion: LEARNING_SIG_VERSION + 1 },
+    { ...good, kind: 'registry' },
+    { ...good, workspace: '' },
+    'not-an-object',
+    null,
+  ]
+  for (const entry of bad) {
+    assert.equal(validateLearningEntry(entry, now), undefined, JSON.stringify(entry) ?? String(entry))
+  }
+})
+
+test('evictLearning/loadLearning: TTL lazy-prune, LRU-by-lastAt eviction, poisoned stores yield zero entries', () => {
+  const entries = {}
+  for (let i = 0; i < 5; i += 1) {
+    entries[`k${i}`] = { sigVersion: LEARNING_SIG_VERSION, workspace: 'c:/ws', kind: 'tool', skeleton: `t${i}()`, count: 1, firstAt: i, lastAt: 1_000 + i }
+  }
+  const evicted = evictLearning(entries, { maxEntries: 3, now: 2_000 })
+  assert.deepEqual(Object.keys(evicted).sort(), ['k2', 'k3', 'k4'], 'oldest lastAt evicted first')
+  const expired = evictLearning(entries, { maxEntries: 10, ttlDays: 1 / 24, now: 1_004 + 3_600_000 + 5_000 })
+  assert.deepEqual(expired, {}, 'TTL-expired entries are lazily pruned even under a generous cap')
+  const f = learningFixture()
+  try {
+    const poisoned = {
+      version: 1,
+      entries: { k: { sigVersion: LEARNING_SIG_VERSION, workspace: 'c:/ws', kind: 'shell-bash', skeleton: '*', count: 999, firstAt: 1, lastAt: 2 } },
+    }
+    writeFileSync(f.file, JSON.stringify(poisoned))
+    assert.deepEqual(loadLearning(f.file).entries, {}, 'a hand-written poisoned entry produces no allow capability')
+  } finally {
+    f.cleanup()
+  }
+})
+
+test('loadLearning: explicit opts override the defaults (ttl/maxEntries honored)', () => {
+  const f = learningFixture()
+  try {
+    const now = Date.now()
+    const store = emptyLearningStore()
+    for (let i = 0; i < 4; i += 1) {
+      const key = learningKey('tool', 'c:/ws', `t${i}(<path>)`)
+      store.entries[key] = { sigVersion: LEARNING_SIG_VERSION, workspace: 'c:/ws', kind: 'tool', skeleton: `t${i}(<path>)`, count: 1, firstAt: now, lastAt: now + i }
+    }
+    persistLearning(f.file, store)
+    const capped = loadLearning(f.file, { maxEntries: 2 })
+    assert.equal(Object.keys(capped.entries).length, 2, 'maxEntries override applies')
+    const shortTtl = loadLearning(f.file, { ttlDays: 0, now: now + 86_400_000 })
+    assert.deepEqual(shortTtl.entries, {}, 'ttlDays override applies')
+  } finally {
+    f.cleanup()
+  }
+})
+
+test('recordConfirm/resetConfirmation: increment lifecycle and human-deny reset semantics', () => {
+  const store = emptyLearningStore()
+  const ws = 'c:/ws'
+  const key = learningKey('shell-bash', ws, 'git status')
+  const seed = { workspace: ws, kind: 'shell-bash', skeleton: 'git status' }
+  recordConfirm(store, key, seed, 100)
+  recordConfirm(store, key, seed, 200)
+  assert.equal(store.entries[key].count, 2)
+  assert.equal(store.entries[key].firstAt, 100, 'firstAt sticks')
+  assert.equal(store.entries[key].lastAt, 200, 'lastAt is monotonic')
+  resetConfirmation(store, key, 300)
+  assert.equal(store.entries[key].count, 0, 'deny zeroes the count')
+  assert.equal(store.entries[key].skeleton, 'git status', 'entry stays behind for observation')
+  assert.equal(resetConfirmation(store, 'nope', 300), store, 'unknown key is a no-op')
+  assert.equal(lookupLearning(store, { key, workspace: ws, threshold: 1, now: 400 }), false, 'zero count never matches')
+})
+
+test('learningCapState: sleeps at the cap and alerts exactly when crossing it', () => {
+  assert.deepEqual(learningCapState(48, 50), { sleep: false, alert: false })
+  assert.deepEqual(learningCapState(49, 50), { sleep: false, alert: true })
+  assert.deepEqual(learningCapState(50, 50), { sleep: true, alert: false })
+  assert.deepEqual(learningCapState(99, 50), { sleep: true, alert: false })
+})
+
+test('signatureFor: empty commands and unknown kinds are not learnable', () => {
+  assert.equal(signatureFor({ kind: 'shell-bash', command: '' }), undefined)
+  assert.equal(signatureFor({ kind: 'shell-bash', command: '   ' }), undefined)
+  assert.equal(signatureFor({ kind: 'shell-pwsh', command: '' }), undefined)
+  assert.equal(signatureFor({ kind: 'registry', command: 'anything' }), undefined)
+})
+
+test('learnDecision: allowance below the cap keeps hits flowing', () => {
+  const { store, key, workspace } = seededLearningStore()
+  const input = { enabled: true, staticRisk: 'MEDIUM', category: 'gitLocal', key, workspace, threshold: 2, now: 25 * LEARN_DAY, store }
+  assert.equal(learnDecision({ ...input, capUsed: 0 }).hit, true)
+  assert.equal(learnDecision({ ...input, capUsed: 49 }).hit, true)
+  assert.equal(learnDecision({ ...input, capUsed: undefined }).hit, true, 'absent counter = fresh session')
+})
+
+test('recordConfirm: distinct signatures live under distinct keys (cross-key isolation)', () => {
+  const store = emptyLearningStore()
+  const ws = 'c:/ws'
+  const seedA = { workspace: ws, kind: 'shell-bash', skeleton: 'git status' }
+  const seedB = { workspace: ws, kind: 'shell-bash', skeleton: 'ls -a,-l' }
+  const keyA = learningKey('shell-bash', ws, 'git status')
+  const keyB = learningKey('shell-bash', ws, 'ls -a,-l')
+  recordConfirm(store, keyA, seedA, 100)
+  recordConfirm(store, keyB, seedB, 100)
+  assert.notEqual(keyA, keyB)
+  assert.equal(store.entries[keyA].count, 1)
+  assert.equal(store.entries[keyB].count, 1)
+  assert.equal(Object.keys(store.entries).length, 2)
+})
+
+test('end-to-end key equivalence: a confirmation of one spelling releases its normalized twin', () => {
+  const store = emptyLearningStore()
+  const ws = 'c:/ws'
+  const confirmed = signatureFor({ kind: 'shell-bash', command: 'GIT STATUS --branch' })
+  const later = signatureFor({ kind: 'shell-bash', command: 'git status --branch' })
+  assert.deepEqual(confirmed, later, 'normalization folds the spelling before hashing')
+  const key = learningKey('shell-bash', ws, confirmed.signature)
+  recordConfirm(store, key, { workspace: ws, kind: 'shell-bash', skeleton: confirmed.skeleton }, 100)
+  recordConfirm(store, key, { workspace: ws, kind: 'shell-bash', skeleton: confirmed.skeleton }, 200)
+  assert.equal(lookupLearning(store, { key: learningKey('shell-bash', ws, later.signature), workspace: ws, threshold: 2, now: 300 }), true)
+})
+
+test('validateLearningEntry: oversized skeletons are rejected like poisoned ones', () => {
+  const now = 1_000_000
+  const good = { sigVersion: LEARNING_SIG_VERSION, workspace: 'c:/ws', kind: 'tool', skeleton: 't()', count: 1, firstAt: 900, lastAt: 999 }
+  assert.equal(validateLearningEntry({ ...good, skeleton: 'x'.repeat(513) }, now), undefined)
+  assert.notEqual(validateLearningEntry({ ...good, skeleton: 'x'.repeat(512) }, now), undefined, 'exactly at the cap passes')
+})
+
+test('resolveConfig: hand-edited numeric-string thresholds clamp without throwing', () => {
+  const base = { timeoutAction: 'reject' }
+  assert.equal(resolveConfig({ ...base, learningThreshold: '9' }).learningThreshold, 9)
+  assert.equal(resolveConfig({ ...base, learningThreshold: '99' }).learningThreshold, 10)
+  assert.equal(resolveConfig({ ...base, learningThreshold: 'abc' }).learningThreshold, 3)
+  assert.equal(resolveConfig({ ...base, learningThreshold: '0' }).learningThreshold, 2)
+})
+
+test('resolveConfig: learning keys resolve exactly (default off / explicit on / threshold clamp)', () => {
+  const base = { timeoutAction: 'reject' }
+  assert.equal(resolveConfig(base).learningEnabled, false, 'fail-closed default')
+  assert.equal(resolveConfig(base).learningThreshold, THRESHOLD_DEFAULTS.learningThreshold)
+  assert.equal(resolveConfig({ ...base, learningEnabled: true }).learningEnabled, true)
+  assert.equal(resolveConfig({ ...base, learningEnabled: false }).learningEnabled, false)
+  assert.equal(resolveConfig({ ...base, learningEnabled: 'yes' }).learningEnabled, false, 'non-boolean degrades to off')
+  assert.equal(resolveConfig({ ...base, learningThreshold: 11 }).learningThreshold, 10)
+  assert.equal(resolveConfig({ ...base, learningThreshold: 1 }).learningThreshold, 2)
+  assert.equal(resolveConfig({ ...base, learningThreshold: Number.NaN }).learningThreshold, 3)
+  assert.equal(resolveConfig({ ...base, learningThreshold: 4.5 }).learningThreshold, 3)
+  assert.equal(resolveConfig({ ...base, learningThreshold: 6 }).learningThreshold, 6)
+})
+
+test('HOST_ONLY_KEYS: the two learning keys stay card-editable (never host-only)', () => {
+  assert.equal(HOST_ONLY_KEYS.includes('learningEnabled'), false)
+  assert.equal(HOST_ONLY_KEYS.includes('learningThreshold'), false)
+})
+
+test('runtime-state moat: learning.json joins RUNTIME_STATE_BASENAMES as the sixth member', () => {
+  assert.equal(RUNTIME_STATE_BASENAMES.has('learning.json'), true)
+  assert.equal(RUNTIME_STATE_BASENAMES.size, 6)
+  assert.match(runtimeStateTargetReason('c:/users/u/.dsh/plugins/dsh-auto-approval-llm/learning.json') ?? '', /runtime state/)
+})
+
+test('breaker isolation: learned-allow never moves the denial counters (sidecar pin)', () => {
+  for (const llmDecided of [false, true]) {
+    const transition = applyBreaker({ consecutive: 2, total: 5 }, 'learned-allow', llmDecided)
+    assert.deepEqual(transition.counts, { consecutive: 2, total: 5 })
+    assert.equal(transition.reset, false)
+    assert.equal(transition.increment, false)
+  }
+})
+
+test('assessTool: a learning.json outside the plugin zone stays a routine write (no over-block)', () => {
+  const roots = { workspace: 'C:/ws', home: 'C:/Users/u', dshHome: 'C:/Users/u/.dsh', tempRoots: [], allowedDshSubpaths: [] }
+  const verdict = assessTool({ name: 'write', arguments: { file_path: 'C:/ws/learning.json', content: 'x' } }, roots, { has: () => false })
+  assert.equal(verdict.decision, 'allow')
+})
+
+test('client bundle: learning keys survive every sync point (anti-clearing pin)', () => {
+  const client = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
+  const compact = client.replaceAll(' ', '')
+  assert.ok(client.includes('learningEnabled: "boolean"') || compact.includes('learningEnabled:"boolean"'), 'INVALID_CONFIG_TYPES boolean row')
+  assert.ok(client.includes('learningThreshold: "number"') || compact.includes('learningThreshold:"number"'), 'INVALID_CONFIG_TYPES number row')
+  assert.ok(compact.includes('"settings.learning.title"') || compact.includes("'settings.learning.title'"), 'locale keys registered')
+  assert.ok(
+    compact.includes('["learningEnabled","learningThreshold"]') || compact.includes("['learningEnabled','learningThreshold']"),
+    'saveCard keys slice registered',
+  )
 })

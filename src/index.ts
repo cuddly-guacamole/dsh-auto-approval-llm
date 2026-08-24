@@ -25,16 +25,33 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { ArtifactRegistry } from './auto/artifacts.js'
 import { appendAuditLine, recordAuditClear } from './auto/audit.js'
-import { applyCategoryDirective, CATEGORY_KEYS, categoryDirectiveFor, LOCKED_CATEGORIES, realpathCriticalReason } from './auto/category.js'
+import { applyCategoryDirective, CATEGORY_KEYS, categoryDirectiveFor, LOCKED_CATEGORIES, realpathCriticalReason, sensitiveBasenameAt } from './auto/category.js'
 import { sanitizeClassifierArguments, sanitizeClassifierText, sanitizeReviewReason } from './auto/classifier.js'
 import { THRESHOLD_DEFAULTS } from './auto/constants.js'
 import { createDshClassifier } from './auto/dsh-classifier.js'
 import { type RaceHumanHandle, type ReviewResult, type StaticRisk, REVIEW_TIMEOUT_NOTICE, applyBreaker, approvalSource, assembleReviewerSystem, breakerTripped, createKeyedMutex, extractToolPath, followResolution, formatDenyFeedback, frameReviewerInput, lowRiskReviewOutcome, parseReview, preserveHostKeys, raceHumanDecision, reviewSuggestionNote, reviewerAutoAllowBlocked, riskFromAssessment, staticListDecision, type ContextSummary } from './auto/decision.js'
 import { loadLatencySamples, pushLatencySample, summarizeLatency, type LatencySample } from './auto/latency.js'
 import { buildAskReason, buildEditDiff, buildEditDiffText, EDIT_DIFF_ARGS_MAX_CHARS, EDIT_DIFF_TOOLS } from './auto/editdiff.js'
-import { isWithin, isCriticalPath, normalizePath, resolveRoots, runtimeStateTargetInZone } from './auto/paths.js'
+import {
+  clampLearningThreshold,
+  confirmActionFor,
+  LEARNING_SIG_VERSION,
+  learningCapState,
+  learningKey,
+  learnDecision,
+  learnGateEligible,
+  loadLearning,
+  persistLearning,
+  recordConfirm,
+  resetConfirmation,
+  signatureFor,
+  type LearningKind,
+  type LearningStore,
+} from './auto/learning.js'
+import { isWithin, isCriticalPath, normalizePath, resolveRoots, runtimeStateTargetInZone, isProtectedProjectPath } from './auto/paths.js'
 import { assessTool, hardDenyReason, symlinkGuardTargets } from './auto/policy.js'
 import { probeTargetFacts } from './auto/probe.js'
+import { RISK_NAME_PATTERN, RISK_REASON_PATTERN } from './auto/risk-tokens.js'
 import { redactResultValue } from './auto/redact.js'
 import { agentKind, evaluateRules, parseRulesText } from './auto/rules.js'
 import { isReviewRetryable, retryAfterMs, retryReviewLoop, toLlmFailure, type RetryAttempt, type ReviewFailure } from './auto/retry.js'
@@ -91,6 +108,10 @@ export interface Config {
   categoryMode: 'standard' | 'aggressive'
   /** Extra trusted directories for Standard mode (host-only, absolute paths). */
   trustedDirs: string[]
+  /** Confirmation learning master switch: off by default (zero behavior change). */
+  learningEnabled: boolean
+  /** Human confirmations before a same-signature ask may auto-allow; clamped to [2,10]. */
+  learningThreshold: number
 }
 
 export const Config: z<Config> = z.object({
@@ -145,6 +166,11 @@ export const Config: z<Config> = z.object({
   categoryPolicy: z.dict(z.union(['auto', 'ask', 'deny'] as const), z.string()).default({}),
   categoryMode: z.union(['standard', 'aggressive'] as const).default('standard'),
   trustedDirs: z.array(z.string()).default([]),
+  // Confirmation learning: fail-closed default (off). The threshold accepts a
+  // wide numeric range here; resolveConfig warns and clamps into [2,10]
+  // instead of throwing, mirroring the categoryPolicy schema/decision split.
+  learningEnabled: z.boolean().default(false),
+  learningThreshold: z.number().default(THRESHOLD_DEFAULTS.learningThreshold),
 })
 
 const AUTO_PRESET = 'auto'
@@ -218,12 +244,30 @@ export function resolveConfig(raw: Config): Config {
     }
     trustedDirs.push(normalized)
   }
+  // Learning-threshold clamp: warn + clamp, never throw and never drop — a
+  // wild value keeps the magnitude of the user's intent (mirrors the
+  // categoryPolicy warn+normalize pattern, but numeric instead of tri-state).
+  const learningThreshold = clampLearningThreshold(
+    raw.learningThreshold,
+    THRESHOLD_DEFAULTS.learningThreshold,
+  )
+  if (
+    typeof raw.learningThreshold !== 'number' ||
+    !Number.isInteger(raw.learningThreshold) ||
+    raw.learningThreshold < 2 ||
+    raw.learningThreshold > 10
+  ) {
+    console.warn(`[dsh-auto-approval-llm] clamping learningThreshold ${String(raw.learningThreshold)} to ${learningThreshold} (valid range: integer 2..10)`)
+  }
   return {
     ...raw,
     timeoutAction,
     categoryPolicy,
     categoryMode: raw.categoryMode === 'aggressive' ? 'aggressive' : 'standard',
     trustedDirs,
+    // Default-off (fail-closed): only an explicit true enables learning.
+    learningEnabled: raw.learningEnabled === true,
+    learningThreshold,
     llmReviewScope: raw.llmReviewScope ?? 'low-or-above',
     llmTakeoverScope: raw.llmTakeoverScope ?? 'medium-or-below',
     lowRiskSeconds: raw.lowRiskSeconds ?? THRESHOLD_DEFAULTS.lowRiskSeconds,
@@ -767,6 +811,14 @@ loadHistory()
 // llm-latency.jsonl (same append+rotate pattern as history.jsonl); clear
 // history intentionally leaves it alone — telemetry is not an approval record.
 const llmLatency: LatencySample[] = loadLatencySamples()
+
+// ── confirmation-learning store ───────────────────────────────────────────
+// Loaded once per process like history/latency; every mutation happens under
+// the per-signature keyed mutex with a synchronous persist, so the on-disk
+// snapshot can trail by at most one finished critical section. Corrupt or
+// poisoned files degrade to an empty store = everything stays with a human.
+const LEARNING_FILE = join(dirname(fileURLToPath(import.meta.url)), '..', 'learning.json')
+const learningStore: LearningStore = loadLearning(LEARNING_FILE)
 
 // ── same-origin feedback route ────────────────────────────────────────────
 // The browser client cannot use `host.call` here (this is a static bundle, not
@@ -1606,6 +1658,94 @@ export function apply(ctx: Context, rawConfig: Config): void {
     return { risk, reason: assessment.reason, assessment, category, directive, mode: config.categoryMode }
   }
 
+  // ── confirmation-learning helpers ───────────────────────────────────────
+  // The ONLY producer of a learnable context is learnableContextFor, and it is
+  // called from exactly the four countdown ask sites — never from the six
+  // status-less hooks (their confirmations can never mature into a hit) and
+  // never from anywhere else. The gate (risk tier × category × sensitive fuse)
+  // is evaluated here for the record-time snapshot and re-evaluated live at
+  // the query point; failing either side means "never learned".
+  const learningFuseHit = (req: any, args: any, policyReason: string | undefined): boolean => {
+    if (RISK_NAME_PATTERN.test(String(req.toolName ?? ''))) return true
+    if (policyReason !== undefined && RISK_REASON_PATTERN.test(policyReason)) return true
+    let parsed: unknown = args
+    if (typeof args === 'string') {
+      try {
+        parsed = JSON.parse(args)
+      } catch {
+        parsed = undefined
+      }
+    }
+    const rawPathArgs = typeof parsed === 'string' || parsed === undefined
+      ? (typeof args === 'string' ? args : undefined)
+      : JSON.stringify(parsed)
+    const target = rawPathArgs === undefined ? undefined : extractToolPath(rawPathArgs)
+    if (target === undefined) return false
+    const roots = rootsFor({ agent: req.agent })
+    const normalized = normalizePath(target, roots.workspace, roots.home)
+    return sensitiveBasenameAt(normalized, roots) || isProtectedProjectPath(normalized, roots)
+  }
+
+  interface LearnableContext {
+    key: string
+    workspace: string
+    kind: LearningKind
+    skeleton: string
+  }
+
+  const learnableContextFor = (
+    req: any,
+    args: any,
+    classified: { risk: StaticRisk; category?: string },
+  ): LearnableContext | undefined => {
+    try {
+      if (!config.learningEnabled) return undefined
+      if (!learnGateEligible({
+        enabled: config.learningEnabled,
+        staticRisk: classified.risk,
+        category: classified.category,
+        fuseHit: learningFuseHit(req, args, undefined),
+      })) return undefined
+      const toolName = String(req.toolName ?? '')
+      let input: { kind: LearningKind; command?: string; toolName?: string; args?: unknown }
+      if (toolName === 'bash' || toolName === 'pwsh') {
+        let parsed: unknown = args
+        if (typeof args === 'string') {
+          try {
+            parsed = JSON.parse(args)
+          } catch {
+            return undefined
+          }
+        }
+        const command = (parsed as any)?.command
+        if (typeof command !== 'string' || command.trim() === '') return undefined
+        input = { kind: toolName === 'bash' ? 'shell-bash' : 'shell-pwsh', command }
+      } else {
+        let parsed: unknown = args
+        if (typeof args === 'string') {
+          try {
+            parsed = JSON.parse(args)
+          } catch {
+            parsed = undefined
+          }
+        }
+        input = { kind: 'tool', toolName, args: parsed }
+      }
+      const signature = signatureFor(input)
+      if (signature === undefined) return undefined
+      const workspace = rootsFor({ agent: req.agent }).workspace
+      if (workspace === undefined || workspace === '') return undefined
+      return {
+        key: learningKey(input.kind, workspace, signature.signature),
+        workspace,
+        kind: input.kind,
+        skeleton: signature.skeleton,
+      }
+    } catch {
+      return undefined
+    }
+  }
+
   const riskReviewed = (risk: 'LOW' | 'MEDIUM' | 'HIGH', scope: Config['llmReviewScope']): boolean => {
     if (scope === 'low-or-above') return true
     if (scope === 'medium-or-above') return risk !== 'LOW'
@@ -1680,6 +1820,15 @@ export function apply(ctx: Context, rawConfig: Config): void {
       const resolved = resolveDeepest(target)
       if (resolved === undefined) continue
       const normalized = normalizePath(resolved, roots.workspace, roots.home)
+      // Independent runtime-state re-check, orthogonal to zone escape: a
+      // textual workspace/trusted-zone target whose RESOLVED landing spot is a
+      // plugin runtime-state file must hard-deny even when the realpath stays
+      // inside every allowed zone (the escape check below stays silent there).
+      // Mode-independent on purpose: mutating approval/audit/learning state is
+      // never a routine write under either position mode.
+      if (runtimeStateTargetInZone(normalized, roots.allowedDshSubpaths)) {
+        return `target resolves into plugin runtime state via a symlink: ${normalized}`
+      }
       const escape = realpathCriticalReason(textual, normalized, roots, roots.trustedDirs, realWsNormalized)
       if (escape === undefined) continue
       if (aggressive) {
@@ -1862,12 +2011,23 @@ export function apply(ctx: Context, rawConfig: Config): void {
   }
   const totalDenials = new Map<string, number>()
   const denialLog = new Map<string, Array<{ reason?: string; toolName: string }>>()
+  // Learned allows per root authority session. This is the third, independent
+  // brake on the learning layer: past the cap the whole layer sleeps for that
+  // session (constant miss → back to a human), while applyBreaker and every
+  // other pipeline stay untouched. Cleaned up on session disposal below.
+  const sessionLearnedAllows = new Map<string, number>()
   // Per-session-key mutex serializing the breaker read-modify-write. Without it
   // two in-flight approvals sharing a sessionKey could interleave their map
   // reads/writes (after an await) and lose an increment. The critical section
   // contains ONLY synchronous Map ops — never the surrounding await — so
   // unrelated approvals stay concurrent.
   const breakerMutex = createKeyedMutex()
+  // Independent mutex for the learning store: keyed by the signature hash so
+  // concurrent confirms of the same signature serialize, different signatures
+  // never wait on each other. The critical section contains ONLY synchronous
+  // map ops + the synchronous tmp+rename persist — never an await (same
+  // contract as the breaker mutex above).
+  const learningMutex = createKeyedMutex()
 
   // Breaker counters are keyed by the authority session id (see
   // authorityKeyFor). A `session/disposed` only fires for the exact session
@@ -1887,6 +2047,10 @@ export function apply(ctx: Context, rawConfig: Config): void {
       denials.delete(key)
       totalDenials.delete(key)
       denialLog.delete(key)
+      // The learned-allow allowance is keyed by the same authority id; drop it
+      // here so a disposed root session cannot leak its counter (a fresh
+      // session starts with a full learning allowance again).
+      sessionLearnedAllows.delete(key)
     })
     if (requestAtByKey.has(key)) requestAtByKey.delete(key)
     // Persisted per-session review mode is keyed by the same authority id; drop
@@ -1901,7 +2065,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
   // approves in different sessions cannot clobber each other's timestamp.
   const requestAtByKey = new Map<string, number>()
 
-  const askHuman = async (req: any, review: ReviewResult | undefined, next: () => Promise<any>, breaker = false, status?: ReviewStatus, handle?: RaceHumanHandle, llmDecided?: boolean): Promise<any> => {
+  const askHuman = async (req: any, review: ReviewResult | undefined, next: () => Promise<any>, breaker = false, status?: ReviewStatus, handle?: RaceHumanHandle, llmDecided?: boolean, learnable?: LearnableContext): Promise<any> => {
     // Delegate to the official ApprovalPanel; the client half parses the
     // countdown marker and adds the visible countdown + auto-answer. Breaker
     // requests intentionally omit the marker so no automatic timeout runs.
@@ -2092,12 +2256,124 @@ export function apply(ctx: Context, rawConfig: Config): void {
       ...llmMeta,
       ...(breaker ? { breaker: true, breakerReasons } : {}),
     })
+    // Learning bookkeeping at the single convergence point, right next to the
+    // history write. Only a genuine human allow on a qualified (countdown)
+    // hook increments — `learnable` is produced exclusively by those four
+    // sites; a human deny on the same signature resets its count; every other
+    // resolution source (timeout-*, llm-*, auto-*, abort, learned-allow) is a
+    // zero code path here. The critical section is synchronous-only (map ops
+    // + the synchronous tmp+rename persist), honoring the keyed-mutex
+    // "never await inside" contract.
+    if (learnable !== undefined) {
+      const action = confirmActionFor(source)
+      if (action !== 'ignore') {
+        try {
+          await learningMutex.run(learnable.key, () => {
+            if (action === 'reset') {
+              resetConfirmation(learningStore, learnable.key, Date.now())
+            } else {
+              recordConfirm(learningStore, learnable.key, { workspace: learnable.workspace, kind: learnable.kind, skeleton: learnable.skeleton }, Date.now())
+            }
+            persistLearning(LEARNING_FILE, learningStore)
+          })
+          debugLog({ ev: 'learn-record', callId: req.callId ?? null, source, action })
+        } catch (error) {
+          debugLog({ ev: 'learn-record-error', callId: req.callId ?? null, error: error instanceof Error ? error.message : String(error) })
+        }
+      }
+    }
     // Verdict maps are read above to compute the source; clean them now.
     if (req.callId !== undefined) {
       reviewVerdicts.delete(req.callId)
       autoAnswered.delete(req.callId)
     }
     return outcome
+  }
+
+  // ── confirmation-learning query + release gate ───────────────────────────
+  // Runs at exactly one wiring point: AFTER the terminal policy hard-deny and
+  // BEFORE the risk branches (so every hard layer above structurally precedes
+  // any learned allow), and only when the switch is on. A hit still owes the
+  // current call one standard online reviewer audit — same machinery as the
+  // ordinary reviews (reasoning-blind input, per-tier budget, CRITICAL-flag
+  // block); anything other than a clean ALLOW falls through to the ordinary
+  // branch as if the layer never matched. The verification never touches the
+  // denial breaker, and confirmed samples (skeleton included) never enter a
+  // prompt.
+  const learnAttempt = async (
+    req: any,
+    args: any,
+    classified: { risk: StaticRisk; category?: string; mode?: string },
+    sessionKey: string,
+    reviewOpts: {
+      userMessages?: string[]
+      workspaceRoot?: string
+      home?: string
+      contextFacts?: { artifacts: ArtifactRegistry; owner?: unknown }
+    },
+  ): Promise<'allowed-once' | undefined> => {
+    try {
+      if (!config.learningEnabled) return undefined
+      const capUsed = sessionLearnedAllows.get(sessionKey) ?? 0
+      const capMax = THRESHOLD_DEFAULTS.learningSessionAllowCap
+      const routeAvailable = !!((config.reviewerProvider && config.reviewerModel) || config.reviewerBaseUrl || sessionModelRoute(req.agent.session))
+      if (!routeAvailable) return undefined
+      const learnable = learnableContextFor(req, args, classified)
+      if (learnable === undefined) return undefined
+      const decision = learnDecision({
+        enabled: config.learningEnabled,
+        staticRisk: classified.risk,
+        category: classified.category,
+        key: learnable.key,
+        workspace: learnable.workspace,
+        threshold: clampLearningThreshold(config.learningThreshold, THRESHOLD_DEFAULTS.learningThreshold),
+        now: Date.now(),
+        capUsed,
+        capMax,
+        store: learningStore,
+      })
+      if (!decision.hit) return undefined
+      // DENY can never reach this line (the terminal above returned); the
+      // assertion only narrows the tier type for the per-risk budget.
+      const seconds = riskSeconds(classified.risk as 'LOW' | 'MEDIUM' | 'HIGH')
+      const start = Date.now()
+      const { review, attempts } = await reviewWithLLM(credentials, llm, tools, req.agent.session, req, config, seconds * 1000, reviewOpts, {
+        maxRetries: config.reviewMaxRetries ?? THRESHOLD_DEFAULTS.reviewMaxRetries,
+        budgetMs: seconds * 1000,
+        asyncPath: false,
+      })
+      pushLatencySample(llmLatency, { at: Date.now(), tookMs: Date.now() - start, settled: review.failure === undefined, attempts: Math.max(1, attempts.length) })
+      debugLog({ ev: 'learned-review', callId: req.callId ?? null, decision: review.decision, risk: review.riskLevel ?? null, tookMs: Date.now() - start })
+      // Anything but a clean ALLOW (DENY / ESCALATE / failure / CRITICAL-flagged
+      // contradiction) is treated as a miss and slides back into the ordinary
+      // risk branch below — fail-closed in exactly one direction.
+      if (review.decision !== 'ALLOW' || reviewerAutoAllowBlocked(review as any)) return undefined
+      sessionLearnedAllows.set(sessionKey, capUsed + 1)
+      if (learningCapState(capUsed, capMax).alert) {
+        appendAuditLine(JSON.stringify({ type: 'learning-cap-reached', at: Date.now(), sessionId: sessionKey, allows: capUsed + 1 }))
+        debugLog({ ev: 'learn-cap', sessionId: sessionKey, allows: capUsed + 1 })
+      }
+      if (config.notifyUser && req.callId !== undefined) {
+        queueNotice(req.agent.session, req.callId, `✅ 已学习放行（仍通过一次在线评审）"${req.toolName}"`)
+      }
+      pushHistory({
+        sessionId: sessionKey,
+        toolName: req.toolName,
+        outcome: 'allowed-once',
+        source: 'learned-allow',
+        category: classified.category,
+        categoryDecision: 'learned',
+        mode: classified.mode,
+        llmDecision: review.decision,
+        llmRisk: review.riskLevel,
+        llmReason: review.reason,
+        ...(attempts.length > 0 ? { attempts } : {}),
+      })
+      return 'allowed-once'
+    } catch (error) {
+      debugLog({ ev: 'learn-error', callId: req.callId ?? null, error: error instanceof Error ? error.message : String(error) })
+      return undefined
+    }
   }
 
   anyCtx.on('approval/request', async (req: any, next: () => Promise<any>) => {
@@ -2273,6 +2549,15 @@ export function apply(ctx: Context, rawConfig: Config): void {
       })
       return 'rejected'
     }
+    // Confirmation-learning query layer — the only wiring slot where a learned
+    // allow may ever return: every preceding hard terminal (declared rules,
+    // deny list, category deny, static allows/asks, manual mode, breaker trip,
+    // and the policy hard-deny immediately above) has already answered by the
+    // time this line runs, so a stored confirmation can structurally never
+    // touch a hard-denied call. A miss, a failed verification, or any error
+    // falls through to the ordinary LOW/MEDIUM/HIGH pipeline unchanged.
+    const learnedAllow = await learnAttempt(req, args, classified, sessionKey, reviewOpts)
+    if (learnedAllow !== undefined) return learnedAllow
     const llmRouteAvailable = !!((config.reviewerProvider && config.reviewerModel) || config.reviewerBaseUrl || sessionModelRoute(req.agent.session))
     const llmReviews = llmRouteAvailable && riskReviewed(staticRisk, config.llmReviewScope)
     const llmTakeover = llmReviews && riskTakenOver(staticRisk, config.llmTakeoverScope)
@@ -2380,7 +2665,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
         action: riskTimedOutAction('LOW', config.timeoutAction, autoUnattended),
         seconds,
       }
-      return askHuman(req, review, next, false, lowEscalateStatus)
+      return askHuman(req, review, next, false, lowEscalateStatus, undefined, undefined, learnableContextFor(req, args, classified))
     }
 
     if (staticRisk === 'MEDIUM') {
@@ -2393,7 +2678,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
           seconds,
           ...(fallback === 'reject' ? { feedback: REVIEW_TIMEOUT_NOTICE } : {}),
         }
-        return askHuman(req, undefined, next, false, status)
+        return askHuman(req, undefined, next, false, status, undefined, undefined, learnableContextFor(req, args, classified))
       }
       const fallbackAction = riskTimedOutAction('MEDIUM', config.timeoutAction, autoUnattended)
       const status: ReviewStatus = {
@@ -2404,7 +2689,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
         ...(fallbackAction === 'reject' ? { feedback: REVIEW_TIMEOUT_NOTICE } : {}),
       }
       const mediumHandle: RaceHumanHandle = { claim: () => {} }
-      const askPromise = askHuman(req, undefined, next, false, status, mediumHandle, true)
+      const askPromise = askHuman(req, undefined, next, false, status, mediumHandle, true, learnableContextFor(req, args, classified))
       const reviewStart = Date.now()
       void reviewWithLLM(credentials, llm, tools, req.agent.session, req, config, seconds * 1000, reviewOpts, {
         maxRetries: config.reviewMaxRetries ?? THRESHOLD_DEFAULTS.reviewMaxRetries,
@@ -2475,7 +2760,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       seconds,
       ...(highAction === 'allow' ? {} : { feedback: REVIEW_TIMEOUT_NOTICE }),
     }
-    const askPromise = askHuman(req, undefined, next, false, status)
+    const askPromise = askHuman(req, undefined, next, false, status, undefined, undefined, learnableContextFor(req, args, classified))
     if (llmReviews) {
       const reviewStart = Date.now()
       void reviewWithLLM(credentials, llm, tools, req.agent.session, req, config, seconds * 1000, reviewOpts, {

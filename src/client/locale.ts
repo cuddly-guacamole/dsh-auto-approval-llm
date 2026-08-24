@@ -158,6 +158,18 @@ export const zh = {
   'category.gitPush': 'Git 推送',
   'category.publish': '发布/外发',
   'category.disk': '磁盘/设备',
+  'settings.learning.title': '确认制学习',
+  'settings.learning.enabled': '启用确认制学习',
+  'settings.learning.enabledHint': '默认关闭；开启后同一操作需累计真实人工确认，才可能获得自动放行资格',
+  'settings.learning.threshold': '确认次数阈值 N',
+  'settings.learning.thresholdHint': '2–10 的整数，默认 3；越界值保存时自动钳回',
+  'settings.learning.howItWorks': '同一签名（命令模板 / 工具参数形状）的操作经 N−1 次人工确认后，第 N 次起自动放行；每次放行前仍会对本次调用执行一次标准在线评审',
+  'settings.learning.safetyNote': '高风险、锁定类别（删除/受保护/提权/磁盘）、unknown 类别与敏感路径永不参与学习；已确认样本不会进入任何提示词',
+  'settings.learning.fallbackNote': '任何一环失效——评审拒绝、评审不可用、未配模型、条目过期损坏——一律回人工',
+  'settings.learning.scopeNote': '主战场是中风险倒计时审批；低风险已有自动放行通道，收益有限',
+  'settings.learning.capNote': '每个根会话累计学习放行上限 50 次，超过后学习层休眠回人工',
+  'settings.learning.ttlNote': '学习条目保留 30 天、至多 100 条，长期不用自动回收；关闭开关不清数据',
+  'settings.learning.denyResetNote': '同签名操作被人工拒绝会立即清零该条计数',
 } as const
 
 export type LocaleKey = keyof typeof zh
@@ -321,6 +333,18 @@ export const en: Record<LocaleKey, string> = {
   'category.gitPush': 'Git push',
   'category.publish': 'Publish / send',
   'category.disk': 'Disk / devices',
+  'settings.learning.title': 'Confirmation learning',
+  'settings.learning.enabled': 'Enable confirmation learning',
+  'settings.learning.enabledHint': 'Off by default; when on, the same operation needs real human confirmations before it can ever auto-allow',
+  'settings.learning.threshold': 'Confirmation threshold N',
+  'settings.learning.thresholdHint': 'Integer between 2 and 10, default 3; out-of-range values clamp back on save',
+  'settings.learning.howItWorks': 'After N−1 human confirmations of the same signature (command template / tool argument shape), matching calls auto-allow from the Nth one; every release still runs one standard online review of that call',
+  'settings.learning.safetyNote': 'High risk, locked categories (delete/protected/privilege/disk), unknown category and sensitive paths never participate; confirmed samples never enter any prompt',
+  'settings.learning.fallbackNote': 'Any failing link — review deny, reviewer unavailable, no model configured, expired or corrupt entries — falls back to a human',
+  'settings.learning.scopeNote': 'The main battlefield is medium-risk countdown approvals; low risk already has automatic channels, so gains are limited there',
+  'settings.learning.capNote': 'Learned allows are capped at 50 per root session; past that the layer sleeps and asks a human',
+  'settings.learning.ttlNote': 'Entries live 30 days, at most 100, recycled when unused; switching off keeps the data',
+  'settings.learning.denyResetNote': 'A human denial of the same signature resets its count immediately',
 }
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {

@@ -12,6 +12,7 @@
 // script performs no writes at all.
 import http from 'node:http'
 import { spawn } from 'node:child_process'
+import { copyFileSync, existsSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { runAuthChecks } from './verify-auth.mjs'
@@ -21,6 +22,10 @@ const PORT = 3080
 const SETTINGS_ROUTE = '/_dsh/auto-approval-llm/settings'
 const here = dirname(fileURLToPath(import.meta.url))
 const MOCK_REVIEWER = join(here, 'mock-reviewer.mjs')
+// The learning store is plugin runtime state just like history/audit; the
+// verification writes real confirmations, so back it up and restore it no
+// matter how the run ends.
+const LEARNING_FILE = join(dirname(here), 'learning.json')
 
 // Runtime-verification payload (mirrors the old standalone verify-config-set.mjs).
 // Deliberately puts the plugin into the mock-reviewer state so the approval
@@ -96,6 +101,20 @@ async function main() {
 
   let dirty = false
   let mock = null
+  // learning.json snapshot (binary copy) taken before any write and restored
+  // in every exit path; a file that did not exist before is removed again.
+  const learningBackup = join(here, `.learning.verify-backup-${process.pid}`)
+  const hadLearning = existsSync(LEARNING_FILE)
+  if (hadLearning) copyFileSync(LEARNING_FILE, learningBackup)
+  const restoreLearning = () => {
+    try {
+      if (hadLearning) copyFileSync(learningBackup, LEARNING_FILE)
+      else if (existsSync(LEARNING_FILE)) rmSync(LEARNING_FILE)
+      if (existsSync(learningBackup)) rmSync(learningBackup)
+    } catch (e) {
+      console.error('[verify-runtime] RESTORE FAILED for learning.json (manual revert needed):', e.message)
+    }
+  }
   const restore = async () => {
     console.log('[verify-runtime] restoring settings to pre-run state…')
     try {
@@ -104,6 +123,7 @@ async function main() {
     } catch (e) {
       console.error('[verify-runtime] RESTORE FAILED (manual revert needed):', e.message)
     }
+    restoreLearning()
     if (mock) { mock.kill(); mock = null }
   }
   process.on('SIGINT', () => { void restore().then(() => process.exit(130)) })

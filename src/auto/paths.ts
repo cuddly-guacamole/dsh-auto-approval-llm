@@ -199,7 +199,7 @@ export function isArtifactArea(target, roots) {
  * alike (a shell vector must never degrade into a countdown-answerable ask).
  * Canonical here so policy.ts and shell.ts share one source of truth.
  */
-export const RUNTIME_STATE_BASENAMES = new Set(['history.jsonl', 'audit.jsonl', 'approval-debug.jsonl', 'review-mode.json', 'llm-latency.jsonl']);
+export const RUNTIME_STATE_BASENAMES = new Set(['history.jsonl', 'audit.jsonl', 'approval-debug.jsonl', 'review-mode.json', 'llm-latency.jsonl', 'learning.json']);
 
 /** Reason when a normalized target names one of those state files. */
 export function runtimeStateTargetReason(normalizedPath) {

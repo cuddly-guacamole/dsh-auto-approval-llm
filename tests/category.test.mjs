@@ -17,7 +17,7 @@ import {
   categoryDirective, categoryDirectiveFor, applyCategoryDirective,
   isEffectiveRoutine, sensitiveBasenameAt, realpathCriticalReason,
 } from '../lib/auto/category.js'
-import { isWithin, normalizePath } from '../lib/auto/paths.js'
+import { isWithin, normalizePath, runtimeStateTargetInZone } from '../lib/auto/paths.js'
 import { assessShell, hardDenyShellReason } from '../lib/auto/shell.js'
 import { assessTool } from '../lib/auto/policy.js'
 import { riskFromAssessment, HOST_ONLY_KEYS } from '../lib/auto/decision.js'
@@ -641,4 +641,154 @@ test('C10 T72: client invalid-config tables gain the three keys (compiled bundle
   const categoryModeEnum = client.indexOf('categoryMode: ["standard"')
   assert.ok(categoryModeEnum !== -1, 'categoryMode enum row')
   assert.ok(client.slice(categoryModeEnum, categoryModeEnum + 200).includes('"aggressive"'), 'aggressive mode value')
+})
+
+// ── confirmation learning · wiring order + guard re-check (L2/L3) ───────────
+
+function learningZoneFixture() {
+  const root = mkdtempSync(join(tmpdir(), 'dsa-learnzone-'))
+  const workspace = join(root, 'ws')
+  const zone = join(root, 'zone', 'dsh-auto-approval-llm')
+  mkdirSync(workspace)
+  mkdirSync(zone, { recursive: true })
+  return {
+    root,
+    workspace,
+    zone,
+    cleanup: () => rmSync(root, { recursive: true, force: true }),
+  }
+}
+
+test('L2 runtime-state fuse: a junction landing on plugin state resolves into the zone (F1 predicate)', () => {
+  const f = learningZoneFixture()
+  try {
+    writeFileSync(join(f.zone, 'learning.json'), '{}')
+    const link = join(f.workspace, 'link-zone')
+    symlinkSync(f.zone, link, 'junction')
+    // The write target textually sits in the workspace; its resolution lands
+    // on the state file behind the junction — exactly the guard's blind spot.
+    const throughLink = join(link, 'learning.json')
+    const resolved = normalizePath(realpathSync(throughLink), f.workspace, f.root)
+    const zoneNorm = normalizePath(realpathSync(f.zone), f.workspace, f.root)
+    assert.notEqual(resolved, normalizePath(throughLink, f.workspace, f.root), 'the fixture really resolves through a link')
+    assert.equal(runtimeStateTargetInZone(resolved, [zoneNorm]), true, 'landing on the state file trips the zone fuse')
+    // Reverse direction: a junction to an ordinary workspace folder never trips.
+    const plainDir = join(f.workspace, 'plain-dir')
+    mkdirSync(plainDir)
+    const okLink = join(f.workspace, 'link-ok')
+    symlinkSync(plainDir, okLink, 'junction')
+    const resolvedOk = normalizePath(realpathSync(okLink), f.workspace, f.root)
+    assert.equal(runtimeStateTargetInZone(resolvedOk, [zoneNorm]), false, 'ordinary workspace targets stay routine')
+  } finally {
+    f.cleanup()
+  }
+})
+
+test('L3 T146: the learning query sits between the terminal policy-deny and risk application (slot Y)', () => {
+  const answererStart = HOST_SRC.indexOf("ev: 'request'")
+  const answerer = HOST_SRC.slice(answererStart)
+  const breakerIdx = answerer.indexOf('breakerTripped(')
+  const denyIdx = answerer.indexOf("'policy-deny'")
+  const learnedIdx = answerer.indexOf('await learnAttempt(')
+  const routeIdx = answerer.indexOf('const llmRouteAvailable')
+  for (const [name, idx] of [['breakerTripped(', breakerIdx], ["'policy-deny'", denyIdx], ['learnAttempt', learnedIdx], ['llmRouteAvailable', routeIdx]]) {
+    assert.ok(idx !== -1, `answerer contains ${name}`)
+  }
+  assert.ok(breakerIdx < denyIdx, 'breaker trip precedes the DENY terminal')
+  assert.ok(denyIdx < learnedIdx, 'the learning query comes AFTER the policy hard-deny — never before it')
+  assert.ok(learnedIdx < routeIdx, 'the learning query comes BEFORE the risk branches consume the decision')
+})
+
+test('L3 LP3: exactly the four countdown hooks construct a learnable context', () => {
+  const all = [...HOST_SRC.matchAll(/learnableContextFor\(/g)]
+  assert.equal(all.length, 5, 'four record-time hooks + one query-side gate inside learnAttempt')
+  const answererStart = HOST_SRC.indexOf("ev: 'request'")
+  const slotY = HOST_SRC.indexOf('await learnAttempt(', answererStart)
+  const preSlot = HOST_SRC.slice(answererStart, slotY)
+  const postSlot = HOST_SRC.slice(slotY)
+  assert.equal([...preSlot.matchAll(/learnableContextFor\(/g)].length, 0, 'no status-less hook ever constructs one')
+  assert.equal([...postSlot.matchAll(/, learnableContextFor\(/g)].length, 4, 'all four live in the countdown ask sites')
+  assert.equal([...HOST_SRC.matchAll(/askHuman\(/g)].length, 10, 'closed ask-site enum: 4 countdown + 6 status-less')
+  const hookIndexes = [...postSlot.matchAll(/, learnableContextFor\(/g)].map((m) => m.index)
+  const highAnchor = postSlot.indexOf('// HIGH')
+  assert.ok(highAnchor !== -1, 'the HIGH branch marker survives compilation')
+  assert.ok(hookIndexes[3] > highAnchor, 'the fourth qualified hook lives in the HIGH branch')
+})
+
+test('L3 LP12b: the host schema declares both learning keys with fail-closed defaults', () => {
+  assert.ok(HOST_SRC.includes('learningEnabled: z.boolean().default(false)'), 'schema default off')
+  assert.ok(HOST_SRC.includes('learningThreshold: z.number().default(THRESHOLD_DEFAULTS.learningThreshold)'), 'schema threshold default')
+  const resolveIdx = HOST_SRC.indexOf('export function resolveConfig')
+  const resolveBlock = HOST_SRC.slice(resolveIdx, HOST_SRC.indexOf('function riskTimedOutAction'))
+  assert.ok(resolveBlock.includes('learningEnabled: raw.learningEnabled === true'), 'non-boolean degrades to off')
+  assert.ok(resolveBlock.includes('clampLearningThreshold('), 'threshold clamped at the decision layer')
+})
+
+test('L3 T148: learning bookkeeping is adjacent to pushHistory at the single convergence point', () => {
+  const start = HOST_SRC.indexOf('const askHuman =')
+  const end = HOST_SRC.indexOf('const learnAttempt')
+  const body = HOST_SRC.slice(start, end > start ? end : start + 8000)
+  const sourceIdx = body.indexOf('const source = approvalSource(')
+  const confirmIdx = body.indexOf('confirmActionFor(source)')
+  const historyIdx = body.lastIndexOf('pushHistory({')
+  const mutexIdx = body.indexOf('learningMutex.run(')
+  const persistIdx = body.indexOf('persistLearning(')
+  for (const [name, idx] of [['source', sourceIdx], ['confirmActionFor', confirmIdx], ['pushHistory', historyIdx], ['learningMutex.run', mutexIdx], ['persistLearning', persistIdx]]) {
+    assert.ok(idx !== -1, `askHuman convergence contains ${name}`)
+  }
+  assert.ok(confirmIdx > sourceIdx, 'the recording consumes the resolved source, nothing earlier')
+  assert.ok(historyIdx < confirmIdx, 'bookkeeping sits right after the history write')
+  assert.ok(mutexIdx < persistIdx, 'persist happens inside the keyed critical section')
+})
+
+test('L3 T149/T152: learned-allow records carry G11-aligned fields; cap sleep alerts via audit', () => {
+  const start = HOST_SRC.indexOf('const learnAttempt')
+  const end = HOST_SRC.indexOf("anyCtx.on('approval/request'")
+  const body = HOST_SRC.slice(start, end > start ? end : start + 12000)
+  assert.ok(body.includes("source: 'learned-allow'"), 'dedicated audit source')
+  assert.ok(body.includes("categoryDecision: 'learned'"), 'G11 field alignment')
+  assert.ok(body.includes("outcome: 'allowed-once'"), 'release outcome vocabulary unchanged')
+  assert.ok(body.includes("'learning-cap-reached'"), 'cap crossing writes an audit alert')
+  assert.ok(body.includes('THRESHOLD_DEFAULTS.learningSessionAllowCap'), 'cap constant consumed from defaults')
+  assert.ok(/config\.notifyUser[\s\S]{0,80}queueNotice/.test(body) || (body.includes('config.notifyUser') && body.includes('queueNotice(')), 'the release notice honors the notify switch')
+})
+
+test('L3 LP8/LP9: the verification gate never touches the breaker and never leaks samples into prompts', () => {
+  const start = HOST_SRC.indexOf('const learnAttempt')
+  const end = HOST_SRC.indexOf("anyCtx.on('approval/request'")
+  const body = HOST_SRC.slice(start, end > start ? end : start + 12000)
+  assert.ok(!body.includes('applyBreaker'), 'verification review is breaker-blind')
+  assert.ok(!body.includes('denials.set') && !body.includes('totalDenials.set') && !body.includes('denialLog.'), 'no denial counter mutation in the learning layer')
+  assert.ok(!/reviewWithLLM\([\s\S]{0,400}skeleton/.test(body), 'confirmed samples (skeletons) never enter any prompt input')
+  assert.ok(!body.includes('.skeleton'), 'the stored skeleton is not referenced at the query point at all')
+})
+
+test('L3 LP12: the learning layer is byte-inert while disabled', () => {
+  const start = HOST_SRC.indexOf('const learnAttempt')
+  const end = HOST_SRC.indexOf("anyCtx.on('approval/request'")
+  const body = HOST_SRC.slice(start, end > start ? end : start + 12000)
+  // The compiled output may split the guard across lines; match its shape.
+  const guardIdx = body.search(/if \(!config\.learningEnabled\)\s*return/)
+  const reviewIdx = body.indexOf('reviewWithLLM(')
+  assert.ok(guardIdx !== -1, 'the query opens with the switch guard')
+  assert.ok(reviewIdx !== -1 && guardIdx < reviewIdx, 'nothing (not even a lookup) runs while the switch is off')
+  assert.equal([...HOST_SRC.matchAll(/loadLearning\(LEARNING_FILE\)/g)].length, 1, 'the store loads once per process, module-level')
+  const disposedAt = HOST_SRC.indexOf("anyCtx.on('session/disposed'")
+  const disposedBlock = HOST_SRC.slice(disposedAt, disposedAt + 1400)
+  assert.ok(disposedBlock.includes('sessionLearnedAllows.delete(key)'), 'disposal clears the per-session allowance')
+})
+
+test('L3 F1: the guard re-checks resolved runtime-state landings before (and independently of) escape', () => {
+  const start = HOST_SRC.indexOf('const symlinkEscapeReason')
+  const end = HOST_SRC.indexOf('tools?.guard')
+  const guard = HOST_SRC.slice(start, end > start ? end : start + 6000)
+  const normalizedIdx = guard.indexOf('const normalized = normalizePath(resolved')
+  const recheckIdx = guard.indexOf('runtimeStateTargetInZone(normalized')
+  const reasonIdx = guard.indexOf('target resolves into plugin runtime state via a symlink')
+  const escapeIdx = guard.indexOf('realpathCriticalReason(textual')
+  for (const [name, idx] of [['normalized', normalizedIdx], ['recheck', recheckIdx], ['reason literal', reasonIdx], ['escape check', escapeIdx]]) {
+    assert.ok(idx !== -1, `guard contains ${name}`)
+  }
+  assert.ok(recheckIdx > normalizedIdx && recheckIdx < escapeIdx, 'the independent re-check runs before the escape verdict')
+  assert.ok(reasonIdx > recheckIdx && reasonIdx < escapeIdx, 'its hard-deny reason returns before escape can say undefined')
 })
