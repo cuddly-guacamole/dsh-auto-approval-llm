@@ -115,13 +115,13 @@ dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 | 键 | 默认 | 说明 |
 |---|---|---|
 | `enabled` | true | 总开关 |
-| `autoSwitchPolicyToAsk` | false | 仅 Auto 预设且 override=never 时自动切 ask |
+| `autoSwitchPolicyToAsk` | false | 仅 Auto 预设且 override=never 时自动切 ask；设置卡已撤下，仅 YAML 配置 |
 | `timeoutAction` | `reject` | 倒计时超时动作：`reject` 拒绝 / `allow` 全部通过 / `low-risk-allow` 仅低风险放行 |
 | `llmReviewScope` | `low-or-above` | LOW/MEDIUM/HIGH 哪些档送 LLM 复审 |
 | `llmTakeoverScope` | `medium-or-below` | 哪些档允许 LLM 结论直接接管 |
 | `defaultReviewMode` | `smart` | 每会话评审模式默认：人工 / 智能 / 无人值守 |
 | `lowRiskSeconds` / `mediumRiskSeconds` / `highRiskSeconds` | 5 / 8 / 10 | 三档倒计时（秒） |
-| `breakerAntiHijackMs` | 0 | 熔断弹窗按钮防误点禁用时长，0 不启用 |
+| `breakerAntiHijackMs` | 0 | 熔断弹窗按钮防误点禁用时长，0 不启用；设置卡已撤下，仅 YAML 配置 |
 | `maxConsecutiveDenials` | 3 | 连续 LLM 拒绝熔断阈值，0 关闭 |
 | `maxTotalDenials` | 20 | 累计拒绝熔断阈值，0 关闭 |
 | `reviewerProtocol` | `openai` | 在线评审协议：`openai`(chat/completions) / `anthropic`(messages) |
@@ -130,7 +130,7 @@ dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 | `safetyPrompt` | '' | 附加给评审模型的额外策略（保存即热生效） |
 | `allowlist` / `denyList` / `humanOnlyList` | [] | 工具名精确匹配 |
 | `rulesText` | '' | 声明式规则（优先于内置列表执行；支持 `[agent:main|subagent|名]`、`[workspace:路径]` 维度前缀，逗号组合=AND；解析错误=整段失效） |
-| `rulesDryRun` | false | 规则干跑：只记命中不执法 |
+| `rulesDryRun` | false | 规则干跑：只记命中不执法；设置卡已撤下，仅 YAML 配置 |
 | `maxArgsChars` | 4000 | 取回工具参数的最大长度 |
 | `notifyUser` | true | 「模型通过」通知进会话 |
 | `showSessionPanel` | `off` | 会话标题栏按钮：关 / 仅Auto / 开 |
@@ -139,7 +139,7 @@ dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 | `classifierTimeoutMs` / `classifierMaxOutputTokens` | 8000 / 1024 | 分类器超时与输出上限 |
 | `reviewMaxRetries` | 1 | LLM 复审失败后的额外重试次数（0 单次 / 1 默认 / 2 上限；仅瞬时故障重试——限流·5xx·传输·空响应，LOW 同步含超时——重试窗口受审批倒计时剩余约束，认证/配置错误不重试） |
 | `debug` | false | 调试模式：写 `approval-debug.jsonl` 与 `[debug]` 日志 |
-| `reviewerContextFacts` | false | 上下文增强复审：给 LLM 复审输入附加结构化工作区事实（目标存在性/类型/大小 + 本会话最近创建文件，最多 8 条）；默认关（载荷与既往一致）。边界：工作区外只报存在性/类型不报大小；tempRoots 文件不入 recent_creates；探测失败整体省略 |
+| `reviewerContextFacts` | false | 仅 YAML 可配（设置卡无此控件）。上下文增强复审：给 LLM 复审输入附加结构化工作区事实（目标存在性/类型/大小 + 本会话最近创建文件，最多 8 条）；默认关（载荷与既往一致）。边界：工作区外只报存在性/类型不报大小；tempRoots 文件不入 recent_creates；探测失败整体省略 |
 | `editDiffPreview` | false | 编辑类工具（write/edit/str_replace_editor 非 view/apply_patch）进入人工审批时，面板展示目标文件行级红绿 diff。纯展示：不参与裁决、不进 LLM 复审输入；失败自动省略。边界：可读的工作区内非受保护目标对比现有内容；全量写类（write/create）目标不可读（外部/受保护/新文件）预览仅新内容全量新增（零读目标文件）；对比类（edit/str_replace/insert/apply_patch）目标不可读整体省略；≤1MiB（lstat 不跟随 + 读后字节复核，防 junction 逃逸）；LCS ≤1024 行/侧、单行 ≤200 字符省略、输出 ≤200 行且 ≤32KiB（截断带 `…truncated`）；语义镜像官方（多匹配/已存在/越界 → 省略）；diff 块内倒计时字面量剥离防伪造 |
 | `categoryPolicy` | `{}` | 11 类三态开关：`{类别: auto\|ask\|deny}`，缺省 `inherit` = 保持既往行为；delete/protected/privilege/disk 四类 LOCKED 仅可 `ask`（其余值 warn+丢弃）；harnessInternal/unknown 无键不可配 |
 | `categoryMode` | `standard` | 信任目录模式：`standard` 常规位置=workspace ∪ `trustedDirs`；`aggressive` 取消位置白名单，任意位置视为常规（敏感名 fuse、运行态硬拒、symlink 复检等危险度门不动；切换时 UI 明示放开范围） |
@@ -147,7 +147,7 @@ dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 | `learningEnabled` | false | 确认制学习：同一操作被人工反复确认达阈值后自动放行（命中仍须过一次标准在线评审）；默认关 = 零行为差异。高风险/锁定四类/unknown/敏感路径永不参与；每根会话学习放行上限 50 次 |
 | `learningThreshold` | 3 | 触发学习放行所需的人工确认次数（保存时钳入 2–10）；同签名操作被人工拒绝即清零计数 |
 
-> 顶层开关（启用/切换策略/超时动作/评审·接管范围/默认模式/按钮显示与位置）改动即保存；每张子卡有独立的 保存/放弃修改 按钮（安全规则列表另有 恢复默认）。host-only 键（workspaceRoot 等）用 patch/YAML 配置，设置卡保存不会抹掉它们。
+> 顶层开关（启用/超时动作/评审·接管范围/默认模式/按钮显示与位置）改动即保存；每张子卡有独立的 保存/放弃修改 按钮（安全规则列表另有 恢复默认）。host-only 键（workspaceRoot 等）用 patch/YAML 配置，设置卡保存不会抹掉它们。
 
 ---
 

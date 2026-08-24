@@ -27,7 +27,7 @@ import { isTrustedRequest, isLoopbackIp, validateReviewerBaseUrl } from '../lib/
 import { parseClassifierDecision } from '../lib/auto/classifier.js'
 import { RISK_NAME_PATTERN, RISK_REASON_PATTERN } from '../lib/auto/risk-tokens.js'
 import { buildAskReason, buildEditDiffText } from '../lib/auto/editdiff.js'
-import { Config, resolveConfig } from '../lib/index.js'
+import { Config, resolveConfig, sessionModelRoute } from '../lib/index.js'
 import { categorizeCommand } from '../lib/auto/category.js'
 
 test('parseClassifierDecision: valid allow/ask/deny', () => {
@@ -2448,4 +2448,43 @@ test('client bundle: learning keys survive every sync point (anti-clearing pin)'
     compact.includes('["learningEnabled","learningThreshold"]') || compact.includes("['learningEnabled','learningThreshold']"),
     'saveCard keys slice registered',
   )
+})
+
+// ── reviewer route availability: explicit pair ∥ baseUrl ∥ session fallback ──
+
+test('sessionModelRoute: live request header wins over recorded header events', () => {
+  const live = { provider: 'live-provider', model: 'live-model' }
+  const session = {
+    requestHeader: () => ({ config: live }),
+    events: [{ type: 'request/header', data: { header: { config: { provider: 'old-provider', model: 'old-model' } } } }],
+  }
+  assert.deepEqual(sessionModelRoute(session), live)
+})
+
+test('sessionModelRoute: newest request/header event is the fallback when no live header', () => {
+  const session = {
+    events: [
+      { type: 'tool/call', data: {} },
+      { type: 'request/header', data: { header: { config: { provider: 'older', model: 'm1' } } } },
+      { type: 'request/header', data: { header: { config: { provider: 'newest', model: 'm2' } } } },
+    ],
+  }
+  assert.deepEqual(sessionModelRoute(session), { provider: 'newest', model: 'm2' })
+})
+
+test('sessionModelRoute: absent/invalid session routes resolve to undefined (fallback source may be empty)', () => {
+  assert.equal(sessionModelRoute(undefined), undefined)
+  assert.equal(sessionModelRoute({}), undefined)
+  assert.equal(sessionModelRoute({ requestHeader: () => ({ config: { provider: '', model: '' } }) }), undefined)
+  assert.equal(sessionModelRoute({ events: [{ type: 'request/header', data: { header: { config: { provider: 'p' } } } }] }), undefined)
+})
+
+test('reviewer route gate: the three-source disjunction stays pinned at both pipeline sites (provider+model pair / baseUrl / session fallback)', () => {
+  // The production judgment is an inline expression inside apply(): once for
+  // the confirmation-learning gate, once for the main risk pipeline that owns
+  // the LOW no-route direct-allow branch. Pin its compiled shape so retiring
+  // any of the three sources fails here instead of silently flipping behavior.
+  const host = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
+  const matches = host.match(/\!\!\(\(config\.reviewerProvider && config\.reviewerModel\) \|\| config\.reviewerBaseUrl \|\| sessionModelRoute\(req\.agent\.session\)\)/g) ?? []
+  assert.equal(matches.length, 2, 'route-availability expression must gate both the learning path and the main review pipeline')
 })

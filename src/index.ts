@@ -297,7 +297,7 @@ function isModelRouteConfig(cfg: any): cfg is { provider: string; model: string 
 
 // Single resolver for "which provider/model is this session talking through":
 // the live request header first, then the newest recorded header event.
-function sessionModelRoute(session: any): { provider: string; model: string } | undefined {
+export function sessionModelRoute(session: any): { provider: string; model: string } | undefined {
   const live = session?.requestHeader?.()?.config
   if (isModelRouteConfig(live)) return { provider: live.provider, model: live.model }
   const events = session?.events ?? []

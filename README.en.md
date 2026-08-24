@@ -115,13 +115,13 @@ Session approval stats — the "Auto Approval" header-button popup: totals / all
 | Key | Default | Description |
 |---|---|---|
 | `enabled` | true | Master switch |
-| `autoSwitchPolicyToAsk` | false | Auto-switch `never` to `ask` for the auto preset with override=never |
+| `autoSwitchPolicyToAsk` | false | Auto-switch `never` to `ask` for the auto preset with override=never; card control removed, YAML only |
 | `timeoutAction` | `reject` | Timeout action: `reject` / `allow` / `low-risk-allow` (auto-approve only LOW) |
 | `llmReviewScope` | `low-or-above` | Which tiers (LOW/MEDIUM/HIGH) are sent for LLM review |
 | `llmTakeoverScope` | `medium-or-below` | Which tiers allow the LLM verdict to take over directly |
 | `defaultReviewMode` | `smart` | Default per-session review mode: Manual / Smart / Unattended |
 | `lowRiskSeconds` / `mediumRiskSeconds` / `highRiskSeconds` | 5 / 8 / 10 | Countdown seconds per tier |
-| `breakerAntiHijackMs` | 0 | Disable breaker panel buttons for this many ms; 0 disables |
+| `breakerAntiHijackMs` | 0 | Disable breaker panel buttons for this many ms; 0 disables; card control removed, YAML only |
 | `maxConsecutiveDenials` | 3 | Consecutive LLM-denial breaker threshold; 0 off |
 | `maxTotalDenials` | 20 | Cumulative denial breaker threshold; 0 off |
 | `reviewerProtocol` | `openai` | Online review protocol: `openai` (chat/completions) / `anthropic` (messages) |
@@ -130,7 +130,7 @@ Session approval stats — the "Auto Approval" header-button popup: totals / all
 | `safetyPrompt` | '' | Extra policy appended to the review model (hot-applied after save) |
 | `allowlist` / `denyList` / `humanOnlyList` | [] | Exact tool-name match |
 | `rulesText` | '' | Declarative rules (take precedence over the built-in lists; optional `[agent:…]` / `[workspace:…]` dimension prefix, comma = AND; parse error voids the whole text) |
-| `rulesDryRun` | false | Dry-run: log rule hits without enforcing |
+| `rulesDryRun` | false | Dry-run: log rule hits without enforcing; card control removed, YAML only |
 | `maxArgsChars` | 4000 | Max length of recovered tool arguments |
 | `notifyUser` | true | "Model approved" notice into the session |
 | `showSessionPanel` | `off` | Session-header button: Off / Auto only / On |
@@ -139,7 +139,7 @@ Session approval stats — the "Auto Approval" header-button popup: totals / all
 | `classifierTimeoutMs` / `classifierMaxOutputTokens` | 8000 / 1024 | Classifier timeout and output cap |
 | `reviewMaxRetries` | 1 | Extra review attempts after a failed review (0 single-shot / 1 default / 2 max; transient failures only — rate-limit, 5xx, transport, empty response, LOW-sync timeouts — bounded by the approval-countdown remainder; auth/config errors never retry) |
 | `debug` | false | Debug mode: writes `approval-debug.jsonl` and `[debug]` logs |
-| `reviewerContextFacts` | false | Context-enhanced review: attach structured workspace facts (target existence/kind/size + up to 8 session-created files) to the LLM review input; off by default (payload stays identical to previous releases). Boundaries: out-of-workspace targets report existence/kind only, never size; temp-root files never enter recent_creates; any probe failure omits the whole facts block |
+| `reviewerContextFacts` | false | YAML only — no settings-card control. Context-enhanced review: attach structured workspace facts (target existence/kind/size + up to 8 session-created files) to the LLM review input; off by default (payload stays identical to previous releases). Boundaries: out-of-workspace targets report existence/kind only, never size; temp-root files never enter recent_creates; any probe failure omits the whole facts block |
 | `editDiffPreview` | false | Edit-class tools (write/edit/str_replace_editor non-view/apply_patch) entering human approval show a line-level red/green diff of the target file in the approval panel. Display-only: never part of any decision or of the LLM review input; omitted automatically on any failure. Boundaries: readable in-workspace non-protected targets diff against current content; whole-file writes (write/create) with unreadable targets preview a pure-addition diff of the new content only (target never read); compare-class tools omit when unreadable; targets ≤1 MiB (lstat without following + post-read byte re-check, junction escapes omitted); LCS ≤1024 lines/side, lines >200 chars ellipsized, output ≤200 lines and ≤32 KiB (truncated marker `…truncated`); official semantics mirrored (ambiguous/existing/out-of-range → omitted); countdown literals inside the diff block are stripped |
 | `categoryPolicy` | `{}` | Tri-state switches for 11 categories: `{category: auto\|ask\|deny}`, missing = `inherit` (previous behavior); delete/protected/privilege/disk are LOCKED to `ask` (other values warn + dropped); harnessInternal/unknown have no key and cannot be configured |
 | `categoryMode` | `standard` | Trusted-directory mode: in `standard`, routine locations = workspace ∪ `trustedDirs`; `aggressive` removes the location whitelist so any location counts as routine (the sensitive-name fuse, runtime-state hard-deny, symlink re-check and other danger gates stay untouched; the UI states what is opened when switching) |
@@ -147,7 +147,7 @@ Session approval stats — the "Auto Approval" header-button popup: totals / all
 | `learningEnabled` | false | Confirmation learning: an operation approved manually enough times gets auto-released (a hit still passes one standard online review); off by default = zero behavior change. High risk / LOCKED categories / unknown / sensitive paths never participate; max 50 learned releases per root session |
 | `learningThreshold` | 3 | Manual confirmations required before a learned release (clamped to 2–10 on save); a manual denial resets that signature's count |
 
-> Top-level switches (enable / switch policy / timeout action / review & takeover scopes / default mode / button visibility & position) save instantly; each sub-card has independent Save/Discard buttons (the Safety card also has Restore defaults). Host-only keys (workspaceRoot etc.) are configured via patch/YAML; card saves won't wipe them.
+> Top-level switches (enable / timeout action / review & takeover scopes / default mode / button visibility & position) save instantly; each sub-card has independent Save/Discard buttons (the Safety card also has Restore defaults). Host-only keys (workspaceRoot etc.) are configured via patch/YAML; card saves won't wipe them.
 
 ---
 

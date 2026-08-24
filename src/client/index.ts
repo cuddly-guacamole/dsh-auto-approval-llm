@@ -660,7 +660,6 @@ interface Draft {
   aiButtonPosition: 'header' | 'floating'
   debug: 'on' | 'off'
   redactResults: 'on' | 'off'
-  reviewerContextFacts: 'on' | 'off'
   editDiffPreview: 'on' | 'off'
   categoryPolicy: Record<string, 'auto' | 'ask' | 'deny'>
   categoryMode: 'standard' | 'aggressive'
@@ -697,7 +696,6 @@ function draftOf(value: any): Draft {
     aiButtonPosition: value?.aiButtonPosition === 'floating' ? 'floating' : 'header',
     debug: value?.debug === true ? 'on' : 'off',
     redactResults: value?.redactResults === true ? 'on' : 'off',
-    reviewerContextFacts: value?.reviewerContextFacts === true ? 'on' : 'off',
     editDiffPreview: value?.editDiffPreview === true ? 'on' : 'off',
     categoryPolicy: (typeof value?.categoryPolicy === 'object' && value.categoryPolicy !== null)
       ? { ...value.categoryPolicy }
@@ -738,7 +736,6 @@ function valueOf(draft: Draft): any {
     aiButtonPosition: draft.aiButtonPosition,
     debug: draft.debug === 'on',
     redactResults: draft.redactResults === 'on',
-    reviewerContextFacts: draft.reviewerContextFacts === 'on',
     editDiffPreview: draft.editDiffPreview === 'on',
     categoryPolicy: draft.categoryPolicy,
     categoryMode: draft.categoryMode,
@@ -778,7 +775,7 @@ function formatLatencySeconds(ms: number | null): string {
 // unknown enum, out-of-range number). The settings card shows a red banner and
 // offers to delete those keys so the schema defaults recover.
 const INVALID_CONFIG_TYPES: Record<string, string> = {
-  enabled: 'boolean', autoSwitchPolicyToAsk: 'boolean', rulesDryRun: 'boolean', notifyUser: 'boolean', debug: 'boolean', redactResults: 'boolean', reviewerContextFacts: 'boolean', editDiffPreview: 'boolean', learningEnabled: 'boolean',
+  enabled: 'boolean', autoSwitchPolicyToAsk: 'boolean', rulesDryRun: 'boolean', notifyUser: 'boolean', debug: 'boolean', redactResults: 'boolean', editDiffPreview: 'boolean', learningEnabled: 'boolean',
   lowRiskSeconds: 'number', mediumRiskSeconds: 'number', highRiskSeconds: 'number', learningThreshold: 'number',
   maxConsecutiveDenials: 'number', maxTotalDenials: 'number', breakerAntiHijackMs: 'number',
   maxArgsChars: 'number', classifierTimeoutMs: 'number', classifierMaxOutputTokens: 'number',
@@ -1068,7 +1065,7 @@ function SettingsSection() {
   const TOP_KEYS = ['enabled', 'autoSwitchPolicyToAsk', 'timeoutAction', 'llmReviewScope', 'llmTakeoverScope', 'defaultReviewMode', 'showSessionPanel', 'aiButtonPosition']
   const TIMER_KEYS = ['breakerAntiHijackMs', 'lowRiskSeconds', 'mediumRiskSeconds', 'highRiskSeconds', 'maxConsecutiveDenials', 'maxTotalDenials']
   const REVIEW_KEYS = ['reviewerProtocol', 'reviewerBaseUrl', 'reviewerModel']
-  const SECURITY_KEYS = ['safetyPrompt', 'allowlist', 'denyList', 'humanOnlyList', 'rulesText', 'rulesDryRun', 'redactResults', 'reviewerContextFacts', 'editDiffPreview']
+  const SECURITY_KEYS = ['safetyPrompt', 'allowlist', 'denyList', 'humanOnlyList', 'rulesText', 'rulesDryRun', 'redactResults', 'editDiffPreview']
   const LEARNING_KEYS = ['learningEnabled', 'learningThreshold']
   const pick = (keys: string[], from: Draft): Partial<Draft> => {
     const out: any = {}
@@ -1441,11 +1438,6 @@ function SettingsSection() {
       options: onOffOptions(),
       onChange: (v: string) => { void instantSaveKey('enabled', v as 'on' | 'off') },
     })),
-    row(t('settings.autoSwitchPolicyToAsk'), React.createElement(CapsuleSelect, {
-      value: draft.autoSwitchPolicyToAsk,
-      options: onOffOptions(),
-      onChange: (v: string) => { void instantSaveKey('autoSwitchPolicyToAsk', v as 'on' | 'off') },
-    })),
     row(t('settings.timeoutAction'), React.createElement(CapsuleSelect, {
       value: draft.timeoutAction,
       options: timeoutOptions(),
@@ -1501,13 +1493,6 @@ function SettingsSection() {
       onChange: (e: any) => update({ highRiskSeconds: e.target.value }),
       className: 'dsa-input',
     })),
-    row(t('settings.breakerAntiHijackMs'), React.createElement('input', {
-      type: 'number',
-      min: 0,
-      value: draft.breakerAntiHijackMs,
-      onChange: (e: any) => update({ breakerAntiHijackMs: e.target.value }),
-      className: 'dsa-input',
-    }), t('settings.breakerAntiHijackMsHint')),
     row(t('settings.maxConsecutiveDenials'), React.createElement('input', {
       type: 'number',
       min: 0,
@@ -1594,21 +1579,11 @@ function SettingsSection() {
       rows: 3,
       className: 'dsa-textarea',
     })),
-    row(t('settings.rules.dryRun'), React.createElement(CapsuleSelect, {
-      value: draft.rulesDryRun,
-      options: onOffOptions(),
-      onChange: (v: any) => update({ rulesDryRun: v as 'on' | 'off' }),
-    }), t('settings.rules.dryRunHint')),
     row(t('settings.rules.redactResults'), React.createElement(CapsuleSelect, {
       value: draft.redactResults,
       options: onOffOptions(),
       onChange: (v: any) => update({ redactResults: v as 'on' | 'off' }),
     }), t('settings.rules.redactResultsHint')),
-    row(t('settings.rules.reviewerContextFacts'), React.createElement(CapsuleSelect, {
-      value: draft.reviewerContextFacts,
-      options: onOffOptions(),
-      onChange: (v: any) => update({ reviewerContextFacts: v as 'on' | 'off' }),
-    }), t('settings.rules.reviewerContextFactsHint')),
     row(t('settings.rules.editDiffPreview'), React.createElement(CapsuleSelect, {
       value: draft.editDiffPreview,
       options: onOffOptions(),
