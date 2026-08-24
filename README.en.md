@@ -9,6 +9,7 @@
 ## Features
 
 - **Static rules + LLM classifier**: read-only / session / workspace routine operations pass directly; dangerous, external-write, credential-exfiltration and protected-path operations are denied directly; ambiguous ones go to the LLM pre-classifier (`tools/guard` + `tools/pre-execute`).
+- **Tri-state switches for 11 categories + trusted-directory mode**: tools and shell commands are grouped into 11 categories (fileEdit / gitLocal / build / readOnly / delete / protected / privilege / networkExec / gitPush / publish / disk), each configurable in the settings card as `auto` / `ask` / `deny`; **the default is `inherit` for all — zero behavior change**. The four dangerous categories (delete / protected / privilege / disk) are LOCKED to `ask` only — misconfiguring them as `auto`/`deny` is clamped away with a warning (never auto-allowed at runtime). `categoryMode: aggressive` plus `trustedDirs` opens the whitelisted location predicates to explicitly trusted directories (the sensitive-name fuse, runtime-state hard-deny, symlink re-check and every other danger gate stay untouched); compound commands merge strictly along "category enum order + directive severity"; a category denial is terminal, same as the denyList (privilege re-escalation cannot bypass it); every category decision lands in history / audit (`category-allow` / `category-deny` sources).
 - **Online review model (optional)**: fill in the API protocol, base URL, model and key, and approval review hits your OpenAI / Anthropic-compatible endpoint directly; the key lives in DSH's credential store — the frontend only shows "Configured" and never echoes it.
 - **Human countdown + timeout fallback**: low/medium/high countdowns (default 5/8/10 s); on timeout the action follows `timeoutAction` (`Reject` / `Allow` / `Auto-approve low-risk`). Closing the browser never hangs (the host timer is authoritative).
 - **LLM takeover**: for medium risk, if the LLM returns a decisive verdict within the countdown, the client follows it immediately — no click needed.
@@ -29,10 +30,10 @@
 ```
 Tool call
   → tools.guard        static hard-deny gate (hit = reject, no popup)
-  → tools/pre-execute  static assessment: allow / deny / ask → LLM classifier
+  → tools/pre-execute  static assessment + category-switch tightening: allow / deny / ask (human or LLM classifier)
   → approval/request   single terminal decision:
-       rulesText → denyList/allowlist → humanOnlyList → review mode →
-       breaker check → risk tier (LOW/MEDIUM/HIGH) → LLM review + countdown
+       rulesText → denyList → category-deny → allowlist → humanOnlyList →
+       category-ask → review mode → breaker check → risk tier (LOW/MEDIUM/HIGH) → LLM review + countdown
   → tools/post-execute feeds "timeout / rule / model denial" markers back
 ```
 
@@ -138,6 +139,9 @@ Session approval stats — the "Auto Approval" header-button popup: totals / all
 | `debug` | false | Debug mode: writes `approval-debug.jsonl` and `[debug]` logs |
 | `reviewerContextFacts` | false | Context-enhanced review: attach structured workspace facts (target existence/kind/size + up to 8 session-created files) to the LLM review input; off by default (payload stays identical to previous releases). Boundaries: out-of-workspace targets report existence/kind only, never size; temp-root files never enter recent_creates; any probe failure omits the whole facts block |
 | `editDiffPreview` | false | Edit-class tools (write/edit/str_replace_editor non-view/apply_patch) entering human approval show a line-level red/green diff of the target file in the approval panel. Display-only: never part of any decision or of the LLM review input; omitted automatically on any failure. Boundaries: readable in-workspace non-protected targets diff against current content; whole-file writes (write/create) with unreadable targets preview a pure-addition diff of the new content only (target never read); compare-class tools omit when unreadable; targets ≤1 MiB (lstat without following + post-read byte re-check, junction escapes omitted); LCS ≤1024 lines/side, lines >200 chars ellipsized, output ≤200 lines and ≤32 KiB (truncated marker `…truncated`); official semantics mirrored (ambiguous/existing/out-of-range → omitted); countdown literals inside the diff block are stripped |
+| `categoryPolicy` | `{}` | Tri-state switches for 11 categories: `{category: auto\|ask\|deny}`, missing = `inherit` (previous behavior); delete/protected/privilege/disk are LOCKED to `ask` (other values warn + dropped); harnessInternal/unknown have no key and cannot be configured |
+| `categoryMode` | `standard` | Trusted-directory mode: `standard` resolves locations against the existing roots (workspace etc.) only; `aggressive` opens the whitelisted location predicates to `trustedDirs`/plugin areas (the sensitive-name fuse, runtime-state hard-deny, symlink re-check and other danger gates stay untouched; the UI states what is opened when switching) |
+| `trustedDirs` | [] | Host-only key: extra trusted directory roots (array of absolute paths), used as member roots for aggressive-mode location predicates and the symlink re-check zone; credential/home/dshHome/critical paths are excluded; patch/YAML only — card saves won't wipe it |
 
 > Top-level switches (enable / switch policy / timeout action / review & takeover scopes / default mode / button visibility & position) save instantly; each sub-card has independent Save/Discard buttons (the Safety card also has Restore defaults). Host-only keys (workspaceRoot etc.) are configured via patch/YAML; card saves won't wipe them.
 
