@@ -3,7 +3,7 @@
 // MIT License, Copyright (c) 2026 程序员阿江-Relakkes (https://github.com/NanmiCoder/dsh-auto-mode).
 // Retained per the MIT License: this is a substantial portion of the original.
 import { randomUUID } from 'node:crypto';
-import { CLASSIFIER_SYSTEM_PROMPT, parseClassifierDecision } from './classifier.js';
+import { classifierSystemPrompt, parseClassifierDecision } from './classifier.js';
 function classifierPayload(input) {
     return JSON.stringify({
         toolName: input.toolName,
@@ -11,6 +11,9 @@ function classifierPayload(input) {
         workspaceRoot: input.workspaceRoot,
         policyReason: input.policyReason,
         trustedUserMessages: input.trustedUserMessages,
+        mode: input.mode ?? 'standard',
+        aggressiveAuto: input.aggressiveAuto === true,
+        riskTier: input.riskTier ?? 'MEDIUM',
     });
 }
 function classifierMessage(input) {
@@ -83,7 +86,7 @@ export function createDshClassifier(runtime, config) {
                 provider: route.provider,
                 model: route.model,
                 messages: [classifierMessage(input)],
-                system: CLASSIFIER_SYSTEM_PROMPT,
+                system: classifierSystemPrompt(input.mode === 'aggressive' && input.aggressiveAuto === true && input.riskTier !== 'HIGH' ? 'aggressive' : 'standard'),
                 temperature: 0,
                 maxTokens: config.maxOutputTokens ?? 1_024,
                 signal: combined,

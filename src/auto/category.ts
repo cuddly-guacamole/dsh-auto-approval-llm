@@ -62,7 +62,7 @@ export const CATEGORY_PRECEDENCE: Record<CategoryKey, number> = {
  * Categories that are implicitly 'auto' under aggressive mode while their key
  * is not explicitly configured (explicit configuration always wins).
  */
-const AGGRESSIVE_BUILTIN: readonly CategoryKey[] = ['networkExec', 'gitPush', 'publish']
+export const AGGRESSIVE_BUILTIN: readonly CategoryKey[] = ['networkExec', 'gitPush', 'publish']
 
 export type CategoryDirective = 'inherit' | 'auto' | 'ask' | 'deny'
 

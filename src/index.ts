@@ -25,7 +25,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { ArtifactRegistry } from './auto/artifacts.js'
 import { appendAuditLine, recordAuditClear } from './auto/audit.js'
-import { applyCategoryDirective, CATEGORY_KEYS, categoryDirectiveFor, LOCKED_CATEGORIES, realpathCriticalReason, sensitiveBasenameAt } from './auto/category.js'
+import { AGGRESSIVE_BUILTIN, applyCategoryDirective, CATEGORY_KEYS, categoryDirectiveFor, type CategoryKey, LOCKED_CATEGORIES, realpathCriticalReason, sensitiveBasenameAt } from './auto/category.js'
 import { sanitizeClassifierArguments, sanitizeClassifierText, sanitizeReviewReason } from './auto/classifier.js'
 import { THRESHOLD_DEFAULTS } from './auto/constants.js'
 import { createDshClassifier } from './auto/dsh-classifier.js'
@@ -1916,6 +1916,8 @@ export function apply(ctx: Context, rawConfig: Config): void {
     try {
       const authority = authorityFor(exec)
       const route = resolveModelRoute(exec.agent) ?? resolveModelRoute(authority)
+      const aggressiveAuto = config.categoryMode === 'aggressive' && 'auto' === directive && AGGRESSIVE_BUILTIN.includes(category as CategoryKey)
+      const riskTier = riskFromAssessment(assessment, exec.name)
       const decision = await classifier.classify({
         toolName: exec.name,
         arguments: sanitizeClassifierArguments(exec.arguments),
@@ -1925,8 +1927,12 @@ export function apply(ctx: Context, rawConfig: Config): void {
         // (RISK-04 prompt-injection surface).
         policyReason: sanitizeClassifierText(assessment.reason),
         trustedUserMessages: trustedUserMessages(authority),
+        mode: config.categoryMode,
+        aggressiveAuto: aggressiveAuto,
+        riskTier: riskTier,
         ...(route === undefined ? {} : { route }),
       }, exec.signal)
+      debugLog({ ev: 'classifier-decision', callId: exec.callId ?? null, toolName: exec.name, category, directive, mode: config.categoryMode, aggressiveAuto, riskTier, decision: decision.decision, reason: sanitizeReviewReason(decision.reason) })
       if (decision.decision === 'allow') return next()
       if (decision.decision === 'deny') return { kind: 'deny', reason: `[auto-mode classifier deny] ${decision.reason}` }
       return { kind: 'ask', reason: `[auto-mode classifier asks] ${decision.reason}` }
