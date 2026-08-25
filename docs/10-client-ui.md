@@ -51,19 +51,24 @@ li.dsa-card（可折叠；任一卡脏 → 头部「未保存」徽标）
 │    enabled · timeoutAction · 评审与接管预设（一次写
 │    llmReviewScope + llmTakeoverScope 两键；非预设 YAML 组合显示「自定义」兜底，选中不写值）
 │    · defaultReviewMode · showSessionPanel · aiButtonPosition(条件显示)
+├─ 首次使用引导块（一次性：首次展开即显示，折叠时写 localStorage
+│    dsa-onboarding-seen-v1 后不再出现；标题+三行+提示；第二行的
+│    {timeout} 标签按实时 timeoutAction 渲染，非 reject 不出现「拒绝」）
 ├─ 6 张可折叠子卡（均独立 保存/放弃；安全规则卡另有 恢复默认）
-│    ├─ 计时器与熔断   风险倒计时一行（低/中/高三组内联输入）· 拒绝熔断阈值一行（连续/累计）（重置=THRESHOLD_DEFAULTS）
+│    ├─ [安全底线] 计时器与熔断   风险倒计时一行（低/中/高三组内联输入）· 拒绝熔断阈值一行（连续/累计）（重置=THRESHOLD_DEFAULTS）
 │    ├─ 在线评审模型   协议(openai/anthropic) · API地址 · 模型 · 密钥(password型)「已配置|未配置」· 测试连接
-│    ├─ 安全规则列表   safetyPrompt · 精确名单（页签切换 allowlist/denyList/humanOnlyList，单个复用 textarea 按页签绑定三字段）
+│    ├─ [安全底线] 安全规则列表   safetyPrompt · 精确名单（页签切换 allowlist/denyList/humanOnlyList，单个复用 textarea 按页签绑定三字段）
 │    │                · redactResults · editDiffPreview（默认关的增强开关）· rulesText(实时语法校验)
-│    ├─ 分类开关与信任模式   categoryMode(standard/aggressive，切 aggressive 弹放开范围警示)
+│    ├─ [安全底线] 分类开关与信任模式   categoryMode(standard/aggressive，切 aggressive 弹放开范围警示)
 │    │                · 11 类逐行三态 CapsuleSelect（LOCKED 四类只剩 继承/人工询问 可选）
-│    ├─ 确认制学习     learningEnabled(on/off) · learningThreshold(数字输入 min2 max10，保存钳回 2..10)（阈值行仅开关=on 时显示）（<span class="lnum">client/index.ts:L1724-1746</span>）
+│    ├─ [安全底线] 确认制学习     learningEnabled(on/off) · learningThreshold(数字输入 min2 max10，保存钳回 2..10)（阈值行仅开关=on 时显示）（<span class="lnum">client/index.ts:L1761-1782</span>）
 │    └─ 最近审批记录   搜索 · 分页(PAGE_SIZE=10) · 记录+[熔断]+原因(warn色) + LLM 响应耗时统计 · 清空历史(confirm)
 └─ 底部 footer：恢复默认 · 重启提示(applies=restart) · 全局错误行
 ```
 
-- **保存语义**：每卡只 POST 自己拥有的键（`sliceValueOf`），叠加到「最后保存基线」上 —— 保存 A 卡不会吞掉 B 卡未保存的编辑；顶层开关即时保存（预设行一次提交两个键、其余单键；`expectedRevision` 乐观并发控制）。学习子卡只提交 `LEARNING_KEYS = ['learningEnabled','learningThreshold']` 两键（<span class="lnum">client/index.ts:L1072</span>），threshold 保存时钳入 2..10。
+> 分组标签（只加标签不移动控件）：前四张子卡（计时器与熔断 / 安全规则列表 / 分类开关与信任模式 / 确认制学习）标题带「安全底线」标签（计时器含倒计时秒数——决策窗口属安全项；`settings.group.safetyBase` 键），评审模型卡与历史卡保持现状。归组合约：后续新增设置键默认进安全底线组。
+
+- **保存语义**：每卡只 POST 自己拥有的键（`sliceValueOf`），叠加到「最后保存基线」上 —— 保存 A 卡不会吞掉 B 卡未保存的编辑；顶层开关即时保存（预设行一次提交两个键、其余单键；`expectedRevision` 乐观并发控制）。学习子卡只提交 `LEARNING_KEYS = ['learningEnabled','learningThreshold']` 两键（<span class="lnum">client/index.ts:L1106</span>），threshold 保存时钳入 2..10。
 - **host-only 键保护**：九员名单 `workspaceRoot / dshHome / tempRoots / trustedDirs / classifierTimeoutMs / classifierMaxOutputTokens / maxArgsChars / notifyUser / reviewerContextFacts`（<span class="lnum">decision.ts:L224-234</span>）走 patch/YAML 配置；保存时 `preserveHostKeys` 让存储值**恒胜出**，卡片改不掉它们。其中 `trustedDirs` 与 `reviewerContextFacts` 完全没有设置卡控件，改动入口只有 YAML。
 - **密钥永不出现在 settings value**：独立 `/reviewer-credential` 路由；输入框 password + new-password 自动完成；保存后立即清空不回显。
 

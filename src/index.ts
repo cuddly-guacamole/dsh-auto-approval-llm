@@ -628,9 +628,44 @@ function appendNotice(session: any, text: string): void {
       content: [{ type: 'text', text }],
       source: { kind: 'plugin', plugin: 'dsh-auto-approval-llm' },
     }), { surfaceOp: 'append' })
-  } catch {
+    debugLog({ ev: 'onboarding-append', sessionId: session?.id ?? null, ok: true })
+  } catch (error) {
     // Notification is best-effort; never changes the approval outcome.
+    debugLog({ ev: 'onboarding-append', sessionId: session?.id ?? null, ok: false, error: error instanceof Error ? error.message : String(error) })
   }
+}
+
+// ── first-use onboarding notice ───────────────────────────────────────────
+// A process-lifetime one-shot greeting for a fresh AUTO session: the very
+// first tool call of each root session queues the notice once through the
+// safe notice queue above (never a bare append). The marker lives only in
+// memory and never touches disk, so a restart may greet the same session
+// again — an accepted semantic (documented in HANDOFF).
+const firstAutoNoticeSeen = new Set<string>()
+
+/** True exactly once per root session key per process lifetime. */
+export function markFirstAutoSessionNotice(sessionKey: string): boolean {
+  if (firstAutoNoticeSeen.has(sessionKey)) return false
+  firstAutoNoticeSeen.add(sessionKey)
+  return true
+}
+
+/** Localized label of the live timeout action (never a literal "reject"). */
+export function onboardingTimeoutLabel(timeoutAction: string, lang: 'zh' | 'en' = 'zh'): string {
+  switch (timeoutAction) {
+    case 'allow': return lang === 'en' ? 'auto-allow' : '自动放行'
+    case 'low-risk-allow': return lang === 'en' ? 'low-risk auto-allow' : '仅低风险放行'
+    default: return lang === 'en' ? 'reject' : '拒绝'
+  }
+}
+
+/** First-use notice body; the timeout slot always carries the live label. */
+export function onboardingNoticeText(timeoutAction: string, lang: 'zh' | 'en' = 'zh'): string {
+  const label = onboardingTimeoutLabel(timeoutAction, lang)
+  if (lang === 'en') {
+    return `(Auto-approval) is active: low-risk actions pass automatically; uncertain ones will show a countdown prompt; no response applies the configured timeout action (currently "${label}"). Reasons for denials are recorded in "recent approvals".`
+  }
+  return `（自动审批）已生效：低风险自动通过；拿不准的操作会弹出倒计时询问你，没人回答则按设置处理（当前为「${label}」）。被拒的原因会写进「最近审批记录」。`
 }
 
 // ── approval notice queue ────────────────────────────────────────────────
@@ -652,8 +687,13 @@ function queueNotice(session: any, callId: string, text: string): void {
 
 function flushNotices(session: any): void {
   const byCall = pendingNotices.get(session.id)
-  if (!byCall) return
+  if (!byCall) {
+    debugLog({ ev: 'onboarding-flush', sessionId: session?.id ?? null, queued: 0, reason: 'no-pending' })
+    return
+  }
   pendingNotices.delete(session.id)
+  const queued = [...byCall.values()]
+  debugLog({ ev: 'onboarding-flush', sessionId: session?.id ?? null, queued: queued.length, seen: queued.filter((e) => e.seen).length, dropped: queued.filter((e) => !e.seen).length })
   for (const { text, seen } of byCall.values()) {
     if (!seen) {
       // The tool never produced a result (rejected/cancelled): inserting a
@@ -667,7 +707,24 @@ function flushNotices(session: any): void {
 }
 
 function watchNotices(ctx: any): void {
+  // Reliable flush point: `tools/result` — its scope carrier keys on
+  // exec.agent, the same chain `tools/pre-execute` proves to reach plugin
+  // contexts. A `session/event` subscription may be filtered away for plugin
+  // contexts (probes: injection fired, flush never did).
+  ctx.on('tools/result', (exec: any) => {
+    const session = exec?.agent?.session
+    const callId = exec?.callId
+    if (!session || !callId) return
+    const byCall = pendingNotices.get(session.id)
+    if (!byCall) return
+    const entry = byCall.get(callId)
+    if (entry) entry.seen = true
+    debugLog({ ev: 'onboarding-event', via: 'tools/result', sessionId: session.id, callId, found: !!entry, pending: byCall.size })
+    flushNotices(session)
+  })
   ctx.on('session/event', (session: any, event: any) => {
+    // Diagnostic: does the scope carrier actually reach plugin contexts?
+    debugLog({ ev: 'onboarding-event', via: 'session/event', sessionId: session?.id ?? null, type: event?.type ?? null })
     if (!pendingNotices.has(session?.id)) return
     if (event?.type === 'tool/result') {
       const callId = event.data?.message?.source?.callId
@@ -1875,6 +1932,15 @@ export function apply(ctx: Context, rawConfig: Config): void {
 
   anyCtx.on('tools/pre-execute', async (exec: any, next: any) => {
     if (!isAutoExecution(exec)) return next()
+    // First-use onboarding: the first tool call of an AUTO root session (per
+    // process lifetime) queues a one-shot greeting through the safe notice
+    // queue — it only registers a pending entry, never touches the decision
+    // flow below, and the flush point (step/end) keeps it out of the
+    // tool-calls message-sequence window.
+    if (markFirstAutoSessionNotice(authorityKeyFor(exec))) {
+      queueNotice(exec.agent.session, exec.callId, onboardingNoticeText(config.timeoutAction))
+      debugLog({ ev: 'onboarding-inject', sessionId: exec.agent?.session?.id ?? null, callId: exec.callId ?? null, action: config.timeoutAction })
+    }
     const roots = rootsFor(exec)
     const assessment = assessTool(exec, roots, artifacts)
     if (assessment.plannedCreates !== undefined) artifacts.plan(exec, assessment.plannedCreates, roots)

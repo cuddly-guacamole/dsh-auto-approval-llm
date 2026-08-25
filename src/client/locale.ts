@@ -170,6 +170,12 @@ export const zh = {
   'settings.learning.capNote': '每个根会话累计学习放行上限 50 次，超过后学习层休眠回人工',
   'settings.learning.ttlNote': '学习条目保留 30 天、至多 100 条，长期不用自动回收；关闭开关不清数据',
   'settings.learning.denyResetNote': '同签名操作被人工拒绝会立即清零该条计数',
+  'settings.onboarding.title': '自动审批 ·',
+  'settings.onboarding.item1': '1. 只对 Auto 档会话生效，其他会话不受影响。',
+  'settings.onboarding.item2': '2. 默认：低风险自动通过；拿不准的会弹出倒计时询问你；没人回答则按设置处理（当前为「{timeout}」）。',
+  'settings.onboarding.item3': '3. 每条决定的理由都在审批面板和「最近审批记录」里。',
+  'settings.onboarding.tip': '提示：仓库变更类操作可能被询问——如果确实是你要求的操作，在对话中明确说出来会被当作授权依据；但安全规则等硬性拒绝不会因口头说明放行。',
+  'settings.group.safetyBase': '安全底线',
 } as const
 
 export type LocaleKey = keyof typeof zh
@@ -345,6 +351,12 @@ export const en: Record<LocaleKey, string> = {
   'settings.learning.capNote': 'Learned allows are capped at 50 per root session; past that the layer sleeps and asks a human',
   'settings.learning.ttlNote': 'Entries live 30 days, at most 100, recycled when unused; switching off keeps the data',
   'settings.learning.denyResetNote': 'A human denial of the same signature resets its count immediately',
+  'settings.onboarding.title': 'Auto-approval ·',
+  'settings.onboarding.item1': 'Only affects Auto preset sessions; other sessions are untouched.',
+  'settings.onboarding.item2': 'Defaults: low-risk actions pass automatically; uncertain ones show a countdown prompt; no response applies the configured timeout action (currently "{timeout}").',
+  'settings.onboarding.item3': 'Reasons for every decision appear in the approval panel and "recent approvals".',
+  'settings.onboarding.tip': 'Tip: repository-changing actions may be asked about — if it\'s truly what you asked for, stating it explicitly in the conversation counts as authorization; hard rule-based denials are never overridden by any statement.',
+  'settings.group.safetyBase': 'Safety baseline',
 }
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {

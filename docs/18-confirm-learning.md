@@ -66,4 +66,4 @@ SHA-256(`sigVersion|kind|workspace|signature`) 作键（<span class="lnum">learn
 | `learningEnabled` | **false** | 总开关，默认关是铁律：不开就没有任何行为差异 |
 | `learningThreshold` | 3 | 所需人工确认次数 N；保存钳入 [2,10]（clampLearningThreshold，<span class="lnum">learning.ts:L231-242</span>），越界由 resolveConfig 发 warn（<span class="lnum">index.ts:L255-262</span>） |
 
-设置卡「确认制学习」子卡两控件 + 七行说明文案（buildLearningBody <span class="lnum">client/index.ts:L1724-1746</span>，注册 L1937；locale 中英各 12 键）。失效语义一句话：**任何一环不成立——开关关、类别锁定、熔丝命中、条目过期/损坏/跨工作区、到帽、评审不干净——都视同未命中，回到原有的人工/LLM 分支**。学习层只做减法路上的加速器，从不当裁判。
+设置卡「确认制学习」子卡两控件 + 七行说明文案（buildLearningBody <span class="lnum">client/index.ts:L1761-1782</span>，注册 L1990；locale 中英各 12 键）。失效语义一句话：**任何一环不成立——开关关、类别锁定、熔丝命中、条目过期/损坏/跨工作区、到帽、评审不干净——都视同未命中，回到原有的人工/LLM 分支**。学习层只做减法路上的加速器，从不当裁判。

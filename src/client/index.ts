@@ -26,6 +26,12 @@ const MAX_PANEL_RECORDS = 10
 // never closes before the host would have swept the follow state.
 const FOLLOW_GRACE_MS = 120_000
 const LOCALE_NS = 'dsh-auto-approval-llm'
+// First-use onboarding is one-shot per browser (and per page lifetime after
+// the settings card was expanded once): weak guarantee by design — incognito
+// or a different browser may see it again, which is acceptable for
+// low-sensitivity copy.
+const ONBOARDING_SEEN_KEY = 'dsa-onboarding-seen-v1'
+let localeService: any = null
 // Answer-once guard: an approval may be auto-answered by the watcher, the
 // countdown timer, or a follow-up responder; only the first responder wins.
 const answeredApprovals = new Set<string>()
@@ -33,6 +39,20 @@ let t: any = (key: string, params?: Record<string, unknown>) => {
   let text = (zh as any)[key] ?? key
   if (params) for (const [k, v] of Object.entries(params)) text = text.replace(`{${k}}`, String(v))
   return text
+}
+
+// Label of the live timeout action for the onboarding copy. The template
+// placeholders sit in the locale dictionaries ({timeout}); this mapping picks
+// the right language via the active locale snapshot, and it always reads the
+// CURRENT setting instead of hardcoding "reject".
+function timeoutActionLabel(action: string): string {
+  let en = false
+  try { en = localeService?.getSnapshot?.()?.active === 'en' } catch { en = false }
+  switch (action) {
+    case 'allow': return en ? 'auto-allow' : '自动放行'
+    case 'low-risk-allow': return en ? 'low-risk auto-allow' : '仅低风险放行'
+    default: return en ? 'reject' : '拒绝'
+  }
 }
 
 interface CountdownInfo {
@@ -973,6 +993,20 @@ function SettingsSection() {
   const [message, setMessage] = React.useState('')
   const [error, setError] = React.useState('')
   const [open, setOpen] = React.useState(false)
+  // First-use onboarding: read the one-shot flag lazily at mount. The flag is
+  // persisted when the card is collapsed (expanded-and-seen implies done), so
+  // the block appears at most until the first collapse, never again.
+  const [onboardingDismissed, setOnboardingDismissed] = React.useState<boolean>(() => {
+    try { return (globalThis as any).localStorage?.getItem(ONBOARDING_SEEN_KEY) === '1' } catch { return false }
+  })
+  const toggleCard = () => {
+    const next = !open
+    if (open && !next) {
+      setOnboardingDismissed(true)
+      try { (globalThis as any).localStorage?.setItem(ONBOARDING_SEEN_KEY, '1') } catch {}
+    }
+    setOpen(next)
+  }
   const [history, setHistory] = React.useState<any[]>([])
   const [llmLatency, setLlmLatency] = React.useState<any>(null)
   const [historyError, setHistoryError] = React.useState('')
@@ -1435,7 +1469,7 @@ function SettingsSection() {
   const subcard = (
     title: string, open: boolean, cardDirty: boolean, onToggle: () => void,
     buildBody: () => React.ReactNode, buildFooter?: () => React.ReactNode,
-    badge?: React.ReactNode,
+    badge?: React.ReactNode, group?: string,
   ) =>
     React.createElement('div', { className: 'dsa-subcard' },
       React.createElement('button', {
@@ -1444,7 +1478,10 @@ function SettingsSection() {
         'aria-expanded': open,
         onClick: onToggle,
       },
-        React.createElement('span', { className: 'dsa-subcardTitle' }, title),
+        React.createElement('span', { className: 'dsa-subcardTitle' },
+          group ? React.createElement('span', { className: 'dsa-groupTag' }, group) : null,
+          title,
+        ),
         badge ?? (cardDirty ? React.createElement('span', { className: 'dsa-pending' }, t('settings.unsaved')) : null),
         React.createElement('span', { className: open ? 'dsa-chevron dsa-chevronOpen' : 'dsa-chevron' },
           React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 14 14', fill: 'none', xmlns: 'http://www.w3.org/2000/svg' },
@@ -1925,16 +1962,32 @@ function SettingsSection() {
         )
       : null,
     topLevelBody,
-    subcard(t('settings.timers.title'), openTimers, timerDirty, () => setOpenTimers((o) => !o), buildTimerBody, buildTimerFooter),
+    // First-use onboarding block: rendered above the sub-card list, only until
+    // the once-per-browser flag is persisted (first collapse marks it seen).
+    // The timeout sentence always renders the LIVE timeoutAction label.
+    open && !onboardingDismissed
+      ? React.createElement('div', { className: 'dsa-onboarding' },
+          React.createElement('div', { className: 'dsa-onboardingCard' },
+            React.createElement('div', { className: 'dsa-onboardingTitle' }, t('settings.onboarding.title')),
+            React.createElement('ul', { className: 'dsa-onboardingList' },
+              React.createElement('li', { className: 'dsa-onboardingItem' }, t('settings.onboarding.item1')),
+              React.createElement('li', { className: 'dsa-onboardingItem' }, t('settings.onboarding.item2', { timeout: timeoutActionLabel(draft.timeoutAction) })),
+              React.createElement('li', { className: 'dsa-onboardingItem' }, t('settings.onboarding.item3')),
+            ),
+            React.createElement('p', { className: 'dsa-onboardingTip' }, t('settings.onboarding.tip')),
+          ),
+        )
+      : null,
+    subcard(t('settings.timers.title'), openTimers, timerDirty, () => setOpenTimers((o) => !o), buildTimerBody, buildTimerFooter, undefined, t('settings.group.safetyBase')),
     subcard(t('settings.reviewer.title'), openReview, reviewDirty, () => setOpenReview((o) => !o), buildReviewBody, buildReviewFooter),
     subcard(t('settings.rules.title'), openSecurity, securityDirtyEff, () => setOpenSecurity((o) => !o), buildSecurityBody, buildSecurityFooter,
       securityDirtyEff
         ? React.createElement('span', { className: 'dsa-pending' }, t('settings.unsaved'))
         : securityActive
           ? React.createElement('span', { className: 'dsa-pending', title: t('settings.notYetEffectiveHint') }, t('settings.notYetEffective'))
-          : null),
-    subcard(t('settings.category.title'), openCategory, categoryDirty, () => setOpenCategory((o) => !o), buildCategoryBody, buildCategoryFooter),
-    subcard(t('settings.learning.title'), openLearning, learningDirty, () => setOpenLearning((o) => !o), buildLearningBody, () => cardFooter(LEARNING_KEYS, 'learning', learningDirty)),
+          : null, t('settings.group.safetyBase')),
+    subcard(t('settings.category.title'), openCategory, categoryDirty, () => setOpenCategory((o) => !o), buildCategoryBody, buildCategoryFooter, undefined, t('settings.group.safetyBase')),
+    subcard(t('settings.learning.title'), openLearning, learningDirty, () => setOpenLearning((o) => !o), buildLearningBody, () => cardFooter(LEARNING_KEYS, 'learning', learningDirty), undefined, t('settings.group.safetyBase')),
     subcard(t('settings.history.title'), openHistory, false, () => setOpenHistory((o) => !o), buildHistoryBody, buildHistoryFooter),
     React.createElement('div', { style: { borderTop: '1px solid var(--dsw-alias-border-l2)', marginTop: 4 } },
       row(t('settings.debug'), React.createElement(CapsuleSelect, {
@@ -1961,7 +2014,7 @@ function SettingsSection() {
       type: 'button',
       className: 'dsa-header',
       'aria-expanded': open,
-      onClick: () => setOpen(!open),
+      onClick: toggleCard,
     },
       React.createElement('span', { className: 'dsa-headText' },
         React.createElement('span', { className: 'dsa-name' }, t('plugin.name')),
@@ -2481,6 +2534,11 @@ function installSettingsCardStyles(): () => void {
 .dsa-diffCtx::before{content:'·'}
 .dsa-diffToggle{appearance:none;background:transparent;border:0;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;cursor:pointer;padding:3px 6px;border-radius:6px}
 .dsa-diffToggle:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}
+.dsa-onboardingCard{border:1px solid var(--dsw-alias-border-l1);border-radius:14px;background:var(--dsw-alias-bg-layer-1);padding:12px 16px;display:flex;flex-direction:column;gap:8px}
+.dsa-onboardingTitle{color:var(--dsw-alias-label-primary);font-weight:600;font-size:13px;line-height:1.5}
+.dsa-onboardingList{display:flex;flex-direction:column;gap:4px;margin:0;padding-left:18px;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.6}
+.dsa-onboardingTip{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.6;margin:0}
+.dsa-groupTag{flex:none;white-space:nowrap;background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-secondary);border-radius:999px;padding:1px 8px;font-size:11px;font-weight:500;line-height:17px}
 `
   g.document.head.appendChild(style)
   return () => { style.remove() }
@@ -2489,6 +2547,7 @@ function installSettingsCardStyles(): () => void {
 export function apply(ctx: any): void {
   sessionsRef = ctx.get('sessions')
   const locale = ctx.get('locale')
+  localeService = locale
   if (locale) {
     const disposeLocale = locale.register(LOCALE_NS, { zh, en })
     t = locale.bind(LOCALE_NS)

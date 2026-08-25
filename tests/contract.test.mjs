@@ -27,7 +27,7 @@ import { isTrustedRequest, isLoopbackIp, validateReviewerBaseUrl } from '../lib/
 import { parseClassifierDecision } from '../lib/auto/classifier.js'
 import { RISK_NAME_PATTERN, RISK_REASON_PATTERN } from '../lib/auto/risk-tokens.js'
 import { buildAskReason, buildEditDiffText } from '../lib/auto/editdiff.js'
-import { Config, resolveConfig, sessionModelRoute, buildReviewSnapshot } from '../lib/index.js'
+import { Config, resolveConfig, sessionModelRoute, buildReviewSnapshot, markFirstAutoSessionNotice, onboardingTimeoutLabel, onboardingNoticeText } from '../lib/index.js'
 import { categorizeCommand } from '../lib/auto/category.js'
 
 test('parseClassifierDecision: valid allow/ask/deny', () => {
@@ -2714,4 +2714,136 @@ test('resolveConfig: base URL without model name resolves usable config with the
   assert.equal(resolved.reviewerModel ?? '', '')
   const hits = warnings.filter((line) => line.includes('reviewerBaseUrl') && line.includes('reviewerModel'))
   assert.equal(hits.length, 1, `expected exactly one half-configured-direct warning, got: ${JSON.stringify(warnings)}`)
+})
+
+// ── first-use onboarding: host notice semantics ───────────────────────────
+test('onboarding: first AUTO session queues once, repeats never re-queue', () => {
+  assert.equal(markFirstAutoSessionNotice('sess-onb-a1'), true)
+  assert.equal(markFirstAutoSessionNotice('sess-onb-a1'), false)
+  assert.equal(markFirstAutoSessionNotice('sess-onb-a1'), false)
+  assert.equal(markFirstAutoSessionNotice('sess-onb-a2'), true)
+  assert.equal(markFirstAutoSessionNotice('sess-onb-a2'), false)
+})
+
+test('onboarding: timeout label follows the live timeoutAction (zh/en)', () => {
+  assert.equal(onboardingTimeoutLabel('reject'), '拒绝')
+  assert.equal(onboardingTimeoutLabel('allow'), '自动放行')
+  assert.equal(onboardingTimeoutLabel('low-risk-allow'), '仅低风险放行')
+  assert.equal(onboardingTimeoutLabel('reject', 'en'), 'reject')
+  assert.equal(onboardingTimeoutLabel('allow', 'en'), 'auto-allow')
+  assert.equal(onboardingTimeoutLabel('low-risk-allow', 'en'), 'low-risk auto-allow')
+  // Unknown values fall back to the reject label (conditional, never a
+  // hardcoded unconditional reject sentence).
+  assert.equal(onboardingTimeoutLabel('weird'), '拒绝')
+})
+
+test('onboarding: notice text carries the configured label, never a literal reject', () => {
+  assert.ok(onboardingNoticeText('allow').includes('自动放行'))
+  assert.ok(!onboardingNoticeText('allow').includes('拒绝'))
+  assert.ok(!onboardingNoticeText('allow', 'en').includes('reject'))
+  assert.ok(onboardingNoticeText('low-risk-allow', 'en').includes('low-risk auto-allow'))
+  assert.ok(onboardingNoticeText('reject', 'en').includes('reject'))
+  assert.ok(onboardingNoticeText('reject').includes('（自动审批）已生效'))
+  assert.ok(onboardingNoticeText('allow', 'en').startsWith('(Auto-approval) is active'))
+})
+
+test('onboarding: copy stays free of countdown literals and unconditional-reject wording', () => {
+  // Invariant 5: no `[dsh-auto-approval-llm] ⏳ will auto-(approve|reject) in Ns`
+  // literal may enter the session timeline through the notice.
+  const countdown = /\[dsh-auto-approval-llm\]\s*⏳\s*will auto-(approve|reject) in \d+s/
+  for (const action of ['reject', 'allow', 'low-risk-allow']) {
+    assert.ok(!countdown.test(onboardingNoticeText(action)), `countdown literal in ${action} copy`)
+    assert.ok(!countdown.test(onboardingNoticeText(action, 'en')), `countdown literal in ${action} en copy`)
+  }
+  // Invariant 2: HIGH always asks the human — no "dangerous operation directly
+  // rejected" unconditional sentence may appear.
+  assert.ok(!/危险操作直接拒绝/.test(onboardingNoticeText('reject')))
+})
+
+test('onboarding injection: only after the AUTO gate, through queueNotice, plugin source', () => {
+  // Static anchor over the compiled host: the one-shot mark call must sit
+  // inside the tools/pre-execute handler after the isAutoExecution gate, and
+  // the notice must reach the session only via queueNotice -> appendNotice.
+  const src = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
+  const preAt = src.indexOf("anyCtx.on('tools/pre-execute'")
+  const gateAt = src.indexOf('if (!isAutoExecution(exec))', preAt)
+  const markAt = src.indexOf('markFirstAutoSessionNotice(authorityKeyFor(exec))')
+  const queueAt = src.indexOf('queueNotice(exec.agent.session, exec.callId, onboardingNoticeText(config.timeoutAction))')
+  assert.ok(preAt !== -1 && gateAt !== -1, 'AUTO gate must exist in pre-execute')
+  assert.ok(markAt !== -1 && queueAt !== -1, 'injection must mark then queue')
+  assert.ok(markAt > gateAt, 'injection must run only after the AUTO gate')
+  assert.ok(queueAt > markAt, 'injection must go through the notice queue')
+  // Channel invariant: the notice never fakes a user message.
+  assert.ok(src.includes("source: { kind: 'plugin', plugin: 'dsh-auto-approval-llm' }"))
+  // Flush path is appendNotice (never a bare append): the notice queue's
+  // flush body must contain the appendNotice call, and both helpers exist
+  // module-level (appendNotice is defined before flushNotices consumes it).
+  const flushAt = src.indexOf('function flushNotices')
+  const appendCallAt = src.indexOf('appendNotice(session, text);')
+  const appendDefAt = src.indexOf('function appendNotice')
+  assert.ok(flushAt !== -1 && appendCallAt !== -1 && appendDefAt !== -1, 'flush helpers must exist')
+  assert.ok(appendCallAt > flushAt, 'flush must append through appendNotice')
+  assert.ok(appendDefAt < flushAt, 'appendNotice must be defined before the flush body')
+  // Flush trigger: the reliable point is the tools/result event (scope carrier
+  // keys on exec.agent, same chain as tools/pre-execute) — the session/event
+  // subscription alone may be filtered for plugin contexts.
+  const toolsResultAt = src.indexOf("ctx.on('tools/result'")
+  const sessionEventAt = src.indexOf("ctx.on('session/event'")
+  const flushAfterToolsResult = src.indexOf('flushNotices(session)', toolsResultAt)
+  assert.ok(toolsResultAt !== -1, 'tools/result flush trigger must be registered')
+  assert.ok(flushAfterToolsResult > toolsResultAt && flushAfterToolsResult < sessionEventAt, 'tools/result handler must call flushNotices')
+})
+
+// ── first-use onboarding: client locale anchors ───────────────────────────
+test('onboarding locale: A-section keys exist in zh/en, referenced by SettingsSection', () => {
+  const localeSrc = readFileSync(new URL('../src/client/locale.ts', import.meta.url), 'utf8')
+  const clientSrc = readFileSync(new URL('../src/client/index.ts', import.meta.url), 'utf8')
+  const zhKeys = [
+    'settings.onboarding.title',
+    'settings.onboarding.item1',
+    'settings.onboarding.item2',
+    'settings.onboarding.item3',
+    'settings.onboarding.tip',
+    'settings.group.safetyBase',
+  ]
+  for (const key of zhKeys) {
+    assert.ok(localeSrc.includes(`'${key}':`), `zh dict must carry ${key}`)
+  }
+  const enSection = localeSrc.split('export const en')[1] ?? ''
+  for (const key of zhKeys) {
+    assert.ok(enSection.includes(`'${key}':`), `en dict must carry ${key}`)
+  }
+  // Dead-link guard: every key is actually referenced by the settings card.
+  // (No closing paren: item2 is rendered with the {timeout} param.)
+  for (const key of zhKeys) {
+    assert.ok(clientSrc.includes(`t('${key}'`), `SettingsSection must reference ${key}`)
+  }
+  // {timeout} is a placeholder rendered by the caller with the live label.
+  assert.ok(localeSrc.includes('{timeout}'))
+  assert.ok(clientSrc.includes('timeoutActionLabel(draft.timeoutAction)'))
+  // One-shot browser key is anchored in the client source.
+  assert.ok(clientSrc.includes("'dsa-onboarding-seen-v1'"))
+  // Conditional copy: the non-reject label exists in the client mapping, so
+  // the settings card never hardcodes "reject".
+  assert.ok(clientSrc.includes('\'auto-allow\''))
+  assert.ok(clientSrc.includes('low-risk auto-allow'))
+  // Live-locale detection must read the LocaleSnapshot `active` field (not
+  // `locale`): otherwise the {timeout} slot renders zh labels in en UI.
+  assert.ok(clientSrc.includes(".active === 'en'"))
+  assert.ok(!clientSrc.includes(".locale === 'en'"))
+})
+
+test('onboarding locale: budget — onboarding/group key family stays ≤ 8', () => {
+  const localeSrc = readFileSync(new URL('../src/client/locale.ts', import.meta.url), 'utf8')
+  const zhSection = localeSrc.split('export const en')[0] ?? ''
+  const count = (zhSection.match(/'(settings\.onboarding|settings\.group)\.[^']+':/g) ?? []).length
+  assert.ok(count <= 8, `onboarding locale keys ${count} must be ≤ 8`)
+})
+
+test('onboarding locale: B-section copy exists host-side (i18n exemption)', () => {
+  // Host notices deliberately bypass locale.ts (page-compromise fence);
+  // anchor the B-section copy in the compiled host instead.
+  const hostSrc = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
+  assert.ok(hostSrc.includes('（自动审批）已生效'))
+  assert.ok(hostSrc.includes('(Auto-approval) is active'))
 })
