@@ -9,28 +9,28 @@
 
 | 挂点 | 行号 | 场景 |
 |---|---|---|
-| LOW 升级 ESCALATE | <span class="lnum">index.ts:L2687</span> | 评审结论是 ask |
-| MEDIUM 无 LLM | <span class="lnum">index.ts:L2700</span> | 本档未送审 |
-| MEDIUM llmTakeover | <span class="lnum">index.ts:L2711</span> | 竞速 + 异步复审并行 |
-| HIGH | <span class="lnum">index.ts:L2782</span> | 高风险倒计时 |
+| LOW 升级 ESCALATE | <span class="lnum">index.ts:L2696</span> | 评审结论是 ask |
+| MEDIUM 无 LLM | <span class="lnum">index.ts:L2709</span> | 本档未送审 |
+| MEDIUM llmTakeover | <span class="lnum">index.ts:L2720</span> | 竞速 + 异步复审并行 |
+| HIGH | <span class="lnum">index.ts:L2791</span> | 高风险倒计时 |
 
-计数/清零/持久化**单汇聚**于 `askHuman` 内紧邻 `pushHistory` 的一段（<span class="lnum">index.ts:L2286-2303</span>）：竞速结案后由 `approvalSource` 产出诚实来源（L2227-2233），`confirmActionFor(source)` 定动作（<span class="lnum">learning.ts:L251-255</span>）——`human-allow`→increment、`human-deny`→reset、**其余一切来源 ignore**；随后在 `learningMutex` 锁内 `resetConfirmation` / `recordConfirm` / `persistLearning`。其余六个 status-less 的转人路径（规则 human、humanOnly、类别 ask、manual、熔断等）不传 learnable，永不参与记账。`learnableContextFor`（<span class="lnum">index.ts:L1715-1766</span>）是 learnable 的唯一生产者，熔丝判定在 `learningFuseHit`（<span class="lnum">index.ts:L1687-1706</span>）。
+计数/清零/持久化**单汇聚**于 `askHuman` 内紧邻 `pushHistory` 的一段（<span class="lnum">index.ts:L2295-2312</span>）：竞速结案后由 `approvalSource` 产出诚实来源（L2236-2242），`confirmActionFor(source)` 定动作（<span class="lnum">learning.ts:L251-255</span>）——`human-allow`→increment、`human-deny`→reset、**其余一切来源 ignore**；随后在 `learningMutex` 锁内 `resetConfirmation` / `recordConfirm` / `persistLearning`。其余六个 status-less 的转人路径（规则 human、humanOnly、类别 ask、manual、熔断等）不传 learnable，永不参与记账。`learnableContextFor`（<span class="lnum">index.ts:L1716-1767</span>）是 learnable 的唯一生产者，熔丝判定在 `learningFuseHit`（<span class="lnum">index.ts:L1688-1707</span>）。
 
 ## 18.2　插位安全性：硬拒不可被学习覆盖
 
-`learnAttempt` 定义于 <span class="lnum">index.ts:L2322-2396</span>，**唯一调用行 L2578** 位于决策序的策略层 DENY 终端（L2560-2570）**之后**。接线顺序本身就是安全论证：凡是静态引擎判死的东西根本走不到学习层；学习层能放行的，至多是本来就要弹窗问人的模糊区。
+`learnAttempt` 定义于 <span class="lnum">index.ts:L2331-2405</span>，**唯一调用行 L2587** 位于决策序的策略层 DENY 终端（L2569-2579）**之后**。接线顺序本身就是安全论证：凡是静态引擎判死的东西根本走不到学习层；学习层能放行的，至多是本来就要弹窗问人的模糊区。
 
 ## 18.3　可学域双门 `learnGateEligible` <span class="lnum">learning.ts:L265-277</span>
 
 ```
 enabled ∧ staticRisk ∈ {LOW, MEDIUM}          ← HIGH 永不学
         ∧ category 非 LOCKED 四类、非 unknown/harnessInternal
-        ∧ 无 fuse（风险名/理由正则或敏感路径命中，index.ts:L1687-1706）
+        ∧ 无 fuse（风险名/理由正则或敏感路径命中，index.ts:L1688-1707）
 ```
 
 ```mermaid
 flowchart TD
-    A["四个倒计时挂点传入 learnableContextFor<br/>L2687 / L2700 / L2711 / L2782"] --> B["askHuman 竞速结案 → approvalSource 标注诚实来源"]
+    A["四个倒计时挂点传入 learnableContextFor<br/>L2696 / L2709 / L2720 / L2791"] --> B["askHuman 竞速结案 → approvalSource 标注诚实来源"]
     B -->|"human-allow"| C["recordConfirm：count+1"]
     B -->|"human-deny"| D["resetConfirmation：该签名清零"]
     B -->|"其余来源"| E["ignore：账本不动"]
@@ -38,7 +38,7 @@ flowchart TD
     D --> F
     F --> G{"下次同签名调用"}
     G -->|"learnDecision = 双门 ∩ 会话帽 ∩ 查找<br/>learning.ts:L429-445 未命中"| M["回退原风险分支，照常人工/LLM [fallback]"]
-    G -->|"命中"| I["仍复用 reviewWithLLM 标准在线评审<br/>同预算同重试 index.ts:L2359-2363"]
+    G -->|"命中"| I["仍复用 reviewWithLLM 标准在线评审<br/>同预算同重试 index.ts:L2368-2372"]
     I -->|"clean ALLOW"| J["放行 source='learned-allow'<br/>cap+1 + 帽值审计告警 + notify [allow]"]
     I -->|"DENY / ESCALATE / 失败 / CRITICAL-flag"| M
 ```
@@ -57,13 +57,13 @@ SHA-256(`sigVersion|kind|workspace|signature`) 作键（<span class="lnum">learn
 
 ## 18.6　消费闸：命中也要再过一次评审
 
-`learnDecision = gate ∧ cap ∧ lookup`（<span class="lnum">learning.ts:L429-445</span>）。命中后 `learnAttempt` **复用 `reviewWithLLM` 走标准在线评审**——同超时预算、同重试机制（<span class="lnum">index.ts:L2359-2363</span>）；只要不是干净的 ALLOW，或评审结果带 CRITICAL 矛盾标记（`reviewerAutoAllowBlocked`），一律当未命中处理、滑回原风险分支（<span class="lnum">index.ts:L2366-2369</span>）。真正放行时：会话内 cap+1（每根会话累计上限 50，`learningSessionAllowCap`，<span class="lnum">constants.ts:L26</span>）、恰达帽值的那一次放行（第 50 次）落一条 `learning-cap-reached` 审计告警（<span class="lnum">index.ts:L2370-2374</span>）、`notifyUser` 弹「✅ 已学习放行」提示（L2375-2377），history 记 `source:'learned-allow'`（L2378-2390）。到帽后学习层休眠（`learningCapState`，<span class="lnum">learning.ts:L408-410</span>），全部回人工。
+`learnDecision = gate ∧ cap ∧ lookup`（<span class="lnum">learning.ts:L429-445</span>）。命中后 `learnAttempt` **复用 `reviewWithLLM` 走标准在线评审**——同超时预算、同重试机制（<span class="lnum">index.ts:L2368-2372</span>）；只要不是干净的 ALLOW，或评审结果带 CRITICAL 矛盾标记（`reviewerAutoAllowBlocked`），一律当未命中处理、滑回原风险分支（<span class="lnum">index.ts:L2375-2378</span>）。真正放行时：会话内 cap+1（每根会话累计上限 50，`learningSessionAllowCap`，<span class="lnum">constants.ts:L26</span>）、恰达帽值的那一次放行（第 50 次）落一条 `learning-cap-reached` 审计告警（<span class="lnum">index.ts:L2379-2383</span>）、`notifyUser` 弹「✅ 已学习放行」提示（L2384-2386），history 记 `source:'learned-allow'`（L2387-2399）。到帽后学习层休眠（`learningCapState`，<span class="lnum">learning.ts:L408-410</span>），全部回人工。
 
 ## 18.7　配置与失效语义
 
 | 项 | 默认 | 说明 |
 |---|---|---|
 | `learningEnabled` | **false** | 总开关，默认关是铁律：不开就没有任何行为差异 |
-| `learningThreshold` | 3 | 所需人工确认次数 N；保存钳入 [2,10]（clampLearningThreshold，<span class="lnum">learning.ts:L231-242</span>），越界由 resolveConfig 发 warn（<span class="lnum">index.ts:L254-261</span>） |
+| `learningThreshold` | 3 | 所需人工确认次数 N；保存钳入 [2,10]（clampLearningThreshold，<span class="lnum">learning.ts:L231-242</span>），越界由 resolveConfig 发 warn（<span class="lnum">index.ts:L255-262</span>） |
 
 设置卡「确认制学习」子卡两控件 + 七行说明文案（buildLearningBody <span class="lnum">client/index.ts:L1724-1746</span>，注册 L1937；locale 中英各 12 键）。失效语义一句话：**任何一环不成立——开关关、类别锁定、熔丝命中、条目过期/损坏/跨工作区、到帽、评审不干净——都视同未命中，回到原有的人工/LLM 分支**。学习层只做减法路上的加速器，从不当裁判。

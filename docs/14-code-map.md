@@ -6,11 +6,11 @@
 
 ```text
 src/
-├─ index.ts              宿主编排：apply()、四挂点接线、10 路由、命令、评审器、审计、学习接线  2913 行
+├─ index.ts              宿主编排：apply()、四挂点接线、10 路由、命令、评审器、审计、学习接线  2922 行
 ├─ auto/                 静态评估纯函数层（20 文件，按字母序）
 │    ├─ artifacts.ts     98   本会话成功创建路径登记（删除豁免依据）
 │    ├─ audit.ts         45   append-only 审批审计（清空留墓碑、5MiB 保尾）
-│    ├─ category.ts      647  11 类三态开关层：归类/优先级合并/指令钳制/信任目录模式
+│    ├─ category.ts      699  11 类三态开关层：归类/优先级合并/指令钳制/信任目录模式
 │    ├─ classifier.ts    75   预分类提示词、参数脱敏、严格响应解析
 │    ├─ constants.ts     27   数值默认唯一事实源（倒计时/熔断/截断/学习族阈值）
 │    ├─ decision.ts      722  纯决策函数：评审解析、人机竞速、来源标注、熔断、静态名单、host-only 键
@@ -26,7 +26,7 @@ src/
 │    ├─ review-mode.ts   52   每会话评审模式持久化快照
 │    ├─ risk-tokens.ts   13   HIGH 风险正则（NAME/REASON 单一事实源）
 │    ├─ rules.ts         370  声明式规则解析/求值（host 与浏览器共用）
-│    ├─ shell.ts         1016 bash/pwsh 词法分解 + 整行熔断 + 逐段静态分类（最大单文件）
+│    ├─ shell.ts         1224 bash/pwsh 词法分解 + 整行熔断 + 逐段静态分类（最大单文件）
 │    └─ trust.ts         101  web 路由信任平面（loopback/LAN 边界、Host 伪造防护、在线端点 URL 校验）
 └─ client/
      ├─ index.ts         React 客户端主体 2527 行（设置卡 6 子卡/面板增强/轮询/浮动按钮/CSS）
@@ -34,13 +34,13 @@ src/
      └─ locale.ts        zh/en 双语 354 行
 
 tests/
-├─ contract.test.mjs         242 例（host 纯函数契约：含评审重试/确认制学习/类别层/diff 预览/上下文探针各族）
-├─ category.test.mjs          70 例（类别层专测：归类/优先级/LOCKED 钳制/复合命令合并/信任目录模式）
+├─ contract.test.mjs         250 例（host 纯函数契约：含评审重试/确认制学习/类别层/diff 预览/上下文探针各族）
+├─ category.test.mjs         101 例（类别层专测：归类/优先级/LOCKED 钳制/复合命令合并/信任目录模式）
 ├─ editdiff.test.mjs          33 例（diff 边界与官方语义镜像）
 ├─ contract-devloop.test.mjs  19 例（开发闭环回归）
 └─ probe.test.mjs              9 例（工作区事实探针边界）
 
-                              合计 373 例（node --test 全绿基线）
+                              合计 412 例（node --test 全绿基线）
 scripts/
 ├─ build.sh             （DSH 源码仓库布局）tsc 编译 src→lib
 ├─ audit-query.mjs      审计查询 CLI

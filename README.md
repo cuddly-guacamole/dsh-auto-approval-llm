@@ -15,6 +15,7 @@
 ## 特性
 
 - **静态规则 + LLM 分类器**：只读/会话/工作区常规操作直接放行；危险、外部写、凭据外泄、受保护路径直接拒绝；模糊操作交给 LLM 预分类（`tools/guard` + `tools/pre-execute`）。
+- **写向量完整性加固**：含真实文件写重定向（`>`/`>>`/`>|`/`&>``）的命令段脱离只读快径；build/test 与版本探测快径仅保留给 discard sink 或工作区内常规写目标（aggressive/trustedDirs 放宽模式同样生效）；POSIX 五头 `tee`/`dd of=`/`sed -i`/`truncate`/`install` 以操作数目标参与按目标闸门——直写插件运行态文件无条件硬拒。
 - **11 分类三态开关 + 信任目录双模式**：工具与 shell 命令归入 11 个类别（fileEdit / gitLocal / build / readOnly / delete / protected / privilege / networkExec / gitPush / publish / disk），设置卡逐类配 `auto` / `ask` / `deny`；**默认全部 `inherit` = 行为零变化**。危险四类（delete / protected / privilege / disk）LOCKED 仅接受 `ask`，误配 `auto`/`deny` 会被钳制丢弃并告警（运行时恒不自动放行）；`trustedDirs` 在 standard 档把常规位置扩展到显式信任目录，`categoryMode: aggressive` 则取消位置白名单——任意位置均视为常规位置（敏感名 fuse、运行态硬拒、symlink 复检等危险度门全部不动）；复合命令按「类别枚举序 + directive 取严」双轨合并；类别拒绝与 denyList 同构为终端拒绝（提权重试不可绕过）；每次类别决策全量写入 history / audit（`category-allow` / `category-deny` source）。
 - **在线评审模型（可选）**：填写 API 协议、地址、模型、密钥后，审批复审直接打到你的 OpenAI / Anthropic 兼容端点；密钥存在 DSH 凭据存储里，前端只显示「已配置」，永不回显。直连三件（地址 / 模型 / 密钥）配置完整才走在线评审——保存与「测试连接」有前端预检拦下缺项，存量半配置在运行时按未配置处理、评审跟随会话模型（fail-closed 不变）。
 - **人工倒计时 + 超时兜底**：低/中/高三档倒计时（默认 5/8/10 秒）；超时按 `timeoutAction` 处理（`拒绝` / `通过` / `低风险自动同意`）。关浏览器也不悬挂（host 计时器独裁）。
