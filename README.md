@@ -16,7 +16,7 @@
 
 - **静态规则 + LLM 分类器**：只读/会话/工作区常规操作直接放行；危险、外部写、凭据外泄、受保护路径直接拒绝；模糊操作交给 LLM 预分类（`tools/guard` + `tools/pre-execute`）。
 - **11 分类三态开关 + 信任目录双模式**：工具与 shell 命令归入 11 个类别（fileEdit / gitLocal / build / readOnly / delete / protected / privilege / networkExec / gitPush / publish / disk），设置卡逐类配 `auto` / `ask` / `deny`；**默认全部 `inherit` = 行为零变化**。危险四类（delete / protected / privilege / disk）LOCKED 仅接受 `ask`，误配 `auto`/`deny` 会被钳制丢弃并告警（运行时恒不自动放行）；`trustedDirs` 在 standard 档把常规位置扩展到显式信任目录，`categoryMode: aggressive` 则取消位置白名单——任意位置均视为常规位置（敏感名 fuse、运行态硬拒、symlink 复检等危险度门全部不动）；复合命令按「类别枚举序 + directive 取严」双轨合并；类别拒绝与 denyList 同构为终端拒绝（提权重试不可绕过）；每次类别决策全量写入 history / audit（`category-allow` / `category-deny` source）。
-- **在线评审模型（可选）**：填写 API 协议、地址、模型、密钥后，审批复审直接打到你的 OpenAI / Anthropic 兼容端点；密钥存在 DSH 凭据存储里，前端只显示「已配置」，永不回显。
+- **在线评审模型（可选）**：填写 API 协议、地址、模型、密钥后，审批复审直接打到你的 OpenAI / Anthropic 兼容端点；密钥存在 DSH 凭据存储里，前端只显示「已配置」，永不回显。直连三件（地址 / 模型 / 密钥）配置完整才走在线评审——保存与「测试连接」有前端预检拦下缺项，存量半配置在运行时按未配置处理、评审跟随会话模型（fail-closed 不变）。
 - **人工倒计时 + 超时兜底**：低/中/高三档倒计时（默认 5/8/10 秒）；超时按 `timeoutAction` 处理（`拒绝` / `通过` / `低风险自动同意`）。关浏览器也不悬挂（host 计时器独裁）。
 - **LLM 接管**：中风险且 LLM 在倒计时内给出明确结论时，客户端立即按 LLM 结论裁决，无需你点。
 - **熔断**：连续 `maxConsecutiveDenials` 次或累计 `maxTotalDenials` 次被 LLM 拒绝 → 转人工、不再自动倒计时；`/approval reset` 可重置。
@@ -28,7 +28,7 @@
 - **上下文增强复审（可选开启，默认关）**：`reviewerContextFacts` 开启后，LLM 复审输入附加结构化工作区事实——目标路径存在性/类型/大小（只读元数据，绝不读内容）＋本会话最近创建的文件相对路径（最多 8 条，经脱敏与工作区过滤）。边界：工作区外目标只报存在性与类型、大小恒为 null；工作区 symlink/联接逃逸到外部时整个事实块省略；临时目录（tempRoots）文件不进 recent_creates；探测失败→事实块整体省略（fail-closed），默认关闭时复审载荷与既往逐字节一致。
 - **编辑操作 diff 预览（editDiffPreview）**：开启后，进入人工审批的编辑类工具（write/edit/str_replace_editor/apply_patch）在审批面板展示目标文件的行级红绿 diff（目标仅限工作区内非受保护路径，≤1MiB/≤200 行/约 32KiB，失败自动省略）。纯展示：不参与任何裁决，不进 LLM 复审输入；默认关闭。边界：可读的工作区内非受保护目标对比现有内容出 diff；全量写类操作（`write` / `str_replace_editor` `create`）目标不可读（工作区外/受保护/新文件等）时预览「仅新内容」的全量新增 diff——素材全部来自工具参数、零读取目标文件，外部/受保护旧内容绝不因此上屏；对比类（`edit` / `str_replace` / `insert` / `apply_patch`）目标不可读时整体省略。LCS 输入 ≤1024 行/侧，单行 >200 字符省略号，输出 ≤200 行且总字节 ≤32KiB，截断带 `…truncated` 标记；语义镜像官方工具（edit/str_replace 多匹配省略、insert 按官方 0 基 splice、create 已存在省略、apply_patch 全目标顺序应用且任一失败整体省略）；diff 块内倒计时字面量被剥离，无法伪造/劫持客户端自动应答。
 - **确认制学习（可选开启，默认关）**：`learningEnabled` 开启后，同一操作（以确定性签名称呼：命令模板 / 工具参数形状，不含任何原始值）在 Auto 档被人工反复确认达到阈值（`learningThreshold` 默认 3，钳制 2–10）起自动放行；**每次学习放行前仍对本次调用执行一次标准在线评审**——非干净 ALLOW 或 CRITICAL 矛盾一律回退原有人工分支。边界：仅低/中风险可学；高风险、锁定四类（delete/protected/privilege/disk）、unknown 类别与敏感路径永不参与；含变量/glob/引号或危险头命令（tee/dd/sed/truncate/install）的命令既不学也不中；同签名被人工拒绝立即清零计数；每根会话学习放行上限 50 次（恰达上限的那一次落审计告警）；条目保留 30 天、至多 100 条、按工作区隔离；任何一环失效都视同未命中回人工。
-- **DSH 原生观感的设置卡**：6 张可折叠子卡（计时器与熔断 / 在线评审模型 / 安全规则列表 / 分类开关与信任模式 / 确认制学习 / 最近审批记录），顶层开关即时保存、每卡独立 保存/放弃；非法配置值有红色横幅 +「尝试修复」。
+- **DSH 原生观感的设置卡**：6 张可折叠子卡（计时器与熔断 / 在线评审模型 / 安全规则列表 / 分类开关与信任模式 / 确认制学习 / 最近审批记录），顶部「评审与接管预设」单选（标准 / 稳健 / 严格 / 自定义）一键写回 LLM 参与门槛组合，三个名单合并为「精确名单」页签编辑器，倒计时三档与熔断双阈值各并为一行；顶层开关即时保存、每卡独立 保存/放弃；非法配置值有红色横幅 +「尝试修复」。
 
 ---
 
@@ -195,6 +195,5 @@ dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 
 ## 版本 / 发布
 
-- 当前：`0.0.8` —— npm：[@quill507/dsh-auto-approval-llm](https://www.npmjs.com/package/@quill507/dsh-auto-approval-llm)，GitHub：[Release v0.0.8](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/releases/tag/v0.0.8)。
 - 安装：`dsh plugin --profile web add @quill507/dsh-auto-approval-llm`
 - 许可证：BSD-3-Clause。
