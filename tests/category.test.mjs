@@ -18,7 +18,7 @@ import {
   isEffectiveRoutine, sensitiveBasenameAt, realpathCriticalReason,
 } from '../lib/auto/category.js'
 import { isWithin, normalizePath, runtimeStateTargetInZone } from '../lib/auto/paths.js'
-import { assessShell, hardDenyShellReason } from '../lib/auto/shell.js'
+import { assessShell, hardDenyShellReason, runtimeStateReadHits } from '../lib/auto/shell.js'
 import { assessTool } from '../lib/auto/policy.js'
 import { riskFromAssessment, HOST_ONLY_KEYS } from '../lib/auto/decision.js'
 
@@ -339,7 +339,9 @@ test('aggressive: ordinary external targets are position-relaxed', () => {
   // Standard keeps the ask; aggressive relaxes the whitelist position predicate.
   assert.equal(assessShell('cat D:/elsewhere/readme.md', 'bash', roots, artifacts, undefined).decision, 'ask')
   assert.equal(assessShell('cat D:/elsewhere/readme.md', 'bash', aggressive, artifacts, undefined).decision, 'allow')
-  assert.equal(assessShell('echo x > D:/elsewhere/f.txt', 'bash', aggressive, artifacts, undefined).decision, 'allow')
+  // A write redirection never rides the static allow — not even under the
+  // relaxed position predicate; it falls to independent classification.
+  assert.equal(assessShell('echo x > D:/elsewhere/f.txt', 'bash', aggressive, artifacts, undefined).decision, 'ask')
   // Composition: an ask-classified call under an auto directive lands on LOW.
   assert.equal(applyCategoryDirective('MEDIUM', 'auto', { decision: 'ask', classifierEligible: true }), 'LOW')
 })
@@ -450,7 +452,9 @@ test('runtime-state precedence: trustedDirs can never unlock runtime state', () 
 test('isEffectiveRoutine semantics flow into the policy allow branches', () => {
   const verdict = assessTool({ name: 'write', arguments: { file_path: 'D:/trusted/x.ts' } }, { ...roots, trustedDirs: ['D:/trusted'] }, artifacts)
   assert.equal(verdict.decision, 'allow')
-  assert.equal(assessShell('echo x > D:/trusted/f.txt', 'bash', { ...roots, trustedDirs: ['D:/trusted'] }, artifacts, undefined).decision, 'allow')
+  // The trusted-dir relaxation covers structured writes; a shell redirection
+  // still cannot take the read-only fast path and asks instead.
+  assert.equal(assessShell('echo x > D:/trusted/f.txt', 'bash', { ...roots, trustedDirs: ['D:/trusted'] }, artifacts, undefined).decision, 'ask')
 })
 
 // ── sensitive-basename fuse ───────────────────────────────────────────
@@ -791,4 +795,153 @@ test('F1: the guard re-checks resolved runtime-state landings before (and indepe
   }
   assert.ok(recheckIdx > normalizedIdx && recheckIdx < escapeIdx, 'the independent re-check runs before the escape verdict')
   assert.ok(reasonIdx > recheckIdx && reasonIdx < escapeIdx, 'its hard-deny reason returns before escape can say undefined')
+})
+
+// ── write redirections: fast-path escape + target-aware category ─────
+
+// Roots shaped so D:/work IS the workspace: the redirect targets below are
+// routine project content, the exact spelling that used to be silently
+// absorbed by the static read-only allow.
+const winRoots = { workspace: 'D:/work', home: 'C:/Users/Administrator', dshHome: 'C:/Users/Administrator/.dsh', tempRoots: [] }
+const verdictOf = (command, shell = 'bash', r = winRoots) =>
+  assessTool({ name: shell, arguments: { command }, agent: {} }, r, artifacts)
+
+test('redirect matrix: routine workspace write via `>` leaves the fast path and labels fileEdit', () => {
+  const v = verdictOf('echo x > D:/work/a.txt')
+  assert.equal(v.decision, 'ask')
+  assert.equal(v.classifierEligible, true)
+  assert.equal(cat('echo x > D:/work/a.txt', 'bash', winRoots), 'fileEdit')
+})
+
+test('redirect matrix: append `>>` behaves like overwrite', () => {
+  const v = verdictOf('echo x >> D:/work/log.txt')
+  assert.equal(v.decision, 'ask')
+  assert.equal(v.classifierEligible, true)
+  assert.equal(cat('echo x >> D:/work/log.txt', 'bash', winRoots), 'fileEdit')
+})
+
+test('redirect matrix: clobber `>|` behaves like overwrite', () => {
+  const v = verdictOf('echo x >| D:/work/a.txt')
+  assert.equal(v.decision, 'ask')
+  assert.equal(v.classifierEligible, true)
+  assert.equal(cat('echo x >| D:/work/a.txt', 'bash', winRoots), 'fileEdit')
+})
+
+test('redirect matrix: fd-form `2>` is a real-file write too', () => {
+  const v = verdictOf('echo hi 2>D:/work/e.txt')
+  assert.equal(v.decision, 'ask')
+  assert.equal(v.classifierEligible, true)
+  assert.equal(cat('echo hi 2>D:/work/e.txt', 'bash', winRoots), 'fileEdit')
+})
+
+test('redirect matrix: credential target stays hard-denied and labels protected', () => {
+  const v = verdictOf('echo x > C:/Users/Administrator/.ssh/config')
+  assert.equal(v.decision, 'deny')
+  assert.equal(v.classifierEligible, false)
+  assert.equal(cat('echo x > C:/Users/Administrator/.ssh/config', 'bash', winRoots), 'protected')
+})
+
+test('redirect matrix: external target asks with fileEdit label (not readOnly)', () => {
+  const v = verdictOf('echo x > D:/elsewhere/b.txt')
+  assert.equal(v.decision, 'ask')
+  assert.equal(v.classifierEligible, true)
+  assert.equal(cat('echo x > D:/elsewhere/b.txt', 'bash', winRoots), 'fileEdit')
+})
+
+test('redirect matrix: protected workspace metadata via a relative redirect labels protected', () => {
+  const v = verdictOf('echo x > .env')
+  assert.equal(v.decision, 'ask')
+  assert.equal(v.classifierEligible, true)
+  assert.equal(cat('echo x > .env', 'bash', winRoots), 'protected')
+})
+
+test('discard sinks keep the historical allow/readOnly behavior', () => {
+  for (const [shellName, command] of [
+    ['bash', 'echo done > /dev/null'],
+    ['bash', 'echo done >/dev/null 2>&1'],
+    ['bash', 'echo hi 2>/dev/null'],
+    ['pwsh', 'write-output done > NUL'],
+    ['pwsh', 'write-output done > $null'],
+  ]) {
+    const v = verdictOf(command, shellName)
+    assert.equal(v.decision, 'allow', command)
+    assert.equal(cat(command, shellName, winRoots), 'readOnly', command)
+  }
+})
+
+test('plain echo without any redirection is fully unchanged', () => {
+  const v = verdictOf('echo hello')
+  assert.equal(v.decision, 'allow')
+  assert.equal(cat('echo hello', 'bash', winRoots), 'readOnly')
+})
+
+test('compound line: redirected segment drags the merged decision to ask with strictest label', () => {
+  const v = verdictOf('echo x > D:/work/a.txt && cat D:/work/b.txt')
+  assert.equal(v.decision, 'ask')
+  assert.equal(v.classifierEligible, true)
+  // fileEdit outranks the plain-read readOnly segment.
+  assert.equal(cat('echo x > D:/work/a.txt && cat D:/work/b.txt', 'bash', winRoots), 'fileEdit')
+})
+
+test('pwsh read-only cmdlet with a real-file redirect asks and labels fileEdit', () => {
+  const v = verdictOf('write-output x > D:/work/a.txt', 'pwsh')
+  assert.equal(v.decision, 'ask')
+  assert.equal(v.classifierEligible, true)
+  assert.equal(cat('write-output x > D:/work/a.txt', 'pwsh', winRoots), 'fileEdit')
+})
+
+test('precedence preserved: deletion segment with a redirect keeps the delete label', () => {
+  const v = verdictOf('rm -rf D:/work/tmp > D:/work/a.txt')
+  assert.equal(v.decision, 'ask')
+  assert.equal(v.classifierEligible, true)
+  assert.equal(cat('rm -rf D:/work/tmp > D:/work/a.txt', 'bash', winRoots), 'delete')
+})
+
+test('label lift: git status with a redirect reads as fileEdit, not readOnly', () => {
+  const v = verdictOf('git status > D:/work/status.txt')
+  assert.equal(v.decision, 'ask')
+  assert.equal(v.classifierEligible, true)
+  assert.equal(cat('git status > D:/work/status.txt', 'bash', winRoots), 'fileEdit')
+})
+
+// ── runtime-state read audit (pure detector, no verdict impact) ──────
+
+const auditRoots = winRoots
+
+test('runtimeStateReadHits: reader-command operands are reported', () => {
+  assert.deepEqual(runtimeStateReadHits('cat approval-debug.jsonl', 'bash', auditRoots), ['approval-debug.jsonl'])
+  assert.deepEqual(runtimeStateReadHits('head -n 20 history.jsonl | wc -l', 'bash', auditRoots), ['history.jsonl'])
+  assert.deepEqual(runtimeStateReadHits('Get-Content C:/Users/Administrator/.dsh/review-mode.json', 'pwsh', auditRoots), ['review-mode.json'])
+})
+
+test('runtimeStateReadHits: cp/mv sources are reported, destinations are not', () => {
+  assert.deepEqual(runtimeStateReadHits('cp history.jsonl D:/backup/history.jsonl', 'bash', auditRoots), ['history.jsonl'])
+  assert.deepEqual(runtimeStateReadHits('mv audit.jsonl old.jsonl', 'bash', auditRoots), ['audit.jsonl'])
+  assert.deepEqual(runtimeStateReadHits('cp src/index.ts D:/backup/history.jsonl', 'bash', auditRoots), [])
+})
+
+test('runtimeStateReadHits: `<` redirection source is reported', () => {
+  assert.deepEqual(runtimeStateReadHits('grep pattern notes.md < llm-latency.jsonl', 'bash', auditRoots), ['llm-latency.jsonl'])
+})
+
+test('runtimeStateReadHits: ordinary files never match', () => {
+  assert.deepEqual(runtimeStateReadHits('ls src', 'bash', auditRoots), [])
+  assert.deepEqual(runtimeStateReadHits('cat notes.md todo.md', 'bash', auditRoots), [])
+})
+
+test('runtimeStateReadHits: matching is case- and spelling-normalized, deduplicated', () => {
+  assert.deepEqual(runtimeStateReadHits('cat ./HISTORY.JSONL', 'bash', auditRoots), ['history.jsonl'])
+  assert.deepEqual(runtimeStateReadHits('cat history.jsonl ./history.jsonl', 'bash', auditRoots), ['history.jsonl'])
+})
+
+test('host wiring: pre-execute logs runtime-state reads before handing over to execution', () => {
+  assert.ok(HOST_SRC.includes("from './auto/shell.js'"), 'the detector is imported from the pure layer')
+  assert.ok(HOST_SRC.includes("'runtime-state-read'"), 'the audit event is wired')
+  const denyAt = HOST_SRC.indexOf('[auto-mode hard deny]')
+  const auditAt = HOST_SRC.indexOf("'runtime-state-read'")
+  const nextAt = HOST_SRC.indexOf("assessment.decision === 'allow'", auditAt)
+  const classifyAt = HOST_SRC.indexOf('classifier.classify(', auditAt)
+  assert.ok(denyAt !== -1 && denyAt < auditAt, 'hard-denied commands are never logged (they never run)')
+  assert.ok(nextAt > auditAt, 'the trail is emitted before the static allow hands over')
+  assert.ok(classifyAt > auditAt, 'classifier-approved reads are covered by the same trail')
 })

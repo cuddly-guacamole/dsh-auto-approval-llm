@@ -226,9 +226,12 @@ test('G2 tilde-user expansion: reads and writes via `~name/` are never routine',
   // Baseline: the literal home forms keep their existing gating…
   assert.notEqual(shell('cat ~/.ssh/id_rsa').decision, 'allow')
   assert.equal(shell('echo x > /c/Users/u/Desktop/abs.txt').classifierEligible, true)
-  // …and ordinary workspace operands stay on the static allow path.
+  // …and ordinary workspace reads stay on the static allow path, while a
+  // workspace write through a redirection asks (it never takes that path).
   assert.equal(shell('cat ./notes.md').decision, 'allow')
-  assert.equal(shell('echo hi > out.txt', zoneRoots).decision, 'allow')
+  const redirected = shell('echo hi > out.txt', zoneRoots)
+  assert.equal(redirected.decision, 'ask')
+  assert.equal(redirected.classifierEligible, true)
 })
 
 test('G3 flag tokens: embedded absolute paths are judged like bare operands', () => {

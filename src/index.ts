@@ -56,6 +56,7 @@ import { redactResultValue } from './auto/redact.js'
 import { agentKind, evaluateRules, parseRulesText } from './auto/rules.js'
 import { isReviewRetryable, retryAfterMs, retryReviewLoop, toLlmFailure, type RetryAttempt, type ReviewFailure } from './auto/retry.js'
 import { type ReviewMode, loadReviewModes, normalizeReviewMode, persistReviewModes } from './auto/review-mode.js'
+import { runtimeStateReadHits } from './auto/shell.js'
 import { isLoopbackHostname, isTrustedRequest, validateReviewerBaseUrl } from './auto/trust.js'
 
 export const name = 'dsh-auto-approval-llm'
@@ -1878,6 +1879,14 @@ export function apply(ctx: Context, rawConfig: Config): void {
     const assessment = assessTool(exec, roots, artifacts)
     if (assessment.plannedCreates !== undefined) artifacts.plan(exec, assessment.plannedCreates, roots)
     if (assessment.decision === 'deny') return { kind: 'deny', reason: `[auto-mode hard deny] ${assessment.reason}` }
+    // Audit-only trail: a shell command that cleared the hard fuse and may
+    // still run (statically allowed or classifier-approved) while opening one
+    // of the plugin's own runtime-state files for reading (approval history,
+    // audit log, …). Purely observational — it never alters any verdict.
+    if ((exec.name === 'bash' || exec.name === 'pwsh') && typeof exec.arguments?.command === 'string') {
+      const stateReads = runtimeStateReadHits(exec.arguments.command, exec.name, roots)
+      if (stateReads.length > 0) debugLog({ ev: 'runtime-state-read', callId: exec.callId ?? null, files: stateReads })
+    }
     // Category tightening (only deny/ask; auto/inherit never intercept here).
     // Deny/ask apply to every non-hard-denied result, including static allows,
     // so a routine read/write cannot slip past a category deny/ask. deny

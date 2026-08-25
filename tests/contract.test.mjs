@@ -1380,8 +1380,9 @@ test('assessShell: deletion of a zone runtime-state file denies', () => {
 })
 test('assessShell: same runtime-state basename outside the zone is NOT over-blocked', () => {
   const roots = zoneRoots()
-  // Project-local history.jsonl in the workspace stays a routine write.
-  assert.equal(assessShell('echo x > C:/ws/history.jsonl', 'bash', roots, HO(), undefined).decision, 'allow')
+  // Project-local history.jsonl in the workspace is not plugin state: it is
+  // neither hard-denied nor auto-allowed — the redirection asks instead.
+  assert.equal(assessShell('echo x > C:/ws/history.jsonl', 'bash', roots, HO(), undefined).decision, 'ask')
   // Zone non-state source files keep the ordinary semantic path (not deny, not auto-allow).
   assert.equal(assessShell(`echo x > ${ZONE}/src/index.ts`, 'bash', roots, HO(), undefined).decision, 'ask')
 })

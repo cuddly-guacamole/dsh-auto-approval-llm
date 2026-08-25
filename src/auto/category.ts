@@ -22,7 +22,7 @@
 
 import { basename } from 'node:path'
 import { isProtectedProjectPath, isWithin, normalizePath } from './paths.js'
-import { decomposeCommandLine } from './shell.js'
+import { decomposeCommandLine, isNullSink } from './shell.js'
 
 /** The 11 configurable category keys. */
 export type CategoryKey =
@@ -449,7 +449,39 @@ function creationCategory(name: string, words: SegmentWord[], shell: string, roo
   return 'fileEdit'
 }
 
+/**
+ * Category of a segment's real-file write-redirect destinations, judged with
+ * the same semantics as the explicit write tools: a normalized target hitting
+ * sensitiveBasenameAt or isProtectedProjectPath is 'protected', any other
+ * target is 'fileEdit' wherever it lives. Discard sinks (/dev/null, NUL,
+ * $null) write no file and statically unresolvable targets contribute nothing.
+ */
+function writeRedirectCategory(targets: SegmentWord[], shell: string, roots: CategoryRoots): CategoryKey | undefined {
+  let category: CategoryKey | undefined
+  for (const target of targets) {
+    if (target.dynamic || target.glob) continue
+    if (isNullSink(target, shell)) continue
+    const normalized = normalizePath(target.text, roots.workspace, roots.home)
+    if (sensitiveBasenameAt(normalized, roots) || isProtectedProjectPath(normalized, roots)) return 'protected'
+    category ??= 'fileEdit'
+  }
+  return category
+}
+
 function classifySegment(segment: Segment, shell: string, roots: CategoryRoots): CategoryKey | 'unknown' {
+  const base = classifySegmentBase(segment, shell, roots)
+  // A write redirection makes its segment at least a file edit regardless of
+  // the leading command's own class (`echo x > a.txt` writes like the write
+  // tools do); merge by global precedence so protected outranks fileEdit and
+  // higher classes (delete/privilege/…) are never dragged down. Segments
+  // without a real-file redirect keep their plain classification.
+  const redirected = writeRedirectCategory(segment.writeTargets, shell, roots)
+  if (redirected === undefined) return base
+  if (base === 'unknown' || CATEGORY_PRECEDENCE[redirected] > CATEGORY_PRECEDENCE[base]) return redirected
+  return base
+}
+
+function classifySegmentBase(segment: Segment, shell: string, roots: CategoryRoots): CategoryKey | 'unknown' {
   if (segment.words.length === 0) return 'unknown'
   const first = segment.words[0]
   if (first.dynamic || first.glob || first.quoted) return 'unknown'

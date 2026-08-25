@@ -3,7 +3,7 @@
 // MIT License, Copyright (c) 2026 程序员阿江-Relakkes (https://github.com/NanmiCoder/dsh-auto-mode).
 // Retained per the MIT License: this is a substantial portion of the original.
 import { basename } from 'node:path';
-import { hardDestructiveTargetReason, isArtifactArea, isProtectedProjectPath, isWithin, normalizePath, runtimeStateTargetInZone, runtimeStateTargetReason, } from './paths.js';
+import { RUNTIME_STATE_BASENAMES, hardDestructiveTargetReason, isArtifactArea, isProtectedProjectPath, isWithin, normalizePath, runtimeStateTargetInZone, runtimeStateTargetReason, } from './paths.js';
 import { isEffectiveRoutine, sensitiveBasenameAt } from './category.js';
 function ambiguous(reason) {
     return { decision: 'ask', reason, classifierEligible: true };
@@ -336,7 +336,7 @@ function dshHomeExfil(source, roots) {
     return patterns.some((pattern) => new RegExp(pattern, 'i').test(flat));
 }
 /** Whether a redirection target discards output instead of writing a file. */
-function isNullSink(word, shell) {
+export function isNullSink(word, shell) {
     const text = word.text.toLowerCase();
     return text === '/dev/null' || (shell === 'pwsh' && (text === '$null' || text === 'nul'));
 }
@@ -936,12 +936,19 @@ function classifyEffectiveCommand(name, words, segment, shell, roots, artifacts,
     }
     if (dynamicInput)
         return ambiguous(`operands arrive from piped input and require independent classification: ${name}`);
+    // A write redirection turns an otherwise read-only command into a file
+    // mutation (`echo x > report.txt`), so the segment must never ride the
+    // static read-only allow — even when the target is ordinary project
+    // content. It falls through to the ordinary evaluation flow below, which
+    // ends in an independent classification. Discard sinks (/dev/null, NUL,
+    // $null) are not file writes and keep the fast path.
+    const redirectedToFile = segment.writeTargets.some(target => !isNullSink(target, shell));
     if (name === 'find' && !findActionsAreReadOnly(words)) {
         return semanticReview(findHasDestructiveAction(words)
             ? 'find deletion requires specific user authorization'
             : 'find executes or writes through a non-read-only action and requires independent classification');
     }
-    if (readOnlyCommand(name, words, shell)) {
+    if (!redirectedToFile && readOnlyCommand(name, words, shell)) {
         return readPathsAreRoutine(operands, roots)
             ? allowed('static read-only command inside the workspace or temporary area')
             : semanticReview('read-only command references a protected or external path');
@@ -1014,4 +1021,65 @@ export function assessShell(source, shell, roots, artifacts, owner) {
     }
     const reasons = assessments.filter(assessment => assessment.decision !== 'allow').map(assessment => assessment.reason);
     return semanticReview([...new Set(reasons)].join('; ').slice(0, 800));
+}
+/** Reader commands whose non-flag operand names a file opened for reading. */
+const STATE_READ_COMMANDS = new Set(['cat', 'less', 'head', 'tail', 'more', 'type', 'get-content', 'gc']);
+/**
+ * Audit-only detection (pure): basenames of plugin runtime-state files this
+ * command line opens for READING — through a reader-command operand, a
+ * copy/move source operand, or a `<` redirection source. Callers must use the
+ * result strictly for observability trails; it never feeds any verdict.
+ * Dynamically expanded operands cannot be resolved statically and stay
+ * unreported.
+ */
+export function runtimeStateReadHits(source, shell, roots) {
+    const decomposition = decomposeCommandLine(String(source ?? ''), shell);
+    if (decomposition.kind === 'opaque')
+        return [];
+    const hits = [];
+    for (const segment of decomposition.segments) {
+        const sources = [...segment.readTargets];
+        const unwrapped = unwrapCommand(segment.words);
+        const name = commandName(unwrapped.words[0]?.text ?? '');
+        if (STATE_READ_COMMANDS.has(name)) {
+            for (let index = 1; index < unwrapped.words.length; index += 1) {
+                const word = unwrapped.words[index];
+                if (!word.text.startsWith('-'))
+                    sources.push(word);
+            }
+        }
+        else if (shell === 'bash' && ['cp', 'mv'].includes(name)) {
+            // Sources are every bare operand except the destination: the last
+            // one conventionally, or — when `-t/--target-directory` supplies
+            // the destination — every remaining bare operand.
+            const bare = [];
+            let destinationByFlag = false;
+            for (let index = 1; index < unwrapped.words.length; index += 1) {
+                const text = unwrapped.words[index].text;
+                if (text === '-t' || text === '--target-directory') {
+                    destinationByFlag = true;
+                    index += 1;
+                    continue;
+                }
+                if (text.startsWith('--target-directory=')) {
+                    destinationByFlag = true;
+                    continue;
+                }
+                if (!text.startsWith('-'))
+                    bare.push(unwrapped.words[index]);
+            }
+            if (!destinationByFlag)
+                bare.pop();
+            sources.push(...bare);
+        }
+        for (const word of sources) {
+            if (word.dynamic || word.glob)
+                continue;
+            const normalized = normalizePath(word.text, roots.workspace, roots.home);
+            const base = normalized.split(/[\\/]/).pop()?.toLowerCase() ?? '';
+            if (RUNTIME_STATE_BASENAMES.has(base) && !hits.includes(base))
+                hits.push(base);
+        }
+    }
+    return hits;
 }
