@@ -755,6 +755,52 @@ function runtimeStateWriteReason(normalizedPath, roots) {
         ? `mutation of ${runtimeStateTargetReason(normalizedPath)} is not permitted`
         : undefined;
 }
+/** Values of dd's `of=` operands — the only dd spelling that names an output file. */
+function ddOutputTargets(words) {
+    const targets = [];
+    for (let index = 1; index < words.length; index += 1) {
+        const match = /^of=(.+)$/i.exec(words[index].text);
+        if (match !== null)
+            targets.push({ text: match[1], dynamic: words[index].dynamic, glob: words[index].glob, quoted: true });
+    }
+    return targets;
+}
+/** Whether a sed invocation edits files in place (`-i`, `-i.suffix`, `--in-place[=suffix]`). */
+function sedEditsInPlace(words) {
+    return words.slice(1).some((word) => /^-i/.test(word.text) || /^--in-place(?:=|$)/.test(word.text));
+}
+/**
+ * Whether the flags supply sed's script explicitly (`-e`/`-f` in separate,
+ * fused, or long form), so every remaining bare operand is an edited file.
+ * Without them the first bare operand is the script text; it can name
+ * path-like strings, so counting it as a write target would hard-deny
+ * ordinary edits whose expression merely mentions a state-file basename.
+ */
+function sedScriptFlagPresent(words) {
+    return words.slice(1).some((word) => /^--(?:expression|file)(?:=.+)?$/.test(word.text)
+        || word.text === '-e' || word.text === '-f'
+        || /^-[ef]./.test(word.text));
+}
+function sedInPlaceTargets(words) {
+    const bare = words.slice(1).filter((word) => !word.text.startsWith('-'));
+    return sedScriptFlagPresent(words) ? bare : bare.slice(1);
+}
+/**
+ * Bash heads beyond copy/move and creation whose own operands mutate files:
+ * `tee` writes its operands outright, `dd` writes through `of=`, `sed -i`
+ * rewrites its inputs in place, `truncate` resizes them, coreutils `install`
+ * copies onto the destination. Read-mode spellings (`sed` without `-i`, `dd`
+ * without `of=`) stay outside the family so their original handling is kept.
+ */
+function writesThroughOperands(name, words) {
+    if (name === 'tee' || name === 'truncate' || name === 'install')
+        return true;
+    if (name === 'dd')
+        return ddOutputTargets(words).length > 0;
+    if (name === 'sed')
+        return sedEditsInPlace(words);
+    return false;
+}
 /** Explicit path operands of a command word list that act as write targets. */
 function writeOperandCandidates(words) {
     // cp/mv: the destination is the last non-flag operand; the earlier ones
@@ -811,6 +857,21 @@ function segmentHardDenyReason(segment, shell, roots) {
     }
     else if (shell === 'bash' && ['mkdir', 'touch'].includes(name)) {
         writeOperands = unwrapped.words.slice(1).filter(word => !word.text.startsWith('-'));
+    }
+    else if (shell === 'bash' && writesThroughOperands(name, unwrapped.words)) {
+        // Destination extraction mirrors how each head really writes: install
+        // behaves exactly like copy/move (last bare operand, or every bare
+        // operand once -t/--target-directory supplies the destination); dd
+        // names its output only through of=; in-place sed edits its file
+        // operands; tee and truncate write their bare operands directly.
+        if (name === 'install')
+            writeOperands = writeOperandCandidates(unwrapped.words);
+        else if (name === 'dd')
+            writeOperands = ddOutputTargets(unwrapped.words);
+        else if (name === 'sed')
+            writeOperands = sedInPlaceTargets(unwrapped.words);
+        else
+            writeOperands = unwrapped.words.slice(1).filter(word => !word.text.startsWith('-'));
     }
     else if (shell === 'pwsh' && ['set-content', 'add-content', 'out-file', 'copy-item', 'move-item', 'new-item'].includes(name)) {
         writeOperands = [];
@@ -1003,16 +1064,20 @@ function classifyEffectiveCommand(name, words, segment, shell, roots, artifacts,
             ? semanticReview(`creating outside routine project content requires specific user authorization: ${creation.paths.join(', ')}`)
             : allowed('create exact project-local artifacts', creation.paths);
     }
-    if (shell === 'bash' && ['cp', 'mv'].includes(name)) {
+    if (shell === 'bash' && (['cp', 'mv'].includes(name) || writesThroughOperands(name, words))) {
         // Flags stay in the list: explicitPaths lifts embedded values out of
         // them, so `--target-directory=C:/abs` is judged like a bare operand.
-        const operands = words.slice(1);
+        // dd hides its destination inside `of=…`, so the extracted output
+        // targets join the operands for the same judgment.
+        const operands = name === 'dd'
+            ? [...words.slice(1), ...ddOutputTargets(words)]
+            : words.slice(1);
         const paths = explicitPaths(operands, roots);
         const tildeUser = operands.some(word => tildeUserTarget(word.text));
         return !tildeUser && paths.length > 0 && paths.every(path => isEffectiveRoutine(path, roots) && !isProtectedProjectPath(path, roots)
             && !(!isWithin(roots.workspace, path) && sensitiveBasenameAt(path, roots)))
             ? allowed('static project-local file operation')
-            : semanticReview('file move/copy target is external, protected, or unclear');
+            : semanticReview('file write target is external, protected, or unclear');
     }
     const tokens = words.map(word => word.text);
     if (name === 'git' && ['reset', 'clean', 'commit', 'push', 'rebase', 'checkout', 'switch', 'branch', 'tag'].includes(tokens[1]?.toLowerCase() ?? '')) {

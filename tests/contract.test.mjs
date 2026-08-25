@@ -1387,6 +1387,144 @@ test('assessShell: same runtime-state basename outside the zone is NOT over-bloc
   assert.equal(assessShell(`echo x > ${ZONE}/src/index.ts`, 'bash', roots, HO(), undefined).decision, 'ask')
 })
 
+// ── POSIX write-vector heads (tee/dd/sed -i/truncate/install) join the fuse ──
+test('assessShell: tee/dd/sed/truncate/install into a zone runtime-state file deny', () => {
+  const roots = zoneRoots()
+  for (const cmd of [
+    `echo x | tee ${ZONE}/audit.jsonl`,
+    `tee ${ZONE}/audit.jsonl`,
+    `tee -a ${ZONE}/history.jsonl`,
+    `dd if=/dev/zero of=${ZONE}/history.jsonl`,
+    `sed -i s/a/b/g ${ZONE}/review-mode.json`,
+    `sed -i.bak s/a/b/g ${ZONE}/review-mode.json`,
+    `sed --in-place s/a/b/g ${ZONE}/review-mode.json`,
+    `sed --in-place=.bak s/a/b/g ${ZONE}/review-mode.json`,
+    `sed -i -e s/a/b/g ${ZONE}/review-mode.json`,
+    `sed -i -f script.sed ${ZONE}/review-mode.json`,
+    `truncate -s 0 ${ZONE}/llm-latency.jsonl`,
+    `install -m 644 x.txt ${ZONE}/learning.json`,
+    `install -m 644 s1.txt s2.txt ${ZONE}/learning.json`,
+  ]) {
+    const verdict = assessShell(cmd, 'bash', roots, HO(), undefined)
+    assert.equal(verdict.decision, 'deny', cmd)
+    assert.match(verdict.reason ?? '', /runtime state/, cmd)
+    assert.equal(riskFromAssessment(verdict, 'bash'), 'DENY', cmd)
+  }
+})
+test('assessShell: workspace=zone still denies the write heads through relative names', () => {
+  const roots = { ...zoneRoots(), workspace: ZONE }
+  for (const cmd of [
+    'tee audit.jsonl',
+    'tee -a history.jsonl',
+    'dd if=x of=history.jsonl',
+    'sed -i s/a/b/ review-mode.json',
+    'truncate -s 0 llm-latency.jsonl',
+    'install x.txt learning.json',
+  ]) {
+    const verdict = assessShell(cmd, 'bash', roots, HO(), undefined)
+    assert.equal(verdict.decision, 'deny', cmd)
+    assert.match(verdict.reason ?? '', /runtime state/, cmd)
+  }
+})
+test('assessShell: read-mode sed and dd keep their original unrecognized classification', () => {
+  const roots = zoneRoots()
+  for (const cmd of ['sed s/a/b/g notes.md', 'sed -n 2p notes.md', 'dd if=a bs=4 count=2']) {
+    const verdict = assessShell(cmd, 'bash', roots, HO(), undefined)
+    assert.equal(verdict.decision, 'ask', cmd)
+    assert.equal(verdict.classifierEligible, true, cmd)
+    assert.match(verdict.reason ?? '', /unrecognized bash command/, cmd)
+  }
+})
+test('assessShell: write heads on ordinary workspace files ride the same flow as cp', () => {
+  const roots = { workspace: 'C:/ws', home: 'C:/Users/u', dshHome: 'C:/Users/u/.dsh', tempRoots: [], allowedDshSubpaths: [] }
+  const cfg = { categoryPolicy: {}, categoryMode: 'standard' }
+  const ref = assessShell('cp ./a.txt ./b.txt', 'bash', roots, HO(), undefined)
+  const refLabel = categorizeCommand('cp ./a.txt ./b.txt', 'bash', roots, cfg)
+  assert.equal(ref.decision, 'allow')
+  assert.equal(refLabel.category, 'fileEdit')
+  for (const cmd of [
+    'tee ./out.txt',
+    'dd if=./a.bin of=./b.bin',
+    'sed -i s/a/b/g ./notes.md',
+    'truncate -s 0 ./log.bin',
+    'install -m 644 ./src.txt ./dst.txt',
+  ]) {
+    const verdict = assessShell(cmd, 'bash', roots, HO(), undefined)
+    assert.deepEqual(
+      { decision: verdict.decision, classifierEligible: verdict.classifierEligible },
+      { decision: ref.decision, classifierEligible: ref.classifierEligible },
+      cmd,
+    )
+    assert.equal(verdict.reason, ref.reason, cmd)
+  }
+  // tee/sed-i/truncate/install label fileEdit like cp; dd keeps its stricter
+  // disk label instead of riding the fileEdit alignment.
+  for (const cmd of ['tee ./out.txt', 'sed -i s/a/b/g ./notes.md', 'truncate -s 0 ./log.bin', 'install -m 644 ./src.txt ./dst.txt']) {
+    assert.equal(categorizeCommand(cmd, 'bash', roots, cfg).category, refLabel.category, cmd)
+  }
+  assert.equal(categorizeCommand('dd if=./a.bin of=./b.bin', 'bash', roots, cfg).category, 'disk')
+  // Bare (non-explicit) spellings degrade exactly like cp's bare form.
+  const bareRef = assessShell('cp a.txt b.txt', 'bash', roots, HO(), undefined)
+  assert.equal(bareRef.decision, 'ask')
+  assert.equal(bareRef.classifierEligible, true)
+  assert.equal(assessShell('tee out.txt', 'bash', roots, HO(), undefined).decision, bareRef.decision)
+  assert.equal(assessShell('truncate -s 0 log.bin', 'bash', roots, HO(), undefined).decision, bareRef.decision)
+})
+test('assessShell: write heads onto sensitive targets take the protected path like cp', () => {
+  const roots = { workspace: 'C:/ws', home: 'C:/Users/u', dshHome: 'C:/Users/u/.dsh', tempRoots: [], allowedDshSubpaths: [] }
+  const envRef = assessShell('cp k.txt .env', 'bash', roots, HO(), undefined)
+  assert.equal(envRef.decision, 'ask')
+  assert.equal(envRef.classifierEligible, true)
+  for (const cmd of ['tee .env', 'sed -i s/a/b/g .env', 'truncate -s 0 .env', 'install -m 644 k.txt .env']) {
+    const verdict = assessShell(cmd, 'bash', roots, HO(), undefined)
+    assert.deepEqual(
+      { decision: verdict.decision, classifierEligible: verdict.classifierEligible },
+      { decision: envRef.decision, classifierEligible: envRef.classifierEligible },
+      cmd,
+    )
+  }
+  const sshRef = assessShell('cp k.txt C:/Users/u/.ssh/config', 'bash', roots, HO(), undefined)
+  assert.equal(sshRef.decision, 'ask')
+  assert.equal(sshRef.classifierEligible, true)
+  for (const cmd of ['tee C:/Users/u/.ssh/config', 'dd if=k of=C:/Users/u/.ssh/config', 'install -m 644 k.txt C:/Users/u/.ssh/id_rsa']) {
+    const verdict = assessShell(cmd, 'bash', roots, HO(), undefined)
+    assert.deepEqual(
+      { decision: verdict.decision, classifierEligible: verdict.classifierEligible },
+      { decision: sshRef.decision, classifierEligible: sshRef.classifierEligible },
+      cmd,
+    )
+  }
+})
+test('categorizeCommand: compound pipe/and keeps delete precedence over a write head', () => {
+  const roots = { workspace: 'C:/ws', home: 'C:/Users/u', dshHome: 'C:/Users/u/.dsh', tempRoots: [], allowedDshSubpaths: [] }
+  const cfg = { categoryPolicy: {}, categoryMode: 'standard' }
+  const label = categorizeCommand('cat a | tee b && rm c', 'bash', roots, cfg)
+  assert.equal(label.category, 'delete')
+  assert.equal(label.directive, 'inherit')
+  // The write heads label fileEdit like cp; read-mode sed stays unknown and
+  // dd keeps its stricter disk label.
+  assert.equal(categorizeCommand('tee b', 'bash', roots, cfg).category, 'fileEdit')
+  assert.equal(categorizeCommand('sed -i s/a/b/g notes.md', 'bash', roots, cfg).category, 'fileEdit')
+  assert.equal(categorizeCommand('truncate -s 0 log.bin', 'bash', roots, cfg).category, 'fileEdit')
+  assert.equal(categorizeCommand('install a b', 'bash', roots, cfg).category, 'fileEdit')
+  assert.equal(categorizeCommand('sed s/a/b/g notes.md', 'bash', roots, cfg).category, 'unknown')
+  assert.equal(categorizeCommand('dd if=a of=b', 'bash', roots, cfg).category, 'disk')
+})
+test('assessShell: pwsh content cmdlets stay denied on zone runtime-state files', () => {
+  const roots = zoneRoots()
+  for (const cmd of [
+    `Set-Content ${ZONE}/audit.jsonl x`,
+    `Add-Content ${ZONE}/audit.jsonl x`,
+    `Add-Content -Path ${ZONE}/history.jsonl x`,
+    `Out-File ${ZONE}/audit.jsonl -InputObject x`,
+    `New-Item ${ZONE}/llm-latency.jsonl`,
+  ]) {
+    const verdict = assessShell(cmd, 'pwsh', roots, HO(), undefined)
+    assert.equal(verdict.decision, 'deny', cmd)
+    assert.match(verdict.reason ?? '', /runtime state/, cmd)
+  }
+})
+
 test('double anchor: git reset/clean is delete (LOCKED) in the category layer while assessShell keeps asking', () => {
   const roots = { workspace: 'C:/ws', home: 'C:/Users/u', dshHome: 'C:/Users/u/.dsh', tempRoots: [] }
   for (const cmd of ['git reset --hard', 'git clean -fd']) {
@@ -2084,6 +2222,23 @@ test('signatureFor: uncovered write-vector heads never become signatures (npm in
   assert.ok(npmInstall !== undefined, 'the head is npm, not install')
   assert.match(npmInstall.signature, /^npm install/)
   assert.ok(LEARNING_NON_LEARNABLE_COMMAND_HEADS.has('tee') && LEARNING_NON_LEARNABLE_COMMAND_HEADS.has('install'))
+})
+
+test('signatureFor: write-vector heads stay non-learnable now that the lexer covers them', () => {
+  // Recognition upgraded these heads from "unrecognized ask" to gated write
+  // vectors; learning must not follow, so a learned entry can never upgrade
+  // any of their asks (or denies) into silent allows.
+  for (const cmd of [
+    'tee -a out.txt',
+    'echo x | tee out.txt',
+    'dd if=a of=b bs=1',
+    'sed -i s/a/b/g notes.md',
+    'sed --in-place=.bak s/a/b/g notes.md',
+    'truncate -s 0 log.bin',
+    'install -t dir src.txt',
+  ]) {
+    assert.equal(signatureFor({ kind: 'shell-bash', command: cmd }), undefined, cmd)
+  }
 })
 
 test('signatureFor: whole-line participation — a sub-segment alone is never an equivalent key', () => {

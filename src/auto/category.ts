@@ -368,6 +368,17 @@ function isDeletion(name: string, shell: string): boolean {
   return shell === 'bash' ? DELETE_BASH.has(name) : DELETE_PWSH.has(name)
 }
 
+/** Whether a sed invocation edits files in place (`-i`, `-i.suffix`, `--in-place[=suffix]`). */
+const sedEditsInPlace = (words: SegmentWord[]): boolean =>
+  words.slice(1).some((word) => /^-i/.test(word.text) || /^--in-place(?:=|$)/.test(word.text))
+
+/** Shared tail of the copy/move-style branches: protected names win over fileEdit. */
+const copyMoveStyleCategory = (words: SegmentWord[], roots: CategoryRoots): CategoryKey => {
+  const paths = explicitPaths(words, roots)
+  if (paths.some((p) => sensitiveBasenameAt(p.normalized, roots) || isProtectedProjectPath(p.normalized, roots))) return 'protected'
+  return 'fileEdit'
+}
+
 function findHasDestructiveAction(words: SegmentWord[]): boolean {
   for (let index = 1; index < words.length; index += 1) {
     const token = words[index].text.toLowerCase()
@@ -533,9 +544,18 @@ function classifySegmentBase(segment: Segment, shell: string, roots: CategoryRoo
   const creation = creationCategory(name, unwrapped.words, shell, roots)
   if (creation !== 'unknown') return creation
   if (shell === 'bash' && (name === 'cp' || name === 'mv')) {
-    const paths = explicitPaths(unwrapped.words.slice(1), roots)
-    if (paths.some((p) => sensitiveBasenameAt(p.normalized, roots) || isProtectedProjectPath(p.normalized, roots))) return 'protected'
-    return 'fileEdit'
+    return copyMoveStyleCategory(unwrapped.words.slice(1), roots)
+  }
+  // Write-vector heads aligned with copy/move: tee, truncate, and coreutils
+  // install write their operands outright, and in-place sed rewrites its
+  // input files, so they label exactly like a copy/move onto the same
+  // target. dd deliberately keeps its disk label — stricter than fileEdit
+  // and already pinned for whole-device spellings.
+  if (shell === 'bash' && (name === 'tee' || name === 'truncate' || name === 'install')) {
+    return copyMoveStyleCategory(unwrapped.words.slice(1), roots)
+  }
+  if (shell === 'bash' && name === 'sed' && sedEditsInPlace(unwrapped.words)) {
+    return copyMoveStyleCategory(unwrapped.words.slice(1), roots)
   }
   if (segment.writeTargets.length > 0) {
     if (readTargetsProtected(segment.writeTargets, roots)) return 'protected'
