@@ -58,7 +58,7 @@ li.dsa-card（可折叠；任一卡脏 → 头部「未保存」徽标）
 │    │                · redactResults · editDiffPreview（默认关的增强开关）· rulesText(实时语法校验)
 │    ├─ 分类开关与信任模式   categoryMode(standard/aggressive，切 aggressive 弹放开范围警示)
 │    │                · 11 类逐行三态 CapsuleSelect（LOCKED 四类只剩 继承/人工询问 可选）
-│    ├─ 确认制学习     learningEnabled(on/off) · learningThreshold(数字输入 min2 max10，保存钳回 2..10)（<span class="lnum">client/index.ts:L1689-1711</span>）
+│    ├─ 确认制学习     learningEnabled(on/off) · learningThreshold(数字输入 min2 max10，保存钳回 2..10)（<span class="lnum">client/index.ts:L1724-1746</span>）
 │    └─ 最近审批记录   搜索 · 分页(PAGE_SIZE=10) · 记录+[熔断]+原因(warn色) + LLM 响应耗时统计 · 清空历史(confirm)
 └─ 底部 footer：恢复默认 · 重启提示(applies=restart) · 全局错误行
 ```

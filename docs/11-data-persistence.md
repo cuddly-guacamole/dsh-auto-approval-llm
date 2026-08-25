@@ -14,7 +14,7 @@
  "at":1787305877691}
 ```
 
-字段全集（<span class="lnum">index.ts:L715-733</span>）：`id` / `at` / `sessionId` / `toolName` / `outcome` / `source` / `llmDecision?` / `llmRisk?` / `llmReason?`（先脱敏）/ `attempts?`（重试时逐次失败轨迹）/ `breaker?` / `breakerReasons?` / 类别三字段 `category?` · `categoryDecision?` · `mode?`。写入走 `pushHistory`（<span class="lnum">index.ts:L778-802</span>）：llmReason 先过脱敏 → 内存窗口 200 条 → `history.jsonl` 追加、>1MB 用内存窗口重写轮转；同一条再以 `type:'decision'` 落进审计。启动时 loadHistory 恢复。
+字段全集（<span class="lnum">index.ts:L734-752</span>）：`id` / `at` / `sessionId` / `toolName` / `outcome` / `source` / `llmDecision?` / `llmRisk?` / `llmReason?`（先脱敏）/ `attempts?`（重试时逐次失败轨迹）/ `breaker?` / `breakerReasons?` / 类别三字段 `category?` · `categoryDecision?` · `mode?`。写入走 `pushHistory`（<span class="lnum">index.ts:L797-821</span>）：llmReason 先过脱敏 → 内存窗口 200 条 → `history.jsonl` 追加、>1MB 用内存窗口重写轮转；同一条再以 `type:'decision'` 落进审计。启动时 loadHistory 恢复。
 
 ### 11.1.2 audit.jsonl（append-only，清空留墓碑）
 

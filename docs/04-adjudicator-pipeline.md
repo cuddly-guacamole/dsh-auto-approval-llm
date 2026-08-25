@@ -2,11 +2,11 @@
 
 > *The Lone Adjudicator*
 
-这是整个插件的心脏。以下决策顺序与 <span class="lnum">index.ts:L2379-2794</span>（注册体；互斥器/askHuman/learnAttempt 等前置件自节注释 <span class="lnum">index.ts:L2003</span> 起）逐行一致，红色 = 拒绝、蓝色 = 转人工/面板、绿色 = 放行。
+这是整个插件的心脏。以下决策顺序与 <span class="lnum">index.ts:L2398-2813</span>（注册体；互斥器/askHuman/learnAttempt 等前置件自节注释 <span class="lnum">index.ts:L2022</span> 起）逐行一致，红色 = 拒绝、蓝色 = 转人工/面板、绿色 = 放行。
 
 ```mermaid
 flowchart TD
-    A1["G0 门卫：enabled？有 permissionPresets？权威会话 preset === 'auto'？（沿 subagent 父链上溯，子代理继承 Auto；非 auto → 交回 next 官方处理） [gate]"] -->|通过| A2["准备：sessionKey=权威会话 id；收集 trustedUserMessages（直接用户消息 ≤4 条/4000 字符）；findToolCallArguments 取参数（截断到 4000）；classifyStaticRisk 在此算出 风险档+类别指令（L2481，一次计算全层复用） [ctx]"]
+    A1["G0 门卫：enabled？有 permissionPresets？权威会话 preset === 'auto'？（沿 subagent 父链上溯，子代理继承 Auto；非 auto → 交回 next 官方处理） [gate]"] -->|通过| A2["准备：sessionKey=权威会话 id；收集 trustedUserMessages（直接用户消息 ≤4 条/4000 字符）；findToolCallArguments 取参数（截断到 4000）；classifyStaticRisk 在此算出 风险档+类别指令（L2500，一次计算全层复用） [ctx]"]
     A2 --> A3["G1 声明规则：rulesText 非空 → 解析，你写的规矩最大。deny→rejected(rule-deny)；allow→allowed-once(rule-allow)；human→转人；解析错误→本层跳过继续 [B1]"]
     A3 -->|未命中| A4["G2a 静态名单 · denyList：精确工具名命中 → rejected(denyList-deny) [lists·deny]"]
     A4 -->|未命中| A5["类别层 · deny：directive==='deny' → rejected(category-deny)，与 denyList 同构的终端拒绝，提权重试不可绕过 [category·deny]"]
@@ -36,9 +36,9 @@ flowchart TD
 - unattended 模式下 HIGH 超时强制转人/失败关闭，方向正确性不让步
 
 ::: tip askHuman 内部做了同一件事
-（<span class="lnum">index.ts:L2068-2291</span>）：把状态写进 `reviewStates`（客户端轮询用，L2072）→ 组装 notes（评审建议 / 「⚠️ Breaker」原因列表 / 「⏳ will auto-X in Ns」/ diff 预览）→ 追加到 `req.reason` → 走 `raceHumanDecision`（[§07](./07-human-race)，L2130）→ 计算诚实来源（`approvalSource`，L2208）→ `applyBreaker` 更新熔断（L2222）→ `pushHistory` 落盘（L2251）→ **学习层记账**（L2267-2284：`human-allow` 计数、`human-deny` 清零，见 [§18](./18-confirm-learning)）。任何一环抛错（会话销毁/请求取消）→ 标记 abort、清残留、rethrow —— **绝不伪造裁决**。
+（<span class="lnum">index.ts:L2087-2310</span>）：把状态写进 `reviewStates`（客户端轮询用，L2091）→ 组装 notes（评审建议 / 「⚠️ Breaker」原因列表 / 「⏳ will auto-X in Ns」/ diff 预览）→ 追加到 `req.reason` → 走 `raceHumanDecision`（[§07](./07-human-race)，L2149）→ 计算诚实来源（`approvalSource`，L2227）→ `applyBreaker` 更新熔断（L2242）→ `pushHistory` 落盘（L2270）→ **学习层记账**（L2286-2303：`human-allow` 计数、`human-deny` 清零，见 [§18](./18-confirm-learning)）。任何一环抛错（会话销毁/请求取消）→ 标记 abort、清残留、rethrow —— **绝不伪造裁决**。
 :::
 
 ::: tip 类别层有第二个接线点
-`tools/pre-execute` 侧另有一段**独立的**类别收紧（<span class="lnum">index.ts:L1868-1885</span>）：只做收紧（deny 终端拒 + ask 跳过分类器快径），不产放行。它与 answerer 侧两个接点各自从零重算类别与指令，**无任何状态跨越**（`categoryDirectiveFor` 注释明言，<span class="lnum">category.ts:L611-616</span>）——一次调用被两层检查，但不存在「上层记住下层结论」的耦合。
+`tools/pre-execute` 侧另有一段**独立的**类别收紧（<span class="lnum">index.ts:L1887-1904</span>）：只做收紧（deny 终端拒 + ask 跳过分类器快径），不产放行。它与 answerer 侧两个接点各自从零重算类别与指令，**无任何状态跨越**（`categoryDirectiveFor` 注释明言，<span class="lnum">category.ts:L611-616</span>）——一次调用被两层检查，但不存在「上层记住下层结论」的耦合。
 :::

@@ -6,7 +6,7 @@
 
 ```text
 src/
-├─ index.ts              宿主编排：apply()、四挂点接线、10 路由、命令、评审器、审计、学习接线  2894 行
+├─ index.ts              宿主编排：apply()、四挂点接线、10 路由、命令、评审器、审计、学习接线  2913 行
 ├─ auto/                 静态评估纯函数层（20 文件，按字母序）
 │    ├─ artifacts.ts     98   本会话成功创建路径登记（删除豁免依据）
 │    ├─ audit.ts         45   append-only 审批审计（清空留墓碑、5MiB 保尾）
@@ -29,18 +29,18 @@ src/
 │    ├─ shell.ts         1016 bash/pwsh 词法分解 + 整行熔断 + 逐段静态分类（最大单文件）
 │    └─ trust.ts         101  web 路由信任平面（loopback/LAN 边界、Host 伪造防护、在线端点 URL 校验）
 └─ client/
-     ├─ index.ts         React 客户端主体 2486 行（设置卡 6 子卡/面板增强/轮询/浮动按钮/CSS）
+     ├─ index.ts         React 客户端主体 2527 行（设置卡 6 子卡/面板增强/轮询/浮动按钮/CSS）
      ├─ auto-icon.ts     权限菜单图标 + Auto 风险确认弹窗 624 行
      └─ locale.ts        zh/en 双语 354 行
 
 tests/
-├─ contract.test.mjs         232 例（host 纯函数契约：含评审重试/确认制学习/类别层/diff 预览/上下文探针各族）
+├─ contract.test.mjs         242 例（host 纯函数契约：含评审重试/确认制学习/类别层/diff 预览/上下文探针各族）
 ├─ category.test.mjs          70 例（类别层专测：归类/优先级/LOCKED 钳制/复合命令合并/信任目录模式）
 ├─ editdiff.test.mjs          33 例（diff 边界与官方语义镜像）
 ├─ contract-devloop.test.mjs  19 例（开发闭环回归）
 └─ probe.test.mjs              9 例（工作区事实探针边界）
 
-                              合计 363 例（node --test 全绿基线）
+                              合计 373 例（node --test 全绿基线）
 scripts/
 ├─ build.sh             （DSH 源码仓库布局）tsc 编译 src→lib
 ├─ audit-query.mjs      审计查询 CLI
