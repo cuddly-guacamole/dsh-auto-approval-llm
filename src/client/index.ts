@@ -1727,7 +1727,7 @@ function SettingsSection() {
       options: onOffOptions(),
       onChange: (v: string) => update({ learningEnabled: v as 'on' | 'off' }),
     }), t('settings.learning.enabledHint')),
-    row(t('settings.learning.threshold'), React.createElement('input', {
+    draft.learningEnabled === 'on' ? row(t('settings.learning.threshold'), React.createElement('input', {
       type: 'number',
       min: 2,
       max: 10,
@@ -1735,7 +1735,7 @@ function SettingsSection() {
       value: draft.learningThreshold,
       onChange: (e: any) => update({ learningThreshold: e.target.value }),
       className: 'dsa-input',
-    }), t('settings.learning.thresholdHint')),
+    }), t('settings.learning.thresholdHint')) : null,
     React.createElement('p', { className: 'dsa-hint', style: { margin: 0 } }, t('settings.learning.howItWorks')),
     React.createElement('p', { className: 'dsa-hint', style: { margin: 0 } }, t('settings.learning.safetyNote')),
     React.createElement('p', { className: 'dsa-hint', style: { margin: 0 } }, t('settings.learning.fallbackNote')),
