@@ -585,6 +585,35 @@ function buildOrTest(words) {
         return tokens.length === 1 || tokens.slice(1).every(token => /^(?:build|test|check|verify|lint)$/.test(token));
     return false;
 }
+/**
+ * Fast-path retention rule for build-or-test and version-probe segments that
+ * carry a real-file write redirection: the static allow survives only when
+ * every target is a discard sink or ordinary workspace-inside content. Any
+ * other target — outside the workspace, sensitive, protected project metadata,
+ * or a plugin runtime-state name inside the plugin zone — sends the whole
+ * segment through the ordinary evaluation flow instead. Unlike
+ * `writeTargetsAreRoutine` this predicate is deliberately not relaxed by
+ * trustedDirs/aggressive mode: a build command's main effect is running it, so
+ * only incidental log targets that provably stay inside the workspace may keep
+ * the static allow.
+ */
+function redirectTargetsStayOnFastPath(segment, shell, roots) {
+    return segment.writeTargets.every((target) => {
+        if (isNullSink(target, shell))
+            return true;
+        if (target.dynamic || target.glob)
+            return false;
+        // `> ~user/file` lands in another user's home; normalizePath cannot
+        // resolve it into the workspace.
+        if (tildeUserTarget(target.text))
+            return false;
+        const normalized = normalizePath(target.text, roots.workspace, roots.home);
+        return isWithin(roots.workspace, normalized)
+            && !isProtectedProjectPath(normalized, roots)
+            && !sensitiveBasenameAt(normalized, roots)
+            && runtimeStateWriteReason(normalized, roots) === undefined;
+    });
+}
 function versionProbe(words) {
     const tokens = words.map(word => word.text);
     const name = commandName(tokens[0]);
@@ -953,9 +982,14 @@ function classifyEffectiveCommand(name, words, segment, shell, roots, artifacts,
             ? allowed('static read-only command inside the workspace or temporary area')
             : semanticReview('read-only command references a protected or external path');
     }
-    if (versionProbe(words))
+    // Build-or-test and version-probe segments keep their static allow under a
+    // write redirection only when every real-file target provably stays inside
+    // the workspace; a violating target drops the whole segment into the
+    // ordinary evaluation flow below instead of riding the fast path.
+    const fastPathRedirect = !redirectedToFile || redirectTargetsStayOnFastPath(segment, shell, roots);
+    if (versionProbe(words) && fastPathRedirect)
         return allowed('static development-tool version probe');
-    if (buildOrTest(words)) {
+    if (buildOrTest(words) && fastPathRedirect) {
         return readPathsAreRoutine(operands, roots)
             ? allowed('recognized project build, test, or verification command')
             : semanticReview('build or test command references a protected or external path');
@@ -1063,6 +1097,47 @@ export function runtimeStateReadHits(source, shell, roots) {
                 }
                 if (text.startsWith('--target-directory=')) {
                     destinationByFlag = true;
+                    continue;
+                }
+                if (!text.startsWith('-'))
+                    bare.push(unwrapped.words[index]);
+            }
+            if (!destinationByFlag)
+                bare.pop();
+            sources.push(...bare);
+        }
+        else if (shell === 'pwsh' && ['copy-item', 'move-item', 'copy', 'move', 'cpi', 'mi', 'cp', 'mv', 'mp'].includes(name)) {
+            // Sources come from -Path/-LiteralPath in either the flag-plus-value
+            // or `-Path:value` spelling, plus every positional operand; an
+            // explicit -Destination makes ALL positionals sources (pwsh binds
+            // position 0 to -Path), otherwise the last positional is the
+            // destination itself and stays unreported.
+            const bare = [];
+            let destinationByFlag = false;
+            for (let index = 1; index < unwrapped.words.length; index += 1) {
+                const text = unwrapped.words[index].text;
+                const inlineValue = /^-(?:path|literalpath):([\s\S]+)$/i.exec(text);
+                if (inlineValue !== null) {
+                    bare.push({ text: inlineValue[1], dynamic: false, glob: false, quoted: true });
+                    continue;
+                }
+                if (/^-(?:path|literalpath)$/i.test(text)) {
+                    const value = unwrapped.words[index + 1];
+                    if (value !== undefined)
+                        bare.push(value);
+                    index += 1;
+                    continue;
+                }
+                if (/^-destination(?::|$)/i.test(text)) {
+                    destinationByFlag = true;
+                    if (!text.includes(':'))
+                        index += 1;
+                    continue;
+                }
+                // Value-taking noise flags: their values are neither sources
+                // nor destinations.
+                if (/^-(?:filter|include|exclude|credential)$/i.test(text)) {
+                    index += 1;
                     continue;
                 }
                 if (!text.startsWith('-'))

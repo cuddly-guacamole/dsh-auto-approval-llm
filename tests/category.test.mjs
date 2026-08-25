@@ -904,6 +904,92 @@ test('label lift: git status with a redirect reads as fileEdit, not readOnly', (
   assert.equal(cat('git status > D:/work/status.txt', 'bash', winRoots), 'fileEdit')
 })
 
+// ── build/test & version-probe fast path: redirect-target retention rule ──
+
+test('build fast path keeps the static allow for an in-workspace redirected log', () => {
+  const v = verdictOf('npm test > D:/work/log.txt')
+  assert.equal(v.decision, 'allow')
+  assert.equal(v.classifierEligible, false)
+  const probe = verdictOf('node --version > D:/work/v.txt')
+  assert.equal(probe.decision, 'allow')
+  assert.equal(probe.classifierEligible, false)
+})
+
+test('build fast path survives `>>` and discard-sink redirects', () => {
+  const appended = verdictOf('npm test >> D:/work/append.log')
+  assert.equal(appended.decision, 'allow')
+  const sink = verdictOf('npm test > /dev/null')
+  assert.equal(sink.decision, 'allow')
+  assert.equal(cat('npm test > /dev/null', 'bash', winRoots), 'build')
+  const pwshSink = verdictOf('npm test > $null', 'pwsh')
+  assert.equal(pwshSink.decision, 'allow')
+})
+
+test('build fast path leaves on an outside-workspace redirect', () => {
+  const v = verdictOf('npm test > C:/Users/Administrator/outside.txt')
+  assert.equal(v.decision, 'ask')
+  assert.equal(v.classifierEligible, true)
+  assert.equal(cat('npm test > C:/Users/Administrator/outside.txt', 'bash', winRoots), 'fileEdit')
+  const probe = verdictOf('node --version > C:/Users/Administrator/outside.txt')
+  assert.equal(probe.decision, 'ask')
+  assert.equal(probe.classifierEligible, true)
+  // Probe-family read-only commands keep the echo-batch semantics: any
+  // real-file redirect already drops them out of the read-only allow.
+  const status = verdictOf('git status > C:/Users/Administrator/outside.txt')
+  assert.equal(status.decision, 'ask')
+  assert.equal(status.classifierEligible, true)
+})
+
+test('an outside redirect cannot ride the build fast path under relaxations', () => {
+  const aggressive = { ...winRoots, mode: 'aggressive' }
+  assert.equal(verdictOf('npm test > C:/Users/Administrator/outside.txt', 'bash', aggressive).decision, 'ask')
+  assert.equal(verdictOf('npm run build >> C:/Users/Administrator/outside.txt', 'bash', aggressive).decision, 'ask')
+  assert.equal(verdictOf('node --version > C:/Users/Administrator/outside.txt', 'bash', aggressive).decision, 'ask')
+  const trusted = { ...winRoots, trustedDirs: ['C:/Users/Administrator'] }
+  assert.equal(verdictOf('npm test > C:/Users/Administrator/outside.txt', 'bash', trusted).decision, 'ask')
+  assert.equal(verdictOf('node --version > C:/Users/Administrator/outside.txt', 'bash', trusted).decision, 'ask')
+})
+
+test('a sensitive redirect target stays hard-denied on the build fast path', () => {
+  for (const r of [winRoots, { ...winRoots, mode: 'aggressive' }, { ...winRoots, trustedDirs: ['C:/Users/Administrator'] }]) {
+    const v = verdictOf('npm test > C:/Users/Administrator/.ssh/config', 'bash', r)
+    assert.equal(v.decision, 'deny', JSON.stringify(r))
+    assert.equal(v.classifierEligible, false)
+  }
+})
+
+test('protected workspace metadata drops the build fast path', () => {
+  const v = verdictOf('npm test > .env')
+  assert.equal(v.decision, 'ask')
+  assert.equal(v.classifierEligible, true)
+  assert.equal(cat('npm test > .env', 'bash', winRoots), 'protected')
+  const git = verdictOf('npm run build > .git/config')
+  assert.equal(git.decision, 'ask')
+  assert.equal(cat('npm run build > .git/config', 'bash', winRoots), 'protected')
+})
+
+test('pwsh build commands obey the same retention rule', () => {
+  const kept = verdictOf('npm run build > D:/work/build.log', 'pwsh')
+  assert.equal(kept.decision, 'allow')
+  assert.equal(kept.classifierEligible, false)
+  const dropped = verdictOf('npm run build > C:/Users/Administrator/outside.txt', 'pwsh')
+  assert.equal(dropped.decision, 'ask')
+  assert.equal(dropped.classifierEligible, true)
+  const probeKept = verdictOf('node --version > D:/work/v.txt', 'pwsh')
+  assert.equal(probeKept.decision, 'allow')
+  const allStreams = verdictOf('npm test *> C:/Users/Administrator/outside.txt', 'pwsh')
+  assert.equal(allStreams.decision, 'ask')
+})
+
+test('plain build/test/version probes without redirection are unchanged', () => {
+  for (const command of ['npm test', 'npm run build', 'tsc --noEmit', 'cargo build', 'node --version']) {
+    const v = verdictOf(command)
+    assert.equal(v.decision, 'allow', command)
+    assert.equal(v.classifierEligible, false, command)
+    assert.equal(cat(command, 'bash', winRoots), 'build', command)
+  }
+})
+
 // ── runtime-state read audit (pure detector, no verdict impact) ──────
 
 const auditRoots = winRoots
@@ -918,6 +1004,45 @@ test('runtimeStateReadHits: cp/mv sources are reported, destinations are not', (
   assert.deepEqual(runtimeStateReadHits('cp history.jsonl D:/backup/history.jsonl', 'bash', auditRoots), ['history.jsonl'])
   assert.deepEqual(runtimeStateReadHits('mv audit.jsonl old.jsonl', 'bash', auditRoots), ['audit.jsonl'])
   assert.deepEqual(runtimeStateReadHits('cp src/index.ts D:/backup/history.jsonl', 'bash', auditRoots), [])
+})
+
+test('runtimeStateReadHits: pwsh Copy-Item -Path reports the source, not the destination', () => {
+  assert.deepEqual(
+    runtimeStateReadHits('Copy-Item -Path history.jsonl -Destination D:/backup/copy-of-history.jsonl', 'pwsh', auditRoots),
+    ['history.jsonl'],
+  )
+})
+
+test('runtimeStateReadHits: pwsh -LiteralPath and colon-spelled sources are reported', () => {
+  assert.deepEqual(
+    runtimeStateReadHits('Copy-Item -LiteralPath approval-debug.jsonl -Destination old/', 'pwsh', auditRoots),
+    ['approval-debug.jsonl'],
+  )
+  assert.deepEqual(
+    runtimeStateReadHits('cpi -Path:llm-latency.jsonl -Destination:D:/backup/llm-latency.jsonl', 'pwsh', auditRoots),
+    ['llm-latency.jsonl'],
+  )
+})
+
+test('runtimeStateReadHits: pwsh positional copy/move treats the last operand as destination', () => {
+  assert.deepEqual(
+    runtimeStateReadHits('Move-Item review-mode.json archive/review-mode.json', 'pwsh', auditRoots),
+    ['review-mode.json'],
+  )
+  assert.deepEqual(
+    runtimeStateReadHits('move history.jsonl learning.json archive/', 'pwsh', auditRoots),
+    ['history.jsonl', 'learning.json'],
+  )
+  // An explicit -Destination makes every positional operand a source.
+  assert.deepEqual(
+    runtimeStateReadHits('move-item -Destination D:/backup/history.jsonl -Path llm-latency.jsonl', 'pwsh', auditRoots),
+    ['llm-latency.jsonl'],
+  )
+})
+
+test('runtimeStateReadHits: pwsh destinations named like state files never match', () => {
+  assert.deepEqual(runtimeStateReadHits('copy-item src/index.ts D:/backup/history.jsonl', 'pwsh', auditRoots), [])
+  assert.deepEqual(runtimeStateReadHits('copy notes.md -Include *.json -Destination D:/backup/history.jsonl', 'pwsh', auditRoots), [])
 })
 
 test('runtimeStateReadHits: `<` redirection source is reported', () => {
