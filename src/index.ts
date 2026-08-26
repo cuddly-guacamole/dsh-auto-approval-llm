@@ -65,7 +65,6 @@ export const inject = ['approval', 'permissionPresets', 'tools', 'llm', 'agents'
 export interface Config {
   enabled: boolean
   autoSwitchPolicyToAsk: boolean
-  reviewerProvider?: string
   reviewerModel?: string
   reviewerProtocol: 'openai' | 'anthropic'
   reviewerBaseUrl: string
@@ -125,7 +124,6 @@ export const Config: z<Config> = z.object({
   enabled: z.boolean().default(true),
   autoSwitchPolicyToAsk: z.boolean().default(false),
   debug: z.boolean().default(false),
-  reviewerProvider: z.string().default(''),
   reviewerModel: z.string().default(''),
   reviewerProtocol: z.union(['openai', 'anthropic'] as const).default('openai'),
   reviewerBaseUrl: z.string().default(''),
@@ -193,9 +191,6 @@ export const Config: z<Config> = z.object({
 const AUTO_PRESET = 'auto'
 
 export function resolveConfig(raw: Config): Config {
-  if (raw.reviewerProvider === undefined !== (raw.reviewerModel === undefined)) {
-    throw new Error('dsh-auto-approval-llm: reviewerProvider and reviewerModel must be configured together')
-  }
   let timeoutAction = raw.timeoutAction
   if (!['reject', 'allow', 'low-risk-allow'].includes(timeoutAction)) {
     if (timeoutAction === 'llm-low-risk-only') {
@@ -487,9 +482,7 @@ export async function buildReviewSnapshot(
     debugLog({ ev: 'reviewer-incomplete', callId: req.callId, baseUrl: validated.baseUrl, missing })
   }
 
-  const route = config.reviewerProvider && config.reviewerModel
-    ? { provider: config.reviewerProvider, model: config.reviewerModel }
-    : sessionModelRoute(session)
+  const route = sessionModelRoute(session)
   if (!route) return { failure: 'no reviewer route' }
   return { online: false, payload, system, route }
 }
@@ -1761,27 +1754,23 @@ export function apply(ctx: Context, rawConfig: Config): void {
 
   // Reviewer provider/model and classifier knobs are read at construction
   // time, so the classifier must be rebuilt whenever (live) settings change;
-  // otherwise reviewerProvider edits would only take effect after a restart.
+  // Reviewer and classifier knobs are read at construction time, so the
+  // classifier must be rebuilt whenever (live) settings change.
   // The override pair must be complete: a lone reviewerModel (or provider)
   // would throw inside the classifier once-during construction and take the
   // whole plugin down at boot (seen 2026-08-26: half-configured reviewer
   // settings crashed dsh). Single-sided values are ignored defensively.
-  const classifierPair = config.reviewerProvider && config.reviewerModel
-    ? { provider: config.reviewerProvider, model: config.reviewerModel }
-    : {}
+  // The classifier always follows the session model: the provider override
+  // pair was retired (2026-08-26) — it only ever produced half-configuration
+  // crashes and no deployment used an independent classifier model.
   let classifier = createDshClassifier(llm, {
     timeoutMs: config.classifierTimeoutMs ?? THRESHOLD_DEFAULTS.classifierTimeoutMs,
     maxOutputTokens: config.classifierMaxOutputTokens ?? THRESHOLD_DEFAULTS.classifierMaxOutputTokens,
-    ...classifierPair,
   })
   const rebuildClassifier = () => {
-    const pair = config.reviewerProvider && config.reviewerModel
-      ? { provider: config.reviewerProvider, model: config.reviewerModel }
-      : {}
     classifier = createDshClassifier(llm, {
       timeoutMs: config.classifierTimeoutMs ?? THRESHOLD_DEFAULTS.classifierTimeoutMs,
       maxOutputTokens: config.classifierMaxOutputTokens ?? THRESHOLD_DEFAULTS.classifierMaxOutputTokens,
-      ...pair,
     })
   }
 
@@ -2553,7 +2542,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       if (!config.learningEnabled) return undefined
       const capUsed = sessionLearnedAllows.get(sessionKey) ?? 0
       const capMax = THRESHOLD_DEFAULTS.learningSessionAllowCap
-      const routeAvailable = !!((config.reviewerProvider && config.reviewerModel) || config.reviewerBaseUrl || sessionModelRoute(req.agent.session))
+      const routeAvailable = !!(config.reviewerBaseUrl || sessionModelRoute(req.agent.session))
       if (!routeAvailable) return undefined
       const learnable = learnableContextFor(req, args, classified)
       if (learnable === undefined) return undefined
@@ -2795,7 +2784,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
     // falls through to the ordinary LOW/MEDIUM/HIGH pipeline unchanged.
     const learnedAllow = await learnAttempt(req, args, classified, sessionKey, reviewOpts)
     if (learnedAllow !== undefined) return learnedAllow
-    const llmRouteAvailable = !!((config.reviewerProvider && config.reviewerModel) || config.reviewerBaseUrl || sessionModelRoute(req.agent.session))
+    const llmRouteAvailable = !!(config.reviewerBaseUrl || sessionModelRoute(req.agent.session))
     const llmReviews = llmRouteAvailable && riskReviewed(staticRisk, config.llmReviewScope)
     const llmTakeover = llmReviews && riskTakenOver(staticRisk, config.llmTakeoverScope)
     const seconds = riskSeconds(staticRisk)

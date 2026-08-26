@@ -2640,13 +2640,13 @@ test('sessionModelRoute: absent/invalid session routes resolve to undefined (fal
   assert.equal(sessionModelRoute({ events: [{ type: 'request/header', data: { header: { config: { provider: 'p' } } } }] }), undefined)
 })
 
-test('reviewer route gate: the three-source disjunction stays pinned at both pipeline sites (provider+model pair / baseUrl / session fallback)', () => {
+test('reviewer route gate: the two-source disjunction stays pinned at both pipeline sites (baseUrl / session fallback)', () => {
   // The production judgment is an inline expression inside apply(): once for
   // the confirmation-learning gate, once for the main risk pipeline that owns
   // the LOW no-route direct-allow branch. Pin its compiled shape so retiring
   // any of the three sources fails here instead of silently flipping behavior.
   const host = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
-  const matches = host.match(/\!\!\(\(config\.reviewerProvider && config\.reviewerModel\) \|\| config\.reviewerBaseUrl \|\| sessionModelRoute\(req\.agent\.session\)\)/g) ?? []
+  const matches = host.match(/\!\!\(config\.reviewerBaseUrl \|\| sessionModelRoute\(req\.agent\.session\)\)/g) ?? []
   assert.equal(matches.length, 2, 'route-availability expression must gate both the learning path and the main review pipeline')
 })
 
@@ -2662,7 +2662,6 @@ const snapshotConfig = (over = {}) => ({
   safetyPrompt: '',
   rulesText: '',
   reviewerProtocol: 'openai',
-  reviewerProvider: '',
   reviewerModel: '',
   reviewerBaseUrl: '',
   ...over,
@@ -2692,10 +2691,10 @@ test('direct review snapshot: base URL + model name + stored key yield the onlin
   assert.equal(snap.protocol, 'openai')
 })
 
-test('direct review snapshot: explicit provider+model pair without a base URL stays the offline explicit route', async () => {
-  const snap = await runSnapshot(undefined, { reviewerProvider: 'pair-provider', reviewerModel: 'pair-model' })
+test('direct review snapshot: no base URL falls through to the session model route (offline)', async () => {
+  const snap = await runSnapshot(undefined)
   assert.equal(snap.online, false)
-  assert.deepEqual(snap.route, { provider: 'pair-provider', model: 'pair-model' })
+  assert.deepEqual(snap.route, { provider: 'sess-provider', model: 'sess-model' })
 })
 
 test('direct review snapshot: fully empty reviewer config follows the session model route', async () => {
@@ -2854,14 +2853,13 @@ test('onboarding locale: B-section copy exists host-side (i18n exemption)', () =
 })
 
 test('classifier pair: half-configured reviewer settings must not crash bootstrap', () => {
-  // Regression anchor (2026-08-26): a lone reviewerModel (or provider) used to
-  // be spread into createDshClassifier, whose pair validation throws during
-  // construction — crashing dsh at boot. The compiled host must build the
-  // override only when both sides are present.
+  // Regression anchor (2026-08-26): reviewerProvider was removed entirely.
+  // The classifier is built without any reviewer override, so no half-
+  // configuration pair can crash bootstrap and no override can diverge from
+  // the session model.
   const hostSrc = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
-  assert.ok(hostSrc.includes('config.reviewerProvider && config.reviewerModel'))
-  assert.ok(hostSrc.includes('const classifierPair = config.reviewerProvider && config.reviewerModel'))
-  assert.ok(!hostSrc.includes('...(config.reviewerProvider ? { provider: config.reviewerProvider } : {})'))
+  assert.ok(!hostSrc.includes('reviewerProvider'), 'reviewerProvider must be fully retired')
+  assert.ok(!hostSrc.includes('classifierPair'), 'no classifier override pair may survive')
 })
 
 test('low risk review: parallel with human countdown, claim on decisive verdict', () => {

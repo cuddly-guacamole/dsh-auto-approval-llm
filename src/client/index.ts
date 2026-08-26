@@ -665,7 +665,6 @@ interface Draft {
   highRiskSeconds: string
   reviewWaitSeconds: string
   safetyPrompt: string
-  reviewerProvider: string
   reviewerModel: string
   reviewerProtocol: string
   reviewerBaseUrl: string
@@ -704,7 +703,6 @@ function draftOf(value: any): Draft {
     highRiskSeconds: String(value?.highRiskSeconds ?? THRESHOLD_DEFAULTS.highRiskSeconds),
     reviewWaitSeconds: String(value?.reviewWaitSeconds ?? THRESHOLD_DEFAULTS.reviewWaitSeconds),
     safetyPrompt: value?.safetyPrompt ?? '',
-    reviewerProvider: value?.reviewerProvider ?? '',
     reviewerModel: value?.reviewerModel ?? '',
     reviewerProtocol: ['openai', 'anthropic'].includes(value?.reviewerProtocol) ? value.reviewerProtocol : 'openai',
     reviewerBaseUrl: value?.reviewerBaseUrl ?? '',
@@ -772,7 +770,6 @@ function valueOf(draft: Draft): any {
     learningEnabled: draft.learningEnabled === 'on',
     learningThreshold: Math.max(2, Math.min(10, intOr(draft.learningThreshold, THRESHOLD_DEFAULTS.learningThreshold))),
   }
-  if (draft.reviewerProvider.trim()) value.reviewerProvider = draft.reviewerProvider.trim()
   if (draft.reviewerModel.trim()) value.reviewerModel = draft.reviewerModel.trim()
   if (draft.reviewerProtocol === 'openai' || draft.reviewerProtocol === 'anthropic') value.reviewerProtocol = draft.reviewerProtocol
   if (draft.reviewerBaseUrl.trim()) value.reviewerBaseUrl = draft.reviewerBaseUrl.trim()
@@ -809,7 +806,7 @@ const INVALID_CONFIG_TYPES: Record<string, string> = {
   maxConsecutiveDenials: 'number', maxTotalDenials: 'number', breakerAntiHijackMs: 'number',
   maxArgsChars: 'number', classifierTimeoutMs: 'number', classifierMaxOutputTokens: 'number',
   workspaceRoot: 'string', dshHome: 'string', safetyPrompt: 'string', rulesText: 'string',
-  reviewerProvider: 'string', reviewerModel: 'string', reviewerBaseUrl: 'string', timeoutAction: 'string',
+  reviewerModel: 'string', reviewerBaseUrl: 'string', timeoutAction: 'string',
   allowlist: 'array', denyList: 'array', humanOnlyList: 'array', tempRoots: 'array',
   categoryPolicy: 'object', categoryMode: 'string', trustedDirs: 'array',
 }
@@ -850,13 +847,6 @@ function findInvalidConfigKeys(value: any): string[] {
       const range = INVALID_CONFIG_RANGES[key]
       if (range && (Number(v) < range[0] || Number(v) > range[1])) bad.add(key)
     }
-  }
-  // reviewerProvider / reviewerModel must be configured together.
-  const hasProvider = Object.prototype.hasOwnProperty.call(value, 'reviewerProvider')
-  const hasModel = Object.prototype.hasOwnProperty.call(value, 'reviewerModel')
-  if (hasProvider !== hasModel) {
-    bad.add('reviewerProvider')
-    bad.add('reviewerModel')
   }
   return [...bad]
 }

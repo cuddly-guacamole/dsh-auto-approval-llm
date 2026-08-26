@@ -127,7 +127,7 @@ dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 | `maxTotalDenials` | 20 | 累计拒绝熔断阈值，0 关闭 |
 | `reviewerProtocol` | `openai` | 在线评审协议：`openai`(chat/completions) / `anthropic`(messages) |
 | `reviewerBaseUrl` | '' | 在线评审 API 地址；非空才走在线评审，空则跟随会话模型。三件齐备（地址＋模型名＋已配置密钥）才启用直连；缺任一自动跟随会话模型 |
-| `reviewerModel`（＋旧 `reviewerProvider`） | '' | 在线评审模型名（旧 Provider 路由保留兼容，不再 UI 暴露）。三件齐备（地址＋模型名＋已配置密钥）才启用直连；缺任一自动跟随会话模型 |
+| `reviewerModel` | '' | 在线评审模型名；连同 `reviewerBaseUrl` 与已配置密钥三件齐备才启用直连（`reviewerProvider` 已于 2026-08-26 退役：classifier 恒跟随会话模型） |
 | `safetyPrompt` | '' | 附加给评审模型的额外策略（保存即热生效） |
 | `allowlist` / `denyList` / `humanOnlyList` | [] | 工具名精确匹配 |
 | `rulesText` | '' | 声明式规则（优先于内置列表执行；支持 `[agent:main|subagent|名]`、`[workspace:路径]` 维度前缀，逗号组合=AND；解析错误=整段失效） |
