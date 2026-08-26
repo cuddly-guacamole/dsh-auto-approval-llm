@@ -2773,7 +2773,7 @@ test('onboarding injection: only after the AUTO gate, through queueNotice, plugi
   const preAt = src.indexOf("anyCtx.on('tools/pre-execute'")
   const gateAt = src.indexOf('if (!isAutoExecution(exec))', preAt)
   const markAt = src.indexOf('markFirstAutoSessionNotice(authorityKeyFor(exec))')
-  const queueAt = src.indexOf('queueNotice(exec.agent.session, exec.callId, onboardingNoticeText(config.timeoutAction))')
+  const queueAt = src.indexOf("queueNotice(exec.agent.session, exec.callId, onboardingNoticeText(config.timeoutAction, 'en'))")
   assert.ok(preAt !== -1 && gateAt !== -1, 'AUTO gate must exist in pre-execute')
   assert.ok(markAt !== -1 && queueAt !== -1, 'injection must mark then queue')
   assert.ok(markAt > gateAt, 'injection must run only after the AUTO gate')
@@ -2902,4 +2902,14 @@ test('reviewer credential delete also clears file-fallback key line', () => {
   const clientSrc = readFileSync(new URL('../src/client/index.ts', import.meta.url), 'utf8')
   assert.ok(clientSrc.includes("method: 'DELETE'"), 'client reset must issue a credential DELETE')
   assert.ok(clientSrc.includes('settings.reviewResetDone'), 'client reset must report completion')
+})
+
+test('onboarding message: english agent notice, disable switch anchored', () => {
+  // Regression anchor (2026-08-26): the first-use notice targets the agent
+  // (English context), is gated by onboardingMessageEnabled (default on), and
+  // the en notice text is used for the injection.
+  const src = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
+  assert.ok(src.includes('onboardingMessageEnabled !== false'), 'injection must honor the switch')
+  assert.ok(src.includes("onboardingNoticeText(config.timeoutAction, 'en')"), 'injection must use the English notice')
+  assert.ok(src.includes('(Auto-approval) is active'), 'English body must exist in the compiled host')
 })

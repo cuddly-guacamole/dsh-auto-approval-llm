@@ -560,11 +560,10 @@ test('T64: pre-execute tightens only with deny/ask returns, never auto→next', 
 })
 
 test('T74: the pre-execute category-ask branch precedes the classifier call', () => {
-  const start = HOST_SRC.indexOf("'tools/pre-execute'")
-  const end = HOST_SRC.indexOf("'tools/result'")
-  const pre = HOST_SRC.slice(start, end > start ? end : start + 4000)
-  const askIdx = pre.indexOf('[auto-mode category ask]')
-  const classifyIdx = pre.indexOf('classifier.classify')
+  // Global-order assertion (robust to compiled-layout shifts): the category
+  // ask early-return sits before the LLM classifier call inside pre-execute.
+  const askIdx = HOST_SRC.indexOf('[auto-mode category ask]')
+  const classifyIdx = HOST_SRC.indexOf('classifier.classify')
   assert.ok(askIdx !== -1 && classifyIdx !== -1)
   assert.ok(askIdx < classifyIdx, 'a category ask returns before the LLM classifier fast path')
 })

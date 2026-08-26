@@ -87,6 +87,8 @@ export interface Config {
   maxArgsChars: number
   notifyUser: boolean
   showSessionPanel: 'on' | 'auto' | 'off'
+  /** One-shot first-use agent notice (English); false disables injection. */
+  onboardingMessageEnabled?: boolean
   breakerAntiHijackMs: number
   aiButtonPosition: 'header' | 'floating'
   workspaceRoot?: string
@@ -143,6 +145,9 @@ export const Config: z<Config> = z.object({
   maxArgsChars: z.number().default(THRESHOLD_DEFAULTS.maxArgsChars).min(1),
   notifyUser: z.boolean().default(true),
   showSessionPanel: z.union(['on', 'auto', 'off'] as const).default('off'),
+  // One-shot first-use notice injected into the session for the AGENT
+  // (English, context-style); off disables the injection entirely.
+  onboardingMessageEnabled: z.boolean().default(true),
   breakerAntiHijackMs: z.number().default(0).min(0),
   aiButtonPosition: z.union(['header', 'floating'] as const).default('header'),
   workspaceRoot: z.string().default(''),
@@ -2024,8 +2029,11 @@ export function apply(ctx: Context, rawConfig: Config): void {
     // queue — it only registers a pending entry, never touches the decision
     // flow below, and the flush point (step/end) keeps it out of the
     // tool-calls message-sequence window.
-    if (markFirstAutoSessionNotice(authorityKeyFor(exec))) {
-      queueNotice(exec.agent.session, exec.callId, onboardingNoticeText(config.timeoutAction))
+    if (config.onboardingMessageEnabled !== false && markFirstAutoSessionNotice(authorityKeyFor(exec))) {
+      // The notice is context for the agent (whose reasoning runs in
+      // English), so it is injected in English rather than the UI language;
+      // it is not an interactive user banner. Can be turned off entirely.
+      queueNotice(exec.agent.session, exec.callId, onboardingNoticeText(config.timeoutAction, 'en'))
       debugLog({ ev: 'onboarding-inject', sessionId: exec.agent?.session?.id ?? null, callId: exec.callId ?? null, action: config.timeoutAction })
     }
     const roots = rootsFor(exec)

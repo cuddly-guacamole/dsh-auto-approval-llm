@@ -677,6 +677,7 @@ interface Draft {
   maxConsecutiveDenials: string
   maxTotalDenials: string
   showSessionPanel: 'on' | 'auto' | 'off'
+  onboardingMessageEnabled: 'on' | 'off'
   breakerAntiHijackMs: string
   aiButtonPosition: 'header' | 'floating'
   debug: 'on' | 'off'
@@ -714,6 +715,7 @@ function draftOf(value: any): Draft {
     maxConsecutiveDenials: String(value?.maxConsecutiveDenials ?? THRESHOLD_DEFAULTS.maxConsecutiveDenials),
     maxTotalDenials: String(value?.maxTotalDenials ?? THRESHOLD_DEFAULTS.maxTotalDenials),
     showSessionPanel: normalizeShowSessionPanel(value?.showSessionPanel ?? 'off'),
+    onboardingMessageEnabled: value?.onboardingMessageEnabled === false ? 'off' : 'on',
     breakerAntiHijackMs: String(value?.breakerAntiHijackMs ?? THRESHOLD_DEFAULTS.breakerAntiHijackMs),
     aiButtonPosition: value?.aiButtonPosition === 'floating' ? 'floating' : 'header',
     debug: value?.debug === true ? 'on' : 'off',
@@ -755,6 +757,7 @@ function valueOf(draft: Draft): any {
     maxConsecutiveDenials: Math.max(0, Number(draft.maxConsecutiveDenials) || 0),
     maxTotalDenials: Math.max(0, Number(draft.maxTotalDenials) || 0),
     showSessionPanel: draft.showSessionPanel,
+    onboardingMessageEnabled: draft.onboardingMessageEnabled === 'off' ? false : true,
     breakerAntiHijackMs: Math.max(0, Number(draft.breakerAntiHijackMs) || 0),
     aiButtonPosition: draft.aiButtonPosition,
     debug: draft.debug === 'on',
@@ -1102,7 +1105,7 @@ function SettingsSection() {
   // Per-card ownership: saving a card only persists the fields it owns,
   // overlaid on the last-saved baseline; other cards' unsaved edits are left
   // in the local draft and never accidentally persisted by another card.
-  const TOP_KEYS = ['enabled', 'autoSwitchPolicyToAsk', 'timeoutAction', 'llmReviewScope', 'llmTakeoverScope', 'defaultReviewMode', 'showSessionPanel', 'aiButtonPosition']
+  const TOP_KEYS = ['enabled', 'autoSwitchPolicyToAsk', 'timeoutAction', 'llmReviewScope', 'llmTakeoverScope', 'defaultReviewMode', 'showSessionPanel', 'aiButtonPosition', 'onboardingMessageEnabled']
   const TIMER_KEYS = ['breakerAntiHijackMs', 'lowRiskSeconds', 'mediumRiskSeconds', 'highRiskSeconds', 'maxConsecutiveDenials', 'maxTotalDenials', 'reviewWaitSeconds']
   const REVIEW_KEYS = ['reviewerProtocol', 'reviewerBaseUrl', 'reviewerModel']
   const SECURITY_KEYS = ['safetyPrompt', 'allowlist', 'denyList', 'humanOnlyList', 'rulesText', 'rulesDryRun', 'redactResults', 'editDiffPreview']
@@ -1583,6 +1586,11 @@ function SettingsSection() {
       options: buttonPositionOptions(),
       onChange: (v: string) => { void instantSaveKey('aiButtonPosition', v as any) },
     })) : null,
+    row(t('settings.onboardingMessage'), React.createElement(CapsuleSelect, {
+      value: draft.onboardingMessageEnabled,
+      options: [{ label: t('option.off'), value: 'off' }, { label: t('option.on'), value: 'on' }],
+      onChange: (v: string) => { void instantSaveKey('onboardingMessageEnabled', v === 'on') },
+    })),
   )
 
   // Timers & breaker card body (the numeric/dangerous group).
