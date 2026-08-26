@@ -9,6 +9,11 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
+
+// Isolate reviewer-key fallback from the host machine's credential file:
+// contract tests must exercise the mocked credentials service, never the
+// developer's real ~/.dsh/.credentials.yaml.
+process.env.DSH_AUTO_APPROVAL_READ_CRED_FILE = '0'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseReview, lowRiskReviewOutcome, raceHumanDecision, preserveHostKeys, normalizeTimeoutAction, prepareReviewerArguments, extractToolPath, frameReviewerInput, breakerTripped, applyBreaker, reviewSuggestionNote, approvalSource, reviewerAutoAllowBlocked, staticListDecision, stripCountdownMarkers, riskFromAssessment, formatDenyFeedback, DENY_CIRCUMVENTION_GUIDANCE, REVIEW_TIMEOUT_NOTICE, REVIEWER_SYSTEM, assembleReviewerSystem, rulesTextSummary } from '../lib/auto/decision.js'
@@ -2846,4 +2851,15 @@ test('onboarding locale: B-section copy exists host-side (i18n exemption)', () =
   const hostSrc = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
   assert.ok(hostSrc.includes('（自动审批）已生效'))
   assert.ok(hostSrc.includes('(Auto-approval) is active'))
+})
+
+test('classifier pair: half-configured reviewer settings must not crash bootstrap', () => {
+  // Regression anchor (2026-08-26): a lone reviewerModel (or provider) used to
+  // be spread into createDshClassifier, whose pair validation throws during
+  // construction — crashing dsh at boot. The compiled host must build the
+  // override only when both sides are present.
+  const hostSrc = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
+  assert.ok(hostSrc.includes('config.reviewerProvider && config.reviewerModel'))
+  assert.ok(hostSrc.includes('const classifierPair = config.reviewerProvider && config.reviewerModel'))
+  assert.ok(!hostSrc.includes('...(config.reviewerProvider ? { provider: config.reviewerProvider } : {})'))
 })

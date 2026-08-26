@@ -439,6 +439,14 @@ export async function buildReviewSnapshot(
     } catch {
       apiKey = undefined
     }
+    // Fallback when the reviewer key did not resolve from the credentials
+    // service (service unreachable, scope-filtered, or ref simply unset):
+    // read the shared DSH credential file. Disable with
+    // DSH_AUTO_APPROVAL_READ_CRED_FILE=0 (keeps contract tests isolated from
+    // the host machine's credential file).
+    if (!apiKey && process.env.DSH_AUTO_APPROVAL_READ_CRED_FILE !== '0') {
+      apiKey = reviewerKeyFromCredentialFile()
+    }
     // The direct channel exists only when all three pieces are configured:
     // base URL + model name + a resolved API key. A half-configured endpoint
     // can only produce a doomed request (empty model → INVALID_REQUEST, no
@@ -918,6 +926,33 @@ const SETTINGS_NS = 'auto-approval-llm' as any
 // reference name), never in the settings value — the UI only ever sees
 // `configured`, never the secret. Resolved per operation, not cached.
 const REVIEWER_CREDENTIAL_REF = 'DSH_AUTO_APPROVAL_REVIEWER_API_KEY'
+
+/** Best-effort fallback: read the reviewer key from the shared DSH credential
+ * file (`~/.dsh/.credentials.yaml`) when the credentials service is not
+ * reachable from the plugin scope. Never throws; returns undefined if absent. */
+function reviewerKeyFromCredentialFile(): string | undefined {
+  try {
+    // The credentials file lives under the DSH home; the runtime may or may
+    // not export DSH_HOME, so probe both the env value and homedir()/.dsh.
+    const candidates = [
+      process.env.DSH_HOME ? join(process.env.DSH_HOME, '.credentials.yaml') : '',
+      join(homedir(), '.dsh', '.credentials.yaml'),
+    ]
+    for (const file of candidates) {
+      if (!file) continue
+      try {
+        const text = readFileSync(file, 'utf8')
+        const match = text.match(new RegExp(`^\\s*${REVIEWER_CREDENTIAL_REF}\\s*:\\s*(sk-[^\\s]+)`, 'm'))
+        if (match) return match[1]
+      } catch {
+        // try the next candidate
+      }
+    }
+    return undefined
+  } catch {
+    return undefined
+  }
+}
 
 interface ReviewStatus {
   risk: 'LOW' | 'MEDIUM' | 'HIGH'
@@ -1636,18 +1671,26 @@ export function apply(ctx: Context, rawConfig: Config): void {
   // Reviewer provider/model and classifier knobs are read at construction
   // time, so the classifier must be rebuilt whenever (live) settings change;
   // otherwise reviewerProvider edits would only take effect after a restart.
+  // The override pair must be complete: a lone reviewerModel (or provider)
+  // would throw inside the classifier once-during construction and take the
+  // whole plugin down at boot (seen 2026-08-26: half-configured reviewer
+  // settings crashed dsh). Single-sided values are ignored defensively.
+  const classifierPair = config.reviewerProvider && config.reviewerModel
+    ? { provider: config.reviewerProvider, model: config.reviewerModel }
+    : {}
   let classifier = createDshClassifier(llm, {
     timeoutMs: config.classifierTimeoutMs ?? THRESHOLD_DEFAULTS.classifierTimeoutMs,
     maxOutputTokens: config.classifierMaxOutputTokens ?? THRESHOLD_DEFAULTS.classifierMaxOutputTokens,
-    ...(config.reviewerProvider ? { provider: config.reviewerProvider } : {}),
-    ...(config.reviewerModel ? { model: config.reviewerModel } : {}),
+    ...classifierPair,
   })
   const rebuildClassifier = () => {
+    const pair = config.reviewerProvider && config.reviewerModel
+      ? { provider: config.reviewerProvider, model: config.reviewerModel }
+      : {}
     classifier = createDshClassifier(llm, {
       timeoutMs: config.classifierTimeoutMs ?? THRESHOLD_DEFAULTS.classifierTimeoutMs,
       maxOutputTokens: config.classifierMaxOutputTokens ?? THRESHOLD_DEFAULTS.classifierMaxOutputTokens,
-      ...(config.reviewerProvider ? { provider: config.reviewerProvider } : {}),
-      ...(config.reviewerModel ? { model: config.reviewerModel } : {}),
+      ...pair,
     })
   }
 
