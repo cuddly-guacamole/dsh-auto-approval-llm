@@ -1307,8 +1307,9 @@ function installReviewerCredentialRoute(ctx: any, credentials: any): void {
           })
           return
         }
-        const body = await readJsonBody(req)
         if (req.method === 'DELETE') {
+          // DELETEs carry no body, so this branch must run before the JSON
+          // body reader (which requires a JSON content type).
           // Never report a cleared credential unless the store actually
           // dropped it: an unset failure (read-only store, backend error)
           // must surface to the settings card instead of a silent ok:true
@@ -1327,6 +1328,7 @@ function installReviewerCredentialRoute(ctx: any, credentials: any): void {
           responseJson(res, 200, { ok: true })
           return
         }
+        const body = await readJsonBody(req)
         if (req.method !== 'POST') {
           res.setHeader('Allow', 'GET, POST, DELETE')
           responseJson(res, 405, { ok: false, error: 'method-not-allowed' })

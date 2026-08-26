@@ -1268,7 +1268,13 @@ function SettingsSection() {
       const data = await res.json()
       if (!data?.ok) throw new Error(data?.error ?? t('settings.saveFailed'))
       broadcastSettings(data.value)
-      await (globalThis as any).fetch(REVIEWER_CREDENTIAL_ROUTE, { method: 'DELETE', credentials: 'same-origin' })
+      const del = await (globalThis as any).fetch(REVIEWER_CREDENTIAL_ROUTE, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+      })
+      const delData = await del.json().catch(() => ({}))
+      if (!del?.ok || delData?.ok === false) throw new Error(delData?.error ?? t('settings.reviewResetFailed'))
       // In-card feedback, left of the restore button (statusLine('review')).
       setCardStatus({ id: 'review', kind: 'ok', text: t('settings.reviewResetDone') })
     } catch (e: any) {
