@@ -44,6 +44,7 @@ import {
   persistLearning,
   recordConfirm,
   resetConfirmation,
+  revokeLearning,
   signatureFor,
   type LearningKind,
   type LearningStore,
@@ -982,6 +983,7 @@ const TEST_ROUTE = '/_dsh/auto-approval-llm/test'
 const SESSION_MODE_ROUTE = '/_dsh/auto-approval-llm/session-mode'
 const REVIEW_STATUS_ROUTE = '/_dsh/auto-approval-llm/review-status'
 const STATS_ROUTE = '/_dsh/auto-approval-llm/stats'
+const LEARNING_STORE_ROUTE = '/_dsh/auto-approval-llm/learning-store'
 const SETTINGS_NS = 'auto-approval-llm' as any
 
 // The online-reviewer API key lives in the DSH credential store (env-var
@@ -1454,6 +1456,58 @@ function installHistoryRoute(ctx: any): void {
       res.end(bytes)
     },
   }), 'dsh-auto-approval-llm: history export route')
+}
+
+function installLearningStoreRoute(ctx: any, revoke: (key: string) => Promise<boolean>): void {
+  const webServer = ctx.get('webServer')
+  if (!webServer) return
+  ctx.effect(() => webServer.register({
+    kind: 'exact',
+    path: LEARNING_STORE_ROUTE,
+    handler: async (req: any, res: any) => {
+      // The learning store is a privileged surface: read-only list + single
+      // revoke. Same-origin loopback/LAN-whitelist gate as every other route.
+      if (!isTrustedRequest(req, trustedHosts)) {
+        responseJson(res, 403, { ok: false, error: 'forbidden' })
+        return
+      }
+      if (req.method === 'GET') {
+        // Display view of the store: keys are opaque hashes (never the raw
+        // signature), the skeleton is the redacted zero-value template that
+        // the store already persisted — nothing secret crosses the wire.
+        const entries = Object.entries(learningStore.entries).map(([key, e]) => ({
+          key,
+          workspace: e.workspace,
+          kind: e.kind,
+          skeleton: e.skeleton,
+          count: e.count,
+          firstAt: e.firstAt,
+          lastAt: e.lastAt,
+        })).sort((a, b) => b.lastAt - a.lastAt)
+        responseJson(res, 200, { ok: true, value: { entries } })
+        return
+      }
+      if (req.method === 'DELETE') {
+        const body = await readJsonBody(req)
+        if (typeof body?.key !== 'string' || body.key === '') {
+          throw new TypeError('key is required')
+        }
+        const removed = await revoke(body.key)
+        if (removed !== true) {
+          responseJson(res, 404, { ok: false, error: 'learning entry not found' })
+          return
+        }
+        persistLearning(LEARNING_FILE, learningStore)
+        // Revoking a learned entry changes future decisions — leave a
+        // recoverable audit trail (mirrors recordAuditClear's discipline).
+        appendAuditLine(JSON.stringify({ type: 'learning-revoked', at: Date.now(), key: body.key }))
+        responseJson(res, 200, { ok: true, value: { removed: true } })
+        return
+      }
+      res.setHeader('Allow', 'GET, DELETE')
+      responseJson(res, 405, { ok: false, error: 'method-not-allowed' })
+    },
+  }), 'dsh-auto-approval-llm: learning-store route')
 }
 
 function installReviewStatusRoute(ctx: any): void {
@@ -2167,6 +2221,13 @@ export function apply(ctx: Context, rawConfig: Config): void {
   installReviewerCredentialRoute(anyCtx, anyCtx.get('credentials'))
   installHistoryRoute(anyCtx)
   installReviewStatusRoute(anyCtx)
+  installLearningStoreRoute(anyCtx, (key: string) =>
+    // Serialize revoke + persist under the same per-key mutex the learning
+    // writers use, so a concurrent recordConfirm cannot interleave.
+    learningMutex.run(key, () => revokeLearning(learningStore, key)).then((done) => {
+      if (done) persistLearning(LEARNING_FILE, learningStore)
+      return done
+    }))
   installModelsRoute(anyCtx, llm)
   installTestRoute(anyCtx, llm)
   installSessionModeRoute(anyCtx)

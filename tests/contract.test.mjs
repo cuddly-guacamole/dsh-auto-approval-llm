@@ -2231,6 +2231,7 @@ import {
   persistLearning,
   recordConfirm,
   resetConfirmation,
+  revokeLearning,
   signatureFor,
   validateLearningEntry,
 } from '../lib/auto/learning.js'
@@ -2561,6 +2562,37 @@ test('learningCapState: sleeps at the cap and alerts exactly when crossing it', 
   assert.deepEqual(learningCapState(49, 50), { sleep: false, alert: true })
   assert.deepEqual(learningCapState(50, 50), { sleep: true, alert: false })
   assert.deepEqual(learningCapState(99, 50), { sleep: true, alert: false })
+})
+
+test('revokeLearning: removes exactly one entry, unknown key is a no-op', () => {
+  const store = emptyLearningStore()
+  const ws = 'c:/ws'
+  const keyA = learningKey('shell-bash', ws, 'git push --force')
+  const keyB = learningKey('shell-bash', ws, 'ls -a,-l')
+  recordConfirm(store, keyA, { workspace: ws, kind: 'shell-bash', skeleton: 'git push --force' }, 100)
+  recordConfirm(store, keyB, { workspace: ws, kind: 'shell-bash', skeleton: 'ls -a,-l' }, 100)
+  assert.equal(revokeLearning(store, keyA), true, 'existing entry revokes')
+  assert.equal(store.entries[keyA], undefined, 'entry is gone')
+  assert.equal(store.entries[keyB].count, 1, 'sibling entry untouched')
+  assert.equal(revokeLearning(store, keyA), false, 'already-revoked key is a no-op')
+  assert.equal(revokeLearning(store, 'missing-key'), false, 'unknown key is a no-op')
+})
+
+test('learning-store route: host exposes a trusted read/revoke surface with an audit trail', () => {
+  // Regression anchor (2026-08-27, backlog D): the revoke UI needs a host
+  // route — GET lists redacted entries, DELETE revokes one and persists.
+  // The audit trail mirrors recordAuditClear's discipline (never a silent
+  // erase the decision path depends on).
+  const src = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
+  assert.ok(src.includes("LEARNING_STORE_ROUTE = '/_dsh/auto-approval-llm/learning-store'"), 'route constant must exist')
+  assert.ok(src.includes('installLearningStoreRoute'), 'route installer must exist')
+  assert.ok(src.includes('learning-store route'), 'route must be registered with the web server')
+  assert.ok(src.includes('revokeLearning'), 'host must consume revokeLearning')
+  assert.ok(src.includes("type: 'learning-revoked'"), 'revoke must leave an audit trail')
+  assert.ok(src.includes('persistLearning(LEARNING_FILE'), 'revoke must persist the store')
+  const client = readFileSync(new URL('../src/client/index.ts', import.meta.url), 'utf8')
+  assert.ok(client.includes("LEARNING_STORE_ROUTE = '/_dsh/auto-approval-llm/learning-store'"), 'client must know the route')
+  assert.ok(client.includes('settings.learning.revoke'), 'client must render a revoke control')
 })
 
 test('signatureFor: empty commands and unknown kinds are not learnable', () => {

@@ -14,6 +14,7 @@ const SETTINGS_ROUTE = '/_dsh/auto-approval-llm/settings'
 const HISTORY_ROUTE = '/_dsh/auto-approval-llm/history'
 const TEST_ROUTE = '/_dsh/auto-approval-llm/test'
 const REVIEWER_CREDENTIAL_ROUTE = '/_dsh/auto-approval-llm/reviewer-credential'
+const LEARNING_STORE_ROUTE = '/_dsh/auto-approval-llm/learning-store'
 const SESSION_MODE_ROUTE = '/_dsh/auto-approval-llm/session-mode'
 const REVIEW_STATUS_ROUTE = '/_dsh/auto-approval-llm/review-status'
 let sessionsRef: any
@@ -1025,6 +1026,8 @@ function SettingsSection() {
   const [openHistory, setOpenHistory] = React.useState(false)
   const [openCategory, setOpenCategory] = React.useState(false)
   const [openLearning, setOpenLearning] = React.useState(false)
+  const [learningEntries, setLearningEntries] = React.useState<any[]>([])
+  const [learningEntriesError, setLearningEntriesError] = React.useState('')
   // In-card feedback: the most recent ok/error text for each sub-card, shown
   // inside that card's footer (not piled at the bottom of the plugin body).
   const [cardStatus, setCardStatus] = React.useState<{ id: string; kind: 'ok' | 'err'; text: string } | null>(null)
@@ -1089,6 +1092,22 @@ function SettingsSection() {
     if (!openReview) return
     return refreshCredential()
   }, [openReview, refreshCredential])
+
+  React.useEffect(() => {
+    if (!openLearning) return
+    let disposed = false
+    setLearningEntriesError('')
+    ;(globalThis as any).fetch(LEARNING_STORE_ROUTE, { credentials: 'same-origin' })
+      .then((r: any) => r.json())
+      .then((data: any) => {
+        if (disposed || !data?.ok) return
+        setLearningEntries(data.value.entries ?? [])
+      })
+      .catch((e: any) => {
+        if (!disposed) setLearningEntriesError(String(e))
+      })
+    return () => { disposed = true }
+  }, [openLearning])
 
   if (!snapshot || !draft) {
     return React.createElement('div', { style: { padding: 12 } }, t('settings.loading'))
@@ -1836,6 +1855,52 @@ function SettingsSection() {
     React.createElement('p', { className: 'dsa-hint', style: { margin: 0 } }, t('settings.learning.capNote')),
     React.createElement('p', { className: 'dsa-hint', style: { margin: 0 } }, t('settings.learning.ttlNote')),
     React.createElement('p', { className: 'dsa-hint', style: { margin: 0 } }, t('settings.learning.denyResetNote')),
+    React.createElement('p', { className: 'dsa-hint', style: { margin: 0 } }, t('settings.learning.entriesTitle')),
+    learningEntriesError
+      ? React.createElement('p', { style: { color: 'var(--dsw-alias-state-error-primary)', fontSize: 12, margin: 0 } }, learningEntriesError)
+      : null,
+    learningEntries.length === 0
+      ? React.createElement('p', { className: 'dsa-hint', style: { margin: 0 } }, t('settings.learning.entriesEmpty'))
+      : React.createElement('div', { style: { display: 'grid', gap: 4 } },
+          ...learningEntries.map((e: any) => React.createElement('div', {
+            key: e.key,
+            style: {
+              padding: '6px 8px',
+              border: '1px solid var(--dsw-alias-border-l1)',
+              borderRadius: 8,
+              fontSize: 12,
+              background: 'var(--dsw-alias-bg-layer-1)',
+              display: 'flex',
+              gap: 8,
+              alignItems: 'center',
+            },
+          },
+            React.createElement('span', { style: { flex: 1, fontFamily: 'var(--dsw-font-mono, monospace)', color: 'var(--dsw-alias-label-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, e.skeleton),
+            React.createElement('span', { style: { color: 'var(--dsw-alias-label-tertiary)', flex: 'none' } }, t('settings.learning.entryMeta', { count: e.count })),
+            React.createElement(Button, {
+              variant: 'outline',
+              size: 'sm',
+              disabled: saving || !snapshot.writable,
+              onClick: () => {
+                void (async () => {
+                  setCardStatus({ id: 'learning', kind: 'ok', text: '' })
+                  const res = await (globalThis as any).fetch(LEARNING_STORE_ROUTE, {
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ key: e.key }),
+                    credentials: 'same-origin',
+                  })
+                  const data = await res.json()
+                  if (!data?.ok) {
+                    setCardStatus({ id: 'learning', kind: 'err', text: t('settings.learning.revokeFailed') })
+                    return
+                  }
+                  setLearningEntries(learningEntries.filter((x: any) => x.key !== e.key))
+                  setCardStatus({ id: 'learning', kind: 'ok', text: t('settings.learning.revoked') })
+                })()
+              },
+            }, t('settings.learning.revoke')))),
+          ),
   )
 
   const buildHistoryBody = () => React.createElement('div', { style: { display: 'grid', gap: 8 } },

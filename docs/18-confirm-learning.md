@@ -67,3 +67,5 @@ SHA-256(`sigVersion|kind|workspace|signature`) 作键（<span class="lnum">learn
 | `learningThreshold` | 3 | 所需人工确认次数 N；保存钳入 [2,10]（clampLearningThreshold，<span class="lnum">learning.ts:L231-242</span>），越界由 resolveConfig 发 warn（<span class="lnum">index.ts:L255-262</span>） |
 
 设置卡「确认制学习」子卡两控件 + 七行说明文案（buildLearningBody <span class="lnum">client/index.ts:L1761-1782</span>，注册 L1990；locale 中英各 12 键）。失效语义一句话：**任何一环不成立——开关关、类别锁定、熔丝命中、条目过期/损坏/跨工作区、到帽、评审不干净——都视同未命中，回到原有的人工/LLM 分支**。学习层只做减法路上的加速器，从不当裁判。
+
+**条目查看与吊销（2026-08-27，backlog D 行 v2 落地）**：学习卡底部新增「已学习条目」区块——展开子卡时经 `/_dsh/auto-approval-llm/learning-store` GET 拉取只读列表（host 端把 entries 映射为 `{key,workspace,kind,skeleton,count,firstAt,lastAt}`，按 lastAt 倒序；key=哈希不泄露签名原文、skeleton=零原始值模板，无敏感信息过网）；每行展示 skeleton + 确认次数 + 「吊销」按钮，DELETE 单条（`{key}`）→ 串行化于同一 per-key mutex → `revokeLearning` 删条目 → `persistLearning` 原子落盘 → audit 追加 `learning-revoked` 留痕。未知 key 404；host 与 client 同源回环/白名单鉴权（与 history 路由同级）。契约锚：`revokeLearning` 纯函数 ×3 + 路由静态锚 ×6。

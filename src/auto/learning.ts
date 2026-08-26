@@ -390,6 +390,17 @@ export function resetConfirmation(store: LearningStore, key: string, now: number
   return store
 }
 
+/**
+ * Remove one learned entry entirely (the revoke-UI operation). Unknown keys
+ * are a no-op returning false; a deletion returns true. The store is mutated
+ * in place and the caller persists it — same contract as recordConfirm.
+ */
+export function revokeLearning(store: LearningStore, key: string): boolean {
+  if (store.entries[key] === undefined) return false
+  delete store.entries[key]
+  return true
+}
+
 /** Exact-equality lookup: presence ∧ current sigVersion ∧ same workspace ∧ count ≥ threshold ∧ fresh. */
 export function lookupLearning(
   store: LearningStore,
