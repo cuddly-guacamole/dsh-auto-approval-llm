@@ -678,6 +678,7 @@ interface Draft {
   maxTotalDenials: string
   showSessionPanel: 'on' | 'auto' | 'off'
   onboardingMessageEnabled: 'on' | 'off'
+  autoModeNoticeEnabled: 'on' | 'off'
   breakerAntiHijackMs: string
   aiButtonPosition: 'header' | 'floating'
   debug: 'on' | 'off'
@@ -716,6 +717,7 @@ function draftOf(value: any): Draft {
     maxTotalDenials: String(value?.maxTotalDenials ?? THRESHOLD_DEFAULTS.maxTotalDenials),
     showSessionPanel: normalizeShowSessionPanel(value?.showSessionPanel ?? 'off'),
     onboardingMessageEnabled: value?.onboardingMessageEnabled === false ? 'off' : 'on',
+    autoModeNoticeEnabled: value?.autoModeNoticeEnabled === false ? 'off' : 'on',
     breakerAntiHijackMs: String(value?.breakerAntiHijackMs ?? THRESHOLD_DEFAULTS.breakerAntiHijackMs),
     aiButtonPosition: value?.aiButtonPosition === 'floating' ? 'floating' : 'header',
     debug: value?.debug === true ? 'on' : 'off',
@@ -758,6 +760,7 @@ function valueOf(draft: Draft): any {
     maxTotalDenials: Math.max(0, Number(draft.maxTotalDenials) || 0),
     showSessionPanel: draft.showSessionPanel,
     onboardingMessageEnabled: draft.onboardingMessageEnabled === 'off' ? false : true,
+    autoModeNoticeEnabled: draft.autoModeNoticeEnabled === 'off' ? false : true,
     breakerAntiHijackMs: Math.max(0, Number(draft.breakerAntiHijackMs) || 0),
     aiButtonPosition: draft.aiButtonPosition,
     debug: draft.debug === 'on',
@@ -1105,7 +1108,7 @@ function SettingsSection() {
   // Per-card ownership: saving a card only persists the fields it owns,
   // overlaid on the last-saved baseline; other cards' unsaved edits are left
   // in the local draft and never accidentally persisted by another card.
-  const TOP_KEYS = ['enabled', 'autoSwitchPolicyToAsk', 'timeoutAction', 'llmReviewScope', 'llmTakeoverScope', 'defaultReviewMode', 'showSessionPanel', 'aiButtonPosition', 'onboardingMessageEnabled']
+  const TOP_KEYS = ['enabled', 'autoSwitchPolicyToAsk', 'timeoutAction', 'llmReviewScope', 'llmTakeoverScope', 'defaultReviewMode', 'showSessionPanel', 'aiButtonPosition', 'onboardingMessageEnabled', 'autoModeNoticeEnabled']
   const TIMER_KEYS = ['breakerAntiHijackMs', 'lowRiskSeconds', 'mediumRiskSeconds', 'highRiskSeconds', 'maxConsecutiveDenials', 'maxTotalDenials', 'reviewWaitSeconds']
   const REVIEW_KEYS = ['reviewerProtocol', 'reviewerBaseUrl', 'reviewerModel']
   const SECURITY_KEYS = ['safetyPrompt', 'allowlist', 'denyList', 'humanOnlyList', 'rulesText', 'rulesDryRun', 'redactResults', 'editDiffPreview']

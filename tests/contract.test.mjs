@@ -2922,6 +2922,6 @@ test('auto-mode notice: enter/exit announcements to the agent, switchable', () =
   assert.ok(src.includes("event?.type === 'permission/preset'"), 'preset switch must be observed')
   assert.ok(src.includes('(Auto-approval) is now ACTIVE'), 'enter notice must exist in English')
   assert.ok(src.includes('(Auto-approval) is now INACTIVE'), 'exit notice must exist in English')
-  assert.ok(src.includes('getConfig().onboardingMessageEnabled === false'), 'notices must honor the switch')
+  assert.ok(src.includes('getConfig().autoModeNoticeEnabled === false'), 'notices must honor the switch')
   assert.ok(src.includes('agent.inject(createUserMessage'), 'notices must go through agent.inject')
 })

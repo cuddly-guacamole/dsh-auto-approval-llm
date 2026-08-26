@@ -89,6 +89,8 @@ export interface Config {
   showSessionPanel: 'on' | 'auto' | 'off'
   /** One-shot first-use agent notice (English); false disables injection. */
   onboardingMessageEnabled?: boolean
+  /** Auto-mode enter/exit agent announcements; false disables them. */
+  autoModeNoticeEnabled?: boolean
   breakerAntiHijackMs: number
   aiButtonPosition: 'header' | 'floating'
   workspaceRoot?: string
@@ -148,6 +150,8 @@ export const Config: z<Config> = z.object({
   // One-shot first-use notice injected into the session for the AGENT
   // (English, context-style); off disables the injection entirely.
   onboardingMessageEnabled: z.boolean().default(true),
+  // Auto-mode enter/exit announcements to the agent (independent switch).
+  autoModeNoticeEnabled: z.boolean().default(true),
   breakerAntiHijackMs: z.number().default(0).min(0),
   aiButtonPosition: z.union(['header', 'floating'] as const).default('header'),
   workspaceRoot: z.string().default(''),
@@ -681,11 +685,18 @@ export function onboardingTimeoutLabel(timeoutAction: string, lang: 'zh' | 'en' 
   }
 }
 
+/** Shared English behavior summary for both the onboarding notice and the
+ * auto-mode enter/exit announcements — one wording source so the agent never
+ * sees contradictory descriptions. The timeout slot carries the live label. */
+function autoApprovalSummary(timeoutAction: string): string {
+  return `low-risk actions pass automatically; uncertain ones will show a countdown prompt; no response applies the configured timeout action (currently "${onboardingTimeoutLabel(timeoutAction, 'en')}")`
+}
+
 /** First-use notice body; the timeout slot always carries the live label. */
 export function onboardingNoticeText(timeoutAction: string, lang: 'zh' | 'en' = 'zh'): string {
   const label = onboardingTimeoutLabel(timeoutAction, lang)
   if (lang === 'en') {
-    return `(Auto-approval) is active: low-risk actions pass automatically; uncertain ones will show a countdown prompt; no response applies the configured timeout action (currently "${label}"). Reasons for denials are recorded in "recent approvals".`
+    return `(Auto-approval) is active: ${autoApprovalSummary(timeoutAction)}. Reasons for denials are recorded in "recent approvals".`
   }
   return `（自动审批）已生效：低风险自动通过；拿不准的操作会弹出倒计时询问你，没人回答则按设置处理（当前为「${label}」）。被拒的原因会写进「最近审批记录」。`
 }
@@ -735,14 +746,14 @@ function watchNotices(ctx: any, getConfig: () => Config): void {
   // onboarding notice — agent context, not a user banner).
   const sessionPreset = new Map<string, string>()
   const autoPolicyNotice = (session: any, preset: string): void => {
-    if (getConfig().onboardingMessageEnabled === false) return
+    if (getConfig().autoModeNoticeEnabled === false) return
     const agent = ctx.get('agents')?.get?.(session.id)
     if (!agent || typeof agent.inject !== 'function') return
     agent.inject(createUserMessage({
       content: [{
         type: 'text',
         text: preset === 'auto'
-          ? '(Auto-approval) is now ACTIVE for this session: low-risk actions pass automatically, uncertain ones show a countdown, and timeouts follow the configured action.'
+          ? `(Auto-approval) is now ACTIVE for this session: ${autoApprovalSummary(getConfig().timeoutAction)}.`
           : '(Auto-approval) is now INACTIVE for this session: the official approval flow applies again.',
       }],
       source: { kind: 'plugin', plugin: 'dsh-auto-approval-llm' },
