@@ -2863,3 +2863,19 @@ test('classifier pair: half-configured reviewer settings must not crash bootstra
   assert.ok(hostSrc.includes('const classifierPair = config.reviewerProvider && config.reviewerModel'))
   assert.ok(!hostSrc.includes('...(config.reviewerProvider ? { provider: config.reviewerProvider } : {})'))
 })
+
+test('low risk review: parallel with human countdown, claim on decisive verdict', () => {
+  // Regression anchor (2026-08-26): LOW used to run synchronously and only
+  // escalate to a human after the reviewer settled. Now the countdown starts
+  // FIRST and the reviewer runs in parallel — a decisive ALLOW/DENY landing
+  // inside the window takes over via handle.claim. Reviewer failure must
+  // still fail closed via claim('rejected') (never let timeoutAction=allow
+  // auto-approve a crashed reviewer).
+  const src = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
+  assert.ok(src.includes('lowAskPromise'), 'LOW must start the human countdown first')
+  assert.ok(src.includes('void reviewWithLLM'), 'LOW review must run in parallel')
+  assert.ok(src.includes("lowHandle.claim('allowed-once')"), 'decisive ALLOW must take over the race')
+  assert.ok(src.includes("lowHandle.claim('rejected')"), 'decisive DENY / failure must take over the race')
+  assert.ok(src.includes("reviewStates.get(req.callId)?.phase !== 'countdown'"), 'late verdicts after the window are discarded')
+  assert.ok(src.includes("asyncPath: false"), 'LOW keeps retry semantics with a countdown race')
+})

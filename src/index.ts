@@ -2724,94 +2724,126 @@ export function apply(ctx: Context, rawConfig: Config): void {
         })
         return 'allowed-once'
       }
-      const lowReviewStart = Date.now()
-      const lowReview = await reviewWithLLM(credentials, llm, tools, req.agent.session, req, config, seconds * 1000, reviewOpts, {
-        maxRetries: config.reviewMaxRetries ?? THRESHOLD_DEFAULTS.reviewMaxRetries,
-        budgetMs: seconds * 1000,
-        asyncPath: false,
-      })
-      const { review, attempts } = lowReview
-      debugLog({ ev: 'review', callId: req.callId, decision: review.decision, risk: review.riskLevel ?? null, startAt: lowReviewStart, tookMs: Date.now() - lowReviewStart, scope: 'low', attempts: attempts.length })
-      // Latency telemetry is sampled for every attempt, settled or not; only
-      // `failure` marks an aborted call (timeout/network/parse), never the
-      // verdict itself — an ESCALATE is still a real response. `attempts`
-      // records how many tries the settled outcome took.
-      pushLatencySample(llmLatency, { at: Date.now(), tookMs: Date.now() - lowReviewStart, settled: review.failure === undefined, attempts: Math.max(1, attempts.length) })
-      const verdict = lowRiskReviewOutcome(review)
-      if (verdict.kind === 'allow') {
-        // Serialize the reset so a concurrent denial for this session cannot
-        // interleave and lose its increment (or resurrect stale counters).
-        await breakerMutex.run(sessionKey, () => {
-          denials.set(sessionKey, 0)
-          totalDenials.set(sessionKey, 0)
-          denialLog.delete(sessionKey)
-        })
-        if (config.notifyUser) queueNotice(req.agent.session, req.callId, `✅ Model approved "${toolName}"`)
-        pushHistory({
-          sessionId: sessionKey,
-          toolName,
-          outcome: 'allowed-once',
-          source: 'llm-allow',
-          llmDecision: review.decision,
-          llmRisk: review.riskLevel,
-          llmReason: review.reason,
-          ...(attempts.length > 0 ? { attempts } : {}),
-        })
-        return 'allowed-once'
-      }
-      if (verdict.kind === 'deny') {
-        if (verdict.llmDenied) {
-          // Serialize the increment: read the counters INSIDE the lock (the
-          // snapshot at 1846-1847 is only for the unlocked trip check) so a
-          // concurrent approval for this session cannot interleave and lose this
-          // increment (lost-update race).
-          await breakerMutex.run(sessionKey, () => {
-            const priorNow = denials.get(sessionKey) ?? 0
-            const totalNow = totalDenials.get(sessionKey) ?? 0
-            denials.set(sessionKey, priorNow + 1)
-            totalDenials.set(sessionKey, totalNow + 1)
-            const log = denialLog.get(sessionKey) ?? []
-            log.push({ reason: review.reason ? sanitizeReviewReason(review.reason) : undefined, toolName })
-            if (log.length > config.maxConsecutiveDenials) log.shift()
-            denialLog.set(sessionKey, log)
-          })
-          recordDecisionFeedback(req.callId, formatDenyFeedback('llm', { toolName, reason: review.reason }))
-          pushHistory({
-            sessionId: sessionKey,
-            toolName,
-            outcome: 'rejected',
-            source: 'llm-deny',
-            llmDecision: review.decision,
-            llmRisk: review.riskLevel,
-            llmReason: review.reason,
-            ...(attempts.length > 0 ? { attempts } : {}),
-          })
-        } else {
-          // Reviewer unavailable/crashed: fail closed on LOW, never auto-allow
-          // and never count toward the LLM-denial breaker.
-          recordDecisionFeedback(req.callId, formatDenyFeedback('timeout'))
-          pushHistory({
-            sessionId: sessionKey,
-            toolName,
-            outcome: 'rejected',
-            source: 'llm-failed',
-            llmReason: review.failure ?? 'reviewer unavailable',
-            ...(attempts.length > 0 ? { attempts } : {}),
-          })
-        }
-        return 'rejected'
-      }
-      // verdict.kind === 'ask' → genuine ESCALATE: never auto-answer from a
-      // reviewer that could not decide; surface to a human with a countdown.
-      // Auto-allow on timeout only when the user explicitly configured
-      // timeoutAction=allow (or 低风险自动同意, which covers LOW).
-      const lowEscalateStatus: ReviewStatus = {
+      const lowHandle: RaceHumanHandle = { claim: () => {} }
+      const lowStatus: ReviewStatus = {
         risk: staticRisk,
         phase: 'countdown',
         action: riskTimedOutAction('LOW', config.timeoutAction, autoUnattended),
         seconds,
       }
-      return askHuman(req, review, next, false, lowEscalateStatus, undefined, undefined, learnableContextFor(req, args, classified))
+      // LOW runs the human countdown in PARALLEL with the reviewer: while the
+      // panel is open the LLM keeps trying (retries stay budget-bound), and a
+      // decisive ALLOW/DENY that lands inside the window takes over the race —
+      // a slow-but-healthy official review (DeepSeek 2.9-4.9s) still decides
+      // instead of silently escalating into the timeout action. A reviewer
+      // failure still fails closed immediately (never auto-allows, never
+      // waits for the countdown to allow via timeoutAction=allow).
+      const lowAskPromise = askHuman(req, undefined, next, false, lowStatus, lowHandle, true, learnableContextFor(req, args, classified))
+      const lowReviewStart = Date.now()
+      void reviewWithLLM(credentials, llm, tools, req.agent.session, req, config, seconds * 1000, reviewOpts, {
+        maxRetries: config.reviewMaxRetries ?? THRESHOLD_DEFAULTS.reviewMaxRetries,
+        budgetMs: seconds * 1000,
+        asyncPath: false,
+      })
+        .then(async ({ review, attempts }) => {
+          debugLog({ ev: 'review', callId: req.callId, decision: review.decision, risk: review.riskLevel ?? null, startAt: lowReviewStart, tookMs: Date.now() - lowReviewStart, scope: 'low', attempts: attempts.length })
+          // Latency telemetry is sampled for every attempt, settled or not;
+          // only `failure` marks an aborted call (timeout/network/parse).
+          pushLatencySample(llmLatency, { at: Date.now(), tookMs: Date.now() - lowReviewStart, settled: review.failure === undefined, attempts: Math.max(1, attempts.length) })
+          // Late response that already lost the countdown race is discarded.
+          if (!req.callId || reviewStates.get(req.callId)?.phase !== 'countdown') return
+          const verdict = lowRiskReviewOutcome(review)
+          if (verdict.kind === 'allow') {
+            reviewVerdicts.set(req.callId, { ...review, attempts })
+            // Serialize the reset so a concurrent denial for this session
+            // cannot interleave and lose its increment (or resurrect stale
+            // counters).
+            await breakerMutex.run(sessionKey, () => {
+              denials.set(sessionKey, 0)
+              totalDenials.set(sessionKey, 0)
+              denialLog.delete(sessionKey)
+            })
+            if (config.notifyUser) queueNotice(req.agent.session, req.callId, `✅ Model approved "${toolName}"`)
+            pushHistory({
+              sessionId: sessionKey,
+              toolName,
+              outcome: 'allowed-once',
+              source: 'llm-allow',
+              llmDecision: review.decision,
+              llmRisk: review.riskLevel,
+              llmReason: review.reason,
+              ...(attempts.length > 0 ? { attempts } : {}),
+            })
+            lowHandle.claim('allowed-once')
+            reviewStates.set(req.callId, {
+              risk: staticRisk,
+              phase: 'follow',
+              action: 'allow',
+              seconds: 0,
+              note: reviewSuggestionNote(review),
+              source: 'llm',
+            })
+            followExpiry.set(req.callId, Date.now() + FOLLOW_STATE_TTL_MS)
+            debugLog({ ev: 'follow', callId: req.callId, decision: review.decision, tookMs: Date.now() - lowReviewStart })
+            return
+          }
+          if (verdict.kind === 'deny') {
+            if (verdict.llmDenied) {
+              // Serialize the increment: read the counters INSIDE the lock so
+              // a concurrent approval cannot interleave and lose it.
+              await breakerMutex.run(sessionKey, () => {
+                const priorNow = denials.get(sessionKey) ?? 0
+                const totalNow = totalDenials.get(sessionKey) ?? 0
+                denials.set(sessionKey, priorNow + 1)
+                totalDenials.set(sessionKey, totalNow + 1)
+                const log = denialLog.get(sessionKey) ?? []
+                log.push({ reason: review.reason ? sanitizeReviewReason(review.reason) : undefined, toolName })
+                if (log.length > config.maxConsecutiveDenials) log.shift()
+                denialLog.set(sessionKey, log)
+              })
+              recordDecisionFeedback(req.callId, formatDenyFeedback('llm', { toolName, reason: review.reason }))
+              pushHistory({
+                sessionId: sessionKey,
+                toolName,
+                outcome: 'rejected',
+                source: 'llm-deny',
+                llmDecision: review.decision,
+                llmRisk: review.riskLevel,
+                llmReason: review.reason,
+                ...(attempts.length > 0 ? { attempts } : {}),
+              })
+              lowHandle.claim('rejected')
+              reviewStates.set(req.callId, {
+                risk: staticRisk,
+                phase: 'follow',
+                action: 'reject',
+                seconds: 0,
+                note: reviewSuggestionNote(review),
+                source: 'llm',
+              })
+              followExpiry.set(req.callId, Date.now() + FOLLOW_STATE_TTL_MS)
+              debugLog({ ev: 'follow', callId: req.callId, decision: review.decision, tookMs: Date.now() - lowReviewStart })
+            } else {
+              // Reviewer unavailable/crashed: fail closed on LOW, never
+              // auto-allow and never count toward the LLM-denial breaker.
+              recordDecisionFeedback(req.callId, formatDenyFeedback('timeout'))
+              pushHistory({
+                sessionId: sessionKey,
+                toolName,
+                outcome: 'rejected',
+                source: 'llm-failed',
+                llmReason: review.failure ?? 'reviewer unavailable',
+                ...(attempts.length > 0 ? { attempts } : {}),
+              })
+              lowHandle.claim('rejected')
+            }
+            return
+          }
+          // verdict.kind === 'ask' → genuine ESCALATE: never auto-answer from
+          // a reviewer that could not decide — the human countdown continues
+          // and the timeout action applies when it expires.
+        })
+      return lowAskPromise
     }
 
     if (staticRisk === 'MEDIUM') {
