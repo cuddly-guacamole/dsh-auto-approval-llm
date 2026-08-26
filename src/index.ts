@@ -345,12 +345,15 @@ function findToolDescription(tools: any, toolName: string): string | undefined {
 }
 
 /**
- * Retry calibration: measured review latency p95 ≈ 3.06s with every settled
- * sample under 3.2s (llm-latency.jsonl, 2026-08-23), so the per-attempt
- * timeout is 3.5s — long enough for a healthy review, short enough that the
- * rolling-remainder budget still fits one retry inside every countdown.
+ * Retry calibration: the original 3.5s fit the 2026-08-23 mock/opencode
+ * latency profile (p95 ≈ 3.06s, settled samples < 3.2s). Direct DeepSeek
+ * official review latency measured 2026-08-26 spans 266ms–4.9s (slow-start
+ * TTFB under load), so the per-attempt timeout is raised to 5s — it still
+ * fits inside every countdown (LOW 5s is the tightest bound, remaining equal
+ * to the attempt window) while keeping most successful official reviews out
+ * of the human-escalation path entirely.
  */
-const REVIEW_ATTEMPT_TIMEOUT_MS = 3_500
+const REVIEW_ATTEMPT_TIMEOUT_MS = 5_000
 const REVIEW_RETRY_BACKOFF_MS = 500
 const REVIEW_RETRY_GUARD_MS = 1_500
 
