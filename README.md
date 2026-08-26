@@ -16,7 +16,7 @@
 
 - **静态规则 + LLM 分类器**：只读/会话/工作区常规操作直接放行；危险、外部写、凭据外泄、受保护路径直接拒绝；模糊操作交给 LLM 预分类（`tools/guard` + `tools/pre-execute`）。
 - **写向量完整性加固**：含真实文件写重定向（`>`/`>>`/`>|`/`&>``）的命令段脱离只读快径；build/test 与版本探测快径仅保留给 discard sink 或工作区内常规写目标（aggressive/trustedDirs 放宽模式同样生效）；POSIX 五头 `tee`/`dd of=`/`sed -i`/`truncate`/`install` 以操作数目标参与按目标闸门——直写插件运行态文件无条件硬拒。
-- **11 分类三态开关 + 信任目录双模式**：工具与 shell 命令归入 11 个类别（fileEdit / gitLocal / build / readOnly / delete / protected / privilege / networkExec / gitPush / publish / disk），设置卡逐类配 `auto` / `ask` / `deny`；**默认全部 `inherit` = 行为零变化**。危险四类（delete / protected / privilege / disk）LOCKED 仅接受 `ask`，误配 `auto`/`deny` 会被钳制丢弃并告警（运行时恒不自动放行）；`trustedDirs` 在 standard 档把常规位置扩展到显式信任目录，`categoryMode: aggressive` 则取消位置白名单——任意位置均视为常规位置（敏感名 fuse、运行态硬拒、symlink 复检等危险度门全部不动）；复合命令按「类别枚举序 + directive 取严」双轨合并；类别拒绝与 denyList 同构为终端拒绝（提权重试不可绕过）；每次类别决策全量写入 history / audit（`category-allow` / `category-deny` source）。
+- **11 分类三态开关 + 信任目录双模式**：工具与 shell 命令归入 11 个类别（fileEdit / gitLocal / build / readOnly / delete / protected / privilege / networkExec / gitPush / publish / disk），设置卡逐类配 `auto` / `ask` / `deny`；**默认全部 `inherit` = 行为零变化**。危险类（delete / protected / disk 及未解锁的 privilege）LOCKED 仅接受 `ask`，误配 `auto`/`deny` 会被钳制丢弃并告警；**`privilegeAutoReview`（默认关）可解锁 privilege**——开启后特权命令（含可见内联代码如 `node -e '…'`）走分类器 + LLM 评审 + 倒计时管线；**LOCKED 转人带硬拒倒计时**——超时自动拒绝，`timeoutAction` 任何配置都无法放行（无人值守不再挂起）；`trustedDirs` 在 standard 档把常规位置扩展到显式信任目录，`categoryMode: aggressive` 则取消位置白名单——任意位置均视为常规位置（敏感名 fuse、运行态硬拒、symlink 复检等危险度门全部不动）；复合命令按「类别枚举序 + directive 取严」双轨合并；类别拒绝与 denyList 同构为终端拒绝（提权重试不可绕过）；每次类别决策全量写入 history / audit（`category-allow` / `category-deny` source）。
 - **在线评审模型（可选）**：填写 API 协议、地址、模型、密钥后，审批复审直接打到你的 OpenAI / Anthropic 兼容端点；密钥存在 DSH 凭据存储里，前端只显示「已配置」，永不回显。直连三件（地址 / 模型 / 密钥）配置完整才走在线评审——保存与「测试连接」有前端预检拦下缺项，存量半配置在运行时按未配置处理、评审跟随会话模型（fail-closed 不变）。
 - **人工倒计时 + 超时兜底**：低/中/高三档倒计时（默认 5/8/10 秒）；超时按 `timeoutAction` 处理（`拒绝` / `通过` / `低风险自动同意`）。关浏览器也不悬挂（host 计时器独裁）。
 - **LLM 接管**：中风险且 LLM 在倒计时内给出明确结论时，客户端立即按 LLM 结论裁决，无需你点。
@@ -145,7 +145,8 @@ dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 | `debug` | false | 调试模式：写 `approval-debug.jsonl` 与 `[debug]` 日志 |
 | `reviewerContextFacts` | false | 仅 YAML 可配（设置卡无此控件）。上下文增强复审：给 LLM 复审输入附加结构化工作区事实（目标存在性/类型/大小 + 本会话最近创建文件，最多 8 条）；默认关（载荷与既往一致）。边界：工作区外只报存在性/类型不报大小；tempRoots 文件不入 recent_creates；探测失败整体省略 |
 | `editDiffPreview` | false | 编辑类工具（write/edit/str_replace_editor 非 view/apply_patch）进入人工审批时，面板展示目标文件行级红绿 diff。纯展示：不参与裁决、不进 LLM 复审输入；失败自动省略。边界：可读的工作区内非受保护目标对比现有内容；全量写类（write/create）目标不可读（外部/受保护/新文件）预览仅新内容全量新增（零读目标文件）；对比类（edit/str_replace/insert/apply_patch）目标不可读整体省略；≤1MiB（lstat 不跟随 + 读后字节复核，防 junction 逃逸）；LCS ≤1024 行/侧、单行 ≤200 字符省略、输出 ≤200 行且 ≤32KiB（截断带 `…truncated`）；语义镜像官方（多匹配/已存在/越界 → 省略）；diff 块内倒计时字面量剥离防伪造 |
-| `categoryPolicy` | `{}` | 11 类三态开关：`{类别: auto\|ask\|deny}`，缺省 `inherit` = 保持既往行为；delete/protected/privilege/disk 四类 LOCKED 仅可 `ask`（其余值 warn+丢弃）；harnessInternal/unknown 无键不可配 |
+| `categoryPolicy` | `{}` | 11 类三态开关：`{类别: auto\|ask\|deny}`，缺省 `inherit` = 保持既往行为；delete/protected/disk（及未开启 `privilegeAutoReview` 时的 privilege）LOCKED 仅可 `ask`（其余值 warn+丢弃）；harnessInternal/unknown 无键不可配 |
+| `privilegeAutoReview` | false | 特权类别解锁开关（默认关=fail-closed）：开启后 privilege 可设 auto/ask/deny 并走分类器 + LLM 评审 + 倒计时管线；delete/protected/disk 不受影响仍锁 ask |
 | `categoryMode` | `standard` | 信任目录模式：`standard` 常规位置=workspace ∪ `trustedDirs`；`aggressive` 取消位置白名单，任意位置视为常规（敏感名 fuse、运行态硬拒、symlink 复检等危险度门不动；切换时 UI 明示放开范围） |
 | `trustedDirs` | [] | host-only 键：额外信任目录根（绝对路径数组），作为 standard 档位置白名单成员与两档共用的 symlink 复检区成员；凭据段/home/dshHome/critical 路径排除；仅 patch/YAML 可配，设置卡保存不会抹掉 |
 | `learningEnabled` | false | 确认制学习：同一操作被人工反复确认达阈值后自动放行（命中仍须过一次标准在线评审）；默认关 = 零行为差异。高风险/锁定四类/unknown/敏感路径永不参与；每根会话学习放行上限 50 次 |
