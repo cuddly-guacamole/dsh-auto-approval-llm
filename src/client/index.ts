@@ -888,6 +888,7 @@ function timeoutOptions(): CapsuleOption[] {
 // writes config.
 const SCOPE_PRESETS: { id: string; review: 'low-or-above' | 'medium-or-above' | 'high'; takeover: 'low' | 'medium-or-below' | 'high-or-below' }[] = [
   { id: 'standard', review: 'low-or-above', takeover: 'medium-or-below' },
+  { id: 'relaxed', review: 'medium-or-above', takeover: 'medium-or-below' },
   { id: 'steady', review: 'low-or-above', takeover: 'low' },
   { id: 'strict', review: 'high', takeover: 'low' },
 ]
