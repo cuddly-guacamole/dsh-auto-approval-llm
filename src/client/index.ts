@@ -663,6 +663,7 @@ interface Draft {
   lowRiskSeconds: string
   mediumRiskSeconds: string
   highRiskSeconds: string
+  reviewWaitSeconds: string
   safetyPrompt: string
   reviewerProvider: string
   reviewerModel: string
@@ -699,6 +700,7 @@ function draftOf(value: any): Draft {
     lowRiskSeconds: String(value?.lowRiskSeconds ?? THRESHOLD_DEFAULTS.lowRiskSeconds),
     mediumRiskSeconds: String(value?.mediumRiskSeconds ?? THRESHOLD_DEFAULTS.mediumRiskSeconds),
     highRiskSeconds: String(value?.highRiskSeconds ?? THRESHOLD_DEFAULTS.highRiskSeconds),
+    reviewWaitSeconds: String(value?.reviewWaitSeconds ?? THRESHOLD_DEFAULTS.reviewWaitSeconds),
     safetyPrompt: value?.safetyPrompt ?? '',
     reviewerProvider: value?.reviewerProvider ?? '',
     reviewerModel: value?.reviewerModel ?? '',
@@ -743,6 +745,7 @@ function valueOf(draft: Draft): any {
     lowRiskSeconds: Math.max(1, Number(draft.lowRiskSeconds) || THRESHOLD_DEFAULTS.lowRiskSeconds),
     mediumRiskSeconds: Math.max(1, Number(draft.mediumRiskSeconds) || THRESHOLD_DEFAULTS.mediumRiskSeconds),
     highRiskSeconds: Math.max(1, Number(draft.highRiskSeconds) || THRESHOLD_DEFAULTS.highRiskSeconds),
+    reviewWaitSeconds: Math.min(10, Math.max(1, Number(draft.reviewWaitSeconds) || THRESHOLD_DEFAULTS.reviewWaitSeconds)),
     safetyPrompt: draft.safetyPrompt,
     allowlist: list(draft.allowlist),
     denyList: list(draft.denyList),
@@ -1100,7 +1103,7 @@ function SettingsSection() {
   // overlaid on the last-saved baseline; other cards' unsaved edits are left
   // in the local draft and never accidentally persisted by another card.
   const TOP_KEYS = ['enabled', 'autoSwitchPolicyToAsk', 'timeoutAction', 'llmReviewScope', 'llmTakeoverScope', 'defaultReviewMode', 'showSessionPanel', 'aiButtonPosition']
-  const TIMER_KEYS = ['breakerAntiHijackMs', 'lowRiskSeconds', 'mediumRiskSeconds', 'highRiskSeconds', 'maxConsecutiveDenials', 'maxTotalDenials']
+  const TIMER_KEYS = ['breakerAntiHijackMs', 'lowRiskSeconds', 'mediumRiskSeconds', 'highRiskSeconds', 'maxConsecutiveDenials', 'maxTotalDenials', 'reviewWaitSeconds']
   const REVIEW_KEYS = ['reviewerProtocol', 'reviewerBaseUrl', 'reviewerModel']
   const SECURITY_KEYS = ['safetyPrompt', 'allowlist', 'denyList', 'humanOnlyList', 'rulesText', 'rulesDryRun', 'redactResults', 'editDiffPreview']
   const LEARNING_KEYS = ['learningEnabled', 'learningThreshold']
@@ -1240,6 +1243,7 @@ function SettingsSection() {
       lowRiskSeconds: String(THRESHOLD_DEFAULTS.lowRiskSeconds),
       mediumRiskSeconds: String(THRESHOLD_DEFAULTS.mediumRiskSeconds),
       highRiskSeconds: String(THRESHOLD_DEFAULTS.highRiskSeconds),
+      reviewWaitSeconds: String(THRESHOLD_DEFAULTS.reviewWaitSeconds),
       breakerAntiHijackMs: String(THRESHOLD_DEFAULTS.breakerAntiHijackMs),
       maxConsecutiveDenials: String(THRESHOLD_DEFAULTS.maxConsecutiveDenials),
       maxTotalDenials: String(THRESHOLD_DEFAULTS.maxTotalDenials),
@@ -1581,6 +1585,18 @@ function SettingsSection() {
         className: 'dsa-input',
         style: { width: 80 },
       }),
+    )),
+    row(t('settings.reviewWaitSeconds'), React.createElement('div', { style: { display: 'flex', gap: 6, alignItems: 'center' } },
+      React.createElement('input', {
+        type: 'number',
+        min: 1,
+        max: 10,
+        value: draft.reviewWaitSeconds,
+        onChange: (e: any) => update({ reviewWaitSeconds: e.target.value }),
+        className: 'dsa-input',
+        style: { width: 80 },
+      }),
+      React.createElement('span', { className: 'dsa-inlineTag' }, t('option.seconds')),
     )),
     row(t('settings.denialBreaker'), React.createElement('div', { style: { display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' } },
       React.createElement('span', { className: 'dsa-inlineTag' }, t('option.breaker.consecutive')),

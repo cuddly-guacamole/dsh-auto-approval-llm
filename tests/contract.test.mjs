@@ -2879,3 +2879,15 @@ test('low risk review: parallel with human countdown, claim on decisive verdict'
   assert.ok(src.includes("reviewStates.get(req.callId)?.phase !== 'countdown'"), 'late verdicts after the window are discarded')
   assert.ok(src.includes("asyncPath: false"), 'LOW keeps retry semantics with a countdown race')
 })
+
+test('review wait: configurable per-attempt timeout with clamped default', () => {
+  // Regression anchor (2026-08-26): the per-attempt reviewer timeout is now
+  // the user setting reviewWaitSeconds (default 5, schema-clamped 1..10)
+  // instead of a hardcoded constant, and the retry loop receives it.
+  const src = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
+  assert.ok(src.includes('reviewWaitSeconds'), 'setting must exist in the compiled host')
+  assert.ok(src.includes('attemptTimeoutMs:', 'retry loop must consume the wait setting'))
+  assert.ok(src.includes('.reviewWaitSeconds ?? THRESHOLD_DEFAULTS.reviewWaitSeconds'), 'host fallback must not hardcode the wait')
+  const cfg = resolveConfig({ timeoutAction: 'reject' })
+  assert.equal(cfg.reviewWaitSeconds, 5, 'default wait is 5 seconds')
+})

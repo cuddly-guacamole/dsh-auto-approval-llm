@@ -96,6 +96,8 @@ export interface Config {
   classifierMaxOutputTokens?: number
   /** Extra LLM review attempts after the first (0 = single-shot, 1 = default). */
   reviewMaxRetries?: number
+  /** Seconds one reviewer attempt may wait (per-attempt timeout). */
+  reviewWaitSeconds?: number
   debug: boolean
   /** Mask credential-shaped material in successful tool results. */
   redactResults: boolean
@@ -152,6 +154,11 @@ export const Config: z<Config> = z.object({
   // single-shot behavior). Calibrated against measured review latency (p95 ≈
   // 3.06s): the rolling budget keeps 1 retry affordable on every risk path.
   reviewMaxRetries: z.number().default(THRESHOLD_DEFAULTS.reviewMaxRetries).min(0).max(2),
+  // Seconds one reviewer attempt may wait for a response before giving up
+  // (per-attempt timeout). Calibrated to direct DeepSeek official TTFB
+  // (266ms-4.9s); keep it below the LOW countdown so a healthy review still
+  // lands inside the window.
+  reviewWaitSeconds: z.number().default(THRESHOLD_DEFAULTS.reviewWaitSeconds).min(1).max(10),
   // Result-side credential masking: off until the first-day value/content
   // read-path measurements are in (fail-closed default; opt-in per deployment).
   redactResults: z.boolean().default(false),
@@ -283,6 +290,7 @@ export function resolveConfig(raw: Config): Config {
     highRiskSeconds: raw.highRiskSeconds ?? THRESHOLD_DEFAULTS.highRiskSeconds,
     redactResults: raw.redactResults === true,
     reviewerContextFacts: raw.reviewerContextFacts === true,
+    reviewWaitSeconds: raw.reviewWaitSeconds ?? THRESHOLD_DEFAULTS.reviewWaitSeconds,
     // Default-off (fail-closed): only an explicit true enables the preview.
     editDiffPreview: raw.editDiffPreview === true,
   }
@@ -345,15 +353,13 @@ function findToolDescription(tools: any, toolName: string): string | undefined {
 }
 
 /**
- * Retry calibration: the original 3.5s fit the 2026-08-23 mock/opencode
- * latency profile (p95 ≈ 3.06s, settled samples < 3.2s). Direct DeepSeek
- * official review latency measured 2026-08-26 spans 266ms–4.9s (slow-start
- * TTFB under load), so the per-attempt timeout is raised to 5s — it still
- * fits inside every countdown (LOW 5s is the tightest bound, remaining equal
- * to the attempt window) while keeping most successful official reviews out
- * of the human-escalation path entirely.
+ * Retry calibration history: the original 3.5s fit the 2026-08-23
+ * mock/opencode latency profile (p95 ≈ 3.06s); direct DeepSeek official
+ * review latency measured 2026-08-26 spans 266ms–4.9s, so the per-attempt
+ * timeout became a user setting (`reviewWaitSeconds`, default 5, schema-clamped
+ * 1..10). It should stay at or below the LOW countdown so a healthy review
+ * still lands inside the window.
  */
-const REVIEW_ATTEMPT_TIMEOUT_MS = 5_000
 const REVIEW_RETRY_BACKOFF_MS = 500
 const REVIEW_RETRY_GUARD_MS = 1_500
 
@@ -615,7 +621,7 @@ async function reviewWithLLM(
   const outcome = await retryReviewLoop({
     budgetMs: retry.budgetMs,
     maxRetries: retry.maxRetries,
-    attemptTimeoutMs: REVIEW_ATTEMPT_TIMEOUT_MS,
+    attemptTimeoutMs: Math.min(10_000, Math.max(1_000, (config.reviewWaitSeconds ?? THRESHOLD_DEFAULTS.reviewWaitSeconds) * 1000)),
     backoffMs: REVIEW_RETRY_BACKOFF_MS,
     guardMs: REVIEW_RETRY_GUARD_MS,
     userSignal: req?.signal,
