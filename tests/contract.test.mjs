@@ -2913,3 +2913,15 @@ test('onboarding message: english agent notice, disable switch anchored', () => 
   assert.ok(src.includes("onboardingNoticeText(config.timeoutAction, 'en')"), 'injection must use the English notice')
   assert.ok(src.includes('(Auto-approval) is active'), 'English body must exist in the compiled host')
 })
+
+test('auto-mode notice: enter/exit announcements to the agent, switchable', () => {
+  // Regression anchor (2026-08-26): switching a session into/out of Auto
+  // injects an English agent-context notice via agent.inject (plugin source),
+  // gated by the shared onboardingMessageEnabled switch.
+  const src = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
+  assert.ok(src.includes("event?.type === 'permission/preset'"), 'preset switch must be observed')
+  assert.ok(src.includes('(Auto-approval) is now ACTIVE'), 'enter notice must exist in English')
+  assert.ok(src.includes('(Auto-approval) is now INACTIVE'), 'exit notice must exist in English')
+  assert.ok(src.includes('getConfig().onboardingMessageEnabled === false'), 'notices must honor the switch')
+  assert.ok(src.includes('agent.inject(createUserMessage'), 'notices must go through agent.inject')
+})

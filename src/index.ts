@@ -728,7 +728,27 @@ function flushNotices(session: any): void {
   }
 }
 
-function watchNotices(ctx: any): void {
+function watchNotices(ctx: any, getConfig: () => Config): void {
+  // One telemetry map per session tracking the last permission preset so a
+  // mode switch into/out of Auto can announce itself to the agent (mirrors
+  // the official user-approval policy-change notice, in English like the
+  // onboarding notice — agent context, not a user banner).
+  const sessionPreset = new Map<string, string>()
+  const autoPolicyNotice = (session: any, preset: string): void => {
+    if (getConfig().onboardingMessageEnabled === false) return
+    const agent = ctx.get('agents')?.get?.(session.id)
+    if (!agent || typeof agent.inject !== 'function') return
+    agent.inject(createUserMessage({
+      content: [{
+        type: 'text',
+        text: preset === 'auto'
+          ? '(Auto-approval) is now ACTIVE for this session: low-risk actions pass automatically, uncertain ones show a countdown, and timeouts follow the configured action.'
+          : '(Auto-approval) is now INACTIVE for this session: the official approval flow applies again.',
+      }],
+      source: { kind: 'plugin', plugin: 'dsh-auto-approval-llm' },
+    }))
+    debugLog({ ev: 'auto-mode-notice', sessionId: session?.id ?? null, preset })
+  }
   // Reliable flush point: `tools/result` — its scope carrier keys on
   // exec.agent, the same chain `tools/pre-execute` proves to reach plugin
   // contexts. A `session/event` subscription may be filtered away for plugin
@@ -747,6 +767,16 @@ function watchNotices(ctx: any): void {
   ctx.on('session/event', (session: any, event: any) => {
     // Diagnostic: does the scope carrier actually reach plugin contexts?
     debugLog({ ev: 'onboarding-event', via: 'session/event', sessionId: session?.id ?? null, type: event?.type ?? null })
+    if (event?.type === 'permission/preset' && session?.id) {
+      // Announce Auto-mode entry/exit to the agent (one direction only:
+      // switching away from a preset we never saw as auto is not an exit).
+      const preset = event.data?.preset ?? ''
+      const last = sessionPreset.get(session.id)
+      sessionPreset.set(session.id, preset)
+      if (preset === 'auto' && last !== undefined && last !== 'auto') autoPolicyNotice(session, 'auto')
+      else if (preset !== 'auto' && last === 'auto') autoPolicyNotice(session, 'other')
+      return
+    }
     if (!pendingNotices.has(session?.id)) return
     if (event?.type === 'tool/result') {
       const callId = event.data?.message?.source?.callId
@@ -758,6 +788,7 @@ function watchNotices(ctx: any): void {
   })
   ctx.on('session/disposed', (session: any) => {
     pendingNotices.delete(session?.id)
+    sessionPreset.delete(session?.id)
   })
 }
 
@@ -2108,7 +2139,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
     artifacts.settle(exec, result, rootsFor(exec))
   })
 
-  watchNotices(anyCtx)
+  watchNotices(anyCtx, () => config)
   trustedHosts = resolveTrustedHosts(anyCtx)
   installFeedbackRoute(anyCtx)
   installSettingsRoute(anyCtx, settings)
