@@ -55,13 +55,13 @@ li.dsa-card（可折叠；任一卡脏 → 头部「未保存」徽标）
 │    dsa-onboarding-seen-v1 后不再出现；标题+三行+提示；第二行的
 │    {timeout} 标签按实时 timeoutAction 渲染，非 reject 不出现「拒绝」）
 ├─ 6 张可折叠子卡（均独立 保存/放弃；安全规则卡另有 恢复默认）
-│    ├─ [安全底线] 计时器与熔断   风险倒计时一行（低/中/高三组内联输入）· 拒绝熔断阈值一行（连续/累计）（重置=THRESHOLD_DEFAULTS）
-│    ├─ 在线评审模型   协议(openai/anthropic) · API地址 · 模型 · 密钥(password型)「已配置|未配置」· 测试连接
+│    ├─ [安全底线] 计时器与熔断   风险倒计时一行（低/中/高三组内联输入）· LLM 等待时间一行（秒，1-10，重置=THRESHOLD_DEFAULTS） · 拒绝熔断阈值一行（连续/累计）（重置=THRESHOLD_DEFAULTS）
 │    ├─ [安全底线] 安全规则列表   safetyPrompt · 精确名单（页签切换 allowlist/denyList/humanOnlyList，单个复用 textarea 按页签绑定三字段）
 │    │                · redactResults · editDiffPreview（默认关的增强开关）· rulesText(实时语法校验)
 │    ├─ [安全底线] 分类开关与信任模式   categoryMode(standard/aggressive，切 aggressive 弹放开范围警示)
 │    │                · 11 类逐行三态 CapsuleSelect（LOCKED 四类只剩 继承/人工询问 可选）
 │    ├─ [安全底线] 确认制学习     learningEnabled(on/off) · learningThreshold(数字输入 min2 max10，保存钳回 2..10)（阈值行仅开关=on 时显示）（<span class="lnum">client/index.ts:L1761-1782</span>）
+│    ├─ 在线评审模型   协议(openai/anthropic) · API地址 · 模型 · 密钥(password型)「已配置|未配置」· 测试连接（恢复默认=三键回默认并清除评审密钥）
 │    └─ 最近审批记录   搜索 · 分页(PAGE_SIZE=10) · 记录+[熔断]+原因(warn色) + LLM 响应耗时统计 · 清空历史(confirm)
 └─ 底部 footer：恢复默认 · 重启提示(applies=restart) · 全局错误行
 ```

@@ -2017,7 +2017,6 @@ function SettingsSection() {
         )
       : null,
     subcard(t('settings.timers.title'), openTimers, timerDirty, () => setOpenTimers((o) => !o), buildTimerBody, buildTimerFooter, undefined, t('settings.group.safetyBase')),
-    subcard(t('settings.reviewer.title'), openReview, reviewDirty, () => setOpenReview((o) => !o), buildReviewBody, buildReviewFooter),
     subcard(t('settings.rules.title'), openSecurity, securityDirtyEff, () => setOpenSecurity((o) => !o), buildSecurityBody, buildSecurityFooter,
       securityDirtyEff
         ? React.createElement('span', { className: 'dsa-pending' }, t('settings.unsaved'))
@@ -2026,6 +2025,7 @@ function SettingsSection() {
           : null, t('settings.group.safetyBase')),
     subcard(t('settings.category.title'), openCategory, categoryDirty, () => setOpenCategory((o) => !o), buildCategoryBody, buildCategoryFooter, undefined, t('settings.group.safetyBase')),
     subcard(t('settings.learning.title'), openLearning, learningDirty, () => setOpenLearning((o) => !o), buildLearningBody, () => cardFooter(LEARNING_KEYS, 'learning', learningDirty), undefined, t('settings.group.safetyBase')),
+    subcard(t('settings.reviewer.title'), openReview, reviewDirty, () => setOpenReview((o) => !o), buildReviewBody, buildReviewFooter),
     subcard(t('settings.history.title'), openHistory, false, () => setOpenHistory((o) => !o), buildHistoryBody, buildHistoryFooter),
     React.createElement('div', { style: { borderTop: '1px solid var(--dsw-alias-border-l2)', marginTop: 4 } },
       row(t('settings.debug'), React.createElement(CapsuleSelect, {
