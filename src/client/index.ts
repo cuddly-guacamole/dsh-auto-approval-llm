@@ -1257,6 +1257,7 @@ function SettingsSection() {
     const merged = { ...draftOf(snapshot.value), reviewerProtocol: 'openai', reviewerBaseUrl: '', reviewerModel: '' }
     setDraft({ ...draft, reviewerProtocol: 'openai', reviewerBaseUrl: '', reviewerModel: '' })
     setSaving(true); setError(''); setMessage('')
+    setCardStatus(null)
     try {
       const res = await (globalThis as any).fetch(SETTINGS_ROUTE, {
         method: 'POST',
@@ -1268,9 +1269,10 @@ function SettingsSection() {
       if (!data?.ok) throw new Error(data?.error ?? t('settings.saveFailed'))
       broadcastSettings(data.value)
       await (globalThis as any).fetch(REVIEWER_CREDENTIAL_ROUTE, { method: 'DELETE', credentials: 'same-origin' })
-      setMessage(t('settings.reviewResetDone'))
+      // In-card feedback, left of the restore button (statusLine('review')).
+      setCardStatus({ id: 'review', kind: 'ok', text: t('settings.reviewResetDone') })
     } catch (e: any) {
-      setError(String(e?.message ?? e))
+      setCardStatus({ id: 'review', kind: 'err', text: String(e?.message ?? e) })
     } finally {
       setSaving(false)
     }
