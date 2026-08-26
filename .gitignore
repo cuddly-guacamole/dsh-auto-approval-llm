@@ -16,5 +16,6 @@
 !/tsdown.config.ts
 !/cordis.patch.yml
 !/package-lock.json
+!/screenshots.json
 !/docs/
 /docs/.vitepress/dist/
