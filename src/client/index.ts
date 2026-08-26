@@ -1618,7 +1618,6 @@ function SettingsSection() {
         className: 'dsa-input',
         style: { width: 80 },
       }),
-      React.createElement('span', { className: 'dsa-inlineTag' }, t('option.seconds')),
     )),
     row(t('settings.denialBreaker'), React.createElement('div', { style: { display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' } },
       React.createElement('span', { className: 'dsa-inlineTag' }, t('option.breaker.consecutive')),
