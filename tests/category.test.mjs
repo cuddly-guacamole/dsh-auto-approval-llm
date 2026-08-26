@@ -242,6 +242,25 @@ test('categoryDirective: LOCKED clamps auto/deny to ask, unset inherits', () => 
   assert.equal(categoryDirective({ categoryPolicy: { delete: 'ask' } }, 'delete', askEligible), 'ask')
 })
 
+test('categoryDirective: privilegeAutoReview unlocks only privilege (others stay locked)', () => {
+  const askEligible = { decision: 'ask', classifierEligible: true }
+  // Unlocked privilege honors explicit auto/deny/ask like an ordinary category.
+  const unlocked = { categoryPolicy: {}, categoryMode: 'standard', privilegeAutoReview: true }
+  assert.equal(categoryDirective({ ...unlocked, categoryPolicy: { privilege: 'auto' } }, 'privilege', askEligible), 'auto')
+  assert.equal(categoryDirective({ ...unlocked, categoryPolicy: { privilege: 'deny' } }, 'privilege', askEligible), 'deny')
+  assert.equal(categoryDirective({ ...unlocked, categoryPolicy: { privilege: 'ask' } }, 'privilege', askEligible), 'ask')
+  // Unlocked privilege unconfigured: inherit — the category layer stops
+  // forcing ask, and the call flows into the ordinary review pipeline
+  // (classifier / LLM review / countdown) instead of a status-less human ask.
+  assert.equal(categoryDirective({ categoryMode: 'aggressive', privilegeAutoReview: true }, 'privilege', askEligible), 'inherit')
+  // The other LOCKED categories never unlock through this key.
+  assert.equal(categoryDirective({ ...unlocked, categoryPolicy: { delete: 'auto' } }, 'delete', askEligible), 'ask')
+  assert.equal(categoryDirective({ ...unlocked, categoryPolicy: { protected: 'auto' } }, 'protected', askEligible), 'ask')
+  assert.equal(categoryDirective({ ...unlocked, categoryPolicy: { disk: 'deny' } }, 'disk', askEligible), 'ask')
+  // Without the key, privilege behaves exactly as before (locked).
+  assert.equal(categoryDirective({ categoryPolicy: { privilege: 'auto' } }, 'privilege', askEligible), 'ask')
+})
+
 test('categoryDirective: aggressive builtins and explicit-config precedence', () => {
   const agg = { categoryPolicy: {}, categoryMode: 'aggressive' }
   const askEligible = { decision: 'ask', classifierEligible: true }
@@ -711,7 +730,11 @@ test('LP3: exactly the four countdown hooks construct a learnable context', () =
   const postSlot = HOST_SRC.slice(slotY)
   assert.equal([...preSlot.matchAll(/learnableContextFor\(/g)].length, 0, 'no status-less hook ever constructs one')
   assert.equal([...postSlot.matchAll(/, learnableContextFor\(/g)].length, 4, 'all four live in the countdown ask sites')
-  assert.equal([...HOST_SRC.matchAll(/askHuman\(/g)].length, 10, 'closed ask-site enum: 4 countdown + 6 status-less')
+  // 11 askHuman call sites: the four learnable countdown hooks, the LOCKED
+  // hard-reject countdown (added 2026-08-27, intentionally learnable-less),
+  // and six status-less asks (rules human / humanOnly / category-ask non-
+  // locked / manual / breaker / status-less fallbacks).
+  assert.equal([...HOST_SRC.matchAll(/askHuman\(/g)].length, 11, 'closed ask-site enum: 5 countdown + 6 status-less')
   const hookIndexes = [...postSlot.matchAll(/, learnableContextFor\(/g)].map((m) => m.index)
   const highAnchor = postSlot.indexOf('// HIGH')
   assert.ok(highAnchor !== -1, 'the HIGH branch marker survives compilation')

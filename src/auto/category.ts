@@ -70,6 +70,8 @@ export type CategoryDirective = 'inherit' | 'auto' | 'ask' | 'deny'
 export interface CategoryConfig {
   categoryPolicy?: Record<string, 'auto' | 'ask' | 'deny'>
   categoryMode?: 'standard' | 'aggressive'
+  /** Unlock the privilege LOCKED clamp (fail-closed off). */
+  privilegeAutoReview?: boolean
 }
 
 /** Minimal shapes the category layer consumes (structural, no live objects). */
@@ -623,7 +625,9 @@ export function categorizeCommand(source: string, shell: string, roots: Category
  * Derive the tri-state directive for one category under a config slice.
  * - unknown / harnessInternal → inherit (no configurable key exists)
  * - LOCKED categories: only 'ask' is legal; a mis-clamped auto/deny clamps to
- *   'ask'; unconfigured → 'inherit' (standard) or 'ask' (aggressive builtin)
+ *   'ask'; unconfigured → 'inherit' (standard) or 'ask' (aggressive builtin).
+ *   exception: privilege with privilegeAutoReview=true is treated like an
+ *   ordinary category (explicit auto/deny honored, aggressive builtin auto)
  * - networkExec/gitPush/publish unconfigured → 'auto' under aggressive
  * - 'auto' only applies to an ask-classified, classifier-eligible call; for
  *   every other assessment it degrades to 'inherit' (manual/opaque never auto)
@@ -640,7 +644,8 @@ export function categoryDirective(
   const policy = config.categoryPolicy ?? {}
   const explicit = policy[category]
   const locked = LOCKED_CATEGORIES.includes(category as CategoryKey)
-  if (locked) {
+  const privilegeUnlocked = category === 'privilege' && config.privilegeAutoReview === true
+  if (locked && !privilegeUnlocked) {
     if (explicit !== undefined) return 'ask'
     return mode === 'aggressive' ? 'ask' : 'inherit'
   }

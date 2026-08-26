@@ -117,7 +117,7 @@ Session approval stats — the "Auto Approval" header-button popup: totals / all
 |---|---|---|
 | `enabled` | true | Master switch |
 | `autoSwitchPolicyToAsk` | false | Auto-switch `never` to `ask` for the auto preset with override=never; card control removed, YAML only |
-| `timeoutAction` | `reject` | Timeout action: `reject` / `allow` / `low-risk-allow` (auto-approve only LOW) |
+| `timeoutAction` | `reject` | Timeout action: `reject` / `allow` / `low-risk-allow` (auto-approve only LOW). Locked categories are exempt: delete / protected / disk (and privilege while the privilege opt-out is off) always auto-reject on timeout |
 | `llmReviewScope` | `low-or-above` | Which tiers (LOW/MEDIUM/HIGH) are sent for LLM review |
 | `llmTakeoverScope` | `medium-or-below` | Which tiers allow the LLM verdict to take over directly |
 | `defaultReviewMode` | `smart` | Default per-session review mode: Manual / Smart / Unattended |

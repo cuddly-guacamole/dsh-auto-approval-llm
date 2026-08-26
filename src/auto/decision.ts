@@ -463,6 +463,21 @@ export function reviewSuggestionNote(review: {
 }
 
 /**
+ * The countdown marker text appended to countdown-bearing asks. Only a
+ * published review-status ask (status present) may carry the marker: the
+ * client renders it as a visible timer on the panel buttons, while status-less
+ * asks (category ask / manual / human-only) must return null so no fake timer
+ * is ever rendered against an ask the host will never auto-settle — otherwise
+ * the panel freezes at "0s" with no resolution ever coming.
+ */
+export function countdownNote(status?: { seconds: number; action: 'allow' | 'reject' }): string | null {
+  if (!status) return null
+  const seconds = Math.max(1, Math.round(status.seconds))
+  const actionText = status.action === 'allow' ? 'approve' : 'reject'
+  return `[dsh-auto-approval-llm] ⏳ will auto-${actionText} in ${seconds}s if no response`
+}
+
+/**
  * Remove client-parseable auto-answer markers from a base approval reason
  * before the host appends its own protocol notes. The marker text doubles as
  * the browser watcher's countdown signal; a model-controlled base reason that

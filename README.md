@@ -117,7 +117,7 @@ dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 |---|---|---|
 | `enabled` | true | 总开关 |
 | `autoSwitchPolicyToAsk` | false | 仅 Auto 预设且 override=never 时自动切 ask；设置卡已撤下，仅 YAML 配置 |
-| `timeoutAction` | `reject` | 倒计时超时动作：`reject` 拒绝 / `allow` 全部通过 / `low-risk-allow` 仅低风险放行 |
+| `timeoutAction` | `reject` | 倒计时超时动作：`reject` 拒绝 / `allow` 全部通过 / `low-risk-allow` 仅低风险放行（**锁定类别除外**：删除/受保护/磁盘/未解锁提权恒拒，不受此键影响） |
 | `llmReviewScope` | `low-or-above` | LOW/MEDIUM/HIGH 哪些档送 LLM 复审 |
 | `llmTakeoverScope` | `medium-or-below` | 哪些档允许 LLM 结论直接接管 |
 | `defaultReviewMode` | `smart` | 每会话评审模式默认：人工 / 智能 / 无人值守 |

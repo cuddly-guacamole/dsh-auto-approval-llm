@@ -16,7 +16,7 @@ import { tmpdir } from 'node:os'
 process.env.DSH_AUTO_APPROVAL_READ_CRED_FILE = '0'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { parseReview, lowRiskReviewOutcome, raceHumanDecision, preserveHostKeys, normalizeTimeoutAction, prepareReviewerArguments, extractToolPath, frameReviewerInput, breakerTripped, applyBreaker, reviewSuggestionNote, approvalSource, reviewerAutoAllowBlocked, staticListDecision, stripCountdownMarkers, riskFromAssessment, formatDenyFeedback, DENY_CIRCUMVENTION_GUIDANCE, REVIEW_TIMEOUT_NOTICE, REVIEWER_SYSTEM, assembleReviewerSystem, rulesTextSummary } from '../lib/auto/decision.js'
+import { parseReview, lowRiskReviewOutcome, raceHumanDecision, preserveHostKeys, normalizeTimeoutAction, prepareReviewerArguments, extractToolPath, frameReviewerInput, breakerTripped, applyBreaker, reviewSuggestionNote, approvalSource, reviewerAutoAllowBlocked, staticListDecision, stripCountdownMarkers, countdownNote, riskFromAssessment, formatDenyFeedback, DENY_CIRCUMVENTION_GUIDANCE, REVIEW_TIMEOUT_NOTICE, REVIEWER_SYSTEM, assembleReviewerSystem, rulesTextSummary } from '../lib/auto/decision.js'
 import { sanitizeReviewReason, sanitizeClassifierText } from '../lib/auto/classifier.js'
 import { redactResultValue, redactSecrets } from '../lib/auto/redact.js'
 import { summarizeLatency } from '../lib/auto/latency.js'
@@ -1244,6 +1244,37 @@ test('stripCountdownMarkers: idempotent', () => {
   assert.equal(stripCountdownMarkers(once), once)
 })
 
+// ── countdownNote: only status-bearing asks carry the marker ──────────────
+test('countdownNote: status present → approve/reject marker with clamped seconds', () => {
+  assert.equal(countdownNote({ seconds: 10, action: 'reject' }), '[dsh-auto-approval-llm] ⏳ will auto-reject in 10s if no response')
+  assert.equal(countdownNote({ seconds: 3.2, action: 'allow' }), '[dsh-auto-approval-llm] ⏳ will auto-approve in 3s if no response')
+  assert.equal(countdownNote({ seconds: 0, action: 'reject' }), '[dsh-auto-approval-llm] ⏳ will auto-reject in 1s if no response')
+  assert.equal(countdownNote({ seconds: -5, action: 'allow' }), '[dsh-auto-approval-llm] ⏳ will auto-approve in 1s if no response')
+})
+
+test('countdownNote: no status → no marker (status-less ask must look manual)', () => {
+  assert.equal(countdownNote(undefined), null)
+  assert.equal(countdownNote(null), null)
+})
+
+test('askHuman: status-less asks carry a wait note, never the countdown marker', () => {
+  // Regression anchor (2026-08-27): manual / human-only / non-locked category
+  // asks are status-less — the host never settles them with a timeout, so
+  // injecting the countdown marker made the client render a fake countdown
+  // that froze at 0s. (LOCKED category asks now carry a real hard-reject
+  // countdown and go through this same countdownNote path legitimately.)
+  // The marker must now be produced only by countdownNote(), and the askHuman
+  // fallback must be the neutral wait note.
+  const src = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
+  assert.ok(src.includes('countdownNote'), 'askHuman must source the marker from countdownNote')
+  assert.ok(/notes\.push\(note \?\? ['"]⏸️ Awaiting human approval — no auto-countdown\.['"]\)/.test(src), 'status-less fallback must be the neutral wait note')
+  // The old inline marker template must be gone from the compiled host.
+  assert.ok(!src.includes('will auto-${actionText} in ${seconds}s'), 'askHuman must not assemble the marker inline')
+  // A real countdown ask still appends the marker through countdownNote.
+  const decisionSrc = readFileSync(new URL('../lib/auto/decision.js', import.meta.url), 'utf8')
+  assert.ok(decisionSrc.includes('will auto-${actionText} in ${seconds}s if no response'), 'countdownNote keeps the marker template')
+})
+
 // ── reviewerBaseUrl cleartext/SSRF fence ──────────────────────────────────
 test('validateReviewerBaseUrl: plain http to a non-loopback host is rejected', () => {
   for (const bad of ['http://192.168.1.10:8000/v1', 'http://api.example.com']) {
@@ -2087,6 +2118,18 @@ test('resolveConfig: categoryPolicy clamps LOCKED auto AND deny to inherit', () 
   assert.deepEqual(mixed.categoryPolicy, { privilege: 'ask' })
 })
 
+test('resolveConfig: privilegeAutoReview default off, unlock lets privilege auto/deny through', () => {
+  assert.equal(Config({}).privilegeAutoReview, false)
+  assert.equal(resolveConfig({ timeoutAction: 'reject' }).privilegeAutoReview, false)
+  assert.equal(resolveConfig({ timeoutAction: 'reject', privilegeAutoReview: true }).privilegeAutoReview, true)
+  // Locked by default: privilege auto/deny are still dropped.
+  const locked = resolveConfig({ timeoutAction: 'reject', categoryPolicy: { privilege: 'auto' } })
+  assert.deepEqual(locked.categoryPolicy, {})
+  // Unlocked: privilege auto/deny survive; the other LOCKED categories stay clamped.
+  const unlocked = resolveConfig({ timeoutAction: 'reject', privilegeAutoReview: true, categoryPolicy: { privilege: 'auto', delete: 'auto', protected: 'deny', disk: 'auto' } })
+  assert.deepEqual(unlocked.categoryPolicy, { privilege: 'auto' })
+})
+
 test('resolveConfig: locked ask values survive; non-locked tri-state keys pass through', () => {
   const locked = resolveConfig({ timeoutAction: 'reject', categoryPolicy: { protected: 'ask', privilege: 'ask', disk: 'ask', delete: 'ask' } })
   assert.deepEqual(locked.categoryPolicy, { protected: 'ask', privilege: 'ask', disk: 'ask', delete: 'ask' })
@@ -2150,6 +2193,24 @@ test('askHuman wiring: the diff text is consumed only by the reason assembly, ne
   assert.ok(!llmMetaBlock.includes('editDiff'), 'history llmMeta never carries the diff text')
   const callSites = [...src.matchAll(/buildAskReason\(/g)]
   assert.equal(callSites.length, 1, 'the diff builder feeds exactly one consumer: the ask reason')
+})
+
+test('category ask on LOCKED categories: hard-reject countdown, never auto-allow', () => {
+  // Regression anchor (2026-08-27): LOCKED category asks (delete / protected /
+  // disk; privilege when the opt-out is off) used to be status-less — with no
+  // countdown the panel hung forever in unattended sessions. Now the askHuman
+  // call for a locked category carries a countdown status with action pinned
+  // to 'reject' (timeoutAction can never flip it), no takeover handle, and no
+  // learnable context.
+  const src = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
+  assert.ok(src.includes('if (isLockedCategory(classified.category))'), 'LOCKED detection must gate the locked countdown ask')
+  assert.ok(src.includes("phase: 'countdown'"), 'the locked ask must publish a countdown')
+  assert.ok(src.includes("action: 'reject'"), 'the locked countdown action must be pinned to reject')
+  assert.ok(src.includes('isLockedCategory'), 'isLockedCategory helper must exist in the compiled host')
+  assert.ok(src.includes("const isLockedCategory = (category"), 'helper must be the LOCKED predicate')
+  // Non-locked category asks keep the status-less shape (no countdown status).
+  assert.ok(src.includes('return askHuman(req, undefined, next, false, lockedStatus)'), 'locked ask must pass the countdown status')
+  assert.ok(src.includes('// Other category asks remain status-less'), 'non-locked category asks must stay status-less')
 })
 
 // ── confirmation learning: signature / gate / store contracts ──────────────

@@ -29,7 +29,7 @@ import { AGGRESSIVE_BUILTIN, applyCategoryDirective, CATEGORY_KEYS, categoryDire
 import { sanitizeClassifierArguments, sanitizeClassifierText, sanitizeReviewReason } from './auto/classifier.js'
 import { THRESHOLD_DEFAULTS } from './auto/constants.js'
 import { createDshClassifier } from './auto/dsh-classifier.js'
-import { type RaceHumanHandle, type ReviewResult, type StaticRisk, REVIEW_TIMEOUT_NOTICE, applyBreaker, approvalSource, assembleReviewerSystem, breakerTripped, createKeyedMutex, extractToolPath, followResolution, formatDenyFeedback, frameReviewerInput, lowRiskReviewOutcome, parseReview, preserveHostKeys, raceHumanDecision, reviewSuggestionNote, reviewerAutoAllowBlocked, riskFromAssessment, staticListDecision, type ContextSummary } from './auto/decision.js'
+import { type RaceHumanHandle, type ReviewResult, type StaticRisk, REVIEW_TIMEOUT_NOTICE, applyBreaker, approvalSource, assembleReviewerSystem, breakerTripped, countdownNote, createKeyedMutex, extractToolPath, followResolution, formatDenyFeedback, frameReviewerInput, lowRiskReviewOutcome, parseReview, preserveHostKeys, raceHumanDecision, reviewSuggestionNote, reviewerAutoAllowBlocked, riskFromAssessment, staticListDecision, type ContextSummary } from './auto/decision.js'
 import { loadLatencySamples, pushLatencySample, summarizeLatency, type LatencySample } from './auto/latency.js'
 import { buildAskReason, buildEditDiff, buildEditDiffText, EDIT_DIFF_ARGS_MAX_CHARS, EDIT_DIFF_TOOLS } from './auto/editdiff.js'
 import {
@@ -112,6 +112,8 @@ export interface Config {
   categoryPolicy: Record<string, 'auto' | 'ask' | 'deny'>
   /** Position-gate mode: 'standard' (current) | 'aggressive' (location-unrestricted, hardened). */
   categoryMode: 'standard' | 'aggressive'
+  /** Opt-out of the privilege LOCKED clamp: false = privilege stays ask-only. */
+  privilegeAutoReview: boolean
   /** Extra trusted directories for Standard mode (host-only, absolute paths). */
   trustedDirs: string[]
   /** Confirmation learning master switch: off by default (zero behavior change). */
@@ -180,6 +182,12 @@ export const Config: z<Config> = z.object({
   // clamps unknown/LOCKED keys (see resolveConfig); empty = inherit.
   categoryPolicy: z.dict(z.union(['auto', 'ask', 'deny'] as const), z.string()).default({}),
   categoryMode: z.union(['standard', 'aggressive'] as const).default('standard'),
+  // Privilege-category opt-out from the LOCKED clamp (fail-closed off): when
+  // true, `privilege` commands (system management / nested execution /
+  // security-sensitive tools) may be configured auto|ask|deny like ordinary
+  // categories — auto flows through classifier + LLM review + countdown.
+  // delete/protected/disk stay locked regardless.
+  privilegeAutoReview: z.boolean().default(false),
   trustedDirs: z.array(z.string()).default([]),
   // Confirmation learning: fail-closed default (off). The threshold accepts a
   // wide numeric range here; resolveConfig warns and clamps into [2,10]
@@ -205,7 +213,8 @@ export function resolveConfig(raw: Config): Config {
   // Category policy clamp: unknown keys (including 'unknown'/'harnessInternal'
   // and spelling drift) are warned and dropped, so no category key can ever
   // become 'auto' by accident; LOCKED categories accept only 'ask' (auto/deny
-  // are warned and dropped = inherit). Mirrors the timeoutAction migration
+  // are warned and dropped = inherit), except privilege when
+  // privilegeAutoReview is on. Mirrors the timeoutAction migration
   // pattern: warn + normalize, never throw.
   const categoryPolicy: Record<string, 'auto' | 'ask' | 'deny'> = {}
   for (const [key, value] of Object.entries(raw.categoryPolicy ?? {})) {
@@ -221,7 +230,8 @@ export function resolveConfig(raw: Config): Config {
       console.warn(`[dsh-auto-approval-llm] ignoring ${key}=${String(value)}: expected "auto" | "ask" | "deny"`)
       continue
     }
-    if (LOCKED_CATEGORIES.includes(key as (typeof LOCKED_CATEGORIES)[number]) && value !== 'ask') {
+    if (LOCKED_CATEGORIES.includes(key as (typeof LOCKED_CATEGORIES)[number]) && value !== 'ask'
+      && !(key === 'privilege' && raw.privilegeAutoReview === true)) {
       console.warn(`[dsh-auto-approval-llm] ignoring ${key}=${String(value)}: locked categories accept only "ask"`)
       continue
     }
@@ -283,6 +293,9 @@ export function resolveConfig(raw: Config): Config {
     timeoutAction,
     categoryPolicy,
     categoryMode: raw.categoryMode === 'aggressive' ? 'aggressive' : 'standard',
+    // Default-off (fail-closed): only an explicit true unlocks privilege
+    // (delete/protected/disk stay locked regardless).
+    privilegeAutoReview: raw.privilegeAutoReview === true,
     trustedDirs,
     // Default-off (fail-closed): only an explicit true enables learning.
     learningEnabled: raw.learningEnabled === true,
@@ -1822,6 +1835,14 @@ export function apply(ctx: Context, rawConfig: Config): void {
   }
   const authorityFor = (exec: any) => autoPermissionAuthority(exec, parentAgent, permissionPresets, AUTO_PRESET)
   const isAutoExecution = (exec: any) => authorityFor(exec) !== undefined
+  // LOCKED-category predicate honoring the privilege opt-out: delete /
+  // protected / disk are always locked; privilege is locked unless
+  // privilegeAutoReview is on (then it follows the ordinary pipeline).
+  const isLockedCategory = (category: string | undefined): boolean => {
+    if (category === undefined) return false
+    if (category === 'privilege' && config.privilegeAutoReview === true) return false
+    return LOCKED_CATEGORIES.includes(category as (typeof LOCKED_CATEGORIES)[number])
+  }
   // Root authority session (walks the parent chain for subagents that inherit
   // Auto): the preset gate, breaker counter, and history are all keyed on this
   // so switching/creating a subagent can never reset the breaker.
@@ -2314,11 +2335,13 @@ export function apply(ctx: Context, rawConfig: Config): void {
         : `rejected ${config.maxTotalDenials} times in total`
       notes.push(`⚠️ Breaker: model was ${limitText}; handed to a human, auto-countdown disabled.${reasons ? `\nPrevious denial reasons:\n${reasons}` : ''}`)
     } else {
-      const seconds = status
-        ? Math.max(1, Math.round(status.seconds))
-        : Math.max(1, Math.round(config.highRiskSeconds))
-      const actionText = status?.action === 'allow' ? 'approve' : 'reject'
-      notes.push(`[dsh-auto-approval-llm] ⏳ will auto-${actionText} in ${seconds}s if no response`)
+      // Countdown marker only for status-bearing asks (countdown review-state
+      // published). Status-less asks (category ask / manual / human-only /
+      // breaker-free rules fallbacks) carry an explicit wait-for-human note
+      // instead — no marker, so the client renders no fake countdown and the
+      // panel never looks stuck at 0s when no timeout will ever fire.
+      const note = countdownNote(status)
+      notes.push(note ?? '⏸️ Awaiting human approval — no auto-countdown.')
     }
     const extra = notes.map((n) => `\n\n${n}`).join('')
     // Edit-class operations get a line-level diff preview of the target file
@@ -2737,9 +2760,23 @@ export function apply(ctx: Context, rawConfig: Config): void {
       return askHuman(req, undefined, next)
     }
     if (classified.directive === 'ask') {
-      // Category ask ≡ explicit human decision: status-less askHuman (no
-      // countdown, no LLM takeover, no timeout auto-allow), same path as
-      // humanOnlyList / manual review mode.
+      // LOCKED category ask (delete / protected / disk, plus privilege when
+      // privilegeAutoReview is off) still requires a human look, but it
+      // carries a hard-reject countdown: the action is pinned to 'reject'
+      // regardless of timeoutAction (never auto-allow), no LLM takeover
+      // handle is wired, and no learnable context is passed — after
+      // highRiskSeconds with no response the ask settles as timeout-deny so
+      // unattended sessions cannot hang forever on a dangerous command.
+      if (isLockedCategory(classified.category)) {
+        const lockedStatus: ReviewStatus = {
+          risk: 'HIGH',
+          phase: 'countdown',
+          action: 'reject',
+          seconds: Math.max(1, Math.round(config.highRiskSeconds)),
+        }
+        return askHuman(req, undefined, next, false, lockedStatus)
+      }
+      // Other category asks remain status-less (explicit human decision).
       return askHuman(req, undefined, next)
     }
 

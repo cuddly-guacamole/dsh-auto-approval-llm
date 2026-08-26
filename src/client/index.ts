@@ -685,6 +685,7 @@ interface Draft {
   editDiffPreview: 'on' | 'off'
   categoryPolicy: Record<string, 'auto' | 'ask' | 'deny'>
   categoryMode: 'standard' | 'aggressive'
+  privilegeAutoReview: 'on' | 'off'
   trustedDirs: string[]
   learningEnabled: 'on' | 'off'
   learningThreshold: string
@@ -725,6 +726,7 @@ function draftOf(value: any): Draft {
       ? { ...value.categoryPolicy }
       : {},
     categoryMode: value?.categoryMode === 'aggressive' ? 'aggressive' : 'standard',
+    privilegeAutoReview: value?.privilegeAutoReview === true ? 'on' : 'off',
     trustedDirs: Array.isArray(value?.trustedDirs) ? [...value.trustedDirs] : [],
     learningEnabled: value?.learningEnabled === true ? 'on' : 'off',
     learningThreshold: String(value?.learningThreshold ?? THRESHOLD_DEFAULTS.learningThreshold),
@@ -766,6 +768,7 @@ function valueOf(draft: Draft): any {
     editDiffPreview: draft.editDiffPreview === 'on',
     categoryPolicy: draft.categoryPolicy,
     categoryMode: draft.categoryMode,
+    privilegeAutoReview: draft.privilegeAutoReview === 'on',
     trustedDirs: draft.trustedDirs,
     learningEnabled: draft.learningEnabled === 'on',
     learningThreshold: Math.max(2, Math.min(10, intOr(draft.learningThreshold, THRESHOLD_DEFAULTS.learningThreshold))),
@@ -1127,6 +1130,7 @@ function SettingsSection() {
   const categoryDirty =
     JSON.stringify(draft.categoryPolicy) !== JSON.stringify(baseDraft.categoryPolicy ?? {})
     || draft.categoryMode !== baseDraft.categoryMode
+    || draft.privilegeAutoReview !== baseDraft.privilegeAutoReview
   const learningDirty = cardDirty(LEARNING_KEYS)
   const invalidKeys = findInvalidConfigKeys(snapshot.value)
   const configError = (snapshot as any)?.configError ?? null
@@ -1758,12 +1762,17 @@ function SettingsSection() {
       options: categoryModeOptions(),
       onChange: (v: string) => update({ categoryMode: v as 'standard' | 'aggressive' }),
     }), t('settings.category.modeHint')),
+    row(t('settings.category.privilegeAutoReview'), React.createElement(CapsuleSelect, {
+      value: draft.privilegeAutoReview,
+      options: onOffOptions(),
+      onChange: (v: any) => update({ privilegeAutoReview: v as 'on' | 'off' }),
+    }), t('settings.category.privilegeAutoReviewHint')),
     draft.categoryMode === 'aggressive'
       ? React.createElement('p', { className: 'dsa-hint', style: { margin: 0, color: 'var(--dsw-alias-state-warn-primary)' } }, t('settings.category.aggressiveNotice'))
       : null,
     React.createElement('p', { className: 'dsa-hint', style: { margin: 0 } }, t('settings.category.policyHint')),
     ...CATEGORY_KEY_LIST.map((key) => {
-      const locked = CATEGORY_LOCKED_LIST.includes(key)
+      const locked = CATEGORY_LOCKED_LIST.includes(key) && !(key === 'privilege' && draft.privilegeAutoReview === 'on')
       const options: CapsuleOption[] = [
         { value: '', label: t('settings.category.inherit') },
         { value: 'auto', label: t('option.category.value.auto') },
@@ -1793,7 +1802,7 @@ function SettingsSection() {
       size: 'sm',
       disabled: saving || !snapshot.writable,
       onClick: () => {
-        setDraft({ ...draft, categoryPolicy: baseDraft.categoryPolicy ?? {}, categoryMode: baseDraft.categoryMode ?? 'standard' })
+        setDraft({ ...draft, categoryPolicy: baseDraft.categoryPolicy ?? {}, categoryMode: baseDraft.categoryMode ?? 'standard', privilegeAutoReview: baseDraft.privilegeAutoReview ?? 'off' })
         setCardStatus({ id: 'category', kind: 'ok', text: '' })
       },
     }, t('settings.discard')),
@@ -1801,7 +1810,7 @@ function SettingsSection() {
       variant: 'primary',
       size: 'sm',
       disabled: saving || !snapshot.writable || !categoryDirty,
-      onClick: () => saveCard(['categoryPolicy', 'categoryMode'], 'category'),
+      onClick: () => saveCard(['categoryPolicy', 'categoryMode', 'privilegeAutoReview'], 'category'),
     }, saving ? t('settings.saving') : t('settings.save')),
   )
 
