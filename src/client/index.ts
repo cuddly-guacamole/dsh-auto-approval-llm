@@ -1250,8 +1250,30 @@ function SettingsSection() {
     })
   }
 
-  const resetReviewerCard = () => {
+  const resetReviewerCard = async () => {
+    // One-tap factory reset of the online-reviewer card: default the three
+    // config keys, persist them, and clear the reviewer API key (credential
+    // store + file fallback) so no secret survives the reset.
+    const merged = { ...draftOf(snapshot.value), reviewerProtocol: 'openai', reviewerBaseUrl: '', reviewerModel: '' }
     setDraft({ ...draft, reviewerProtocol: 'openai', reviewerBaseUrl: '', reviewerModel: '' })
+    setSaving(true); setError(''); setMessage('')
+    try {
+      const res = await (globalThis as any).fetch(SETTINGS_ROUTE, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ expectedRevision: snapshot.revision, value: valueOf(merged) }),
+        credentials: 'same-origin',
+      })
+      const data = await res.json()
+      if (!data?.ok) throw new Error(data?.error ?? t('settings.saveFailed'))
+      broadcastSettings(data.value)
+      await (globalThis as any).fetch(REVIEWER_CREDENTIAL_ROUTE, { method: 'DELETE', credentials: 'same-origin' })
+      setMessage(t('settings.reviewResetDone'))
+    } catch (e: any) {
+      setError(String(e?.message ?? e))
+    } finally {
+      setSaving(false)
+    }
   }
 
   const restoreTopDefaults = async () => {

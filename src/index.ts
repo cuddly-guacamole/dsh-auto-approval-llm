@@ -963,6 +963,35 @@ function reviewerKeyFromCredentialFile(): string | undefined {
   }
 }
 
+/** Best-effort removal of the reviewer key line from the shared credential
+ * file, mirroring the fallback probe paths. Used by the credential DELETE so
+ * "restore defaults" really clears the reviewer key in every source. Never
+ * touches any other ref line. */
+function clearReviewerKeyFromCredentialFile(): boolean {
+  try {
+    const candidates = [
+      process.env.DSH_HOME ? join(process.env.DSH_HOME, '.credentials.yaml') : '',
+      join(homedir(), '.dsh', '.credentials.yaml'),
+    ]
+    for (const file of candidates) {
+      if (!file) continue
+      try {
+        const text = readFileSync(file, 'utf8')
+        const pattern = new RegExp(`^\\s*${REVIEWER_CREDENTIAL_REF}\\s*:.*$`, 'm')
+        if (!pattern.test(text)) continue
+        const cleaned = text.replace(pattern, '')
+        writeFileSync(file, cleaned)
+        return true
+      } catch {
+        // try the next candidate
+      }
+    }
+    return false
+  } catch {
+    return false
+  }
+}
+
 interface ReviewStatus {
   risk: 'LOW' | 'MEDIUM' | 'HIGH'
   phase: 'countdown' | 'follow'
@@ -1291,6 +1320,10 @@ function installReviewerCredentialRoute(ctx: any, credentials: any): void {
               return
             }
           }
+          // Also drop the shared-file fallback source (the line this plugin
+          // appended earlier): a cleared reviewer key must not resurrect from
+          // the credential file on the next review. Best-effort only.
+          clearReviewerKeyFromCredentialFile()
           responseJson(res, 200, { ok: true })
           return
         }

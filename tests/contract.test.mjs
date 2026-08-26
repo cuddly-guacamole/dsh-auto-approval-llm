@@ -2891,3 +2891,15 @@ test('review wait: configurable per-attempt timeout with clamped default', () =>
   const cfg = resolveConfig({ timeoutAction: 'reject' })
   assert.equal(cfg.reviewWaitSeconds, 5, 'default wait is 5 seconds')
 })
+
+test('reviewer credential delete also clears file-fallback key line', () => {
+  // Regression anchor (2026-08-26): "restore defaults" on the online-reviewer
+  // card must really clear the reviewer key — credential store via DELETE and
+  // the shared-file fallback line this plugin may have appended earlier.
+  const src = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
+  assert.ok(src.includes('function clearReviewerKeyFromCredentialFile'), 'file-clear helper must exist')
+  assert.ok(src.includes('clearReviewerKeyFromCredentialFile()'), 'DELETE handler must invoke the file clear')
+  const clientSrc = readFileSync(new URL('../src/client/index.ts', import.meta.url), 'utf8')
+  assert.ok(clientSrc.includes("method: 'DELETE'"), 'client reset must issue a credential DELETE')
+  assert.ok(clientSrc.includes('settings.reviewResetDone'), 'client reset must report completion')
+})
