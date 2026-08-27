@@ -101,6 +101,14 @@ dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 
 ![安全规则列表](assets/settings-safety-rules.png)
 
+分类开关与信任模式——标准/激进两种位置模式、特权命令允许 LLM 审查开关与各类别独立三态覆盖：
+
+![分类开关与信任模式](assets/settings-categories-trust.png)
+
+确认制学习——同一签名累计 N 次真实人工确认后自动放行（每次放行前仍经一次在线评审），支持查看与吊销已学习条目：
+
+![确认制学习](assets/settings-learning.png)
+
 审批面板——倒计时贴在超时自动执行的动作上（此处 `超时动作=低风险自动同意` → 中风险超时自动**拒绝**，「拒绝」按钮带倒计时、「允许一次」保持干净）：
 
 ![审批面板 · 拒绝倒计时](assets/approval-panel-countdown-reject.png)

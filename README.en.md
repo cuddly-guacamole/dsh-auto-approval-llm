@@ -101,6 +101,14 @@ Safety rules — safety prompt / allow & deny lists / declarative rules / dry-ru
 
 ![Safety rules](assets/settings-safety-rules.png)
 
+Category switches & trust mode — standard/aggressive location modes, a switch to let privilege commands into LLM review, and per-category three-state overrides:
+
+![Category switches & trust mode](assets/settings-categories-trust.png)
+
+Confirmation-based learning — after N real human confirms of the same signature the action auto-passes (each pass still goes through one online review); learned entries can be viewed and revoked:
+
+![Confirmation-based learning](assets/settings-learning.png)
+
 Approval panel — the countdown sits on the button that will auto-execute on timeout (here `timeoutAction=low-risk-allow` → a medium-risk request auto-**rejects** on timeout, so "Reject" runs the countdown and "Allow once" stays clean):
 
 ![Approval panel · Reject countdown](assets/approval-panel-countdown-reject.png)
