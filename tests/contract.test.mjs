@@ -2237,6 +2237,37 @@ test('resolveConfig: trustedDirs are normalized (folded) before storage (D-3)', 
   assert.deepEqual(out.trustedDirs, ['c:\\ok2', 'd:\\trusted dir\\'])
 })
 
+// ── dev-loop audit round: omitted learningThreshold must not spam a warning ──
+// resolveConfig is called on every settings/updated and with patch defaults
+// (which omit the key); the old guard warned "clamping learningThreshold
+// undefined" on every such run. Only an actually-present out-of-range/non-
+// integer value may warn.
+test('resolveConfig: an omitted learningThreshold never warns (schema default path)', () => {
+  const warnings = []
+  const original = console.warn
+  console.warn = (...args) => { warnings.push(args.join(' ')) }
+  try {
+    const out = resolveConfig({ timeoutAction: 'reject' })
+    assert.equal(out.learningThreshold, THRESHOLD_DEFAULTS.learningThreshold)
+    assert.ok(!warnings.some((w) => w.includes('learningThreshold')), `unexpected warnings: ${warnings.join(' | ')}`)
+  } finally {
+    console.warn = original
+  }
+})
+
+test('resolveConfig: a present out-of-range learningThreshold still warns and clamps', () => {
+  const warnings = []
+  const original = console.warn
+  console.warn = (...args) => { warnings.push(args.join(' ')) }
+  try {
+    const out = resolveConfig({ timeoutAction: 'reject', learningThreshold: 99 })
+    assert.equal(out.learningThreshold, 10)
+    assert.ok(warnings.some((w) => w.includes('learningThreshold')), 'an invalid present value must warn')
+  } finally {
+    console.warn = original
+  }
+})
+
 test('frameReviewerInput: the reviewer payload can never carry the diff block (5-key invariant)', () => {
   const payload = JSON.parse(frameReviewerInput({
     toolName: 'edit',

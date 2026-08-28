@@ -274,11 +274,14 @@ export function resolveConfig(raw: Config): Config {
     raw.learningThreshold,
     THRESHOLD_DEFAULTS.learningThreshold,
   )
+  // Only an actually-present invalid value warns: an omitted key is the schema
+  // default and must not spam a "clamping undefined" warning on every boot.
   if (
-    typeof raw.learningThreshold !== 'number' ||
-    !Number.isInteger(raw.learningThreshold) ||
-    raw.learningThreshold < 2 ||
-    raw.learningThreshold > 10
+    raw.learningThreshold !== undefined && raw.learningThreshold !== null &&
+    (typeof raw.learningThreshold !== 'number' ||
+      !Number.isInteger(raw.learningThreshold) ||
+      raw.learningThreshold < 2 ||
+      raw.learningThreshold > 10)
   ) {
     console.warn(`[dsh-auto-approval-llm] clamping learningThreshold ${String(raw.learningThreshold)} to ${learningThreshold} (valid range: integer 2..10)`)
   }
