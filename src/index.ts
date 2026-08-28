@@ -3003,6 +3003,14 @@ export function apply(ctx: Context, rawConfig: Config): void {
           // a reviewer that could not decide — the human countdown continues
           // and the timeout action applies when it expires.
         })
+        .catch((error) => {
+          // The LOW review races the countdown exactly like MEDIUM/HIGH; an
+          // unexpected rejection must be observed (latency + debug trail), not
+          // left as an unhandledRejection that could crash the host process.
+          // The countdown keeps running, so a healthy human answer is unaffected.
+          debugLog({ ev: 'review-error', callId: req.callId, scope: 'low', error: error instanceof Error ? error.message : String(error) })
+          pushLatencySample(llmLatency, { at: Date.now(), tookMs: Date.now() - lowReviewStart, settled: false })
+        })
       return lowAskPromise
     }
 

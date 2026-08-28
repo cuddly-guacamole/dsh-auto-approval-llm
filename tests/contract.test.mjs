@@ -2270,6 +2270,23 @@ test('askHuman wiring: the diff text is consumed only by the reason assembly, ne
   assert.equal(callSites.length, 1, 'the diff builder feeds exactly one consumer: the ask reason')
 })
 
+// ── dev-loop audit round: the LOW review chain must observe rejections ──────
+// MEDIUM/HIGH attach a `.catch` to their asynchronous review chain; the LOW
+// chain used to end with `.then(...)` only. An unexpected rejection there
+// became an unhandledRejection (a default-crash risk for the whole host
+// process in modern Node), so the LOW chain must carry the same catch.
+test('LOW async review chain must attach the same rejection catch as MEDIUM/HIGH', () => {
+  const src = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
+  const lowChainStart = src.indexOf('void reviewWithLLM(')
+  assert.ok(lowChainStart !== -1, 'the LOW review chain must exist')
+  const lowChainEnd = src.indexOf('return lowAskPromise')
+  assert.ok(lowChainEnd > lowChainStart, 'the LOW chain must end before its ask return')
+  const lowChain = src.slice(lowChainStart, lowChainEnd)
+  assert.ok(lowChain.includes('.catch('), 'the LOW chain must attach a .catch')
+  assert.ok(lowChain.includes("'low'") || lowChain.includes('"low"'), 'the LOW catch must identify its scope')
+  assert.ok(lowChain.includes('pushLatencySample'), 'the LOW catch must sample the aborted attempt')
+})
+
 test('category ask on LOCKED categories: hard-reject countdown, never auto-allow', () => {
   // Regression anchor (2026-08-27): LOCKED category asks (delete / protected /
   // disk; privilege when the opt-out is off) used to be status-less — with no
