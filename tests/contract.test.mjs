@@ -709,6 +709,40 @@ test('evaluateRules: dimension mismatch continues to next rule', () => {
   assert.equal(evaluateRules(rules, main).policy, 'human')
 })
 
+// ── dev-loop audit round: `?`-containing agent scopes must fail closed ──────
+// A `?`-leading agent value (`[agent:?]`) passes parse-time validation but
+// used to compile into an invalid regex (`/^?$/`) at evaluation time, throwing
+// inside the approval chain. The converter now escapes `?` as a literal and
+// degrades unreachable spellings to a never-matching rule.
+test('parseRulesText: `?`-containing agent scope values stay parseable', () => {
+  for (const text of ['[agent:?] bash | deny | toolName', '[agent:a?b] bash | deny | toolName', '[agent:??] bash | deny | toolName']) {
+    const { rules, errors } = parseRulesText(text)
+    assert.equal(errors.length, 0, text)
+    assert.equal(rules.length, 1, text)
+  }
+})
+
+test('evaluateRules: `?` scopes never throw and match literally (never a quantifier)', () => {
+  const lone = parseRulesText('[agent:?] bash | deny | toolName').rules
+  // must not throw for any subject
+  assert.equal(evaluateRules(lone, { toolName: 'bash', agentKind: 'main', agentName: 'anything' }), undefined)
+  assert.equal(evaluateRules(lone, { toolName: 'bash', agentKind: 'main', agentName: '?' })?.policy, 'deny')
+  const literal = parseRulesText('[agent:a?b] bash | deny | toolName').rules
+  assert.equal(evaluateRules(literal, { toolName: 'bash', agentKind: 'main', agentName: 'a?b' })?.policy, 'deny')
+  assert.equal(evaluateRules(literal, { toolName: 'bash', agentKind: 'main', agentName: 'ab' }), undefined)
+  assert.equal(evaluateRules(literal, { toolName: 'bash', agentKind: 'main', agentName: 'axb' }), undefined)
+  // `*` keeps its documented glob meaning.
+  const glob = parseRulesText('[agent:node-*] bash | deny | toolName').rules
+  assert.equal(evaluateRules(glob, { toolName: 'bash', agentKind: 'main', agentName: 'node-1' })?.policy, 'deny')
+  assert.equal(evaluateRules(glob, { toolName: 'bash', agentKind: 'main', agentName: 'web-1' }), undefined)
+})
+
+test('evaluateRules: `?` scope with a negated value never throws', () => {
+  const rules = parseRulesText('[agent:!?] bash | deny | toolName').rules
+  assert.equal(evaluateRules(rules, { toolName: 'bash', agentKind: 'main', agentName: '?', }), undefined)
+  assert.equal(evaluateRules(rules, { toolName: 'bash', agentKind: 'main', agentName: 'other' })?.policy, 'deny')
+})
+
 test('evaluateRules: dimensions AND tools AND pattern all must pass', () => {
   const { rules, errors } = parseRulesText('[agent:main,workspace:D:/proj] bash(^git push) | deny | arguments')
   assert.equal(errors.length, 0)

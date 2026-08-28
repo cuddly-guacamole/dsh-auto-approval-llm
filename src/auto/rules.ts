@@ -105,7 +105,19 @@ function isBoundedPattern(src: string): boolean {
 
 /** Anchor a glob pattern (`*` wildcards) as an anchored case-insensitive regex. */
 function toGlobRegExp(pattern: string): RegExp {
-  return new RegExp(`^${pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`, 'i')
+  // `?` is escaped as a literal: only `*` is a documented glob character, and
+  // an agent value like `?` (which parseDimensionHeader accepts) must never
+  // compile into a quantifier — `/^?$/` throws SyntaxError at evaluation time,
+  // crashing the approval chain instead of failing the rule closed.
+  const source = `^${pattern.replace(/[.+^${}()|[\]\\?]/g, '\\$&').replace(/\*/g, '.*')}$`
+  try {
+    return new RegExp(source, 'i')
+  } catch {
+    // A pathological spelling that survives parsing (hand-edited rules text)
+    // must never throw inside evaluateRules: a never-matching rule is the
+    // fail-closed shape (the rule simply does not apply).
+    return new RegExp('(?!)', 'i')
+  }
 }
 
 /** Path comparison form: separators unified to `/`, trailing slashes dropped, case folded. */
