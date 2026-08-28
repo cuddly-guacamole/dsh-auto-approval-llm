@@ -177,9 +177,14 @@ export function approvalSource(input: {
   claimed: boolean
   auto: boolean
   reviewerDecision?: string
+  /** The claim settled a reviewer FAILURE (ESCALATE + failure), not a decisive verdict. */
+  reviewerFailure?: boolean
 }): string {
   if (input.timedOut) return input.outcome === 'allowed-once' ? 'timeout-allow' : 'timeout-deny'
   if (input.claimed) {
+    // A claim that ended the race with a reviewer failure is never labeled a
+    // decided LLM denial: fail-closed outcomes must not feed the denial breaker.
+    if (input.reviewerFailure === true) return 'llm-failed'
     // A claim is only ever made for a decidable ALLOW/DENY verdict; when the
     // verdict is somehow absent, fall back to the outcome rather than guessing.
     if (input.reviewerDecision === 'ALLOW') return 'llm-allow'

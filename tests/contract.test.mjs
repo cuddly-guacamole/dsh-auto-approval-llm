@@ -755,6 +755,15 @@ test('applyBreaker: llmDecided=false (advisory, non-takeover DENY) never increme
   assert.equal(allow.increment, false)
 })
 
+test('applyBreaker: llm-failed (reviewer-failure claim) never increments', () => {
+  const t = applyBreaker({ consecutive: 2, total: 10 }, 'llm-failed', true)
+  assert.deepEqual(t.counts, { consecutive: 2, total: 10 })
+  assert.equal(t.increment, false)
+  assert.equal(t.reset, false)
+  const resets = applyBreaker({ consecutive: 2, total: 10 }, 'llm-failed', false)
+  assert.deepEqual(resets.counts, { consecutive: 2, total: 10 })
+})
+
 test('applyBreaker: timeouts and auto answers leave counters untouched', () => {
   for (const source of ['timeout-deny', 'timeout-allow', 'auto-deny', 'auto-allow']) {
     const t = applyBreaker({ consecutive: 1, total: 4 }, source, true)
@@ -912,6 +921,17 @@ test('approvalSource: a genuine LLM takeover (claim) is labelled llm-*', () => {
   assert.equal(approvalSource({ outcome: 'rejected', timedOut: false, claimed: true, auto: true, reviewerDecision: 'DENY' }), 'llm-deny')
   // A claim without a matching decidable verdict falls back to the outcome.
   assert.equal(approvalSource({ outcome: 'allowed-once', timedOut: false, claimed: true, auto: false }), 'llm-allow')
+})
+
+test('approvalSource: a reviewer-failure claim is llm-failed, never an LLM denial', () => {
+  // A fail-closed claim (ESCALATE + failure) settles the ask but must never be
+  // labeled or counted as a decided LLM denial by the denial breaker.
+  assert.equal(approvalSource({ outcome: 'rejected', timedOut: false, claimed: true, reviewerFailure: true }), 'llm-failed')
+  assert.equal(approvalSource({ outcome: 'allowed-once', timedOut: false, claimed: true, reviewerFailure: true }), 'llm-failed')
+  // A decisive verdict still wins when no failure is present.
+  assert.equal(approvalSource({ outcome: 'rejected', timedOut: false, claimed: true, reviewerFailure: false, reviewerDecision: 'DENY' }), 'llm-deny')
+  // Without a claim the failure label never applies.
+  assert.equal(approvalSource({ outcome: 'rejected', timedOut: false, claimed: false, reviewerFailure: true }), 'human-deny')
 })
 
 test('approvalSource: no reviewer signal at all -> human/auto by outcome', () => {

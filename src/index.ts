@@ -2502,11 +2502,14 @@ export function apply(ctx: Context, rawConfig: Config): void {
     // timeout — that was mislabeling every auto-answer as 'timeout-*'.
     const follow = (review as any) ?? (req.callId !== undefined ? reviewVerdicts.get(req.callId) : undefined)
     const followDecidable = follow && (follow.decision === 'ALLOW' || follow.decision === 'DENY')
+    // A claim that settled with a reviewer failure (ESCALATE + failure) is an
+    // honest 'llm-failed' resolution: fail-closed, never an LLM denial streak.
+    const followFailed = follow !== undefined && follow.decision === 'ESCALATE' && follow.failure !== undefined
     const llmMeta = follow && follow.decision
       ? {
           llmDecision: follow.decision,
           llmRisk: follow.riskLevel,
-          llmReason: follow.reason,
+          llmReason: follow.failure !== undefined && follow.reason === undefined ? follow.failure : follow.reason,
           ...(Array.isArray(follow.attempts) && follow.attempts.length > 0 ? { attempts: follow.attempts } : {}),
         }
       : {}
@@ -2521,6 +2524,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       claimed,
       auto,
       reviewerDecision: followDecidable ? follow.decision : undefined,
+      ...(followFailed ? { reviewerFailure: true } : {}),
     })
     // Breaker transition: a human answer resets the counters, a decided LLM
     // denial (only when this ask was an LLM takeover — never an advisory HIGH
@@ -2932,26 +2936,13 @@ export function apply(ctx: Context, rawConfig: Config): void {
           if (!req.callId || reviewStates.get(req.callId)?.phase !== 'countdown') return
           const verdict = lowRiskReviewOutcome(review)
           if (verdict.kind === 'allow') {
+            // Single-source accounting: history and the denial breaker are
+            // updated exactly once in askHuman's continuation (the claim
+            // resolves it) — counting here as well would double-record. The
+            // breaker is also never reset by an LLM allow: only a human
+            // decision resets it (LOW/MEDIUM parity).
             reviewVerdicts.set(req.callId, { ...review, attempts })
-            // Serialize the reset so a concurrent denial for this session
-            // cannot interleave and lose its increment (or resurrect stale
-            // counters).
-            await breakerMutex.run(sessionKey, () => {
-              denials.set(sessionKey, 0)
-              totalDenials.set(sessionKey, 0)
-              denialLog.delete(sessionKey)
-            })
             if (config.notifyUser) queueNotice(req.agent.session, req.callId, `✅ Model approved "${toolName}"`)
-            pushHistory({
-              sessionId: sessionKey,
-              toolName,
-              outcome: 'allowed-once',
-              source: 'llm-allow',
-              llmDecision: review.decision,
-              llmRisk: review.riskLevel,
-              llmReason: review.reason,
-              ...(attempts.length > 0 ? { attempts } : {}),
-            })
             lowHandle.claim('allowed-once')
             reviewStates.set(req.callId, {
               risk: staticRisk,
@@ -2967,29 +2958,13 @@ export function apply(ctx: Context, rawConfig: Config): void {
           }
           if (verdict.kind === 'deny') {
             if (verdict.llmDenied) {
-              // Serialize the increment: read the counters INSIDE the lock so
-              // a concurrent approval cannot interleave and lose it.
-              await breakerMutex.run(sessionKey, () => {
-                const priorNow = denials.get(sessionKey) ?? 0
-                const totalNow = totalDenials.get(sessionKey) ?? 0
-                denials.set(sessionKey, priorNow + 1)
-                totalDenials.set(sessionKey, totalNow + 1)
-                const log = denialLog.get(sessionKey) ?? []
-                log.push({ reason: review.reason ? sanitizeReviewReason(review.reason) : undefined, toolName })
-                if (log.length > config.maxConsecutiveDenials) log.shift()
-                denialLog.set(sessionKey, log)
-              })
+              // Decisive LLM denial: register the verdict and claim the race.
+              // The breaker increment and the history record land exactly once
+              // in askHuman's continuation — incrementing here in addition
+              // would double-count the denial. LOW/MEDIUM now share the same
+              // accounting path.
+              reviewVerdicts.set(req.callId, { ...review, attempts })
               recordDecisionFeedback(req.callId, formatDenyFeedback('llm', { toolName, reason: review.reason }))
-              pushHistory({
-                sessionId: sessionKey,
-                toolName,
-                outcome: 'rejected',
-                source: 'llm-deny',
-                llmDecision: review.decision,
-                llmRisk: review.riskLevel,
-                llmReason: review.reason,
-                ...(attempts.length > 0 ? { attempts } : {}),
-              })
               lowHandle.claim('rejected')
               reviewStates.set(req.callId, {
                 risk: staticRisk,
@@ -3003,16 +2978,23 @@ export function apply(ctx: Context, rawConfig: Config): void {
               debugLog({ ev: 'follow', callId: req.callId, decision: review.decision, tookMs: Date.now() - lowReviewStart })
             } else {
               // Reviewer unavailable/crashed: fail closed on LOW, never
-              // auto-allow and never count toward the LLM-denial breaker.
+              // auto-allow and never count toward the LLM-denial breaker. The
+              // verdict (ESCALATE + failure) is registered so the continuation
+              // labels the resolution 'llm-failed' — which applyBreaker does
+              // not count — instead of a decided 'llm-deny'. A follow is
+              // published like every other decisive claim so the client closes
+              // the official panel with the real outcome.
+              reviewVerdicts.set(req.callId, { ...review, attempts })
               recordDecisionFeedback(req.callId, formatDenyFeedback('timeout'))
-              pushHistory({
-                sessionId: sessionKey,
-                toolName,
-                outcome: 'rejected',
-                source: 'llm-failed',
-                llmReason: review.failure ?? 'reviewer unavailable',
-                ...(attempts.length > 0 ? { attempts } : {}),
+              reviewStates.set(req.callId, {
+                risk: staticRisk,
+                phase: 'follow',
+                action: 'reject',
+                seconds: 0,
+                note: reviewSuggestionNote(review),
+                source: 'llm',
               })
+              followExpiry.set(req.callId, Date.now() + FOLLOW_STATE_TTL_MS)
               lowHandle.claim('rejected')
             }
             return
