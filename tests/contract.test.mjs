@@ -184,6 +184,27 @@ test('raceHumanDecision: takeover claim for a DENY resolves rejected', async () 
   assert.deepEqual(raced, { outcome: 'rejected', timedOut: false, claimed: true })
 })
 
+test('raceHumanDecision: a claim landing after the human answered cannot relabel it', async () => {
+  const handle = {}
+  const human = new Promise((resolve) => setTimeout(() => resolve('allowed-once'), 5))
+  const racing = raceHumanDecision(() => human, {
+    status: { seconds: 60, action: 'reject' },
+    callId: 'late-claim',
+    recordTimeout: () => {},
+  }, handle)
+  // The human answers; the in-flight review verdict claims a microtask or two
+  // later — i.e. AFTER the race already settled on the human side, but before
+  // the race continuation reads `claimed`. The label must stay human.
+  human.then(async () => {
+    await Promise.resolve()
+    await Promise.resolve()
+    handle.claim('rejected')
+  })
+  const raced = await racing
+  assert.deepEqual(raced, { outcome: 'allowed-once', timedOut: false, claimed: false },
+    'a late claim after the human answered must not relabel the resolution as an LLM takeover')
+})
+
 test('preserveHostKeys: host-only fields survive a card save that omits them', () => {
   const current = { workspaceRoot: 'C:/ws', dshHome: 'C:/dsh', tempRoots: ['t'], classifierTimeoutMs: 9000, maxArgsChars: 4000, notifyUser: true, enabled: false }
   const submitted = { enabled: true, timeoutAction: 'reject' }

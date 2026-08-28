@@ -95,7 +95,10 @@ export interface RaceHumanHandle {
  * When `handle` is supplied its `claim` lets a decisive caller pre-empt the
  * countdown: the timer is cleared and the race settles with the pure outcome
  * string and `timedOut: false`, so the returned shape stays identical whether
- * the human, the host timer, or the caller's claim wins.
+ * the human, the host timer, or the caller's claim wins. A claim that lands
+ * after the human side already answered is ignored for labeling
+ * (`claimed: false`), so an in-flight review verdict can never relabel a human
+ * decision as an LLM takeover.
  */
 export async function raceHumanDecision(
   next: () => Promise<any>,
@@ -106,6 +109,9 @@ export async function raceHumanDecision(
   let timeoutTimer: ReturnType<typeof setTimeout> | undefined
   let timedOut = false
   let claimed = false
+  // Whether the human/cancellation side (next) settled — used only to stop the
+  // host timer from recording a spurious timeout notice for an answered ask.
+  let finishedByNext = false
   let settle: (outcome: string, didTimeout: boolean) => void = () => {}
   const racedPromise = new Promise<string>((resolve) => {
     settle = (outcome: string, didTimeout: boolean) => {
@@ -113,7 +119,7 @@ export async function raceHumanDecision(
       resolve(outcome)
     }
     timeoutTimer = setTimeout(() => {
-      if (claimed) return
+      if (claimed || finishedByNext) return
       if (opts.callId !== undefined) {
         const actionText = opts.status.action === 'allow' ? 'approved' : 'rejected'
         opts.recordTimeout(
@@ -133,8 +139,18 @@ export async function raceHumanDecision(
     }
   }
   try {
-    const outcome = await Promise.race([Promise.resolve().then(() => next()), racedPromise])
-    return { outcome, timedOut, claimed }
+    // Tag both race arms with their origin so the winner is unambiguous: a
+    // claim that arrives after the human side already settled the race must
+    // not relabel the decision as an LLM takeover (the outcome and the label
+    // must describe the SAME side that actually won).
+    const won = await Promise.race([
+      Promise.resolve().then(() => next()).then(
+        (value) => { finishedByNext = true; return { via: 'next', value } },
+        (error) => { finishedByNext = true; throw error },
+      ),
+      racedPromise.then((value) => ({ via: 'race', value })),
+    ])
+    return { outcome: won.value, timedOut, claimed: claimed && won.via === 'race' }
   } finally {
     if (!timedOut && !claimed && timeoutTimer !== undefined) clearTimeout(timeoutTimer)
   }
