@@ -939,6 +939,14 @@ function segmentHardDenyReason(segment, shell, roots) {
  */
 export function hardDenyShellReason(source, shell, roots) {
     const compact = source.trim();
+    // Newline-flattened copy for the whole-line fuses: `decomposeCommandLine`
+    // treats `\n` as a segment separator, but an opaque grouping form such as
+    // `(echo a\nsudo ls)` short-circuits before any per-segment check, and the
+    // anchor class here has no `\n` — so a privilege command hidden on its own
+    // line inside a group previously escaped the unconditional fuse. Flattening
+    // first makes `\n` behave exactly like the `;` separator the segment loop
+    // already guards against.
+    const flat = compact.replace(/\r?\n/g, '; ');
     // Whole-line privilege fuse: also catches a compound line whose operator
     // separates a segment starting with sudo/doas/su (`echo hi;sudo ls`,
     // `cmd && sudo rm -rf /`), which the old `^|\s` anchor missed. Anchored on
@@ -947,9 +955,9 @@ export function hardDenyShellReason(source, shell, roots) {
     // authoritative guard for decomposed lines. `{` is included so a brace
     // group (`{ sudo ls; }`) is caught before decomposition (a `{` otherwise
     // makes the line opaque and escapes both fuses).
-    if (/(?:^|[;&|({])\s*(?:sudo|doas|su)(?:\s|$)/i.test(compact))
+    if (/(?:^|[;&|({])\s*(?:sudo|doas|su)(?:\s|$)/i.test(flat))
         return 'privilege escalation is not permitted by auto mode';
-    if (/(?:set-executionpolicy|disable-windowsdefender|clear-disk|format-volume|remove-partition|bcdedit)(?:\s|$)/i.test(compact)) {
+    if (/(?:set-executionpolicy|disable-windowsdefender|clear-disk|format-volume|remove-partition|bcdedit)(?:\s|$)/i.test(flat)) {
         return 'operating-system security or disk policy changes are not permitted';
     }
     if (/(?:curl|wget|invoke-webrequest|invoke-restmethod)/i.test(compact) && (sensitiveMarker(compact) || dshHomeExfil(compact, roots))) {

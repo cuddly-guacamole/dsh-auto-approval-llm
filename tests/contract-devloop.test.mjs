@@ -76,6 +76,35 @@ test('assessShell: brace-group sudo is denied end to end', () => {
   assert.equal(assessShell('{ sudo rm -rf /; }', 'bash', roots, artifacts, undefined).decision, 'deny')
 })
 
+// ── dev-loop audit round: newline-hidden privilege commands in opaque groups ──
+// A group/brace form whose opener makes the line opaque (`(echo a\nsudo ls)`)
+// previously escaped both fuses: the whole-line anchor class had no `\n` and
+// the per-segment loop never ran. The fuses now run against a newline-flattened
+// copy so `\n` behaves like the `;` separator the segment loop already guards.
+test('hardDenyShellReason: newline-hidden sudo/doas/su inside opaque groups is hard-denied', () => {
+  const roots = { workspace: 'C:/ws', home: 'C:/Users/u', dshHome: 'C:/Users/u/.dsh', tempRoots: [] }
+  const deny = 'privilege escalation is not permitted by auto mode'
+  assert.equal(hardDenyShellReason('(echo a\nsudo ls)', 'bash', roots), deny)
+  assert.equal(hardDenyShellReason('{ echo a\nsudo rm -rf /; }', 'bash', roots), deny)
+  assert.equal(hardDenyShellReason('echo b\n( doas whoami )', 'bash', roots), deny)
+  assert.equal(hardDenyShellReason('git status\nsudo ls', 'bash', roots), deny)
+  assert.equal(hardDenyShellReason('echo x\nsu -c whoami', 'bash', roots), deny)
+})
+
+test('assessShell: newline-hidden group privilege is denied end to end', () => {
+  const roots = { workspace: 'C:/ws', home: 'C:/Users/u', dshHome: 'C:/Users/u/.dsh', tempRoots: [] }
+  const artifacts = { has: () => false }
+  assert.equal(assessShell('(echo a\nsudo ls)', 'bash', roots, artifacts, undefined).decision, 'deny')
+  assert.equal(assessShell('{ echo a\nsudo ls; }', 'bash', roots, artifacts, undefined).decision, 'deny')
+})
+
+test('hardDenyShellReason: multi-line ordinary commands are not misjudged by the flatten', () => {
+  const roots = { workspace: 'C:/ws', home: 'C:/Users/u', dshHome: 'C:/Users/u/.dsh', tempRoots: [] }
+  assert.equal(hardDenyShellReason('echo a\nls -la', 'bash', roots), undefined)
+  assert.equal(hardDenyShellReason('echo sudo\nls', 'bash', roots), undefined)
+  assert.equal(hardDenyShellReason('echo a\n(ls)', 'bash', roots), undefined)
+})
+
 // ── C: symlink-escape guard covers the read-tool family ─────────────────────
 test('symlinkGuardTargets: grep/glob/lsp paths are covered like read/read_image', () => {
   assert.deepEqual(symlinkGuardTargets('write', { file_path: 'C:/ws/a.ts' }), ['C:/ws/a.ts'])
