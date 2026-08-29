@@ -1021,6 +1021,20 @@ const SETTINGS_NS = 'auto-approval-llm' as any
 // `configured`, never the secret. Resolved per operation, not cached.
 const REVIEWER_CREDENTIAL_REF = 'DSH_AUTO_APPROVAL_REVIEWER_API_KEY'
 
+/**
+ * Parse the `DSH_AUTO_APPROVAL_REVIEWER_API_KEY: <value>` line out of the
+ * shared credential file text. Pure so the fallback parsing is contract-tested.
+ * Handles the two spellings users actually write: bare `sk-...` and a value
+ * wrapped in single/double quotes (`"sk-..."`), stripping the closing quote so
+ * a quoted YAML value never ships a trailing quote character as part of the
+ * key.
+ */
+export function extractReviewerKeyLine(text: string): string | undefined {
+  const match = text.match(new RegExp(`^\\s*${REVIEWER_CREDENTIAL_REF}\\s*:\\s*["']?(sk-[^\\s]+)`, 'm'))
+  if (!match) return undefined
+  return match[1].replace(/["']+$/, '')
+}
+
 /** Best-effort fallback: read the reviewer key from the shared DSH credential
  * file (`~/.dsh/.credentials.yaml`) when the credentials service is not
  * reachable from the plugin scope. Never throws; returns undefined if absent. */
@@ -1036,8 +1050,8 @@ function reviewerKeyFromCredentialFile(): string | undefined {
       if (!file) continue
       try {
         const text = readFileSync(file, 'utf8')
-        const match = text.match(new RegExp(`^\\s*${REVIEWER_CREDENTIAL_REF}\\s*:\\s*(sk-[^\\s]+)`, 'm'))
-        if (match) return match[1]
+        const key = extractReviewerKeyLine(text)
+        if (key !== undefined) return key
       } catch {
         // try the next candidate
       }
