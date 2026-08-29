@@ -297,7 +297,10 @@ function dynamicHomeTarget(source) {
     return /(?:\$\{?HOME\}?|\$env:(?:USERPROFILE|HOME)|%USERPROFILE%|%HOME%)/i.test(source);
 }
 function sensitiveMarker(source) {
-    return /(?:\.ssh[\\/]|\.gnupg[\\/]|\.aws[\\/]|\.kube[\\/]|\.credentials\.yaml|\.env(?:$|[.\/\s])|id_(?:rsa|ed25519)|(?:API|AUTH|ACCESS|SECRET)[_-]?KEY|TOKEN|PASSWORD)/i.test(source);
+    // `.env.example*` is a documentation template (same carve-out as the
+    // read paths / protected-project fuses); a real `.env` or `.env.<env>`
+    // (e.g. `.env.production`) stays a sensitive marker.
+    return /(?:\.ssh[\\/]|\.gnupg[\\/]|\.aws[\\/]|\.kube[\\/]|\.credentials\.yaml|\.env(?!\.example)(?:$|[.\/\s])|id_(?:rsa|ed25519)|(?:API|AUTH|ACCESS|SECRET)[_-]?KEY|TOKEN|PASSWORD)/i.test(source);
 }
 /**
  * Whether a shell exfil would ship a file living under the configured DSH_HOME
