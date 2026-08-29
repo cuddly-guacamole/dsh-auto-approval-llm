@@ -1121,19 +1121,11 @@ const followExpiry = new Map<string, number>()
 // LLM's review is always visible, even when it did not take over.
 const reviewVerdicts = new Map<string, ReviewResult>()
 
-// callIds answered by the plugin's own client auto-answer (autoRespond /
-// followRespond). Map<callId, timestamp> with a TTL sweep so a late ACK can
-// never grow it without bound (RISK-05); askHuman reads/clears it to label
-// history source as 'auto-*'.
-const autoAnswered = new Map<string, number>()
-const AUTO_ANSWERED_TTL_MS = 60_000
-
 // callIds whose approval/request has already been settled by the host (any
-// resolution path). The client's follow ACK (FEEDBACK POST with auto:true)
-// arrives AFTER askHuman finished, so without this set the ACK would relabel a
-// resolved ask as "no response: auto-*" and re-add the callId to autoAnswered
-// forever. Map<callId, timestamp>; swept with the follow sweep; only used to
-// gate feedback text.
+// resolution path). The client's follow ACK (FEEDBACK POST) arrives AFTER
+// askHuman finished, so without this set the ACK would relabel a resolved ask
+// as "no response: auto-*". Map<callId, timestamp>; swept with the follow
+// sweep; only used to gate feedback text.
 const resolvedCallIds = new Map<string, number>()
 const RESOLVED_TTL_MS = 30_000
 
@@ -1149,7 +1141,6 @@ const approvalState = {
   reviewStates,
   followExpiry,
   reviewVerdicts,
-  autoAnswered,
   resolvedCallIds,
   timeoutFeedback,
   decisionFeedback,
@@ -1168,9 +1159,6 @@ function sweepFollowPhase(now = Date.now()): void {
   }
   for (const [callId, at] of resolvedCallIds) {
     if (now - at > RESOLVED_TTL_MS) resolvedCallIds.delete(callId)
-  }
-  for (const [callId, at] of autoAnswered) {
-    if (now - at > AUTO_ANSWERED_TTL_MS) autoAnswered.delete(callId)
   }
 }
 
@@ -1286,11 +1274,6 @@ export function installFeedbackRoute(ctx: any): void {
         if (!decisionFeedback.has(body.callId) && !resolvedCallIds.has(body.callId)) {
           recordTimeoutFeedback(body.callId, `[dsh-auto-approval-llm] no response: auto-${actionText}`)
         }
-        // Client auto-answer marker (autoRespond/followRespond): remember it so
-        // history can say 'auto-*' rather than implying a human clicked. Only
-        // when the host has NOT already resolved: otherwise the ACK would
-        // re-add a callId that askHuman already cleaned up, leaking it forever.
-        if (body.auto === true && !resolvedCallIds.has(body.callId)) autoAnswered.set(body.callId, Date.now())
         // The client has seen the follow phase and is answering: release the
         // follow state early instead of waiting for the TTL sweep.
         if (reviewStates.get(body.callId)?.phase === 'follow') {
@@ -2504,18 +2487,16 @@ export function apply(ctx: Context, rawConfig: Config): void {
     } catch (error) {
       // The delegated official approval (next()) rejected — e.g. the session
       // was disposed or the request was cancelled while awaiting the panel.
-      // The success path below (resolvedCallIds/verdict/autoAnswered cleanup,
-      // history, breaker) is skipped by the propagating exception, so perform
-      // the essential per-callId cleanup here to keep the maps bounded, mark
-      // the ask host-resolved so a late FEEDBACK ACK cannot relabel it, and
-      // drop any stored verdict/auto-answer marker. Then rethrow so the
-      // approval chain observes the failure (fail-closed: never a fabricated
-      // resolution).
+      // The success path below (resolvedCallIds/verdict cleanup, history, breaker)
+      // is skipped by the propagating exception, so perform the essential
+      // per-callId cleanup here to keep the maps bounded, mark the ask
+      // host-resolved so a late FEEDBACK ACK cannot relabel it, and drop any
+      // stored verdict marker. Then rethrow so the approval chain observes the
+      // failure (fail-closed: never a fabricated resolution).
       aborted = true
       if (req.callId !== undefined) {
         resolvedCallIds.set(req.callId, Date.now())
         reviewVerdicts.delete(req.callId)
-        autoAnswered.delete(req.callId)
       }
       throw error
     } finally {
@@ -2540,10 +2521,10 @@ export function apply(ctx: Context, rawConfig: Config): void {
         followExpiry.set(req.callId, Date.now() + FOLLOW_STATE_TTL_MS)
       }
     }
-    // Mark the ask as host-resolved so a late client ACK (FEEDBACK auto:true)
-    // cannot relabel it "no response: auto-*" or re-add it to autoAnswered.
-    // Covers status-less asks too: their client-side countdown answer is also
-    // a resolution the host has already finished by the time the ACK lands.
+    // Mark the ask as host-resolved so a late client ACK (FEEDBACK POST) cannot
+    // relabel it "no response: auto-*". Covers status-less asks too: their
+    // client-side countdown answer is also a resolution the host has already
+    // finished by the time the ACK lands.
     if (req.callId !== undefined) resolvedCallIds.set(req.callId, Date.now())
     // The denial breaker is updated below, after `source` is computed, so it
     // only ever reacts to a human decision (reset) or a decided LLM denial
@@ -2566,7 +2547,6 @@ export function apply(ctx: Context, rawConfig: Config): void {
           ...(Array.isArray(follow.attempts) && follow.attempts.length > 0 ? { attempts: follow.attempts } : {}),
         }
       : {}
-    const auto = req.callId !== undefined && autoAnswered.has(req.callId)
     // Honest provenance: only a genuine LLM takeover (the caller's claim
     // settled the race) may label the resolution `llm-*`. An advisory review
     // verdict may still exist (followDecidable), but a human/timeout/auto
@@ -2575,7 +2555,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       outcome,
       timedOut,
       claimed,
-      auto,
+      auto: false,
       reviewerDecision: followDecidable ? follow.decision : undefined,
       ...(followFailed ? { reviewerFailure: true } : {}),
     })
@@ -2607,14 +2587,13 @@ export function apply(ctx: Context, rawConfig: Config): void {
       outcome,
       timedOut,
       source,
-      auto,
       seconds: status?.seconds ?? null,
       elapsedMs: Date.now() - t0,
       llmDecision: (follow as any)?.decision ?? null,
       breaker: breaker === true,
     })
     const requestAt = requestAtByKey.get(key) ?? null
-    debugLog({ ev: 'resolve', callId: req.callId ?? null, outcome, timedOut, source, auto, seconds: status?.seconds ?? null, elapsedMs: Date.now() - t0, requestAt, requestToResolveMs: requestAt !== null ? Date.now() - requestAt : null, llmDecision: (follow as any)?.decision ?? null })
+    debugLog({ ev: 'resolve', callId: req.callId ?? null, outcome, timedOut, source, seconds: status?.seconds ?? null, elapsedMs: Date.now() - t0, requestAt, requestToResolveMs: requestAt !== null ? Date.now() - requestAt : null, llmDecision: (follow as any)?.decision ?? null })
     pushHistory({
       sessionId: key,
       toolName: req.toolName,
@@ -2652,7 +2631,6 @@ export function apply(ctx: Context, rawConfig: Config): void {
     // Verdict maps are read above to compute the source; clean them now.
     if (req.callId !== undefined) {
       reviewVerdicts.delete(req.callId)
-      autoAnswered.delete(req.callId)
     }
     return outcome
   }

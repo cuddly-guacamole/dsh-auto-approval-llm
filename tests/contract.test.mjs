@@ -1213,11 +1213,11 @@ test('isTrustedRequest: cross-site and Origin mismatch are rejected', () => {
 })
 
 // ── FEEDBACK route: loopback privileged domain ──────────────────────────────
-// The feedback route writes approval state (timeout notice text, auto-answer
-// markers, early follow release) keyed by a callId the review-status protocol
-// carries in the open; it is therefore part of the loopback-only privileged
-// plane, exactly like the settings / reviewer-credential routes. These tests
-// drive the registered handler directly with minimal fake req/res.
+// The feedback route writes approval state (timeout notice text, early follow
+// release) keyed by a callId the review-status protocol carries in the open;
+// it is therefore part of the loopback-only privileged plane, exactly like
+// the settings / reviewer-credential routes. These tests drive the registered
+// handler directly with minimal fake req/res.
 
 function captureFeedbackHandler() {
   const registrations = []
