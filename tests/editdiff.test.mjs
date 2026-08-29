@@ -387,6 +387,37 @@ test('buildEditDiff: apply_patch any patch failure omits the whole preview', () 
   }
 })
 
+test('buildEditDiff: apply_patch new_string is literal — $&/$1 replacement patterns never rewrite the preview', () => {
+  const f = fixture()
+  try {
+    const target = join(f.workspace, 'literal.txt')
+    writeFileSync(target, 'abc')
+    // $& would expand to the matched text under String.replace; the preview
+    // must show exactly what the tool will write (literal interpolation).
+    const diff = buildEditDiff('apply_patch', args({ patches: [
+      { file_path: target, old_string: 'b', new_string: 'X$&Y' },
+    ] }), f.workspace)
+    assert.ok(diff)
+    // The whole line changes (b → X$&Y), so the line diff is one del+add of
+    // the full line; the added text must carry the literal $& (never the
+    // expanded matched "b").
+    assert.deepEqual(diff.lines, [
+      { kind: 'del', text: 'abc' },
+      { kind: 'add', text: 'aX$&Yc' },
+    ], '$& must stay literal, never expand to the matched "b"')
+    const dollar = buildEditDiff('apply_patch', args({ patches: [
+      { file_path: target, old_string: 'b', new_string: '$1' },
+    ] }), f.workspace)
+    assert.ok(dollar)
+    assert.deepEqual(dollar.lines, [
+      { kind: 'del', text: 'abc' },
+      { kind: 'add', text: 'a$1c' },
+    ], '$1 must stay literal')
+  } finally {
+    f.cleanup()
+  }
+})
+
 // ── read gate: write falls back to a full addition, compare-class omits ─────
 test('buildEditDiff: write to an out-of-workspace target falls back to a full-addition diff of the in-args content', () => {
   const f = fixture()

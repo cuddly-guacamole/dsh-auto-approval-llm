@@ -366,7 +366,10 @@ function applyPatchDiff(args: any, workspaceRoot: string, home?: string): EditDi
     const before = current.get(normalized)!
     const occurrences = countOccurrences(before, p.old_string)
     if (occurrences === 0 || occurrences > 1) return undefined
-    current.set(normalized, before.replace(p.old_string, p.new_string))
+    // Literal replacement: split/join (never String.replace, whose $&/$1/$`
+    // /$' patterns would rewrite the new_string and mislead the approval panel
+    // about what the tool will actually write).
+    current.set(normalized, before.split(p.old_string).join(p.new_string))
   }
   const all: EditDiffLine[] = []
   const multi = files.length > 1
