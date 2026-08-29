@@ -24,26 +24,31 @@
         approval: never
 
 # Config values are pinned against the z.object defaults in src/index.ts.
-# These rows ship the fail-closed bundle defaults. They are plain config rows,
-# NEVER a `- insert:` self-entry: the plugin is already loaded once through the
-# profile's bundles array, and a second self-insert would apply() it twice and
-# crash on duplicate webserver routes (fixed 2026-08-30).
-# The home-layer ~/.dsh/cordis.patch.yml may override any of these keys.
-- id: auto-approval-llm
-  config:
-    enabled: true
-    # OVERRIDE of code default (false): ship the never->ask policy guard
-    # ON so a bundle install cannot run the auto preset unapproved.
-    autoSwitchPolicyToAsk: true
-    timeoutAction: reject
-    allowlist: []
-    denyList: []
-    # Equals code default ([]): bash is not pinned to human review; the
-    # classifier and LLM review pipeline handle it (unreadable destructive
-    # shell still stays on the one-shot human path via shell.ts).
-    humanOnlyList: []
-    # Equals code defaults (see src/index.ts Config):
-    maxConsecutiveDenials: 3
-    maxTotalDenials: 20
-    maxArgsChars: 4000
-    notifyUser: true
+# The plugin's loader ENTRY is created by this insert row — the profile
+# bundles array only supplies patch layers, it does not create entries.
+# 2026-08-30 regression note: removing the insert (or keeping only id-targeted
+# config rows) leaves the plugin with no loader entry -> all plugin routes 404.
+# A duplicate-apply crash (00:23-00:28) came from this insert PLUS the
+# super-injector runtime re-injecting the same package from its registry;
+# the registry no longer lists this plugin, so the insert alone is the single
+# entry source and the config rows below are the shipped defaults.
+- insert:
+    - id: auto-approval-llm
+      name: '@quill507/dsh-auto-approval-llm'
+      config:
+        enabled: true
+        # OVERRIDE of code default (false): ship the never->ask policy guard
+        # ON so a bundle install cannot run the auto preset unapproved.
+        autoSwitchPolicyToAsk: true
+        timeoutAction: reject
+        allowlist: []
+        denyList: []
+        # Equals code default ([]): bash is not pinned to human review; the
+        # classifier and LLM review pipeline handle it (unreadable destructive
+        # shell still stays on the one-shot human path via shell.ts).
+        humanOnlyList: []
+        # Equals code defaults (see src/index.ts Config):
+        maxConsecutiveDenials: 3
+        maxTotalDenials: 20
+        maxArgsChars: 4000
+        notifyUser: true
