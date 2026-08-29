@@ -19,7 +19,7 @@
  *   the average), so it is counted separately and never aggregated into
  *   the latency statistics.
  */
-import { appendFileSync, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -107,7 +107,21 @@ export function pushLatencySample(samples: LatencySample[], sample: LatencySampl
   try {
     appendFileSync(LATENCY_FILE, `${JSON.stringify(sample)}\n`)
     if (statSync(LATENCY_FILE).size > 1_048_576) {
-      writeFileSync(LATENCY_FILE, `${samples.map((s) => JSON.stringify(s)).join('\n')}\n`)
+      // Mirror of atomicWriteFile in ../index.ts: temp file + rename so a
+      // crash mid-rotation cannot truncate the JSONL; original preserved on
+      // failure (fail-closed).
+      const tmp = `${LATENCY_FILE}.tmp.${process.pid}`
+      try {
+        writeFileSync(tmp, `${samples.map((s) => JSON.stringify(s)).join('\n')}\n`)
+        renameSync(tmp, LATENCY_FILE)
+      } catch (error) {
+        try {
+          if (existsSync(tmp)) unlinkSync(tmp)
+        } catch {
+          // Best-effort cleanup; keep the previous content.
+        }
+        throw error
+      }
     }
   } catch {
     // Persistence is best-effort; the in-memory window still serves the UI.

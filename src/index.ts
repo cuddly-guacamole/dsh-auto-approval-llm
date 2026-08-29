@@ -19,7 +19,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
-import { appendFileSync, existsSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { networkInterfaces, homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -914,6 +914,45 @@ const approvalHistory: HistoryRecord[] = []
 const HISTORY_FILE = join(dirname(fileURLToPath(import.meta.url)), '..', 'history.jsonl')
 const DEBUG_FILE = join(dirname(fileURLToPath(import.meta.url)), '..', 'approval-debug.jsonl')
 
+// ── atomic JSONL rotation + tolerant history parse ─────────────────────────
+// Rotations write a same-directory temp file and rename it over the target,
+// so a crash between truncate and write can never leave a truncated last
+// line (which would otherwise poison the next load). On failure the temp
+// file is removed and the previous content stays untouched — fail-closed:
+// prefer stale data over lost data. Mirrored inline by pushLatencySample in
+// src/auto/latency.ts (kept local there to avoid a cross-module dependency).
+export function atomicWriteFile(file: string, content: string): void {
+  const tmp = `${file}.tmp.${process.pid}`
+  try {
+    writeFileSync(tmp, content)
+    renameSync(tmp, file)
+  } catch (error) {
+    try {
+      if (existsSync(tmp)) unlinkSync(tmp)
+    } catch {
+      // Best-effort cleanup; the original file is unchanged.
+    }
+    throw error
+  }
+}
+
+/** Parse stored history JSONL tolerantly: a line that fails to parse is
+ * skipped and counted, never allowed to abort loading the lines after it
+ * (a crash mid-rotation can leave exactly one truncated line behind). */
+export function parseHistoryLines(lines: string[]): { records: HistoryRecord[]; badCount: number } {
+  const records: HistoryRecord[] = []
+  let badCount = 0
+  for (const line of lines) {
+    try {
+      const record = JSON.parse(line) as HistoryRecord
+      if (record && typeof record.id === 'string') records.push(record)
+    } catch {
+      badCount += 1
+    }
+  }
+  return { records, badCount }
+}
+
 // Gated by the settings「调试」switch (`config.debug`); off by default so the
 // debug trail is only written while diagnosing.
 let debugOn = false
@@ -931,7 +970,7 @@ function debugLog(entry: Record<string, unknown>): void {
   try {
     if (existsSync(DEBUG_FILE) && statSync(DEBUG_FILE).size > 1_048_576) {
       const lines = readFileSync(DEBUG_FILE, 'utf8').split('\n').filter(Boolean)
-      writeFileSync(DEBUG_FILE, `${lines.slice(-2000).join('\n')}\n`)
+      atomicWriteFile(DEBUG_FILE, `${lines.slice(-2000).join('\n')}\n`)
     }
     appendFileSync(DEBUG_FILE, `${JSON.stringify({ at: Date.now(), ...entry })}\n`)
   } catch {
@@ -943,9 +982,10 @@ function loadHistory(): void {
   try {
     if (!existsSync(HISTORY_FILE)) return
     const lines = readFileSync(HISTORY_FILE, 'utf8').split('\n').filter(Boolean)
-    for (const line of lines) {
-      const record = JSON.parse(line) as HistoryRecord
-      if (record && typeof record.id === 'string') approvalHistory.push(record)
+    const { records, badCount } = parseHistoryLines(lines)
+    approvalHistory.push(...records)
+    if (badCount > 0) {
+      console.warn(`[dsh-auto-approval-llm] history.jsonl: skipped ${badCount} corrupt line(s); later records still loaded`)
     }
     if (approvalHistory.length > 200) approvalHistory.splice(0, approvalHistory.length - 200)
   } catch {
@@ -969,7 +1009,7 @@ function pushHistory(entry: Omit<HistoryRecord, 'id' | 'at'>): void {
     // Rotate the on-disk log once it grows past 1 MB so it cannot grow without
     // bound (the in-memory window is already capped at 200 records).
     if (statSync(HISTORY_FILE).size > 1_048_576) {
-      writeFileSync(HISTORY_FILE, `${approvalHistory.map((r) => JSON.stringify(r)).join('\n')}\n`)
+      atomicWriteFile(HISTORY_FILE, `${approvalHistory.map((r) => JSON.stringify(r)).join('\n')}\n`)
     }
   } catch {
     // History persistence is best-effort.
