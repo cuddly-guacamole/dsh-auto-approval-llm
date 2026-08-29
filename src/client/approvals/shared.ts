@@ -132,6 +132,11 @@ export function startReviewPolling(
   const g = globalThis as any
 
   let settled = false
+  // In-flight guard (F4): poll() may be entered by the immediate poll, the
+  // interval tick and pollNow() — a response slower than pollMs used to let
+  // every later tick stack a second request for the same callId. Only one
+  // outstanding review-status fetch per poller instance, ever.
+  let inFlight = false
   let interval: any
   let graceTimer: any
   let meta: string | undefined
@@ -219,7 +224,8 @@ export function startReviewPolling(
   }
 
   const poll = async () => {
-    if (settled) return
+    if (settled || inFlight) return
+    inFlight = true
     let status: any
     try {
       const res = await g.fetch(REVIEW_STATUS_ROUTE, {
@@ -238,6 +244,8 @@ export function startReviewPolling(
     } catch {
       // Network error: never treat it as a resolution; keep observing.
       return
+    } finally {
+      inFlight = false
     }
     // Drop late responses for approvals already detached from (R004).
     if (settled) return

@@ -67,6 +67,39 @@ function routeFetch({ statusByCallId = {}, feedbackLog = [], fetchLog = [] } = {
   }
 }
 
+/**
+ * fetch stub for the plugin routes that also records how many review-status
+ * fetches are in flight at once (probe.peak) and can delay each response —
+ * reproduces F4: a response slower than pollMs let every interval tick stack
+ * a second request for the same callId (multi-request storm). With the
+ * in-flight guard, probe.peak must stay 1 even under bursts.
+ */
+function slowReviewFetch({ statusByCallId = {}, delayMs = 0, feedbackLog = [] } = {}) {
+  const probe = { active: 0, peak: 0, calls: [] }
+  const fn = async (url, init) => {
+    probe.active++
+    probe.peak = Math.max(probe.peak, probe.active)
+    probe.calls.push({ url, init })
+    try {
+      if (url === REVIEW_STATUS_ROUTE) {
+        if (delayMs) await sleep(delayMs)
+        const callId = init?.headers?.['x-auto-approval-call-id']
+        const value = statusByCallId[callId]
+        if (value === 'down') return { ok: false }
+        return { ok: true, json: async () => (value === undefined ? { ok: false } : { ok: true, value }) }
+      }
+      if (url === FEEDBACK_ROUTE) {
+        feedbackLog.push(JSON.parse(init.body))
+        return { ok: true, json: async () => ({ ok: true }) }
+      }
+      throw new Error(`unexpected fetch: ${url}`)
+    } finally {
+      probe.active--
+    }
+  }
+  return { fn, probe }
+}
+
 function fakeCtx(services = {}) {
   const disposers = []
   return {
@@ -381,6 +414,45 @@ test('startReviewPolling: onDetach fires exactly once and late dispose is a no-o
   poller.dispose()
   await sleep(30)
   assert.deepEqual(detached, ['s1:c1'], 'the tombstone signal fires exactly once')
+})
+
+// ── F4 in-flight guard (slow responses must never stack polls) ─────────────
+
+test('startReviewPolling: F4 — slow responses never stack concurrent polls (pollNow burst + fast ticks)', async () => {
+  // Pre-fix: every pollNow() and every 10ms interval tick entered poll() and
+  // awaited the 50ms fetch concurrently — a multi-request storm for one
+  // callId. The in-flight guard caps it at exactly one outstanding request.
+  const { fn, probe } = slowReviewFetch({ statusByCallId: {}, delayMs: 50 })
+  globalThis.fetch = fn
+  const poller = startReviewPolling({ sessionId: 's1', key: 's1:c1', callId: 'c1', respond: async () => {} }, () => true, { pollMs: 10 })
+  for (let i = 0; i < 20; i++) poller.pollNow()
+  await sleep(250) // several interval ticks land while responses are still slow
+  poller.dispose()
+  assert.equal(probe.peak, 1, 'never more than one in-flight review-status request')
+  assert.ok(probe.calls.length >= 4, 'the poller kept observing (guard did not stall it)')
+  assert.ok(probe.calls.length < 20, 'requests were serialized, not amplified')
+})
+
+test('startReviewPolling: F4 regression — fast responses keep polling normally and the countdown → llm-follow chain answers once', async () => {
+  const statuses = { c1: { phase: 'countdown', action: 'allow', seconds: 30 } }
+  const feedbackLog = []
+  const { fn, probe } = slowReviewFetch({ statusByCallId: statuses, delayMs: 0, feedbackLog })
+  globalThis.fetch = fn
+  const responds = []
+  const handle = { sessionId: 's1', key: 's1:c1', callId: 'c1', respond: async (o) => { responds.push(o) } }
+  const poller = startReviewPolling(handle, () => true, { pollMs: 10 })
+  await until(() => probe.calls.length >= 1, 'first poll fired')
+  const countBefore = probe.calls.length
+  await sleep(60)
+  assert.ok(probe.calls.length > countBefore, 'fast polling continues at the interval rate')
+  statuses.c1 = { phase: 'follow', source: 'llm', action: 'allow', seconds: 0 }
+  await until(() => responds.length === 1, 'follow answered')
+  await sleep(40)
+  assert.deepEqual(responds, ['allowed-once'])
+  assert.equal(feedbackLog.length, 1)
+  assert.deepEqual(feedbackLog[0], { callId: 'c1', outcome: 'allowed-once', auto: true })
+  assert.equal(probe.peak, 1)
+  poller.dispose()
 })
 
 // ── legacy watcher (rc.2 snapshot.pending) ─────────────────────────────────
