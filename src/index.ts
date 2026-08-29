@@ -1214,9 +1214,14 @@ async function readJsonBody(req: any, maxBytes = 64 * 1024): Promise<any> {
 // enforcement when an Origin header is present. Unlike the old
 // `isSameOriginPost`, the Host authority is validated against a whitelist
 // (loopback ∪ trusted LAN), so `Host: attacker.com` can never pass even when
-// Origin matches it. The settings / reviewer-credential domains are treated as
-// a privileged configuration plane and restricted to loopback-same-origin
-// only, matching the official PRIVILEGED_METHODS precedent.
+// Origin matches it. The settings / reviewer-credential / feedback domains
+// are treated as a privileged plane and restricted to loopback-same-origin
+// only, matching the official PRIVILEGED_METHODS precedent. The feedback
+// route writes approval state keyed by a callId that the review-status
+// protocol carries in the open, so it must not be reachable by a LAN peer
+// holding an arbitrary callId. Clamping it to loopback costs nothing
+// functional: the panel close stays the client's protocol-level respond, and
+// a follow state that is not released early is swept by its own TTL.
 
 /** Resolve the trusted Host authorities: webRuntime service → argv → LAN IPv4. */
 function resolveTrustedHosts(ctx: any): string[] {
@@ -1244,7 +1249,7 @@ function resolveTrustedHosts(ctx: any): string[] {
   return []
 }
 
-function installFeedbackRoute(ctx: any): void {
+export function installFeedbackRoute(ctx: any): void {
   const webServer = ctx.get('webServer')
   if (!webServer) return
   ctx.effect(() => webServer.register({
@@ -1256,7 +1261,11 @@ function installFeedbackRoute(ctx: any): void {
         responseJson(res, 405, { ok: false, error: 'method-not-allowed' })
         return
       }
-      if (!isTrustedRequest(req, trustedHosts)) {
+      // Feedback plane: loopback-same-origin only (privileged domain — the
+      // route writes approval state keyed by a callId the review-status
+      // protocol carries in the open, so LAN peers must not be able to forge
+      // those writes).
+      if (!isTrustedRequest(req, [])) {
         responseJson(res, 403, { ok: false, error: 'forbidden' })
         return
       }

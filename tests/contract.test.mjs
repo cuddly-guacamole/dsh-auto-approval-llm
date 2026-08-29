@@ -32,7 +32,7 @@ import { isTrustedRequest, isLoopbackIp, validateReviewerBaseUrl } from '../lib/
 import { parseClassifierDecision } from '../lib/auto/classifier.js'
 import { RISK_NAME_PATTERN, RISK_REASON_PATTERN } from '../lib/auto/risk-tokens.js'
 import { buildAskReason, buildEditDiffText } from '../lib/auto/editdiff.js'
-import { Config, resolveConfig, sessionModelRoute, buildReviewSnapshot, markFirstAutoSessionNotice, onboardingTimeoutLabel, onboardingNoticeText, extractReviewerKeyLine } from '../lib/index.js'
+import { Config, resolveConfig, sessionModelRoute, buildReviewSnapshot, markFirstAutoSessionNotice, onboardingTimeoutLabel, onboardingNoticeText, extractReviewerKeyLine, installFeedbackRoute } from '../lib/index.js'
 import { categorizeCommand } from '../lib/auto/category.js'
 
 test('parseClassifierDecision: valid allow/ask/deny', () => {
@@ -1212,6 +1212,84 @@ test('isTrustedRequest: cross-site and Origin mismatch are rejected', () => {
   assert.equal(isTrustedRequest({ headers: { host: 'localhost', origin: 'http://localhost' }, socket: { remoteAddress: '127.0.0.1' } }, []), true)
 })
 
+// ── FEEDBACK route: loopback privileged domain ──────────────────────────────
+// The feedback route writes approval state (timeout notice text, auto-answer
+// markers, early follow release) keyed by a callId the review-status protocol
+// carries in the open; it is therefore part of the loopback-only privileged
+// plane, exactly like the settings / reviewer-credential routes. These tests
+// drive the registered handler directly with minimal fake req/res.
+
+function captureFeedbackHandler() {
+  const registrations = []
+  const ctx = {
+    get: (name) => (name === 'webServer' ? { register: (desc) => registrations.push(desc) } : undefined),
+    effect: (fn) => fn(),
+  }
+  installFeedbackRoute(ctx)
+  assert.equal(registrations.length, 1, 'feedback route must be registered exactly once')
+  return registrations[0].handler
+}
+
+function feedbackFakeRes() {
+  const state = { statusCode: 0, body: '' }
+  const res = {
+    setHeader: () => {},
+    writeHead: (code) => { state.statusCode = code },
+    end: (chunk) => { state.body = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk) },
+  }
+  return { res, state }
+}
+
+function feedbackReq(host, ip, payload, consumed) {
+  const bytes = Buffer.from(JSON.stringify(payload))
+  return {
+    method: 'POST',
+    headers: { host, 'content-type': 'application/json' },
+    socket: { remoteAddress: ip },
+    [Symbol.asyncIterator]: async function* () {
+      consumed.value = true
+      yield bytes
+    },
+  }
+}
+
+test('feedback route: loopback-same-origin request is accepted (200 ok:true)', async () => {
+  const handler = captureFeedbackHandler()
+  const { res, state } = feedbackFakeRes()
+  const consumed = { value: false }
+  const req = feedbackReq('localhost:8080', '127.0.0.1', { callId: 'contract-loopback-1', outcome: 'rejected', auto: true }, consumed)
+  await handler(req, res)
+  assert.equal(state.statusCode, 200)
+  assert.deepEqual(JSON.parse(state.body), { ok: true })
+  assert.equal(consumed.value, true, 'body must be read on the accepted path')
+})
+
+test('feedback route: LAN peer forging Host+callId is rejected 403 with no state writes', async () => {
+  const handler = captureFeedbackHandler()
+  const { res, state } = feedbackFakeRes()
+  // A LAN peer addressing the server by its LAN IP with an arbitrary callId:
+  // the body iterable flags consumption, so a 403 means the auth gate
+  // short-circuited before readJsonBody — and every approval-state write
+  // happens only after body parsing, so rejection implies zero side effects.
+  const consumed = { value: false }
+  const req = feedbackReq('192.168.1.50', '192.168.1.50', { callId: 'contract-lan-spoof', outcome: 'rejected', auto: true }, consumed)
+  await handler(req, res)
+  assert.equal(state.statusCode, 403)
+  assert.deepEqual(JSON.parse(state.body), { ok: false, error: 'forbidden' })
+  assert.equal(consumed.value, false, 'rejection must precede any body/state processing')
+})
+
+test('feedback route: loopback peer cannot address a LAN Host header (403)', async () => {
+  const handler = captureFeedbackHandler()
+  const { res, state } = feedbackFakeRes()
+  const consumed = { value: false }
+  const req = feedbackReq('192.168.1.50', '127.0.0.1', { callId: 'contract-lan-host', outcome: 'allowed-once' }, consumed)
+  await handler(req, res)
+  assert.equal(state.statusCode, 403)
+  assert.deepEqual(JSON.parse(state.body), { ok: false, error: 'forbidden' })
+  assert.equal(consumed.value, false, 'rejection must precede any body/state processing')
+})
+
 // ── 7th audit round — A2: bare-dot protected-path read carve-out bypass ────
 test('assessShell: bare-dot protected read (.git/config without ./) is not auto-allowed (A2)', () => {
   const roots = { workspace: 'C:/ws', home: 'C:/Users/u', dshHome: 'C:/Users/u/.dsh', tempRoots: [] }
@@ -2104,6 +2182,8 @@ test('redactResultValue: old [redacted-secret] and new [redacted:<type>] markers
   assert.ok(!out.includes('abcdefgh12345678'))
   assert.ok(!out.includes('SflKxwR'))
 })
+
+
 
 // ── rules injection into the reviewer system prompt ─────────────────────────
 
