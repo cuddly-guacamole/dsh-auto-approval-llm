@@ -16,18 +16,18 @@
 
 - 从面板文本解析 `⏳ will auto-(approve|reject) in Ns` 标记，把 `（Ns）` 倒计时后缀**只贴到「会超时自动执行」的那个按钮**上（timeoutAction=allow → 允许一次；否则 → 拒绝），每 200ms 刷新。
 - 面板文本含「熔断」→ 双按钮禁用 `breakerAntiHijackMs`。
-- 非 UI 轮询器 `watchApprovals`：500ms GET `/review-status`（callId 走 `x-auto-approval-call-id` 头，不进 URL），五分支处理 countdown/follow/失配。
+- 非 UI 轮询器（0.0.12 起拆为 `approvals/` 双协议模块）：`legacy` watcher 以 `session.getSnapshot().pending` 为源（rc.2）、`remote` watcher 观察 `uiSession.pendingInteractions`（alpha.1），两源在对方协议下天然空转；共同核心 `shared.startReviewPolling` 500ms GET `/review-status`（callId 走 `x-auto-approval-call-id` 头，不进 URL），五分支处理 countdown/follow/grace/无状态。
 
-## 10.1　watchApprovals 状态机（自动应答的大脑）
+## 10.1　双协议应答状态机（自动应答的大脑，approvals/ 模块）
 
 ```mermaid
 flowchart TD
-    A["订阅 sessions.list + session 快照，找到 pending 里 kind==='approval' 的项 → 布署轮询 [arm]"]
-    A -->|500ms 轮询 review-status| B1["① follow + source='human'：人已决定 → 只收面板，绝不代答 [observe]"]
-    A -->|500ms 轮询 review-status| B2["② follow 其他（llm/timeout）：收面板 + 上报 outcome（followRespond） [report]"]
+    A["订阅协议源（legacy: snapshot.pending / remote: pendingInteractions），按 callId 匹配 kind==='approval' 项 → 布署轮询 [arm]"]
+    A -->|500ms 轮询 review-status| B1["① follow + source='human'/'abort'：人已决定或已取消 → 只收面板，绝不代答 [observe]"]
+    A -->|500ms 轮询 review-status| B2["② follow 其他（llm/timeout）：收面板 + 上报 outcome [answer]"]
     A -->|500ms 轮询 review-status| B3["③ status 消失但曾是 countdown：宽限 FOLLOW_GRACE_MS=120s，仍 pending 才按记录动作自动应答 [grace]"]
     A -->|500ms 轮询 review-status| B4["④ phase='countdown'：宿主倒计时权威 → 只观察、清本地残留定时器 [observe]"]
-    A -->|500ms 轮询 review-status| B5["⑤ 失配（reason-key 无状态）：本地 setTimeout(seconds*1000)，到点仍 pending → 自动应答 [fallback]"]
+    A -->|500ms 轮询 review-status| B5["⑤ 非 countdown 状态（status-less / 无 callId）：永不武装，等人工 [observe]"]
     subgraph GR1["观察与上报"]
         B1
         B2
@@ -39,7 +39,7 @@ flowchart TD
     end
 ```
 
-`followRespond/autoRespond` 只把 `outcome ∈ {allowed-once, rejected}` 传上网（POST /feedback + wait.respond），通告文案由宿主生成；`answeredApprovals` Set 保证同一审批只答一次。
+`answerOnce`（shared）只把 `outcome ∈ {allowed-once, rejected}` 传上网（POST /feedback + `handle.respond`——legacy 为 `wait.respond({ok,value})` 原形、remote 为 `pending.answer(outcome)`，后者对已 settle 实例抛错被静默处置），通告文案由宿主生成；`answeredApprovals` 统一以 `sessionId:callId` 为键保证同一审批只答一次。协议探测（`approvals/feature.ts`）仅服务诊断与契约测试，不参与装配。
 
 ## 10.2　设置卡解剖（settings.plugin.item）
 
