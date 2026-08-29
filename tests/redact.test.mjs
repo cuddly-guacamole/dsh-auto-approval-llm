@@ -7,7 +7,7 @@
 // connection strings, and the JSON/bare colon forms) is masked.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { redactSecrets } from '../lib/auto/redact.js'
+import { redactResultValue, redactSecrets } from '../lib/auto/redact.js'
 
 // ── audit loop — colon-form secret redaction (F1-redact) ────────────────────
 // JSON (`{"token": "…"}`) and bare (`token: …`) colon forms used to slip past
@@ -57,4 +57,60 @@ test('redactSecrets: existing formats keep redacting alongside the colon forms (
   assert.ok(!out.includes('abc12345'))
   assert.ok(!out.includes('SflKxwR'))
   assert.ok(!out.includes('user:secret@'))
+})
+
+// ── audit loop — depth-bound redaction fix (F2-redact) ──────────────────────
+// redactResultValue used to return objects/arrays beyond maxDepth through
+// entirely (and skipped SECRET_KEYS field checks at depth === maxDepth), so
+// deeply nested secret fields/values leaked to the model. maxDepth now bounds
+// CONTAINER recursion only: string values are still cleaned at any depth, and
+// field names are checked at every visited layer.
+test('redactResultValue: string values are still cleaned beyond maxDepth (no leak)', () => {
+  // The `data` string sits at depth 7 (default maxDepth=6): container
+  // recursion stops, but the string itself still runs through redactSecrets.
+  const deep = { l1: { l2: { l3: { l4: { l5: { l6: { data: 'sk-abcdefgh12345678' } } } } } } }
+  const out = redactResultValue(deep)
+  assert.equal(out.l1.l2.l3.l4.l5.l6.data, '[redacted-secret]')
+  assert.ok(!JSON.stringify(out).includes('sk-abcdefgh12345678'))
+  // A shallower cap still cleans the strings it reaches past the bound.
+  const mid = { a: { b: 'sk-abcdefgh12345678' } }
+  assert.equal(redactResultValue(mid, 0, 1).a.b, '[redacted-secret]')
+  // Array element at depth 7 is cleaned too.
+  const arr = [[[[[[['sk-abcdefgh12345678']]]]]]]
+  assert.ok(!JSON.stringify(redactResultValue(arr)).includes('sk-abcdefgh12345678'))
+})
+
+test('redactResultValue: SECRET_KEYS field names are checked at depth === maxDepth', () => {
+  // The {token: …} object sits at depth 6: the old `depth < maxDepth` guard
+  // skipped the field-name check there, so the value leaked raw.
+  const deep = { a: { b: { c: { d: { e: { f: { token: 'sk-abcdefgh12345678' } } } } } } }
+  const out = redactResultValue(deep)
+  assert.equal(out.a.b.c.d.e.f.token, '[redacted:field]')
+  assert.ok(!JSON.stringify(out).includes('sk-abcdefgh12345678'))
+})
+
+test('redactResultValue: containers beyond maxDepth are passed through whole (perf guard kept)', () => {
+  // The inner {token: …} container sits at depth 7: object/array recursion
+  // stops there, so its field names are not checked — that is the documented
+  // trade-off behind maxDepth (raise it when a stronger guarantee is needed).
+  // Pass-through keeps the fast path (original references, no copying).
+  const deep = { a: { b: { c: { d: { e: { f: { g: { token: 'sk-abcdefgh12345678' } } } } } } } }
+  const same = redactResultValue(deep)
+  assert.equal(same, deep)
+  assert.equal(same.a.b.c.d.e.f.g.token, 'sk-abcdefgh12345678')
+})
+
+test('redactResultValue: shallow behavior is unchanged (regression)', () => {
+  const out = redactResultValue({ token: 'sk-abcdefgh12345678', data: 'Bearer abcdefgh12345678', nested: { apiKey: 'x' } })
+  assert.equal(out.token, '[redacted:field]')
+  assert.equal(out.nested.apiKey, '[redacted:field]')
+  assert.ok(out.data.includes('[redacted-secret]'))
+  assert.ok(!JSON.stringify(out).includes('sk-abcdefgh12345678'))
+})
+
+test('redactResultValue: benign values keep the exact original reference (fast path)', () => {
+  const plain = { x: 1, y: 'ok', z: { w: [1, 2] } }
+  assert.equal(redactResultValue(plain), plain)
+  const deepBenign = { a: { b: { c: { d: { e: { f: { g: { note: 'plain deep text' } } } } } } } }
+  assert.equal(redactResultValue(deepBenign), deepBenign)
 })

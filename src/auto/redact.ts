@@ -69,15 +69,19 @@ export const REDACTED_FIELD = '[redacted:field]'
  * Recursively mask credential-shaped material inside one tool result value.
  * Pure JSON semantics: only replace, NEVER truncate (a benign large result
  * such as a file read must survive byte-exact), and return the ORIGINAL
- * reference when nothing changed (zero copying on the common path). Objects
- * and arrays deeper than `maxDepth` are passed through untouched.
+ * reference when nothing changed (zero copying on the common path). `maxDepth`
+ * bounds recursion into objects/arrays only — a performance guard for huge
+ * results — never STRING cleaning: string values still run through
+ * redactSecrets at any depth. Containers beyond `maxDepth` are passed through
+ * whole, so their field names are not checked either (acceptable trade-off;
+ * raise `maxDepth` when a stronger guarantee is needed).
  */
 export function redactResultValue(value: unknown, depth = 0, maxDepth = 6): unknown {
-  if (depth > maxDepth) return value
   if (typeof value === 'string') {
     const cleaned = redactSecrets(value)
     return cleaned === value ? value : cleaned
   }
+  if (depth > maxDepth) return value
   if (typeof value !== 'object' || value === null) return value
   if (Array.isArray(value)) {
     let changed = false
@@ -93,7 +97,7 @@ export function redactResultValue(value: unknown, depth = 0, maxDepth = 6): unkn
   let changed = false
   const out: Record<string, unknown> = {}
   for (const [key, entry] of Object.entries(record)) {
-    if (depth < maxDepth && SECRET_KEYS.test(key)) {
+    if (SECRET_KEYS.test(key)) {
       out[key] = REDACTED_FIELD
       changed = true
     } else {

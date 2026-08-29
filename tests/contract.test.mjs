@@ -2117,13 +2117,14 @@ test('redactResultValue: undefined/null/scalars stay identical', () => {
   assert.equal(redactResultValue(false), false)
 })
 
-test('redactResultValue: depth guard leaves material beyond maxDepth untouched', () => {
+test('redactResultValue: depth guard bounds container recursion, never string cleaning', () => {
   const deep = { l1: { l2: { l3: { l4: { l5: { l6: { l7: 'sk-abcdefgh12345678' } } } } } } }
-  // Default maxDepth=6: the string sits at depth 7 -> untouched.
-  assert.equal(redactResultValue(deep).l1.l2.l3.l4.l5.l6.l7, 'sk-abcdefgh12345678')
-  // A shallower cap stops even earlier.
+  // Default maxDepth=6: the string sits at depth 7 — container recursion
+  // stops, but string values are still cleaned (F2-redact).
+  assert.equal(redactResultValue(deep).l1.l2.l3.l4.l5.l6.l7, '[redacted-secret]')
+  // A shallower cap still cleans the strings it reaches past the bound.
   const mid = { a: { b: 'sk-abcdefgh12345678' } }
-  assert.equal(redactResultValue(mid, 0, 1).a.b, 'sk-abcdefgh12345678')
+  assert.equal(redactResultValue(mid, 0, 1).a.b, '[redacted-secret]')
   assert.equal(redactResultValue(mid, 0, 2).a.b, '[redacted-secret]')
 })
 
