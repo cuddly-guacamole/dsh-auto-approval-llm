@@ -16,6 +16,7 @@ import {
   canonicalPendingKey,
   answerOnce,
   startReviewPolling,
+  createBreakerGuard,
   answeredApprovals,
   FEEDBACK_ROUTE,
   REVIEW_STATUS_ROUTE,
@@ -787,6 +788,96 @@ test('dual channel: the same callId fed to both watchers answers exactly once', 
   cleanup()
 })
 
+// ── breaker anti-hijack guard (createBreakerGuard, F5) ──────────────────────
+
+function fakeBreakerButtons() {
+  const mkBtn = (text, disabled = false) => ({ textContent: text, disabled, isConnected: true })
+  const mkPanel = (...buttons) => ({ querySelectorAll: () => [...buttons] })
+  return { mkBtn, mkPanel }
+}
+
+test('breaker guard: React re-render swaps button nodes — the NEW nodes stay disabled (F5)', async () => {
+  const { mkBtn, mkPanel } = fakeBreakerButtons()
+  const guard = createBreakerGuard(() => 60)
+  const r1 = mkBtn('拒绝')
+  const a1 = mkBtn('允许一次')
+  guard.apply(mkPanel(r1, a1), 'k1')
+  assert.equal(r1.disabled, true, 'first scan disables the original nodes')
+  assert.equal(a1.disabled, true)
+  // React re-render: brand-new node objects; the old ones leave the DOM.
+  r1.isConnected = false
+  a1.isConnected = false
+  const r2 = mkBtn('拒绝')
+  const a2 = mkBtn('允许一次')
+  guard.apply(mkPanel(r2, a2), 'k1') // scan fires again inside the window
+  assert.equal(r2.disabled, true, 'the re-rendered reject node must be disabled (F5)')
+  assert.equal(a2.disabled, true, 'the re-rendered allow node must be disabled (F5)')
+  await sleep(90) // window expires
+  assert.equal(r2.disabled, false, 'expiry restores the CURRENT (re-rendered) node')
+  assert.equal(a2.disabled, false)
+  guard.dispose()
+})
+
+test('breaker guard: expiry restores the pre-guard state; a still-matching panel re-arms a fresh window', async () => {
+  const { mkBtn, mkPanel } = fakeBreakerButtons()
+  const guard = createBreakerGuard(() => 50)
+  const reject = mkBtn('拒绝')
+  const allow = mkBtn('允许一次', true) // React keeps this one disabled on its own
+  const panel = mkPanel(reject, allow)
+  guard.apply(panel, 'k1')
+  assert.equal(reject.disabled, true)
+  assert.equal(allow.disabled, true)
+  await sleep(80) // past the window
+  assert.equal(reject.disabled, false, 'a node enabled before the guard is restored')
+  assert.equal(allow.disabled, true, 'a node disabled before the guard stays disabled')
+  guard.apply(panel, 'k1') // rolling window: the breaker text is still visible
+  assert.equal(reject.disabled, true, 'a fresh window re-disables the buttons')
+  guard.dispose()
+})
+
+test('breaker guard: window 0 is a complete no-op (default behavior unchanged)', () => {
+  const { mkBtn, mkPanel } = fakeBreakerButtons()
+  const guard = createBreakerGuard(() => 0)
+  const reject = mkBtn('拒绝')
+  const allow = mkBtn('允许一次')
+  guard.apply(mkPanel(reject, allow), 'k1')
+  assert.equal(reject.disabled, false, 'a 0 window never disables anything')
+  assert.equal(allow.disabled, false)
+  guard.prune(new Set()) // safe no-ops
+  guard.dispose()
+  guard.apply(mkPanel(reject, allow), 'k1') // no throw after dispose
+  assert.equal(reject.disabled, false)
+})
+
+test('breaker guard: prune cancels windows for panels that left the DOM', async () => {
+  const { mkBtn, mkPanel } = fakeBreakerButtons()
+  const guard = createBreakerGuard(() => 40)
+  const a = mkBtn('拒绝')
+  const aAllow = mkBtn('允许一次')
+  const b = mkBtn('拒绝')
+  const bAllow = mkBtn('允许一次')
+  guard.apply(mkPanel(a, aAllow), 'ka')
+  guard.apply(mkPanel(b, bAllow), 'kb')
+  guard.prune(new Set(['ka']))
+  await sleep(70)
+  assert.equal(a.disabled, false, 'the live key restored after its window expired')
+  assert.equal(b.disabled, true, 'the pruned key never restores (timer was cancelled)')
+  guard.dispose()
+})
+
+test('breaker guard: dispose cancels pending windows — no late restore, no timer leak', async () => {
+  const { mkBtn, mkPanel } = fakeBreakerButtons()
+  const guard = createBreakerGuard(() => 30)
+  const reject = mkBtn('拒绝')
+  const allow = mkBtn('允许一次')
+  guard.apply(mkPanel(reject, allow), 'k1')
+  assert.equal(reject.disabled, true, 'window armed')
+  guard.dispose() // teardown mid-window
+  await sleep(70) // past the original window
+  assert.equal(reject.disabled, true, 'dispose cancelled the timer: no late restore may fire')
+  assert.equal(allow.disabled, true)
+})
+
 // ── static wiring anchors ──────────────────────────────────────────────────
 
 test('static anchors: dual-protocol wiring stays pinned (0.0.15 flips legacy to must-not)', () => {
@@ -803,4 +894,14 @@ test('static anchors: dual-protocol wiring stays pinned (0.0.15 flips legacy to 
   assert.ok(Array.isArray(pkg.dsh?.client?.inject), 'dsh.client.inject must be an array')
   assert.ok(!pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-runtime'), 'the dead inject reference must be gone')
   assert.equal(pkg.dsh.client.inject.length, 5, 'the remaining inject entries stay untouched')
+})
+
+test('static anchors: breaker guard is mounted via the shared factory (F5 wiring pinned)', () => {
+  const shared = readFileSync(new URL('../src/client/approvals/shared.ts', import.meta.url), 'utf8')
+  const client = readFileSync(new URL('../src/client/index.ts', import.meta.url), 'utf8')
+  assert.ok(shared.includes('export function createBreakerGuard'), 'the factory must be exported from the shared core')
+  assert.ok(client.includes('const breaker = createBreakerGuard(() => breakerAntiHijackMs)'), 'index.ts must mount the guard with a live window read')
+  assert.ok(client.includes('breaker.apply(panel, key)'), 'scan must apply the guard per live panel')
+  assert.ok(client.includes('breaker.prune(liveKeys)'), 'cleanup must prune vanished breaker keys')
+  assert.ok(client.includes('breaker.dispose()'), 'dispose must release every breaker timer')
 })

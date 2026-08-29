@@ -5,7 +5,7 @@ import { THRESHOLD_DEFAULTS } from '../auto/constants.js'
 import { parseRulesText } from '../auto/rules.js'
 import { installAutoPermissionIcon } from './auto-icon.js'
 import { zh, en } from './locale.js'
-import { parseCountdown } from './approvals/shared.js'
+import { createBreakerGuard, parseCountdown } from './approvals/shared.js'
 import type { CountdownInfo } from './approvals/shared.js'
 import { watchLegacyApprovals } from './approvals/legacy.js'
 import { watchRemoteApprovals } from './approvals/remote.js'
@@ -90,7 +90,10 @@ function hijackApprovalButtons(): () => void {
   const doc = g.document
   const originals = new Map<any, string>()
   const intervals = new Map<string, any>()
-  const breakerTimers = new Map<string, any>()
+  // Breaker anti-hijack guard, held in the shared core factory so the
+  // re-arm/restore logic is unit-testable against the compiled lib. The
+  // window read is live: 0 (default) makes the guard a complete no-op.
+  const breaker = createBreakerGuard(() => breakerAntiHijackMs)
 
   const originalText = (btn: any): string => {
     if (!originals.has(btn)) originals.set(btn, btn.textContent ?? '')
@@ -123,24 +126,6 @@ function hijackApprovalButtons(): () => void {
     interval = setInterval(apply, 200)
     intervals.set(key, interval)
     apply()
-  }
-
-  const applyBreakerGuard = (panel: any, key: string) => {
-    if (!breakerAntiHijackMs || breakerTimers.has(key)) return
-    const buttons: any[] = Array.from(panel.querySelectorAll('button'))
-    const reject: any = buttons.find((b: any) => /^(拒绝|Reject)$/i.test((b.textContent ?? '').trim()))
-    const allow: any = buttons.find((b: any) => /^(允许一次|Allow once)$/i.test((b.textContent ?? '').trim()))
-    if (!reject && !allow) return
-    const rejectDisabled = reject.disabled
-    const allowDisabled = allow.disabled
-    reject.disabled = true
-    allow.disabled = true
-    const timer = setTimeout(() => {
-      breakerTimers.delete(key)
-      if (reject.isConnected) reject.disabled = rejectDisabled
-      if (allow.isConnected) allow.disabled = allowDisabled
-    }, breakerAntiHijackMs)
-    breakerTimers.set(key, timer)
   }
 
   const enablePreLine = (panel: any) => {
@@ -246,7 +231,7 @@ function hijackApprovalButtons(): () => void {
         hideDiffBlock(panel)
       }
       const text = panel.textContent ?? ''
-      if (/熔断/.test(text)) applyBreakerGuard(panel, key)
+      if (/熔断/.test(text)) breaker.apply(panel, key)
       const info = parseCountdown(text)
       if (!info) continue
       updatePanel(panel, key, info)
@@ -257,12 +242,7 @@ function hijackApprovalButtons(): () => void {
         intervals.delete(key)
       }
     }
-    for (const key of [...breakerTimers.keys()]) {
-      if (!liveKeys.has(key)) {
-        clearTimeout(breakerTimers.get(key))
-        breakerTimers.delete(key)
-      }
-    }
+    breaker.prune(liveKeys)
     // The `originals` cache is keyed by button nodes React re-creates per
     // approval; pruning disconnected nodes here (rather than only at dispose)
     // stops a long-lived SPA from accumulating stale button strong-refs.
@@ -279,8 +259,7 @@ function hijackApprovalButtons(): () => void {
     observer.disconnect()
     for (const timer of intervals.values()) clearInterval(timer)
     intervals.clear()
-    for (const timer of breakerTimers.values()) clearTimeout(timer)
-    breakerTimers.clear()
+    breaker.dispose()
     originals.clear()
   }
 }

@@ -260,3 +260,119 @@ export function startReviewPolling(
     pollNow: () => { void poll() },
   }
 }
+
+// ── breaker anti-hijack guard (button disable window) ──────────────────────
+// The official ApprovalPanel disables its own buttons during a breaker
+// countdown vote, but only after the host published a review-status. The
+// hijack guard closes the pre-vote window by disabling 拒绝/允许一次 as soon
+// as the breaker text appears. Button nodes are duck-typed ({textContent,
+// disabled, isConnected}) so the guard runs under the unit test's fake DOM.
+
+/** One guard slot: a button node captured at arm time + its pre-guard state. */
+export interface BreakerSlot {
+  node: any
+  disabled: boolean
+}
+
+/** Per-key breaker state: the disable window plus the last-seen button nodes. */
+export interface BreakerEntry {
+  timer: any
+  deadline: number
+  reject: BreakerSlot | null
+  allow: BreakerSlot | null
+}
+
+export interface BreakerGuard {
+  /** Disable the panel's buttons for the window (re-applying to CURRENT nodes). */
+  apply(panel: any, key: string): void
+  /** Drop guard state for keys that left the live panel set. */
+  prune(liveKeys: ReadonlySet<string>): void
+  /** Release every pending window (clear all timers/state). */
+  dispose(): void
+}
+
+/**
+ * Breaker anti-hijack guard. `getWindowMs` is read per apply(): returning 0
+ * makes the guard a complete no-op (default). The window is re-applied on
+ * every apply while it is open: a React re-render swaps the button nodes
+ * mid-window, so each scan re-captures the CURRENT nodes (keeping them
+ * disabled) and expiry restores whichever nodes are in the DOM then (F5).
+ */
+export function createBreakerGuard(getWindowMs: () => number): BreakerGuard {
+  const breakerTimers = new Map<string, BreakerEntry>()
+
+  const restoreNode = (slot: BreakerSlot | null) => {
+    if (slot && slot.node != null && slot.node.isConnected) slot.node.disabled = slot.disabled
+  }
+
+  const armNode = (entry: BreakerEntry, button: any, slot: 'reject' | 'allow') => {
+    const rec = entry[slot]
+    if (rec && rec.node === button) return // same node still in DOM: state already captured
+    const disabled = button.disabled
+    button.disabled = true
+    entry[slot] = { node: button, disabled }
+  }
+
+  const apply = (panel: any, key: string) => {
+    const windowMs = getWindowMs()
+    if (!windowMs) return
+    const entry = breakerTimers.get(key)
+    if (entry && entry.deadline <= Date.now()) {
+      // Window over: restore the nodes recorded at the last apply (the
+      // re-rendered ones if any) and disarm; the next apply with the breaker
+      // text still visible arms a fresh window (rolling, as before).
+      clearTimeout(entry.timer)
+      restoreNode(entry.reject)
+      restoreNode(entry.allow)
+      breakerTimers.delete(key)
+    }
+    const buttons: any[] = Array.from(panel.querySelectorAll('button'))
+    const reject: any = buttons.find((b: any) => /^(拒绝|Reject)$/i.test((b.textContent ?? '').trim()))
+    const allow: any = buttons.find((b: any) => /^(允许一次|Allow once)$/i.test((b.textContent ?? '').trim()))
+    if (!reject && !allow) return
+    const current = breakerTimers.get(key)
+    if (current) {
+      // Window still open: re-apply to the CURRENT nodes. A React re-render
+      // mid-window swaps the button nodes; without re-arming here the new
+      // buttons would stay enabled for the rest of the window (F5).
+      armNode(current, reject, 'reject')
+      armNode(current, allow, 'allow')
+      return
+    }
+    const fresh: BreakerEntry = {
+      timer: undefined,
+      deadline: Date.now() + windowMs,
+      reject: null,
+      allow: null,
+    }
+    armNode(fresh, reject, 'reject')
+    armNode(fresh, allow, 'allow')
+    fresh.timer = setTimeout(() => {
+      // Expiry: restore whatever is recorded (the last-seen nodes; nodes that
+      // left the DOM are skipped by the isConnected check).
+      const expired = breakerTimers.get(key)
+      if (!expired) return
+      restoreNode(expired.reject)
+      restoreNode(expired.allow)
+      breakerTimers.delete(key)
+    }, windowMs)
+    breakerTimers.set(key, fresh)
+  }
+
+  const prune = (liveKeys: ReadonlySet<string>) => {
+    for (const key of [...breakerTimers.keys()]) {
+      if (!liveKeys.has(key)) {
+        const entry = breakerTimers.get(key)
+        if (entry) clearTimeout(entry.timer)
+        breakerTimers.delete(key)
+      }
+    }
+  }
+
+  const dispose = () => {
+    for (const entry of breakerTimers.values()) clearTimeout(entry.timer)
+    breakerTimers.clear()
+  }
+
+  return { apply, prune, dispose }
+}
