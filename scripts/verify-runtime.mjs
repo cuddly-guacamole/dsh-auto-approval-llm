@@ -20,12 +20,19 @@ import { runAuthChecks } from './verify-auth.mjs'
 const HOST = '127.0.0.1'
 const PORT = 3080
 const SETTINGS_ROUTE = '/_dsh/auto-approval-llm/settings'
+const CREDENTIAL_ROUTE = '/_dsh/auto-approval-llm/reviewer-credential'
 const here = dirname(fileURLToPath(import.meta.url))
 const MOCK_REVIEWER = join(here, 'mock-reviewer.mjs')
 // The learning store is plugin runtime state just like history/audit; the
 // verification writes real confirmations, so back it up and restore it no
 // matter how the run ends.
 const LEARNING_FILE = join(dirname(here), 'learning.json')
+// Mock reviewer must be reachable by the online-reviewer path, which requires
+// the configured credential (three-piece gate: baseUrl+model+key). The key is
+// written to the credential store for the mock round and deleted on restore.
+// Overridable via DSH_VERIFY_MOCK_KEY (a deployed secret must never sit in
+// this repo).
+const MOCK_API_KEY = process.env.DSH_VERIFY_MOCK_KEY ?? 'dsh-verify-mock-key'
 
 // Runtime-verification payload (mirrors the old standalone verify-config-set.mjs).
 // Deliberately puts the plugin into the mock-reviewer state so the approval
@@ -93,6 +100,28 @@ const putSettings = async (value) => {
   return res.json
 }
 
+// Make the online-reviewer three-piece gate (baseUrl+model+key) complete for
+// the mock round. No-op when the store already reports configured.
+const setupMockCredential = async () => {
+  const info = (await request('GET', CREDENTIAL_ROUTE)).json?.value
+  if (!info) return 'unavailable'
+  if (info.configured) return 'already'
+  if (info.writable !== true) return 'readonly'
+  const res = await request('POST', CREDENTIAL_ROUTE, { apiKey: MOCK_API_KEY })
+  if (res.status !== 200) return 'write-failed'
+  return 'written'
+}
+
+const clearMockCredential = async () => {
+  try {
+    const res = await request('DELETE', CREDENTIAL_ROUTE)
+    if (res.status === 200) console.log('[verify-runtime] mock credential cleared')
+    else console.error(`[verify-runtime] credential clear failed (${res.status}): ${res.body}`)
+  } catch (e) {
+    console.error('[verify-runtime] credential clear error:', e.message)
+  }
+}
+
 async function main() {
   const wantMock = process.argv.includes('--mock')
   const before = await getSettings()
@@ -101,6 +130,7 @@ async function main() {
 
   let dirty = false
   let mock = null
+  let credentialWritten = false
   // learning.json snapshot (binary copy) taken before any write and restored
   // in every exit path; a file that did not exist before is removed again.
   const learningBackup = join(here, `.learning.verify-backup-${process.pid}`)
@@ -124,6 +154,7 @@ async function main() {
       console.error('[verify-runtime] RESTORE FAILED (manual revert needed):', e.message)
     }
     restoreLearning()
+    if (credentialWritten) await clearMockCredential()
     if (mock) { mock.kill(); mock = null }
   }
   process.on('SIGINT', () => { void restore().then(() => process.exit(130)) })
@@ -138,6 +169,12 @@ async function main() {
     if (wantMock) {
       mock = spawn(process.execPath, [MOCK_REVIEWER], { stdio: 'inherit' })
       await new Promise((r) => setTimeout(r, 600))
+      const cred = await setupMockCredential()
+      credentialWritten = cred === 'written'
+      if (cred === 'unavailable') console.warn('[verify-runtime] WARN: credential route unavailable — reviewer falls back to the session model')
+      else if (cred === 'readonly') console.warn('[verify-runtime] WARN: credential store read-only — reviewer falls back to the session model')
+      else if (cred === 'write-failed') console.warn('[verify-runtime] WARN: credential write failed — reviewer falls back to the session model')
+      else console.log(`[verify-runtime] mock credential: ${cred}`)
       await putSettings(MOCK_CONFIG)
       dirty = true
       console.log('\n[verify-runtime] mock reviewer up; mock config applied')
