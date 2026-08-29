@@ -19,11 +19,12 @@ export const SECRET_KEYS = /(?:api|auth|access|secret|private|credential|passwor
  * Cheap feature pre-screen: a strict superset of every literal the
  * redaction patterns below can match (`=` for key=value forms, `bearer`,
  * `begin` for PEM, `akia`, `eyj` for JWT, the token prefixes, `://` for
- * connection strings). It only decides whether to run the replacement chain
+ * connection strings, `:\s*["']` / `:\s*\S{6,}` for JSON and bare colon
+ * forms). It only decides whether to run the replacement chain
  * — never which replacement applies — so a benign huge result (e.g. a file
  * read) skips the multi-pass scan without any false-negative gate.
  */
-const SECRET_FEATURES = /[=]|bearer|begin|akia|eyj|github_pat|\bsk[-_]|ghp[-_]|xox|:\/\//i
+const SECRET_FEATURES = /[=]|bearer|begin|akia|eyj|github_pat|\bsk[-_]|ghp[-_]|xox|:\/\/|:\s*["']|:\s*\S{6,}/i
 
 /** Redact likely secrets (key formats, bearer tokens, key=value pairs). */
 export function redactSecrets(value: string): string {
@@ -32,6 +33,14 @@ export function redactSecrets(value: string): string {
     .replace(/\b(?:sk|ghp|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{8,}\b/g, '[redacted-secret]')
     .replace(/\bBearer\s+[A-Za-z0-9._~+\/-]{8,}/gi, 'Bearer [redacted-secret]')
     .replace(/((?:api[_-]?key|token|secret|password)=)[^&\s]+/gi, '$1[redacted-secret]')
+    // JSON colon forms (`{"token": "…"}`, `'api_key': '…'`): keep the key and
+    // the quoted structure, replace the value only (quotes preserved so the
+    // text stays parseable after redaction).
+    .replace(/(["'])(api[_-]?key|token|secret|password|access_key|auth[_-]?token)\1\s*:\s*(["'])[^"']+["']/gi, '$1$2$1: $3[redacted-secret]$3')
+    // Bare colon forms (`token: abc12345`): the value must be at least six
+    // non-space characters so short values / negations (`token: none`,
+    // `secret: no`) stay readable text.
+    .replace(/\b(api[_-]?key|token|secret|password)\s*:\s*\S{6,}/gi, '$1: [redacted-secret]')
     // AWS access-key IDs (`AKIA...`) and AWS secret material (the
     // `aws_secret_access_key=`/`secret_access_key=` forms are NOT caught by
     // the `secret=` pattern above because `_access_key` sits between).
