@@ -1,0 +1,254 @@
+// Protocol-agnostic approval-responder core.
+//
+// Consumed by both protocol watchers (legacy rc.2 `snapshot.pending` and
+// remote alpha.1 `pendingInteractions`) and by the button hijack in index.ts.
+// Depends only on the plugin's own host routes (review-status/feedback) and
+// never on any dsh client protocol type — duck-typed structural interfaces
+// only — so this file survives the legacy protocol removal (0.0.15) unchanged.
+
+export const FEEDBACK_ROUTE = '/_dsh/auto-approval-llm/feedback'
+export const REVIEW_STATUS_ROUTE = '/_dsh/auto-approval-llm/review-status'
+
+// Grace (ms) during which a countdown approval whose host follow is not yet
+// observable keeps being watched before the client closes the panel with the
+// recorded countdown action. Aligned with the host's follow TTL so the client
+// never closes before the host would have swept the follow state.
+export const FOLLOW_GRACE_MS = 120_000
+
+export interface CountdownInfo {
+  seconds: number
+  action: 'allow' | 'reject'
+  feedbackText?: string
+}
+
+export type ApprovalOutcome = 'allowed-once' | 'rejected'
+
+// Protocol-agnostic identity of one approval ask. Never carries the protocol
+// object itself: the watchers adapt their source into this shape.
+export interface ApprovalHandle {
+  sessionId: string
+  /** Canonical identity (`${sessionId}:${callId}`); null for status-less asks. */
+  key: string | null
+  callId?: string
+  respond(outcome: ApprovalOutcome): Promise<void>
+}
+
+// The single answer-once guard shared by every watcher/poller instance: an
+// approval may be auto-answered by either watcher, the countdown timer, or a
+// follow-up responder; only the first responder wins. Session-scoped keys are
+// dropped when their session stops being tracked, bounding growth to
+// approvals actually seen.
+export const answeredApprovals = new Set<string>()
+
+export function forgetAnsweredKeys(sessionId: string): void {
+  const prefix = `${sessionId}:`
+  for (const key of [...answeredApprovals]) {
+    if (key.startsWith(prefix)) answeredApprovals.delete(key)
+  }
+}
+
+/** Unified dedup/tombstone identity: `${sessionId}:${callId}`; null without callId. */
+export function canonicalPendingKey(sessionId: string, callId: string | undefined): string | null {
+  if (!callId) return null
+  return `${sessionId}:${callId}`
+}
+
+export function parseCountdown(reason: string | undefined): CountdownInfo | null {
+  if (!reason) return null
+  const match = reason.match(/\[dsh-auto-approval-llm\]\s*⏳\s*will auto-(approve|reject) in (\d+)s/)
+  if (!match) return null
+  return {
+    seconds: Math.max(1, Number(match[2])),
+    action: match[1] === 'approve' ? 'allow' : 'reject',
+  }
+}
+
+// Answer exactly once, regardless of who calls: dedup with the shared guard,
+// then best-effort host feedback (auto source), then the protocol respond.
+// Every rejection is swallowed — a settled approval throwing is expected
+// (someone else already answered) and must never surface or retry.
+export async function answerOnce(handle: ApprovalHandle, outcome: ApprovalOutcome): Promise<void> {
+  const key = canonicalPendingKey(handle.sessionId, handle.callId)
+  if (!key) return
+  if (answeredApprovals.has(key)) return
+  // Add before answering: a settle-race (host resolved, respond throws) must
+  // never permit a second answer for the same callId.
+  answeredApprovals.add(key)
+  try {
+    if (handle.callId) {
+      // Only the outcome crosses the wire; host generates the notice text.
+      const feedback = (globalThis as any).fetch(FEEDBACK_ROUTE, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ callId: handle.callId, outcome, auto: true }),
+        credentials: 'same-origin',
+      }).catch(() => {
+        // The route is best-effort; the approval answer must still happen.
+      })
+      // Never let a slow/hanging feedback request block the approval answer.
+      await Promise.race([feedback, new Promise((resolve) => setTimeout(resolve, 500))])
+    }
+    await handle.respond(outcome)
+  } catch (e) {
+    console.error('[dsh-auto-approval-llm] approval respond failed', e)
+  }
+}
+
+export interface ReviewPollingOptions {
+  /** Review-status poll interval (default 500ms; injectable for node tests). */
+  pollMs?: number
+  /** Grace window after the countdown status vanishes (default FOLLOW_GRACE_MS). */
+  graceMs?: number
+  /** Notifies the watcher that the approval settled; the watcher tombstones the key. */
+  onDetach?: (key: string) => void
+}
+
+/** Watcher-level options: polling options plus an injectable clock. */
+export interface WatcherOptions extends ReviewPollingOptions {
+  /** Clock for the legacy watcher's event-driven extra-poll debounce. */
+  now?: () => number
+}
+
+export interface ReviewPollHandle {
+  dispose(): void
+  /** Immediate poll for thaw/resume/visibility events; debounced by the caller. */
+  pollNow(): void
+}
+
+// One armed approval: 500ms review-status observation + the countdown state
+// machine + the bounded grace fallback. The returned handle lets the watcher
+// detach (approval left pending) and fire immediate polls (C2 thaw events).
+export function startReviewPolling(
+  handle: ApprovalHandle,
+  isStillPending: () => boolean,
+  options: ReviewPollingOptions = {},
+): ReviewPollHandle {
+  const pollMs = options.pollMs ?? 500
+  const graceMs = options.graceMs ?? FOLLOW_GRACE_MS
+  // Status-less ask (no callId): nothing can ever be published for it and no
+  // answer may be derived from marker text — never arm a poller.
+  if (!handle.callId) return { dispose: () => {}, pollNow: () => {} }
+  const timerKey = canonicalPendingKey(handle.sessionId, handle.callId)!
+  const g = globalThis as any
+
+  let settled = false
+  let interval: any
+  let graceTimer: any
+  let meta: string | undefined
+
+  const clearGrace = () => {
+    if (graceTimer) {
+      clearTimeout(graceTimer)
+      graceTimer = undefined
+    }
+  }
+
+  // Stop observing one approval: clear poller/timer/meta and tombstone it via
+  // the watcher. Idempotent — a late dispose() from the watcher is a no-op.
+  const detach = () => {
+    if (settled) return
+    settled = true
+    clearGrace()
+    if (interval) {
+      clearInterval(interval)
+      interval = undefined
+    }
+    options.onDetach?.(timerKey)
+  }
+
+  const answerAction = (action: 'allow' | 'reject') => {
+    void answerOnce(handle, action === 'allow' ? 'allowed-once' : 'rejected')
+  }
+
+  const applyStatus = (status: any) => {
+    if (settled) return
+    if (status?.phase === 'follow') {
+      if (status.source === 'human' || status.source === 'abort') {
+        // The human answered the panel / the ask was cancelled: detaching is
+        // enough — re-answering would re-respond to a settled approval and
+        // mislabel it (R001).
+        detach()
+        return
+      }
+      // LLM takeover / host timeout: answer with the real follow action so the
+      // official panel closes immediately, then detach.
+      detach()
+      answerAction(status.action)
+      return
+    }
+    if (status === undefined && meta?.startsWith('countdown:')) {
+      // Host stopped reporting a follow for this countdown approval. Per the
+      // DSH contract review-status is never 404 — resolution is signalled by
+      // ok:false — so the host resolved and its terminal `follow` may simply
+      // arrive one poll later. Keep the watch alive for a bounded grace so a
+      // late follow still closes the official panel (A5). We never auto-answer
+      // here: if a real follow arrives, the follow branch responds with the
+      // host's authoritative action. Only if none arrives within the grace and
+      // the approval is still open do we close it with the countdown's
+      // recorded action — the only action this approval ever declared. When
+      // the approval leaves pending, the watcher disposes this poller.
+      const parts = meta.split(':')
+      const recordedAction = parts[1] === 'allow' ? 'allow' : 'reject'
+      if (!graceTimer) {
+        graceTimer = setTimeout(() => {
+          graceTimer = undefined
+          if (isStillPending()) {
+            answerAction(recordedAction)
+          }
+          detach()
+        }, graceMs)
+      }
+      return
+    }
+    if (status?.phase !== 'countdown') {
+      // No host-published countdown: never arm an answer from reason text.
+      // The marker regex matches free text any command can forge, so reason
+      // parsing must not decide outcomes — status-less asks (breaker / manual
+      // / human-only) are meant to wait for a human, and every real countdown
+      // shows up here as a published review-status within one poll.
+      return
+    }
+    const next = `countdown:${status.action}:${status.seconds}`
+    if (meta === next) return
+    // countdown-key: the host countdown is authoritative, so the client only
+    // observes (no local timer). Also clear a grace timer that may have been
+    // armed on an earlier observation (status-lag) — a real host countdown
+    // always supersedes any locally recorded action (R002).
+    clearGrace()
+    meta = next
+  }
+
+  const poll = async () => {
+    if (settled) return
+    let status: any
+    try {
+      const res = await g.fetch(REVIEW_STATUS_ROUTE, {
+        credentials: 'same-origin',
+        // Call id travels in a header so it never lands in the URL query
+        // (devtools/logs/Referer). The host route reads this header.
+        headers: { 'x-auto-approval-call-id': String(handle.callId) },
+      })
+      if (!res.ok) {
+        // Transient server error: keep observing; never treat it as a
+        // resolution.
+        return
+      }
+      const data = await res.json()
+      status = data?.ok ? data.value : undefined
+    } catch {
+      // Network error: never treat it as a resolution; keep observing.
+      return
+    }
+    // Drop late responses for approvals already detached from (R004).
+    if (settled) return
+    applyStatus(status)
+  }
+
+  void poll()
+  interval = setInterval(() => { void poll() }, pollMs)
+
+  return {
+    dispose: detach,
+    pollNow: () => { void poll() },
+  }
+}

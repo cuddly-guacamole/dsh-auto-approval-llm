@@ -5,27 +5,24 @@ import { THRESHOLD_DEFAULTS } from '../auto/constants.js'
 import { parseRulesText } from '../auto/rules.js'
 import { installAutoPermissionIcon } from './auto-icon.js'
 import { zh, en } from './locale.js'
+import { parseCountdown } from './approvals/shared.js'
+import type { CountdownInfo } from './approvals/shared.js'
+import { watchLegacyApprovals } from './approvals/legacy.js'
+import { watchRemoteApprovals } from './approvals/remote.js'
 
 export const name = 'dsh-auto-approval-llm'
 export const inject = ['slots', 'sessions']
 
-const FEEDBACK_ROUTE = '/_dsh/auto-approval-llm/feedback'
 const SETTINGS_ROUTE = '/_dsh/auto-approval-llm/settings'
 const HISTORY_ROUTE = '/_dsh/auto-approval-llm/history'
 const TEST_ROUTE = '/_dsh/auto-approval-llm/test'
 const REVIEWER_CREDENTIAL_ROUTE = '/_dsh/auto-approval-llm/reviewer-credential'
 const LEARNING_STORE_ROUTE = '/_dsh/auto-approval-llm/learning-store'
 const SESSION_MODE_ROUTE = '/_dsh/auto-approval-llm/session-mode'
-const REVIEW_STATUS_ROUTE = '/_dsh/auto-approval-llm/review-status'
 let sessionsRef: any
 let breakerAntiHijackMs = THRESHOLD_DEFAULTS.breakerAntiHijackMs
 let aiButtonPosition: 'header' | 'floating' = 'header'
 const MAX_PANEL_RECORDS = 10
-// Grace (ms) during which a countdown approval whose host follow is not yet
-// observable keeps being watched before the client closes the panel with the
-// recorded countdown action. Aligned with the host's follow TTL so the client
-// never closes before the host would have swept the follow state.
-const FOLLOW_GRACE_MS = 120_000
 const LOCALE_NS = 'dsh-auto-approval-llm'
 // First-use onboarding is one-shot per browser (and per page lifetime after
 // the settings card was expanded once): weak guarantee by design — incognito
@@ -33,9 +30,6 @@ const LOCALE_NS = 'dsh-auto-approval-llm'
 // low-sensitivity copy.
 const ONBOARDING_SEEN_KEY = 'dsa-onboarding-seen-v1'
 let localeService: any = null
-// Answer-once guard: an approval may be auto-answered by the watcher, the
-// countdown timer, or a follow-up responder; only the first responder wins.
-const answeredApprovals = new Set<string>()
 let t: any = (key: string, params?: Record<string, unknown>) => {
   let text = (zh as any)[key] ?? key
   if (params) for (const [k, v] of Object.entries(params)) text = text.replace(`{${k}}`, String(v))
@@ -54,361 +48,6 @@ function timeoutActionLabel(action: string): string {
     case 'low-risk-allow': return en ? 'low-risk auto-allow' : '仅低风险放行'
     default: return en ? 'reject' : '拒绝'
   }
-}
-
-interface CountdownInfo {
-  seconds: number
-  action: 'allow' | 'reject'
-  feedbackText?: string
-}
-
-function parseCountdown(reason: string | undefined): CountdownInfo | null {
-  if (!reason) return null
-  const match = reason.match(/\[dsh-auto-approval-llm\]\s*⏳\s*will auto-(approve|reject) in (\d+)s/)
-  if (!match) return null
-  return {
-    seconds: Math.max(1, Number(match[2])),
-    action: match[1] === 'approve' ? 'allow' : 'reject',
-  }
-}
-
-function answerKey(wait: any): string {
-  return `${wait.sessionId}:${wait.key ?? wait.payload?.callId ?? '?'}`
-}
-
-async function followRespond(wait: any, status: any) {
-  const outcome = status.action === 'allow' ? 'allowed-once' : 'rejected'
-  const key = answerKey(wait)
-  if (answeredApprovals.has(key)) return
-  answeredApprovals.add(key)
-  try {
-    if (wait.payload?.callId) {
-      // Only the outcome crosses the wire; host generates the notice text.
-      const feedback = (globalThis as any).fetch(FEEDBACK_ROUTE, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ callId: wait.payload.callId, outcome, auto: true }),
-        credentials: 'same-origin',
-      }).catch(() => {})
-      await Promise.race([feedback, new Promise((resolve) => setTimeout(resolve, 500))])
-    }
-    await wait.respond({
-      ok: true,
-      value: {
-        sessionId: wait.sessionId,
-        approvalId: wait.payload?.approvalId,
-        outcome,
-      },
-    })
-  } catch (e) {
-    console.error('[dsh-auto-approval-llm] follow respond failed', e)
-  }
-}
-
-async function autoRespond(wait: any, countdown: CountdownInfo) {
-  const outcome = countdown.action === 'allow' ? 'allowed-once' : 'rejected'
-  const key = answerKey(wait)
-  if (answeredApprovals.has(key)) return
-  answeredApprovals.add(key)
-  try {
-    if (wait.payload?.callId) {
-      // Only the outcome crosses the wire; host generates the notice text.
-      const feedback = (globalThis as any).fetch(FEEDBACK_ROUTE, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ callId: wait.payload.callId, outcome, auto: true }),
-        credentials: 'same-origin',
-      }).catch(() => {
-        // The route is best-effort; the approval answer must still happen.
-      })
-      // Never let a slow/hanging feedback request block the approval answer.
-      await Promise.race([feedback, new Promise((resolve) => setTimeout(resolve, 500))])
-    }
-    await wait.respond({ ok: true, value: { sessionId: wait.sessionId, approvalId: wait.payload.approvalId, outcome } })
-  } catch (e) {
-    console.error('[dsh-auto-approval-llm] auto respond failed', e)
-  }
-}
-
-// ── non-UI watcher ────────────────────────────────────────────────────────
-// The auto-answer must not depend on a particular slot being rendered by the
-// active skin. This service-level watcher subscribes to the current session's
-// snapshot and answers managed approvals on timeout.
-function watchApprovals(ctx: any): void {
-  const sessions = ctx.get('sessions')
-  if (!sessions) return
-
-  const timers = new Map<string, any>()
-  const pollers = new Map<string, any>()
-  const timerMeta = new Map<string, string>()
-  // C1: immediate-poll references (armApproval's poll fn per timerKey), so a
-  // thaw/resume event can poll at once without waiting for the next (possibly
-  // throttled) interval tick.
-  const pollFns = new Map<string, () => void>()
-  // C2: timestamp of the last event-driven extra poll. Bursty events (fast
-  // alt-tab flapping, rapid snapshot pushes) cost at most one extra poll every
-  // 500ms, so they can never turn into a poll storm.
-  let lastExtraPollAt = 0
-  // Tombstones: approvals the watcher already detached from (host resolved,
-  // follow answered, or host stopped tracking). Prevents check() from
-  // re-arming a poller for a stale approval and drops late in-flight poll
-  // responses (R004).
-  const resolvedKeys = new Set<string>()
-  let currentId: string | undefined
-  let unsubSession: (() => void) | undefined
-
-  const clearSessionTimers = (sessionId: string | undefined) => {
-    if (!sessionId) return
-    const prefix = `${sessionId}:`
-    for (const [key, timer] of timers) {
-      if (key.startsWith(prefix)) {
-        clearTimeout(timer)
-        timers.delete(key)
-      }
-    }
-    for (const [key, poller] of pollers) {
-      if (key.startsWith(prefix)) {
-        clearInterval(poller)
-        pollers.delete(key)
-      }
-    }
-    for (const key of [...pollFns.keys()]) {
-      if (key.startsWith(prefix)) pollFns.delete(key)
-    }
-    for (const key of [...timerMeta.keys()]) {
-      if (key.startsWith(prefix)) timerMeta.delete(key)
-    }
-    for (const key of [...resolvedKeys]) {
-      if (key.startsWith(prefix)) resolvedKeys.delete(key)
-    }
-    for (const key of [...answeredApprovals]) {
-      if (key.startsWith(prefix)) answeredApprovals.delete(key)
-    }
-  }
-
-  /** Stop observing one approval: clear timer/poller/meta and tombstone it. */
-  const detach = (timerKey: string) => {
-    if (timers.has(timerKey)) {
-      clearTimeout(timers.get(timerKey))
-      timers.delete(timerKey)
-    }
-    const poller = pollers.get(timerKey)
-    if (poller) {
-      clearInterval(poller)
-      pollers.delete(timerKey)
-    }
-    pollFns.delete(timerKey)
-    timerMeta.delete(timerKey)
-    resolvedKeys.add(timerKey)
-  }
-
-  /** Whether an approval with this key is still visible in the session snapshot. */
-  const approvalStillPending = (sessionId: string, approvalKey: string): boolean => {
-    const binding = sessions.binding?.(sessionId)
-    const snapshot = binding?.session?.getSnapshot?.() ?? {}
-    return (snapshot.pending ?? []).some((i: any) => i.kind === 'approval' && i.key === approvalKey)
-  }
-
-  const applyStatus = (sessionId: string, approval: any, status: any) => {
-    const timerKey = `${sessionId}:${approval.key}`
-    // Late response for an approval we already detached from: drop it.
-    if (resolvedKeys.has(timerKey)) return
-    if (status?.phase === 'follow') {
-      if (status.source === 'human') {
-        // The human already closed the panel; detaching is enough — re-answering
-        // would re-respond to a settled approval and mislabel it (R001).
-        detach(timerKey)
-        return
-      }
-      // LLM takeover / host timeout: answer with the real follow action so the
-      // official panel closes immediately, then detach.
-      detach(timerKey)
-      void followRespond(approval, status)
-      return
-    }
-    const priorMeta = timerMeta.get(timerKey)
-    if (status === undefined && priorMeta?.startsWith('countdown:')) {
-      // Host stopped reporting a follow for this countdown approval. Per the
-      // DSH contract review-status is never 404 — resolution is signalled by
-      // ok:false — so the host resolved and its terminal `follow` may simply
-      // arrive one poll later. Keep the watch alive for a bounded grace so a
-      // late follow still closes the official panel (A5). We never auto-answer
-      // here: if a real follow arrives, the follow branch responds with the
-      // host's authoritative action. Only if none arrives within the grace and
-      // the approval is still open do we close it with the countdown's recorded
-      // action — the only action this approval ever declared. When the approval
-      // leaves the pending snapshot, check() clears everything.
-      const parts = priorMeta.split(':')
-      const recordedAction = parts[1] === 'allow' ? 'allow' : 'reject'
-      if (!timers.has(timerKey)) {
-        timerMeta.set(timerKey, priorMeta)
-        const fallback = setTimeout(() => {
-          if (approvalStillPending(sessionId, approval.key)) {
-            void autoRespond(approval, { seconds: 0, action: recordedAction })
-          }
-          detach(timerKey)
-        }, FOLLOW_GRACE_MS)
-        timers.set(timerKey, fallback)
-      }
-      return
-    }
-    if (status?.phase !== 'countdown') {
-      // No host-published countdown: never arm an answer from reason text.
-      // The marker regex matches free text any command can forge, so reason
-      // parsing must not decide outcomes — status-less asks (breaker / manual
-      // / human-only) are meant to wait for a human, and every real countdown
-      // shows up here as a published review-status within one poll.
-      return
-    }
-    const info: CountdownInfo = { seconds: status.seconds, action: status.action, feedbackText: status.feedback }
-    const meta = `countdown:${info.action}:${info.seconds}`
-    if (timerMeta.get(timerKey) === meta) return
-    // countdown-key: the host countdown is authoritative, so the client only
-    // observes (no local timer). The host resolves → publishes follow → the
-    // poller sees it within 500ms. A local timer here would fire with the
-    // same action but could also answer against a stale direction (R002).
-    // Also clear a fallback timer that may have been armed by the grace
-    // branch on an earlier observation (status-lag), so a real host countdown
-    // always supersedes any locally recorded action.
-    if (timers.has(timerKey)) {
-      clearTimeout(timers.get(timerKey))
-      timers.delete(timerKey)
-    }
-    timerMeta.set(timerKey, meta)
-  }
-
-  const armApproval = (sessionId: string, approval: any) => {
-    const timerKey = `${sessionId}:${approval.key}`
-    if (pollers.has(timerKey)) clearInterval(pollers.get(timerKey))
-    const callId = approval.payload?.callId
-    const poll = async () => {
-      if (!callId) {
-        applyStatus(sessionId, approval, undefined)
-        return
-      }
-      let status: any
-      try {
-        const res = await (globalThis as any).fetch(REVIEW_STATUS_ROUTE, {
-          credentials: 'same-origin',
-          // Call id is sent in a header so it never lands in the URL query
-          // (devtools/logs/Referer). The host route reads this header.
-          headers: { 'x-auto-approval-call-id': String(callId) },
-        })
-        if (!res.ok) {
-          // Transient server error: keep observing; do not treat it as a
-          // resolution.
-          return
-        }
-        const data = await res.json()
-        status = data?.ok ? data.value : undefined
-      } catch {
-        // Network error: never treat it as a resolution; keep observing.
-        return
-      }
-      // Drop late responses for approvals we already detached from (R004).
-      if (resolvedKeys.has(timerKey)) return
-      applyStatus(sessionId, approval, status)
-    }
-    void poll()
-    const interval = setInterval(() => { void poll() }, 500)
-    pollers.set(timerKey, interval)
-    pollFns.set(timerKey, poll)
-  }
-
-  const check = (sessionId: string | undefined) => {
-    if (!sessionId) return
-    const binding = sessions.binding?.(sessionId)
-    const session = binding?.session
-    if (!session) return
-    const snapshot = session.getSnapshot?.() ?? {}
-    const pending = snapshot.pending ?? []
-    const approval = pending.find((i: any) => i.kind === 'approval')
-    if (!approval) {
-      clearSessionTimers(sessionId)
-      return
-    }
-    const timerKey = `${sessionId}:${approval.key}`
-    // Never re-arm an approval we already detached from (tombstone); waiting
-    // for it to leave pending is the only path to clear the tombstone.
-    if (!pollers.has(timerKey) && !resolvedKeys.has(timerKey)) armApproval(sessionId, approval)
-  }
-
-  // C2: event-driven immediate poll. Non-timer events (visibilitychange /
-  // pageshow / resume) are delivered even right after a thaw from Chrome's
-  // intensive throttling, so returning to the page closes an already-decided
-  // approval panel at once instead of waiting for the next interval tick.
-  // Only polls the current session's armed approvals while the tab is
-  // visible; debounced so bursty events cost at most one extra poll / 500ms.
-  const fireImmediatePoll = () => {
-    const g = globalThis as any
-    const now = Date.now()
-    if (now - lastExtraPollAt < 500) return
-    lastExtraPollAt = now
-    if (g.document?.visibilityState === 'hidden') return
-    if (currentId === undefined) return
-    const prefix = `${currentId}:`
-    for (const [key, poll] of pollFns) {
-      if (key.startsWith(prefix)) void poll()
-    }
-  }
-
-  const onListChange = () => {
-    const next = sessions.list?.getSnapshot?.()?.current
-    if (next === currentId) {
-      check(currentId)
-      return
-    }
-    if (unsubSession) {
-      unsubSession()
-      unsubSession = undefined
-    }
-    clearSessionTimers(currentId)
-    currentId = next
-    if (currentId) {
-      const binding = sessions.binding?.(currentId)
-      const session = binding?.session
-      if (session) unsubSession = session.subscribe?.(() => {
-        check(currentId)
-        // A snapshot push right after the tab became visible doubles as a thaw
-        // signal (same debounce/visibility guards as fireImmediatePoll).
-        fireImmediatePoll()
-      })
-      check(currentId)
-    }
-  }
-
-  const unsubList = sessions.list?.subscribe?.(onListChange)
-  onListChange()
-
-  // C2: thaw/resume listeners — non-timer events are unaffected by Chrome's
-  // intensive throttling, so they fire the moment the user returns to the tab.
-  // visibilitychange lives on the document; pageshow/resume on the window.
-  const g = globalThis as any
-  const doc = g.document
-  const win = g.window
-  if (doc?.addEventListener) doc.addEventListener('visibilitychange', fireImmediatePoll)
-  if (win?.addEventListener) {
-    win.addEventListener('pageshow', fireImmediatePoll)
-    win.addEventListener('resume', fireImmediatePoll)
-  }
-
-  ctx.effect(() => () => {
-    unsubList?.()
-    unsubSession?.()
-    if (doc?.removeEventListener) doc.removeEventListener('visibilitychange', fireImmediatePoll)
-    if (win?.removeEventListener) {
-      win.removeEventListener('pageshow', fireImmediatePoll)
-      win.removeEventListener('resume', fireImmediatePoll)
-    }
-    for (const timer of timers.values()) clearTimeout(timer)
-    timers.clear()
-    for (const poller of pollers.values()) clearInterval(poller)
-    pollers.clear()
-    for (const key of [...pollFns.keys()]) pollFns.delete(key)
-    timerMeta.clear()
-    resolvedKeys.clear()
-    answeredApprovals.clear()
-  }, 'dsh-auto-approval-llm: approval watcher')
 }
 
 function watchSessionModeChanges(ctx: any): void {
@@ -2687,7 +2326,8 @@ export function apply(ctx: any): void {
   ctx.effect(() => installAutoPermissionIcon((globalThis as any).document), 'dsh-auto-approval-llm: auto permission icon')
   ctx.effect(() => installFloatingApprovalButton(ctx), 'dsh-auto-approval-llm: floating button')
   ctx.effect(installSettingsCardStyles, 'dsh-auto-approval-llm: settings card styles')
-  watchApprovals(ctx)
+  ctx.effect(() => watchLegacyApprovals(ctx), 'dsh-auto-approval-llm: approval watcher (legacy)')
+  ctx.effect(() => watchRemoteApprovals(ctx), 'dsh-auto-approval-llm: approval watcher (remote)')
   watchSessionModeChanges(ctx)
   ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
     name: 'settings.plugin.item',
