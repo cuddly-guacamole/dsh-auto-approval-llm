@@ -728,6 +728,30 @@ function queueNotice(session: any, callId: string, text: string): void {
   byCall.set(callId, { text, seen: false })
 }
 
+/**
+ * Dequeue and settle ONE pending notice by its own callId. Parallel tool
+ * executions each land a `tools/result`; flushing the whole session map on the
+ * first result would drop the notices still waiting for their own results
+ * (seen=false → console-only), so result delivery settles only the matched
+ * callId and leaves the rest queued for their own result or the step/end
+ * flush.
+ */
+function flushNotice(session: any, callId: string): void {
+  const byCall = pendingNotices.get(session.id)
+  if (!byCall) return
+  const entry = byCall.get(callId)
+  if (entry === undefined) return
+  byCall.delete(callId)
+  if (!entry.seen) {
+    // The tool never produced a result (rejected/cancelled): inserting a
+    // user message there would still break the tool-calls sequence, so keep
+    // it out of the session log.
+    console.log(`[dsh-auto-approval-llm] (工具未执行，仅控制台通知) ${entry.text}`)
+    return
+  }
+  appendNotice(session, entry.text)
+}
+
 function flushNotices(session: any): void {
   const byCall = pendingNotices.get(session.id)
   if (!byCall) {
@@ -783,7 +807,7 @@ function watchNotices(ctx: any, getConfig: () => Config): void {
     const entry = byCall.get(callId)
     if (entry) entry.seen = true
     debugLog({ ev: 'onboarding-event', via: 'tools/result', sessionId: session.id, callId, found: !!entry, pending: byCall.size })
-    flushNotices(session)
+    flushNotice(session, callId)
   })
   ctx.on('session/event', (session: any, event: any) => {
     // Diagnostic: does the scope carrier actually reach plugin contexts?
@@ -803,6 +827,9 @@ function watchNotices(ctx: any, getConfig: () => Config): void {
       const callId = event.data?.message?.source?.callId
       const entry = pendingNotices.get(session.id)?.get(callId)
       if (entry) entry.seen = true
+      // Same parallel-safe dequeue as the tools/result branch: only this
+      // result's notice leaves the queue; siblings wait for their own results.
+      if (typeof callId === 'string') flushNotice(session, callId)
     } else if (event?.type === 'step/end') {
       flushNotices(session)
     }

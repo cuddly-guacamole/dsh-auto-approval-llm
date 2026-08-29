@@ -2363,6 +2363,26 @@ test('category ask on LOCKED categories: hard-reject countdown, never auto-allow
   assert.ok(src.includes('// Other category asks remain status-less'), 'non-locked category asks must stay status-less')
 })
 
+// ── notice queue: parallel tool results must not drop sibling notices ──────
+// F-regression (audit round): `tools/result` used to flush the WHOLE pending
+// map per result; with N parallel tool calls the first result flushed (and
+// dropped as seen=false) every other call's notice before its tool returned.
+// The fix settles exactly one callId per result delivery and keeps the rest
+// queued for their own result or the step/end flush.
+test('notice queue: tools/result settles only its own callId (parallel-safe)', () => {
+  const src = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
+  assert.ok(src.includes('function flushNotice('), 'a per-call flush helper must exist')
+  assert.ok(src.includes('function flushNotices('), 'the full-session flush helper must exist for step/end')
+  // The tools/result branch must call the per-call helper, not the full flush.
+  const toolsResultStart = src.indexOf("via: 'tools/result'")
+  const toolsResultBlock = src.slice(toolsResultStart, toolsResultStart + 600)
+  assert.ok(toolsResultBlock.includes('flushNotice(session, callId)'), 'tools/result must settle exactly its own callId')
+  assert.ok(!toolsResultBlock.includes('flushNotices(session)'), 'tools/result must not flush sibling notices')
+  // The session/event tool/result branch follows the same per-call rule.
+  const eventBlock = src.slice(src.indexOf("event?.type === 'tool/result'"), src.indexOf('event?.type === \'step/end\''))
+  assert.ok(eventBlock.includes('flushNotice(session, callId)'), 'session/event tool/result must settle its own callId too')
+})
+
 // ── confirmation learning: signature / gate / store contracts ──────────────
 import {
   LEARNING_KINDS,
@@ -3033,12 +3053,17 @@ test('onboarding injection: only after the AUTO gate, through queueNotice, plugi
   assert.ok(appendDefAt < flushAt, 'appendNotice must be defined before the flush body')
   // Flush trigger: the reliable point is the tools/result event (scope carrier
   // keys on exec.agent, same chain as tools/pre-execute) — the session/event
-  // subscription alone may be filtered for plugin contexts.
+  // subscription alone may be filtered for plugin contexts. Parallel tool
+  // calls each settle their OWN notice there (per-call flush); the step/end
+  // event still drains the whole queue.
   const toolsResultAt = src.indexOf("ctx.on('tools/result'")
   const sessionEventAt = src.indexOf("ctx.on('session/event'")
-  const flushAfterToolsResult = src.indexOf('flushNotices(session)', toolsResultAt)
+  const flushAfterToolsResult = src.indexOf('flushNotice(session, callId)', toolsResultAt)
   assert.ok(toolsResultAt !== -1, 'tools/result flush trigger must be registered')
-  assert.ok(flushAfterToolsResult > toolsResultAt && flushAfterToolsResult < sessionEventAt, 'tools/result handler must call flushNotices')
+  assert.ok(flushAfterToolsResult > toolsResultAt && flushAfterToolsResult < sessionEventAt, 'tools/result handler must settle its own callId (per-call flush)')
+  const stepEndAt = src.indexOf("event?.type === 'step/end'")
+  assert.ok(stepEndAt !== -1, 'step/end must remain the full-queue drain point')
+  assert.ok(src.indexOf('flushNotices(session)', stepEndAt) > stepEndAt, 'step/end must call the full flushNotices')
 })
 
 // ── first-use onboarding: client locale anchors ───────────────────────────
