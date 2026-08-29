@@ -376,3 +376,52 @@ export function createBreakerGuard(getWindowMs: () => number): BreakerGuard {
 
   return { apply, prune, dispose }
 }
+
+// ── edit-diff marker stripping ─────────────────────────────────────────────
+// The host appends "[dsh-edit-diff]…[/dsh-edit-diff]" to the reason text of
+// edit-class approvals; the client renders a colored preview from the block
+// and must remove the raw marker text from the panel. Stripping rewrites TEXT
+// NODES only — never `el.textContent = …`, which would destroy the
+// React-rendered child structure (spans can split the two markers apart, so
+// the element carrying both markers is usually a container, F6).
+
+/**
+ * Compute per-text-node rewrites that strip the first complete marker pair
+ * (`start` … `end`) from the joined text. Nodes are given in document order
+ * (depth-first); each output string keeps everything outside the removed
+ * span, so element structure is untouched. Without a COMPLETE pair the inputs
+ * are returned unchanged — forged or half markers in command text must not
+ * consume anything. Trailing newlines on the element's final text are
+ * trimmed, matching the legacy `textContent` rewrite behaviour. Idempotent:
+ * applying the result again is a no-op.
+ */
+export function computeTextNodeRewrites(texts: readonly string[], startMarker: string, endMarker: string): string[] {
+  const joined = texts.join('')
+  const startIdx = joined.indexOf(startMarker)
+  const endIdx = startIdx === -1 ? -1 : joined.indexOf(endMarker, startIdx)
+  if (startIdx === -1 || endIdx === -1) return [...texts]
+  const removeFrom = startIdx
+  const removeTo = endIdx + endMarker.length
+  let cursor = 0
+  const out: string[] = []
+  for (const text of texts) {
+    const from = cursor
+    const to = cursor + text.length
+    cursor = to
+    if (to <= removeFrom || from >= removeTo) {
+      out.push(text)
+      continue
+    }
+    let rewritten = ''
+    if (removeFrom > from) rewritten += text.slice(0, removeFrom - from)
+    if (removeTo < to) rewritten += text.slice(removeTo - from)
+    out.push(rewritten)
+  }
+  for (let i = out.length - 1; i >= 0; i--) {
+    if (out[i].length > 0) {
+      out[i] = out[i].replace(/\n+$/, '')
+      break
+    }
+  }
+  return out
+}

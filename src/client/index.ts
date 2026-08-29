@@ -5,7 +5,7 @@ import { THRESHOLD_DEFAULTS } from '../auto/constants.js'
 import { parseRulesText } from '../auto/rules.js'
 import { installAutoPermissionIcon } from './auto-icon.js'
 import { zh, en } from './locale.js'
-import { createBreakerGuard, parseCountdown } from './approvals/shared.js'
+import { computeTextNodeRewrites, createBreakerGuard, parseCountdown } from './approvals/shared.js'
 import type { CountdownInfo } from './approvals/shared.js'
 import { watchLegacyApprovals } from './approvals/legacy.js'
 import { watchRemoteApprovals } from './approvals/remote.js'
@@ -197,7 +197,28 @@ function hijackApprovalButtons(): () => void {
 
   // Remove the raw marker block from the panel text (idempotent). Only the
   // deepest element carrying both markers is touched, so sibling text such as
-  // the countdown note survives intact.
+  // the countdown note survives intact. Stripping rewrites TEXT NODES only —
+  // rewriting the element's textContent would destroy its child structure
+  // (React splits long reasons into spans and the two markers often land in
+  // different children, F6).
+  const collectTextNodes = (root: any, out: any[]): any[] => {
+    for (const node of Array.from(root.childNodes ?? []) as any[]) {
+      if (node.nodeType === 3) out.push(node)
+      else collectTextNodes(node, out)
+    }
+    return out
+  }
+
+  const applyTextNodeRewrites = (el: any) => {
+    const nodes = collectTextNodes(el, [])
+    if (!nodes.length) return
+    const texts = nodes.map((n: any) => n.data ?? '')
+    const rewrites = computeTextNodeRewrites(texts, DIFF_START, DIFF_END)
+    for (let i = 0; i < nodes.length; i++) {
+      if (rewrites[i] !== texts[i]) nodes[i].data = rewrites[i]
+    }
+  }
+
   const hideDiffBlock = (panel: any) => {
     for (const el of Array.from(panel.querySelectorAll('*')) as any[]) {
       const text = el.textContent ?? ''
@@ -205,10 +226,7 @@ function hijackApprovalButtons(): () => void {
       const childCarries = Array.from(el.children).some((c: any) =>
         (c.textContent ?? '').includes(DIFF_START) && (c.textContent ?? '').includes(DIFF_END))
       if (childCarries) continue
-      const start = text.indexOf(DIFF_START)
-      const end = text.indexOf(DIFF_END)
-      const cleaned = `${text.slice(0, start)}${text.slice(end + DIFF_END.length)}`.replace(/\n+$/, '')
-      el.textContent = cleaned
+      applyTextNodeRewrites(el)
       break
     }
   }
