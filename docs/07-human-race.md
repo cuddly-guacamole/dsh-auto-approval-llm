@@ -17,7 +17,7 @@
 |---|---|
 | 宿主倒计时到期 | `timeout-allow / timeout-deny` |
 | LLM 接管（claim） | `llm-allow / llm-deny` |
-| 客户端自动应答（autoAnswered 标记） | `auto-allow / auto-deny` |
+| 客户端自动应答（resolvedCallIds 防重） | `auto-allow / auto-deny` |
 | 真实人工点击 | `human-allow / human-deny` |
 | 请求被取消/会话销毁 | `abort → 永远 action=reject（不假装有人决定过）` |
 | 声明规则（G1）/静态名单（G2） | `rule-deny / rule-allow`、`denyList-deny / allowlist-allow` |

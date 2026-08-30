@@ -27,7 +27,7 @@
 :::
 
 ::: tip 生命周期
-**生命周期**：`session/disposed` 在锁内删除该会话键；`/approval reset` 清两个计数器 + denialLog + 全部 7 张 approvalState 表（reviewStates/followExpiry/reviewVerdicts/autoAnswered/resolvedCallIds/timeoutFeedback/decisionFeedback）。
+**生命周期**：`session/disposed` 在锁内删除该会话键；`/approval reset` 清两个计数器 + denialLog + 全部 6 张 approvalState 表（reviewStates/followExpiry/reviewVerdicts/resolvedCallIds/timeoutFeedback/decisionFeedback）。
 :::
 
 ## 8.3　触发生效后的人工面
