@@ -7,11 +7,14 @@
  * audit lives in a plain file (never in user/message session events), so the
  * main model can never read it back as an injection channel.
  */
-import { appendFileSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 export const MAX_AUDIT_LINES = 5_000
+
+/** Byte cap for audit rotation (must match the stat trigger in appendAuditLine). */
+export const MAX_AUDIT_BYTES = 5 * 1024 * 1024
 
 // Compiled to lib/auto/audit.js, so two levels up is the plugin root
 // (the same directory that holds history.jsonl).
@@ -24,11 +27,48 @@ export function trimAuditTail(content: string, maxLines = MAX_AUDIT_LINES): stri
   return `${lines.slice(-maxLines).join('\n')}\n`
 }
 
+/**
+ * Byte- AND line-bounded rotation: keep the last `maxLines` lines, then — when
+ * the tail still exceeds `maxBytes` (long lines) — drop leading tail lines
+ * until the kept tail fits, always keeping at least one line. One backward
+ * O(n) byte scan, no repeated joining, so every rotate call converges in a
+ * single pass: the rotated file sits under `maxBytes` whenever any single
+ * line can, and the next append no longer re-triggers a full rewrite (no
+ * O(n²) write amplification). A single oversized line is kept whole.
+ */
+export function auditRotateContent(content: string, maxBytes = MAX_AUDIT_BYTES, maxLines = MAX_AUDIT_LINES): string {
+  const lines = content.split('\n').filter(Boolean)
+  if (lines.length <= maxLines) {
+    const bytes = lines.reduce((sum, line) => sum + Buffer.byteLength(line) + 1, 0)
+    if (bytes <= maxBytes) return content.endsWith('\n') ? content : `${content}\n`
+  }
+  const tail = lines.slice(-maxLines)
+  const tailBytes = tail.reduce((sum, line) => sum + Buffer.byteLength(line) + 1, 0)
+  if (tailBytes <= maxBytes) return `${tail.join('\n')}\n`
+  let keep = 0
+  let acc = 0
+  for (let i = tail.length - 1; i >= 0; i -= 1) {
+    const add = Buffer.byteLength(tail[i]) + (keep === 0 ? 0 : 1)
+    if (acc + add > maxBytes) break
+    acc += add
+    keep += 1
+  }
+  if (keep === 0 && tail.length > 0) keep = 1
+  return `${tail.slice(-keep).join('\n')}\n`
+}
+
 export function appendAuditLine(line: string): void {
   try {
     appendFileSync(AUDIT_FILE, `${line}\n`)
-    if (statSync(AUDIT_FILE).size > 5 * 1024 * 1024) {
-      writeFileSync(AUDIT_FILE, trimAuditTail(readFileSync(AUDIT_FILE, 'utf8')))
+    if (statSync(AUDIT_FILE).size > MAX_AUDIT_BYTES) {
+      const content = readFileSync(AUDIT_FILE, 'utf8')
+      const rotated = auditRotateContent(content)
+      if (rotated === content) return
+      // Atomic replace (tmp + rename, same directory) so a crash mid-rotate
+      // can never leave a torn audit file; the original survives write errors.
+      const tmp = `${AUDIT_FILE}.tmp`
+      writeFileSync(tmp, rotated)
+      renameSync(tmp, AUDIT_FILE)
     }
   } catch {
     // Audit persistence is best-effort and never affects an approval outcome.
