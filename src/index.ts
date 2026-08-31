@@ -2168,7 +2168,15 @@ export function apply(ctx: Context, rawConfig: Config): void {
       // covers every textual target — the remaining credential/system fence.
       const inTrustedZone = trustedZone.some(root => isWithin(root, textual))
       if (!isWithin(roots.workspace, textual) && !inTrustedZone && !aggressive) continue
-      const resolved = resolveDeepest(target)
+      // Resolve the NORMALIZED path, never the raw argument: `resolveDeepest`
+      // ends in `realpathSync`, which anchors a relative spelling ('hello.txt',
+      // '.') to `process.cwd()` — the dsh process's directory, not the session
+      // workspace. `dsh web` serves every workspace from one process, so the
+      // raw form turned each relative target into a realpath rooted outside the
+      // workspace and hard-denied it. Resolving `textual` keeps the guard's
+      // intent (compare the judged target against where it actually lands)
+      // while making the resolution independent of the process cwd.
+      const resolved = resolveDeepest(textual)
       if (resolved === undefined) continue
       const normalized = normalizePath(resolved, roots.workspace, roots.home)
       // Independent runtime-state re-check, orthogonal to zone escape: a

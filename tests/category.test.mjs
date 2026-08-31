@@ -1092,3 +1092,44 @@ test('host wiring: pre-execute logs runtime-state reads before handing over to e
   assert.ok(nextAt > auditAt, 'the trail is emitted before the static allow hands over')
   assert.ok(classifyAt > auditAt, 'classifier-approved reads are covered by the same trail')
 })
+// ── relative-target resolution (guard fed the normalized path) ─────────────
+// Regression: the guard used to hand the RAW tool argument to its realpath
+// resolver. `realpathSync` anchors a relative spelling to `process.cwd()`, so
+// in `dsh web` — one process serving every workspace — a plain `write
+// hello.txt` produced a realpath rooted at the process directory and was
+// hard-denied as a symlink escape. The two compositions below are the ones
+// the guard can build for the same call; only the normalized one describes
+// the path the policy actually judged.
+test('relative target: only the normalized path resolves inside the workspace (raw one lands on process.cwd)', () => {
+  const f = fixture()
+  try {
+    // realpath the fixture root: on macOS the temp root is itself a symlink
+    // (/var → /private/var) and would fake an escape for every target.
+    const root = realpathSync(f.root)
+    const workspace = normalizePath(realpathSync(f.workspace), realpathSync(f.workspace), root)
+    const r = { workspace, home: root, dshHome: join(root, '.dsh'), allowedDshSubpaths: [] }
+    // The tool argument as the model writes it: relative, not yet created.
+    const textual = normalizePath('hello.txt', workspace, root)
+    assert.equal(isWithin(workspace, textual), true, 'the normalized target is in-workspace')
+    assert.ok(!isWithin(workspace, normalizePath(process.cwd(), workspace, root)), 'the fixture workspace is not the process cwd')
+    // resolveDeepest walks up to the deepest EXISTING ancestor: from the
+    // normalized target that is the workspace itself; from the raw 'hello.txt'
+    // it is dirname('hello.txt') === '.', i.e. realpathSync('.') === cwd.
+    const fromTextual = normalizePath(realpathSync(f.workspace), workspace, root)
+    const fromRaw = normalizePath(realpathSync('.'), workspace, root)
+    assert.equal(realpathCriticalReason(textual, fromTextual, r, [], workspace), undefined, 'a routine relative write must not be denied')
+    assert.match(realpathCriticalReason(textual, fromRaw, r, [], workspace) ?? '', /resolves outside the workspace via a symlink/, 'the raw composition is what produced the false escape')
+  } finally {
+    f.cleanup()
+  }
+})
+
+test('G-relative: the symlink guard resolves the normalized target, never the raw argument', () => {
+  const start = HOST_SRC.indexOf('const symlinkEscapeReason')
+  const end = HOST_SRC.indexOf('tools?.guard')
+  const guard = HOST_SRC.slice(start, end > start ? end : start + 6000)
+  assert.ok(guard.includes('const resolved = resolveDeepest(textual)'), 'the per-target resolution consumes the normalized path')
+  assert.ok(!guard.includes('resolveDeepest(target)'), 'the raw argument must never reach realpathSync')
+  // The workspace root is absolute already; that call site is unaffected.
+  assert.ok(guard.includes('resolveDeepest(roots.workspace)'), 'the cached workspace realpath still resolves the root itself')
+})
