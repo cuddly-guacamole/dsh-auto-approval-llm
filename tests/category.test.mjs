@@ -570,7 +570,11 @@ test('T63: the category decision function is called once per wiring point (2 tot
 
 test('T64: pre-execute tightens only with deny/ask returns, never auto→next', () => {
   const start = HOST_SRC.indexOf("'tools/pre-execute'")
-  const end = HOST_SRC.indexOf("'tools/result'")
+  // Anchor the end search at `start`: the first `'tools/result'` in the
+  // compiled host belongs to watchNotices (module level, far above apply), so
+  // an unanchored search always lost the window to the char-count fallback
+  // and the assertions silently depended on the handler staying under it.
+  const end = HOST_SRC.indexOf("'tools/result'", start)
   const pre = HOST_SRC.slice(start, end > start ? end : start + 4000)
   assert.ok(pre.includes('[auto-mode category deny]'), 'category deny return exists')
   assert.ok(pre.includes('[auto-mode category ask]'), 'category ask return exists')

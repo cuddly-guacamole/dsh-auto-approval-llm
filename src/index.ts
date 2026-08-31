@@ -2229,7 +2229,25 @@ export function apply(ctx: Context, rawConfig: Config): void {
     const roots = rootsFor(exec)
     const assessment = assessTool(exec, roots, artifacts)
     if (assessment.plannedCreates !== undefined) artifacts.plan(exec, assessment.plannedCreates, roots)
-    if (assessment.decision === 'deny') return { kind: 'deny', reason: `[auto-mode hard deny] ${assessment.reason}` }
+    if (assessment.decision === 'deny') {
+      // The code-enforced fuse is the decision users trust most, so it must
+      // leave the same durable trace as every other terminal. Until this
+      // record existed a hard deny was visible only as the error string
+      // handed back to the model: no panel entry, no history.jsonl line, not
+      // even a debug one. Its own `hard-deny` source keeps the static fuse
+      // separable from the classifier plane; `category`/`riskTier` are
+      // derived further down this handler and are left off rather than
+      // recomputed here, since neither took part in this verdict.
+      pushHistory({
+        sessionId: authorityKeyFor(exec),
+        toolName: exec.name,
+        outcome: 'rejected',
+        source: 'hard-deny',
+        llmReason: assessment.reason,
+      })
+      debugLog({ ev: 'hard-deny', callId: exec.callId ?? null, toolName: exec.name, reason: sanitizeReviewReason(assessment.reason) })
+      return { kind: 'deny', reason: `[auto-mode hard deny] ${assessment.reason}` }
+    }
     // Audit-only trail: a shell command that cleared the hard fuse and may
     // still run (statically allowed or classifier-approved) while opening one
     // of the plugin's own runtime-state files for reading (approval history,
@@ -2284,6 +2302,27 @@ export function apply(ctx: Context, rawConfig: Config): void {
         ...(route === undefined ? {} : { route }),
       }, exec.signal)
       debugLog({ ev: 'classifier-decision', callId: exec.callId ?? null, toolName: exec.name, category, directive, mode: config.categoryMode, aggressiveAuto, riskTier, decision: decision.decision, reason: sanitizeReviewReason(decision.reason) })
+      // This fast path answers without ever entering the `approval/request`
+      // answerer, where every other pushHistory site lives — so an allow or a
+      // deny is recorded here or nowhere, and the panel stayed empty for the
+      // one plane where the model decides on its own. 'ask' is deliberately
+      // left out: it continues into the answerer, which records the settled
+      // outcome downstream (recording here too would double-count it). The
+      // sources are distinct from the answerer's so the two decision planes
+      // stay separable in the history.
+      if (decision.decision !== 'ask') {
+        pushHistory({
+          sessionId: authorityKeyFor(exec),
+          toolName: exec.name,
+          outcome: decision.decision === 'allow' ? 'allowed-once' : 'rejected',
+          source: decision.decision === 'allow' ? 'classifier-allow' : 'classifier-deny',
+          category,
+          mode: config.categoryMode,
+          llmDecision: decision.decision,
+          llmRisk: riskTier,
+          llmReason: decision.reason,
+        })
+      }
       if (decision.decision === 'allow') return next()
       if (decision.decision === 'deny') return { kind: 'deny', reason: `[auto-mode classifier deny] ${decision.reason}` }
       return { kind: 'ask', reason: `[auto-mode classifier asks] ${decision.reason}` }
