@@ -144,7 +144,6 @@ const SESSION_STATE_TOOLS = new Set([
     'update_goal',
     'exit_plan_mode',
     'skill',
-    'report',
 ]);
 /** Read-only tools backed by owner/workspace-authorized Harness services. */
 const HARNESS_READ_TOOLS = new Set([

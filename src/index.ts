@@ -332,12 +332,37 @@ function isModelRouteConfig(cfg: any): cfg is { provider: string; model: string 
     typeof cfg?.model === 'string' && cfg.model.length > 0
 }
 
+// One normalized "all session events" view across dsh host generations:
+// alpha.4+ removed `Session.events` in favor of `snapshotEvents()` (commit
+// 27bf1039, 2026-09); rc.2 keeps the `events` getter. Feature-detected and
+// duck-typed so the same binary serves both hosts.
+export function sessionEventList(session: any): readonly any[] {
+  if (session === undefined || session === null) return []
+  if (typeof session.snapshotEvents === 'function') {
+    const events = session.snapshotEvents()
+    return Array.isArray(events) ? events : []
+  }
+  const events = session.events
+  return Array.isArray(events) ? events : []
+}
+
+// Resolve the effective permission preset across host generations: rc.2
+// `current(events)` folds the event list; alpha.4+ `current(session)` reads
+// the session's folded knob state. The snapshotEvents method identifies the
+// new-generation Session.
+export function currentPreset(permissionPresets: any, session: any): string | undefined {
+  if (permissionPresets === undefined || permissionPresets?.current == null) return undefined
+  if (session === undefined || session === null) return undefined
+  if (typeof session.snapshotEvents === 'function') return permissionPresets.current(session)
+  return permissionPresets.current(session.events ?? [])
+}
+
 // Single resolver for "which provider/model is this session talking through":
 // the live request header first, then the newest recorded header event.
 export function sessionModelRoute(session: any): { provider: string; model: string } | undefined {
   const live = session?.requestHeader?.()?.config
   if (isModelRouteConfig(live)) return { provider: live.provider, model: live.model }
-  const events = session?.events ?? []
+  const events = sessionEventList(session)
   for (let i = events.length - 1; i >= 0; i -= 1) {
     const event = events[i]
     if (event?.type !== 'request/header') continue
@@ -358,7 +383,7 @@ function resolveModelRoute(agent: any): { provider: string; model: string } | un
 
 function findToolCallArguments(session: any, callId: string | undefined, maxChars: number): string | undefined {
   if (!callId) return undefined
-  const events = session?.events ?? []
+  const events = sessionEventList(session)
   for (let i = events.length - 1; i >= 0; i -= 1) {
     const event = events[i]
     if (event?.type !== 'tool/call' || event.data?.callId !== callId) continue
@@ -1782,7 +1807,7 @@ function installSessionModeRoute(ctx: any): void {
         responseJson(res, 404, { ok: false, error: 'agent not found' })
         return
       }
-      const mode = permissionPresets?.current?.(agent.session.events)
+      const mode = currentPreset(permissionPresets, agent.session) ?? null
       responseJson(res, 200, { ok: true, value: { mode: mode ?? null } })
     },
   }), 'dsh-auto-approval-llm: session mode route')
@@ -1790,10 +1815,11 @@ function installSessionModeRoute(ctx: any): void {
 
 function trustedUserMessages(authority: any) {
   if (authority === undefined) return []
+  const events = sessionEventList(authority.session)
   const messages: string[] = []
   let remaining = 4_000
-  for (let index = authority.session.events.length - 1; index >= 0 && messages.length < 4 && remaining > 0; index -= 1) {
-    const event = authority.session.events[index]
+  for (let index = events.length - 1; index >= 0 && messages.length < 4 && remaining > 0; index -= 1) {
+    const event = events[index]
     if (event?.type !== 'user/message' || event.data.source.kind !== 'user') continue
     const text = event.data.content
       .filter((block: any) => block.type === 'text')
@@ -1809,8 +1835,9 @@ function trustedUserMessages(authority: any) {
 }
 
 function isAutoPermissionExecution(exec: any, permissionPresets: any, presetName = AUTO_PRESET) {
-  const events = exec.agent?.session.events
-  return events !== undefined && permissionPresets?.current?.(events) === presetName
+  const session = exec.agent?.session
+  if (session === undefined) return false
+  return currentPreset(permissionPresets, session) === presetName
 }
 
 function autoPermissionAuthority(exec: any, parentAgent: any, permissionPresets: any, presetName = AUTO_PRESET) {
@@ -2359,7 +2386,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
   const ensureAsk = (agent: any) => {
     if (!config.autoSwitchPolicyToAsk || !agent?.session) return
     if (!permissionPresets) return
-    const preset = permissionPresets.current?.(agent.session.events)
+    const preset = currentPreset(permissionPresets, agent.session)
     if (preset !== AUTO_PRESET) return
     if (approval?.overrideOf?.(agent.session) !== 'never') return
     const timer = setTimeout(() => {
@@ -2768,7 +2795,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
     // Auto (mirrors tools/pre-execute) instead of falling through to the
     // official panel without review or breaker.
     const authority = authorityFor({ agent: req.agent, signal: req.signal })
-    const preset = permissionPresets.current?.(authority?.session?.events ?? req.agent.session.events)
+    const preset = currentPreset(permissionPresets, authority?.session ?? req.agent.session)
     if (preset !== AUTO_PRESET) return next()
     const sessionKey = authorityKeyFor({ agent: req.agent })
     requestAtByKey.set(sessionKey, Date.now())
@@ -3238,7 +3265,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
         const key = authorityKeyFor({ agent })
         let mode: string | null = null
         try {
-          mode = permissionPresets?.current?.(authority?.session?.events ?? agent?.session?.events ?? []) ?? null
+          mode = currentPreset(permissionPresets, authority?.session ?? agent?.session) ?? null
         } catch {
           mode = null
         }

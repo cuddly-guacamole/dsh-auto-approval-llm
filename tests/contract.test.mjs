@@ -32,7 +32,7 @@ import { isTrustedRequest, isLoopbackIp, validateReviewerBaseUrl } from '../lib/
 import { parseClassifierDecision } from '../lib/auto/classifier.js'
 import { RISK_NAME_PATTERN, RISK_REASON_PATTERN } from '../lib/auto/risk-tokens.js'
 import { buildAskReason, buildEditDiffText } from '../lib/auto/editdiff.js'
-import { Config, resolveConfig, sessionModelRoute, buildReviewSnapshot, markFirstAutoSessionNotice, onboardingTimeoutLabel, onboardingNoticeText, extractReviewerKeyLine, installFeedbackRoute } from '../lib/index.js'
+import { Config, resolveConfig, sessionModelRoute, buildReviewSnapshot, markFirstAutoSessionNotice, onboardingTimeoutLabel, onboardingNoticeText, extractReviewerKeyLine, installFeedbackRoute, sessionEventList, currentPreset } from '../lib/index.js'
 import { categorizeCommand } from '../lib/auto/category.js'
 
 test('parseClassifierDecision: valid allow/ask/deny', () => {
@@ -2982,6 +2982,45 @@ test('sessionModelRoute: absent/invalid session routes resolve to undefined (fal
   assert.equal(sessionModelRoute({}), undefined)
   assert.equal(sessionModelRoute({ requestHeader: () => ({ config: { provider: '', model: '' } }) }), undefined)
   assert.equal(sessionModelRoute({ events: [{ type: 'request/header', data: { header: { config: { provider: 'p' } } } }] }), undefined)
+})
+
+// ── dsh alpha.4+ compatibility: Session.events removed, snapshotEvents()/ session arg ──
+
+test('sessionEventList: alpha.4 session (snapshotEvents) and rc.2 session (events) both normalize', () => {
+  const events = [{ type: 'user/message', data: {} }]
+  assert.deepEqual(sessionEventList({ snapshotEvents: () => events }), events)
+  assert.deepEqual(sessionEventList({ events }), events)
+  assert.deepEqual(sessionEventList(null), [])
+  assert.deepEqual(sessionEventList(undefined), [])
+  assert.deepEqual(sessionEventList({}), [])
+  // Broken snapshotEvents output must not crash the pipeline.
+  assert.deepEqual(sessionEventList({ snapshotEvents: () => undefined }), [])
+  assert.deepEqual(sessionEventList({ snapshotEvents: () => 'nope' }), [])
+})
+
+test('sessionModelRoute: alpha.4 session without events getter still resolves the fallback header', () => {
+  const session = {
+    snapshotEvents: () => [
+      { type: 'tool/call', data: {} },
+      { type: 'request/header', data: { header: { config: { provider: 'newest', model: 'm2' } } } },
+    ],
+  }
+  assert.deepEqual(sessionModelRoute(session), { provider: 'newest', model: 'm2' })
+})
+
+test('currentPreset: passes the session to alpha.4 current() and the event list to rc.2 current()', () => {
+  const alphaSession = { snapshotEvents: () => [{ type: 'x', data: {} }] }
+  const rcSession = { events: [{ type: 'x', data: {} }] }
+  const captured = []
+  const permissionPresets = { current: (arg) => { captured.push(arg); return 'auto' } }
+  assert.equal(currentPreset(permissionPresets, alphaSession), 'auto')
+  assert.equal(currentPreset(permissionPresets, rcSession), 'auto')
+  assert.equal(captured[0], alphaSession)
+  assert.deepEqual(captured[1], rcSession.events)
+  assert.equal(currentPreset(undefined, rcSession), undefined)
+  assert.equal(currentPreset({}, rcSession), undefined)
+  assert.equal(currentPreset(permissionPresets, undefined), undefined)
+  assert.equal(currentPreset(permissionPresets, null), undefined)
 })
 
 test('reviewer route gate: the two-source disjunction stays pinned at both pipeline sites (baseUrl / session fallback)', () => {
