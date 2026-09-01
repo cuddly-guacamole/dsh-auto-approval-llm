@@ -2760,10 +2760,22 @@ export function apply(ctx: Context, rawConfig: Config): void {
       // contradiction) is treated as a miss and slides back into the ordinary
       // risk branch below — fail-closed in exactly one direction.
       if (review.decision !== 'ALLOW' || reviewerAutoAllowBlocked(review as any)) return undefined
-      sessionLearnedAllows.set(sessionKey, capUsed + 1)
-      if (learningCapState(capUsed, capMax).alert) {
-        appendAuditLine(JSON.stringify({ type: 'learning-cap-reached', at: Date.now(), sessionId: sessionKey, allows: capUsed + 1 }))
-        debugLog({ ev: 'learn-cap', sessionId: sessionKey, allows: capUsed + 1 })
+      // Atomic learned-allow increment under the same keyed mutex as the
+      // breaker counters and session/disposed deletion: the count is re-read
+      // inside the critical section, so two concurrent learned allows for one
+      // session each land their increment — the per-session cap cannot be
+      // diluted by parallel subagents. The LLM review stayed outside the lock
+      // (only synchronous map ops may run under it). The gate above still
+      // reads a pre-review snapshot: that is the soft-brake check-then-act,
+      // and an exact count with a momentary overshoot is honest.
+      const used = await breakerMutex.run(sessionKey, () => {
+        const next = (sessionLearnedAllows.get(sessionKey) ?? 0) + 1
+        sessionLearnedAllows.set(sessionKey, next)
+        return next
+      })
+      if (used === capMax) {
+        appendAuditLine(JSON.stringify({ type: 'learning-cap-reached', at: Date.now(), sessionId: sessionKey, allows: used }))
+        debugLog({ ev: 'learn-cap', sessionId: sessionKey, allows: used })
       }
       if (config.notifyUser && req.callId !== undefined) {
         queueNotice(req.agent.session, req.callId, `✅ 已学习放行（仍通过一次在线评审）"${req.toolName}"`)

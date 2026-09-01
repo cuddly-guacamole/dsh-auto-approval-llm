@@ -779,6 +779,19 @@ test('T149/T152: learned-allow records carry G11-aligned fields; cap sleep alert
   assert.ok(/config\.notifyUser[\s\S]{0,80}queueNotice/.test(body) || (body.includes('config.notifyUser') && body.includes('queueNotice(')), 'the release notice honors the notify switch')
 })
 
+test('M1: learned-allow cap increment is a fresh read inside the keyed mutex (2026-09-03 audit)', () => {
+  const start = HOST_SRC.indexOf('const learnAttempt')
+  const end = HOST_SRC.indexOf("anyCtx.on('approval/request'")
+  const body = HOST_SRC.slice(start, end > start ? end : start + 12000)
+  const runIdx = body.indexOf('await breakerMutex.run(sessionKey')
+  assert.ok(runIdx !== -1, 'the cap increment is serialized under the session keyed mutex')
+  const freshRead = body.indexOf('sessionLearnedAllows.get(sessionKey)', runIdx)
+  assert.ok(freshRead !== -1 && freshRead > runIdx, 'the count is re-read inside the critical section')
+  assert.ok(!body.includes('sessionLearnedAllows.set(sessionKey, capUsed + 1)'), 'the write never consumes the stale pre-review snapshot')
+  const alertIdx = body.indexOf('used === capMax')
+  assert.ok(alertIdx !== -1 && alertIdx > runIdx, 'the cap-crossing alert fires from the fresh count')
+})
+
 test('LP8/LP9: the verification gate never touches the breaker and never leaks samples into prompts', () => {
   const start = HOST_SRC.indexOf('const learnAttempt')
   const end = HOST_SRC.indexOf("anyCtx.on('approval/request'")

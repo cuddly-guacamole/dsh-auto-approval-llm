@@ -218,6 +218,46 @@ test('createKeyedMutex: callbacks that throw keep the chain alive for later lock
   assert.equal(ran, true)
 })
 
+// ── F2: learned-allow session cap — exact increments under concurrency ──────
+// M1 regression (2026-09-03 host audit): the learned-allow cap counter used a
+// pre-review snapshot (`capUsed`) for its post-review write, so concurrent
+// learned allows for one session lost increments and diluted the 50-per-session
+// brake. The fix re-reads the count inside the keyed mutex; this test pins the
+// exact-increment invariant of that wiring pattern (gate snapshot may be stale,
+// the increment must never be).
+
+test('learned-allow cap: concurrent fresh-read increments are exact (M1 regression)', async () => {
+  const m = createKeyedMutex()
+  const sessionLearnedAllows = new Map()
+  const key = 'root-session'
+  const n = 8
+  const tasks = []
+  const landed = []
+  for (let i = 0; i < n; i++) {
+    tasks.push((async () => {
+      // Pre-review gate snapshot, taken BEFORE the review exactly like the
+      // host does (learnDecision's capUsed). All 8 pass: the snapshot reads
+      // start from the same empty counter.
+      const capUsed = sessionLearnedAllows.get(key) ?? 0
+      if (capUsed >= 5) return
+      // Staggered "LLM review" latency AFTER the gate: increments of other
+      // calls land while this one is still reviewing, so its snapshot is
+      // genuinely stale by the time it writes.
+      await new Promise((r) => setTimeout(r, Math.floor(Math.random() * 10)))
+      // Post-review increment: fresh read inside the keyed critical section.
+      const used = await m.run(key, () => {
+        const next = (sessionLearnedAllows.get(key) ?? 0) + 1
+        sessionLearnedAllows.set(key, next)
+        return next
+      })
+      landed.push(used)
+    })())
+  }
+  await Promise.all(tasks)
+  assert.equal(sessionLearnedAllows.get(key), n, 'every successful learned allow lands exactly one increment')
+  assert.deepEqual([...landed].sort((a, b) => a - b), Array.from({ length: n }, (_, i) => i + 1), 'each caller observes its true sequence position')
+})
+
 // ── G: static-allow closures (round-3 audit) ────────────────────────────────
 const zoneRoots = {
   workspace: 'C:/Users/u/.dsh/plugins/dsh-auto-approval-llm',
