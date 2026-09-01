@@ -3325,7 +3325,14 @@ test('reviewer system: inline executable source is untrusted payload, not instru
 // alpha.4 reworded the zh workspace-write preset to "工作区内修改"; the menu
 // gate must recognise both the rc.2 and alpha.4 variants so the Auto menu item
 // and the composer trigger stay consistently decorated.
-import { PERMISSION_LABEL_SETS, isPermissionMenu } from '../lib/client/auto-icon.js'
+import { PERMISSION_LABEL_SETS, isPermissionMenu, installAutoPermissionIcon } from '../lib/client/auto-icon.js'
+
+test('auto-icon installer: missing document degrades to a no-op disposer (F7)', () => {
+  assert.equal(typeof installAutoPermissionIcon(undefined), 'function', 'undefined document -> disposer')
+  assert.equal(typeof installAutoPermissionIcon(null), 'function', 'null document -> disposer')
+  assert.doesNotThrow(() => installAutoPermissionIcon(undefined)(), 'the no-op disposer runs without a DOM')
+  assert.doesNotThrow(() => installAutoPermissionIcon(null)(), 'null-DOM disposer runs without a DOM')
+})
 
 test('permission menu gate: alpha.4 zh labels match (workspace-write reworded)', () => {
   const fakeMenu = (labels) => ({

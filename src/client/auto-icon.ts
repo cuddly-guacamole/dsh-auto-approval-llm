@@ -484,6 +484,12 @@ export function decorateAutoPermissionIcons(document) {
 }
 /** Install the Auto icon and explicit risk gate, then return their disposer. */
 export function installAutoPermissionIcon(document) {
+    // Same DOM-readiness guard as the other installers in apply(): the effect
+    // may run before the browser DOM exists (headless boots / odd injection
+    // order), and a bare querySelectorAll would throw and kill the installer
+    // (F7, 2026-09-03 audit).
+    if (!document)
+        return () => { };
     for (const existing of document.querySelectorAll('style[data-plugin]')) {
         if (existing.getAttribute('data-plugin') === PLUGIN_ID)
             existing.remove();
