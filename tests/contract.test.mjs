@@ -1169,12 +1169,30 @@ test('parseRulesText: counted-repetition and nested ReDoS shapes are rejected', 
   assert.equal(parseRulesText('(a|b){2,} | deny').errors.length, 1)
   assert.equal(parseRulesText('((a)+)+ | deny').errors.length, 1)
   assert.equal(parseRulesText('((ab)*)+ | deny').errors.length, 1)
+  // Counted-repeat groups under an outer unbounded quantifier — the only
+  // composition-blowup shape reachable without bare `|` in the pattern
+  // (L2, 2026-09-03 audit).
+  assert.equal(parseRulesText('(a{5,10})+ | deny').errors.length, 1)
+  assert.equal(parseRulesText('(a{5,})+ | deny').errors.length, 1)
+  assert.equal(parseRulesText('(a{5})+ | deny').errors.length, 1)
+})
+
+test('parseRulesText: alternation inside patterns is structurally rejected by the field-split grammar', () => {
+  // parseRulesText splits each rule line on EVERY bare `|` (rules.ts
+  // `left.split('|')`), so a pattern containing alternation yields a
+  // three-part line whose middle part is not a valid policy — the
+  // `(a|aa)+`-style catastrophic shapes can never reach the regex engine
+  // (L2 closure, 2026-09-03).
+  assert.equal(parseRulesText('(a|aa)+ | deny').errors.length, 1)
+  assert.equal(parseRulesText('(master|main)$ | deny').errors.length, 1)
 })
 
 test('parseRulesText: common anchored patterns remain accepted (no over-block)', () => {
   assert.equal(parseRulesText('^git push | deny').errors.length, 0)
   assert.equal(parseRulesText('git.push | deny | arguments').errors.length, 0)
   assert.equal(parseRulesText('\\.ssh[\\\\/]id_rsa | deny | arguments').errors.length, 0)
+  assert.equal(parseRulesText('\\d{2,4} | deny | arguments').errors.length, 0, 'ungrouped counted repeats stay authorable')
+  assert.equal(parseRulesText('(ab){1,3} | deny | arguments').errors.length, 0, 'bounded closed-count groups stay authorable')
 })
 
 // ── 7th audit round — A1: LAN-bind loopback-source hardening ───────────────

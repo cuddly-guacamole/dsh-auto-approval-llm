@@ -92,6 +92,13 @@ function isBoundedPattern(src: string): boolean {
   if (/\(\s*[^()]*[+*][^()]*\)\s*[+*]/.test(src)) return false
   // Alternation wrapped in an outer unbounded quantifier: `(a|b|c)*`, ...
   if (/\(\s*(?:[^()]*\|[^()]*\|[^()]*)\s*\)\s*[+*]/.test(src)) return false
+  // A group carrying a counted repeat (closed or open upper bound: `(a{5})+`,
+  // `(a{5,})+`, `(a{5,10})`) under an outer unbounded quantifier — the
+  // composition-count blowup is reachable WITHOUT any `|`, so the alternation
+  // rules above cannot cover it (L2, 2026-09-03 audit; the `(a|aa)+` shape
+  // itself is structurally impossible because the rule grammar splits on bare
+  // `|` at parse time — see parseRulesText).
+  if (/\(\s*[^()]*\{\s*\d+\s*(?:,\s*\d*\s*)?\}\s*\)\s*[+*]/.test(src)) return false
   // Nested groups each carrying a repeat, at any paren depth: `((a)+)+`,
   // `((ab)*)+` — exhaustive nested-quantifier checks are out of scope, but this
   // unmistakable shape is a classic catastrophic-backtracking signature.
