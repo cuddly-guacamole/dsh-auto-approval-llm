@@ -3342,3 +3342,42 @@ test('permission menu gate: alpha.4 zh labels match (workspace-write reworded)',
   const missing = ['仅可查看', 'Auto', '完全权限']
   assert.equal(isPermissionMenu(fakeMenu(missing)), false, 'incomplete menu must not pass')
 })
+
+// ── alpha.4 client contract: remote watcher probe-and-arm (P2, 2026-09-02) ──
+// ui-session.pendingInteractions is a browser-side dynamic service that may
+// register after the plugin mounts; the watcher must keep probing instead of
+// silently idling, and arm as soon as the service is observable.
+import { watchRemoteApprovals } from '../lib/client/approvals/remote.js'
+
+test('remote watcher: arms when uiSession.pendingInteractions is available at mount', () => {
+  let subscribed = false
+  const never = () => null
+  const fakeCtx = {
+    get: (name) => name === 'uiSession'
+      ? { pendingInteractions: { getSnapshot: () => new Map(), subscribe: () => { subscribed = true; return never } } }
+      : undefined,
+    effect: () => never,
+  }
+  watchRemoteApprovals(fakeCtx, { pollMs: 60000 })
+  assert.equal(subscribed, true, 'watcher must subscribe when the service is present')
+})
+
+test('remote watcher: keeps probing when the service appears after mount', async () => {
+  let available = false
+  let subscribed = false
+  const calls = []
+  const never = () => null
+  const fakeCtx = {
+    get: (name) => {
+      calls.push(name)
+      if (name !== 'uiSession' || !available) return undefined
+      return { pendingInteractions: { getSnapshot: () => new Map(), subscribe: () => { subscribed = true; return never } } }
+    },
+    effect: () => never,
+  }
+  watchRemoteApprovals(fakeCtx, { pollMs: 60000 })
+  assert.equal(subscribed, false, 'must not subscribe before the service exists')
+  available = true
+  await new Promise((r) => setTimeout(r, 600))
+  assert.equal(subscribed, true, 'must subscribe after the service becomes observable')
+})

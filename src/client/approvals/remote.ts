@@ -26,27 +26,30 @@ export interface PendingApprovalLike {
   answer(outcome: ApprovalOutcome): Promise<void>
 }
 
-export function watchRemoteApprovals(ctx: any, options: WatcherOptions = {}): void {
-  const pendingInteractions = ctx.get('uiSession')?.pendingInteractions
-  if (
-    !pendingInteractions ||
-    typeof pendingInteractions.getSnapshot !== 'function' ||
-    typeof pendingInteractions.subscribe !== 'function'
-  ) {
-    // alpha.1 ui-session is absent on rc.2 (and older): idle watcher.
-    return
-  }
+// The ui-session service is a browser-side dynamic package that registers
+// during the same application batch as this plugin; on alpha.4 it may not be
+// queryable at plugin-mount time yet. Instead of silently idling forever
+// (which turns every official panel into an unclosable ghost), keep probing
+// for a bounded window and log when the watcher actually arms or gives up.
+// rc.2 installs simply keep the watcher idle after the probe window.
+const UI_SESSION_RETRY_MS = 500
+const UI_SESSION_MAX_RETRIES = 30 // 15s covers the client application batch
 
+export function watchRemoteApprovals(ctx: any, options: WatcherOptions = {}): void {
   const active = new Map<string, { dispose: () => void; pollNow: () => void }>()
   // Tombstones: approvals the watcher already detached from (host resolved,
   // follow answered). Prevents check() from re-arming a stale approval
   // (R004); cleared when the item leaves the snapshot.
   const resolvedKeys = new Set<string>()
   const seenSessions = new Set<string>()
+  let unsub: (() => void) | undefined
+  let pendingInteractions: any
+  let disposed = false
+  let retryTimer: any
 
   const stillVisible = (item: PendingApprovalLike): boolean => {
     try {
-      const snapshot = pendingInteractions.getSnapshot()
+      const snapshot = pendingInteractions?.getSnapshot()
       const pending = snapshot?.get?.(item.sessionId)
       return !!pending && pending.kind === 'approval' && pending.callId === item.callId
     } catch {
@@ -55,6 +58,7 @@ export function watchRemoteApprovals(ctx: any, options: WatcherOptions = {}): vo
   }
 
   const check = () => {
+    if (disposed || pendingInteractions === undefined) return
     let snapshot: any
     try {
       snapshot = pendingInteractions.getSnapshot()
@@ -111,10 +115,56 @@ export function watchRemoteApprovals(ctx: any, options: WatcherOptions = {}): vo
     }
   }
 
-  const unsub = pendingInteractions.subscribe?.(check)
-  check()
+  // Probe-and-arm: link the watcher to ui-session.pendingInteractions once it
+  // is observable. Returns true when armed, false when still unavailable.
+  const armOnce = (): boolean => {
+    const pi = ctx.get('uiSession')?.pendingInteractions
+    if (
+      disposed ||
+      pi === undefined ||
+      typeof pi.getSnapshot !== 'function' ||
+      typeof pi.subscribe !== 'function'
+    ) {
+      return false
+    }
+    pendingInteractions = pi
+    unsub = pi.subscribe?.(check)
+    check()
+    return true
+  }
+
+  if (armOnce()) {
+    // armed at mount (pre-alpha.4 ordering)
+  } else {
+    console.warn('[dsh-auto-approval-llm] approval watcher (remote): uiSession.pendingInteractions unavailable at mount; probing')
+    let retries = 0
+    retryTimer = setInterval(() => {
+      if (disposed) {
+        clearInterval(retryTimer)
+        retryTimer = undefined
+        return
+      }
+      retries += 1
+      if (armOnce()) {
+        clearInterval(retryTimer)
+        retryTimer = undefined
+        console.warn(`[dsh-auto-approval-llm] approval watcher (remote): armed after ${retries * UI_SESSION_RETRY_MS}ms`)
+        return
+      }
+      if (retries >= UI_SESSION_MAX_RETRIES) {
+        clearInterval(retryTimer)
+        retryTimer = undefined
+        console.warn(`[dsh-auto-approval-llm] approval watcher (remote): uiSession.pendingInteractions unavailable after ${retries * UI_SESSION_RETRY_MS}ms; approval auto-close disabled (rc.2 install? offline panel)`)
+      }
+    }, UI_SESSION_RETRY_MS)
+  }
 
   ctx.effect(() => () => {
+    disposed = true
+    if (retryTimer !== undefined) {
+      clearInterval(retryTimer)
+      retryTimer = undefined
+    }
     unsub?.()
     for (const [, poller] of active) poller.dispose()
     active.clear()
