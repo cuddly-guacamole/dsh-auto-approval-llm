@@ -748,6 +748,7 @@ test('LP12b: the host schema declares both learning keys with fail-closed defaul
   const resolveBlock = HOST_SRC.slice(resolveIdx, HOST_SRC.indexOf('function riskTimedOutAction'))
   assert.ok(resolveBlock.includes('learningEnabled: raw.learningEnabled === true'), 'non-boolean degrades to off')
   assert.ok(resolveBlock.includes('clampLearningThreshold('), 'threshold clamped at the decision layer')
+  assert.ok(HOST_SRC.includes("safetyPrompt: z.string().default('').max(2000)"), 'safetyPrompt is bounded like the rules text (L3)')
 })
 
 test('T148: learning bookkeeping is adjacent to pushHistory at the single convergence point', () => {
