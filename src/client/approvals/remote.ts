@@ -36,6 +36,11 @@ const UI_SESSION_RETRY_MS = 500
 const UI_SESSION_MAX_RETRIES = 30 // 15s covers the client application batch
 
 export function watchRemoteApprovals(ctx: any, options: WatcherOptions = {}): void {
+  // Injectable for node contract tests (M1, 2026-09-03); defaults keep the
+  // 15s probe window of the original alpha.4 wiring.
+  const retryMs = options.retryMs ?? UI_SESSION_RETRY_MS
+  const maxRetries = options.maxRetries ?? UI_SESSION_MAX_RETRIES
+  const g = globalThis as any
   const active = new Map<string, { dispose: () => void; pollNow: () => void }>()
   // Tombstones: approvals the watcher already detached from (host resolved,
   // follow answered). Prevents check() from re-arming a stale approval
@@ -46,6 +51,10 @@ export function watchRemoteApprovals(ctx: any, options: WatcherOptions = {}): vo
   let pendingInteractions: any
   let disposed = false
   let retryTimer: any
+  // Whether the bounded probe window elapsed without uiSession. Guards the
+  // visibility re-probe: only a watcher that actually gave up may re-arm.
+  let gaveUp = false
+  let detachVisibilityProbe: (() => void) | undefined
 
   const stillVisible = (item: PendingApprovalLike): boolean => {
     try {
@@ -137,34 +146,75 @@ export function watchRemoteApprovals(ctx: any, options: WatcherOptions = {}): vo
     // armed at mount (pre-alpha.4 ordering)
   } else {
     console.warn('[dsh-auto-approval-llm] approval watcher (remote): uiSession.pendingInteractions unavailable at mount; probing')
+    startProbing()
+  }
+
+  // Probe loop. Gives up after `maxRetries` attempts so a rc.2 install (no
+  // ui-session service) does not probe forever, then hands over to the
+  // visibility re-probe below.
+  function startProbing(): void {
     let retries = 0
     retryTimer = setInterval(() => {
       if (disposed) {
-        clearInterval(retryTimer)
-        retryTimer = undefined
+        clearProbeTimer()
         return
       }
       retries += 1
       if (armOnce()) {
-        clearInterval(retryTimer)
-        retryTimer = undefined
-        console.warn(`[dsh-auto-approval-llm] approval watcher (remote): armed after ${retries * UI_SESSION_RETRY_MS}ms`)
+        clearProbeTimer()
+        console.warn(`[dsh-auto-approval-llm] approval watcher (remote): armed after ${retries * retryMs}ms`)
         return
       }
-      if (retries >= UI_SESSION_MAX_RETRIES) {
-        clearInterval(retryTimer)
-        retryTimer = undefined
-        console.warn(`[dsh-auto-approval-llm] approval watcher (remote): uiSession.pendingInteractions unavailable after ${retries * UI_SESSION_RETRY_MS}ms; approval auto-close disabled (rc.2 install? offline panel)`)
+      if (retries >= maxRetries) {
+        clearProbeTimer()
+        gaveUp = true
+        console.warn(`[dsh-auto-approval-llm] approval watcher (remote): uiSession.pendingInteractions unavailable after ${retries * retryMs}ms; approval auto-close disabled (rc.2 install? offline panel)`)
+        armVisibilityProbe()
       }
-    }, UI_SESSION_RETRY_MS)
+    }, retryMs)
   }
 
-  ctx.effect(() => () => {
-    disposed = true
+  const clearProbeTimer = () => {
     if (retryTimer !== undefined) {
       clearInterval(retryTimer)
       retryTimer = undefined
     }
+  }
+
+  // A slow-starting tab (cold VM, LAN debug, deep backgrounding) may expose
+  // uiSession after the probe window, and HMR is not guaranteed to rebuild the
+  // bundle. Re-arm on the next visibility restore; if the service is still
+  // missing, restart the bounded probe window instead of staying dead until
+  // the plugin is reloaded (F1, 2026-09-03 audit).
+  function armVisibilityProbe(): void {
+    const doc = g.document
+    if (!doc || typeof doc.addEventListener !== 'function') return
+    detachVisibilityProbe?.()
+    let removed = false
+    const detach = () => {
+      if (removed) return
+      removed = true
+      doc.removeEventListener?.('visibilitychange', onVisible)
+    }
+    const onVisible = () => {
+      if (disposed || !gaveUp) return
+      if (doc.visibilityState !== undefined && doc.visibilityState !== 'visible') return
+      if (armOnce()) {
+        gaveUp = false
+        detach()
+        console.warn('[dsh-auto-approval-llm] approval watcher (remote): armed via visibility re-probe')
+        return
+      }
+      startProbing()
+    }
+    doc.addEventListener('visibilitychange', onVisible)
+    detachVisibilityProbe = detach
+  }
+
+  ctx.effect(() => () => {
+    disposed = true
+    clearProbeTimer()
+    detachVisibilityProbe?.()
     unsub?.()
     for (const [, poller] of active) poller.dispose()
     active.clear()

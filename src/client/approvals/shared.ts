@@ -107,6 +107,10 @@ export interface ReviewPollingOptions {
 export interface WatcherOptions extends ReviewPollingOptions {
   /** Clock for the legacy watcher's event-driven extra-poll debounce. */
   now?: () => number
+  /** Probe interval for the remote watcher's uiSession probe (default 500ms). */
+  retryMs?: number
+  /** Probe attempts before the remote watcher gives up (default 30 = 15s). */
+  maxRetries?: number
 }
 
 export interface ReviewPollHandle {

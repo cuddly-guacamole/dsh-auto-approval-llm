@@ -3381,3 +3381,79 @@ test('remote watcher: keeps probing when the service appears after mount', async
   await new Promise((r) => setTimeout(r, 600))
   assert.equal(subscribed, true, 'must subscribe after the service becomes observable')
 })
+
+// Probe-boundary behaviors (M1, 2026-09-03 client audit): give-up, dispose and
+// the visibility re-probe are now covered with injected timings instead of the
+// default 15s window.
+
+test('remote watcher: gives up after the injected probe window and warns', async () => {
+  const calls = []
+  const warns = []
+  const originalWarn = console.warn
+  console.warn = (...args) => { warns.push(args.join(' ')) }
+  try {
+    const fakeCtx = {
+      get: (name) => { calls.push(name); return undefined },
+      effect: () => () => {},
+    }
+    watchRemoteApprovals(fakeCtx, { pollMs: 60000, retryMs: 5, maxRetries: 3 })
+    await new Promise((r) => setTimeout(r, 80))
+    assert.equal(calls.filter((c) => c === 'uiSession').length, 4, 'mount probe + 3 retries')
+    assert.equal(warns.length, 2, 'mount warn announces the probe; give-up warn breaks the silence')
+    assert.ok(warns[0].includes('probing'), 'the mount warn announces the probe')
+    assert.ok(warns[1].includes('unavailable after'), 'the give-up warn names the elapsed window')
+    assert.ok(!warns[1].includes('armed'), 'no false armed notice')
+  } finally {
+    console.warn = originalWarn
+  }
+})
+
+test('remote watcher: effect dispose during probing stops the probe timer', async () => {
+  let effectCallback
+  const calls = []
+  const fakeCtx = {
+    get: (name) => { calls.push(name); return undefined },
+    effect: (cb) => { effectCallback = cb; return () => {} },
+  }
+  watchRemoteApprovals(fakeCtx, { pollMs: 60000, retryMs: 5, maxRetries: 1000 })
+  const cleanup = effectCallback()
+  cleanup()
+  const before = calls.length
+  await new Promise((r) => setTimeout(r, 40))
+  assert.equal(calls.length, before, 'no further probe attempts after dispose')
+})
+
+test('remote watcher: visibility restore re-probes after give-up (F1)', async () => {
+  const originalDocument = globalThis.document
+  const originalWarn = console.warn
+  console.warn = () => {}
+  let visibilityListener
+  const fakeDoc = {
+    visibilityState: 'visible',
+    addEventListener: (type, fn) => { if (type === 'visibilitychange') visibilityListener = fn },
+    removeEventListener: (type) => { if (type === 'visibilitychange') visibilityListener = undefined },
+  }
+  globalThis.document = fakeDoc
+  let available = false
+  let subscribed = false
+  const never = () => {}
+  const fakeCtx = {
+    get: (name) => name === 'uiSession' && available
+      ? { pendingInteractions: { getSnapshot: () => new Map(), subscribe: () => { subscribed = true; return never } } }
+      : undefined,
+    effect: () => never,
+  }
+  try {
+    watchRemoteApprovals(fakeCtx, { pollMs: 60000, retryMs: 5, maxRetries: 3 })
+    await new Promise((r) => setTimeout(r, 80)) // give-up reached
+    assert.ok(visibilityListener, 're-probe listener attached after give-up')
+    available = true
+    visibilityListener()
+    await new Promise((r) => setTimeout(r, 20))
+    assert.equal(subscribed, true, 'watcher re-arms on the visibility change')
+    assert.equal(visibilityListener, undefined, 'listener detached after successful re-arm')
+  } finally {
+    globalThis.document = originalDocument
+    console.warn = originalWarn
+  }
+})
