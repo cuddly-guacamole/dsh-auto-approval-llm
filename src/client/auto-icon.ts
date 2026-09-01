@@ -15,9 +15,11 @@ const DIALOG_ATTRIBUTE = 'data-dsh-auto-mode-risk-dialog';
 // Both locales of the four presets; a permission menu matches when every
 // preset slot is present in either language (the ported implementation only
 // shipped the English set, which silently dropped the zh menu).
-const PERMISSION_LABEL_SETS = {
+export const PERMISSION_LABEL_SETS = {
     readOnly: ['Read Only', '仅可查看'],
-    workspaceWrite: ['Workspace Write', '可写入工作区'],
+    // alpha.4 reworded the workspace-write preset in zh ("工作区内修改");
+    // keep the rc.2 variant so both official generations match the menu gate.
+    workspaceWrite: ['Workspace Write', '可写入工作区', '工作区内修改'],
     auto: ['Auto', '自动审批'],
     fullAccess: ['Full access', '完全权限'],
 };
@@ -289,7 +291,8 @@ function createRiskDialog(document, onCancel, onConfirm) {
 function normalizedText(element) {
     return (element.textContent ?? '').replace(/\s+/g, ' ').trim();
 }
-function isPermissionMenu(menu) {
+/** Menu gate: a permission menu must contain every preset slot in either locale. */
+export function isPermissionMenu(menu) {
     const labels = new Set(Array.from(menu.querySelectorAll('button[role="menuitem"]'), normalizedText));
     return Object.values(PERMISSION_LABEL_SETS).every(variants => variants.some(label => labels.has(label)));
 }
