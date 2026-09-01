@@ -2462,6 +2462,10 @@ export function apply(ctx: Context, rawConfig: Config): void {
       // here so a disposed root session cannot leak its counter (a fresh
       // session starts with a full learning allowance again).
       sessionLearnedAllows.delete(key)
+      // The one-shot greeting marker is keyed by the same id; drop it so a
+      // long-lived process never grows the Set with disposed sessions (L1,
+      // 2026-09-03 audit).
+      firstAutoNoticeSeen.delete(key)
     })
     if (requestAtByKey.has(key)) requestAtByKey.delete(key)
     // Persisted per-session review mode is keyed by the same authority id; drop
