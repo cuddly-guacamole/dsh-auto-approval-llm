@@ -391,6 +391,28 @@ test('startReviewPolling: grace fallback skips answering when the approval alrea
   assert.equal(feedbackLog.length, 0)
 })
 
+test('startReviewPolling: a re-published same countdown cancels the armed grace (F2/M9)', async () => {
+  const statuses = { c1: { phase: 'countdown', action: 'reject', seconds: 30 } }
+  const feedbackLog = []
+  globalThis.fetch = routeFetch({ statusByCallId: statuses, feedbackLog })
+  const responds = []
+  const handle = { sessionId: 's1', key: 's1:c1', callId: 'c1', respond: async (o) => { responds.push(o) } }
+  const poller = startReviewPolling(handle, () => true, { pollMs: 10, graceMs: 60 })
+  await sleep(40) // countdown observed → meta = countdown:reject:30
+  statuses.c1 = undefined // status-window gap → grace armed
+  await sleep(30)
+  // The same countdown value is re-published while the grace is armed: a live
+  // host countdown must always supersede the locally recorded action (R002),
+  // so the grace has to be cancelled — even on the identical-value early
+  // return. Without the fix the grace would fire mid-countdown and close the
+  // official panel with the stale recorded action.
+  statuses.c1 = { phase: 'countdown', action: 'reject', seconds: 30 }
+  await sleep(120) // well past the 60ms grace that was armed before the re-publish
+  poller.dispose()
+  assert.equal(responds.length, 0, 'a cancelled grace must never answer a still-live countdown')
+  assert.equal(feedbackLog.length, 0)
+})
+
 test('startReviewPolling: transient server errors keep observing and never resolve', async () => {
   const fetchLog = []
   globalThis.fetch = routeFetch({ statusByCallId: { c1: 'down' }, fetchLog })

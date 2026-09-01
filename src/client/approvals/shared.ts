@@ -214,12 +214,13 @@ export function startReviewPolling(
       return
     }
     const next = `countdown:${status.action}:${status.seconds}`
-    if (meta === next) return
-    // countdown-key: the host countdown is authoritative, so the client only
-    // observes (no local timer). Also clear a grace timer that may have been
-    // armed on an earlier observation (status-lag) — a real host countdown
-    // always supersedes any locally recorded action (R002).
+    // A published countdown always supersedes any grace armed on an earlier
+    // observation (R002) — cancel FIRST, also when the same value is
+    // re-published: the grace may have been armed while the status window was
+    // briefly empty (status-lag), and leaving it armed would let a stale
+    // recorded action close the panel mid-countdown.
     clearGrace()
+    if (meta === next) return
     meta = next
   }
 
