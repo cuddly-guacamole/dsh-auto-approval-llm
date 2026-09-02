@@ -1511,7 +1511,7 @@ function SettingsSection() {
               alignItems: 'center',
             },
           },
-            React.createElement('span', { style: { flex: 1, fontFamily: 'var(--dsw-font-mono, monospace)', color: 'var(--dsw-alias-label-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, e.skeleton),
+            React.createElement('span', { style: { flex: 1, fontFamily: 'var(--ds-font-family-code, monospace)', color: 'var(--dsw-alias-label-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, e.skeleton),
             React.createElement('span', { style: { color: 'var(--dsw-alias-label-tertiary)', flex: 'none' } }, t('settings.learning.entryMeta', { count: e.count })),
             React.createElement(Button, {
               variant: 'outline',
@@ -2208,7 +2208,7 @@ function installSettingsCardStyles(): () => void {
 .dsa-input:disabled,.dsa-select:disabled,.dsa-textarea:disabled{color:var(--dsw-alias-label-tertiary);cursor:default}
 .dsa-footer{border-top:1px solid var(--dsw-alias-border-l2);justify-content:flex-end;align-items:center;gap:8px;padding:12px 0 4px;display:flex}
 .dsa-success{min-width:0;color:var(--dsw-alias-state-success-primary);flex:1;margin:0;font-size:12px;line-height:1.5}
-.dsa-failed{min-width:0;color:var(--dsw-alias-label-error);flex:1;margin:0;font-size:12px;line-height:1.5}
+.dsa-failed{min-width:0;color:var(--dsw-alias-state-error-primary);flex:1;margin:0;font-size:12px;line-height:1.5}
 .dsa-save,.dsa-discard{appearance:none;font:inherit;cursor:pointer;border:1px solid transparent;border-radius:8px;padding:5px 14px;font-size:13px;line-height:1.5}
 .dsa-discard{border-color:var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary);background:0 0}
 .dsa-discard:hover:not(:disabled){color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-label-dimmed)}

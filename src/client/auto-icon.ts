@@ -186,12 +186,11 @@ function iconStyles() {
 [${DIALOG_ATTRIBUTE}] .dsh-auto-risk-confirm {
   min-width: 136px;
   border-color: transparent;
-  color: var(--dsw-alias-label-on-fill, #fff);
+  color: var(--dsw-alias-label-primary-foreground, #fff);
   background: var(--dsw-alias-button-primary-fill, #171717);
 }
 [${DIALOG_ATTRIBUTE}] .dsh-auto-risk-confirm:disabled {
-  color: var(--dsw-alias-label-disable, rgba(255, 255, 255, 0.78));
-  background: var(--dsw-alias-button-disabled-fill, #aaa);
+  opacity: .4;
   cursor: not-allowed;
 }
 @supports (height: 100dvh) {
