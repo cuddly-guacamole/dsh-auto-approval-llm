@@ -2263,7 +2263,7 @@ function installSettingsCardStyles(): () => void {
 .dsa-subcardBody{display:grid;gap:12px;padding:4px 16px 14px;border-top:1px solid var(--dsw-alias-border-l2)}
 .dsa-subcardFooter{display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:10px 16px;border-top:1px solid var(--dsw-alias-border-l2)}
 .dsa-badgeOk,.dsa-badgeMuted{white-space:nowrap;border-radius:999px;padding:1px 8px;font-size:11px;font-weight:500;line-height:17px;border:1px solid var(--dsw-alias-border-l1);flex:none}
-.dsa-badgeOk{color:var(--dsw-alias-state-success-primary);background:rgba(var(--dsw-alias-state-success-rgb,0),0.08)}
+.dsa-badgeOk{color:var(--dsw-alias-state-success-primary);background:rgba(var(--dsw-alias-state-success-primary-rgb,34 197 94),0.08)}
 .dsa-badgeMuted{color:var(--dsw-alias-label-tertiary);background:var(--dsw-alias-bg-layer-2)}
 .dsa-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 0}
 .dsa-row+.dsa-row{border-top:1px solid var(--dsw-alias-border-l2)}
@@ -2275,7 +2275,7 @@ function installSettingsCardStyles(): () => void {
 .dsa-control{flex:none;display:flex;align-items:center;gap:8px}
 .dsa-control .dsa-input{width:240px;min-width:0}
 .dsa-alert{display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:8px;font-size:12px;line-height:1.5}
-.dsa-alertError{color:var(--dsw-alias-state-error-primary);background:rgba(var(--dsw-alias-state-error-primary,229 72 77),0.08);border:1px solid var(--dsw-alias-state-error-primary)}
+.dsa-alertError{color:var(--dsw-alias-state-error-primary);background:rgba(var(--dsw-alias-state-error-primary-rgb,236 19 19),0.08);border:1px solid var(--dsw-alias-state-error-primary)}
 .dsa-alertText{flex:1;min-width:0;overflow-wrap:anywhere}
 .dsa-resetButton{border-radius:8px!important;height:auto!important;padding:5px 14px!important}
 .dsa-diff{border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2);margin:8px 0;padding:6px 10px;font-family:var(--ds-font-family-code,monospace);font-size:12px;line-height:1.6;max-height:280px;overflow:auto}
@@ -2283,9 +2283,9 @@ function installSettingsCardStyles(): () => void {
 .dsa-diffBody{display:grid}
 .dsa-diffLine{white-space:pre-wrap;word-break:break-word;padding:0 6px;border-left:3px solid transparent}
 .dsa-diffLine::before{display:inline-block;width:1.4em;margin-left:-6px;color:var(--dsw-alias-label-tertiary)}
-.dsa-diffDel{color:var(--dsw-alias-label-secondary);background:rgba(var(--dsw-alias-state-error-primary,229 72 77),0.10);border-left-color:var(--dsw-alias-state-error-primary)}
+.dsa-diffDel{color:var(--dsw-alias-label-secondary);background:rgba(var(--dsw-alias-state-error-primary-rgb,236 19 19),0.10);border-left-color:var(--dsw-alias-state-error-primary)}
 .dsa-diffDel::before{content:'−';color:var(--dsw-alias-state-error-primary)}
-.dsa-diffAdd{color:var(--dsw-alias-label-secondary);background:rgba(var(--dsw-alias-state-success-primary,48 164 108),0.10);border-left-color:var(--dsw-alias-state-success-primary)}
+.dsa-diffAdd{color:var(--dsw-alias-label-secondary);background:rgba(var(--dsw-alias-state-success-primary-rgb,34 197 94),0.10);border-left-color:var(--dsw-alias-state-success-primary)}
 .dsa-diffAdd::before{content:'+';color:var(--dsw-alias-state-success-primary)}
 .dsa-diffCtx{color:var(--dsw-alias-label-tertiary)}
 .dsa-diffCtx::before{content:'·'}
