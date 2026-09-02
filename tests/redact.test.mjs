@@ -89,15 +89,65 @@ test('redactResultValue: SECRET_KEYS field names are checked at depth === maxDep
   assert.ok(!JSON.stringify(out).includes('sk-abcdefgh12345678'))
 })
 
-test('redactResultValue: containers beyond maxDepth are passed through whole (perf guard kept)', () => {
-  // The inner {token: …} container sits at depth 7: object/array recursion
-  // stops there, so its field names are not checked — that is the documented
-  // trade-off behind maxDepth (raise it when a stronger guarantee is needed).
-  // Pass-through keeps the fast path (original references, no copying).
+test('redactResultValue: field names are checked at the boundary, not skipped (leak closed)', () => {
+  // This case used to pin the leak as intended behaviour: the {token: …}
+  // container sat one level past the bound, so its field names were never
+  // checked and the value was handed back raw. Coverage now reaches far deeper
+  // (the bound is 64), and the boundary container itself is masked.
   const deep = { a: { b: { c: { d: { e: { f: { g: { token: 'sk-abcdefgh12345678' } } } } } } } }
-  const same = redactResultValue(deep)
-  assert.equal(same, deep)
-  assert.equal(same.a.b.c.d.e.f.g.token, 'sk-abcdefgh12345678')
+  const out = redactResultValue(deep)
+  assert.equal(out.a.b.c.d.e.f.g.token, '[redacted:field]')
+  assert.ok(!JSON.stringify(out).includes('sk-abcdefgh12345678'))
+  // Depths that the old bound of 6 could not reach at all.
+  const nest = (d, leaf) => (d === 0 ? leaf : { [`k${d}`]: nest(d - 1, leaf) })
+  for (const depth of [10, 40, 64]) {
+    const masked = redactResultValue(nest(depth, { token: 'sk-abcdefgh12345678' }))
+    assert.ok(!JSON.stringify(masked).includes('sk-abcdefgh12345678'), `depth ${depth} must be masked`)
+  }
+})
+
+test('redactResultValue: the depth bound still terminates the walk (stack/cycle/cost guard)', () => {
+  // The bound is not a correctness knob to be removed: the walk is recursive
+  // and a tool result is untrusted JSON, while the caller's failure path
+  // forwards the UNMASKED value. Past the boundary the walk stops looking.
+  // NOTE: build iteratively — a recursive builder blows the stack itself at
+  // these depths and the failure looks like the masker's.
+  const nestIter = (d, leaf) => {
+    let value = leaf
+    for (let i = 0; i < d; i += 1) value = { [`k${i}`]: value }
+    return value
+  }
+  const tooDeep = redactResultValue(nestIter(200, { token: 'sk-abcdefgh12345678' }))
+  assert.ok(JSON.stringify(tooDeep).includes('sk-abcdefgh12345678'), 'documented edge: nothing past the boundary is inspected')
+  // A very deep result must return rather than throw — a RangeError here would
+  // make the caller forward the result with no masking at all.
+  assert.doesNotThrow(() => redactResultValue(nestIter(20_000, { token: 'sk-abcdefgh12345678' })))
+  // A self-referencing result terminates.
+  const cyclic = { token: 'sk-abcdefgh12345678', keep: 1 }
+  cyclic.self = cyclic
+  const out = redactResultValue(cyclic)
+  assert.equal(out.token, '[redacted:field]')
+  assert.equal(out.keep, 1)
+})
+
+test('redactResultValue: an own __proto__ key cannot hijack the copy prototype', () => {
+  // JSON.parse creates an OWN "__proto__" key; the previous per-container
+  // `out[key] = …` on a bare {} moved it onto the copy's prototype slot.
+  const payload = JSON.parse('{"token":"sk-abcdefgh12345678","__proto__":{"polluted":true},"tail":1}')
+  const out = redactResultValue(payload)
+  assert.equal(out.token, '[redacted:field]')
+  assert.equal(out.tail, 1)
+  assert.ok(Object.hasOwn(out, '__proto__'), 'the key stays an ordinary data key')
+  assert.equal(Object.getPrototypeOf(out), Object.prototype, 'the copy keeps a clean prototype')
+  assert.equal({}.polluted, undefined, 'no global pollution')
+})
+
+test('redactResultValue: inherited keys are neither masked nor copied out', () => {
+  const proto = { token: 'sk-abcdefgh12345678' }
+  const child = Object.create(proto)
+  child.own = 'plain'
+  const out = redactResultValue(child)
+  assert.deepEqual({ ...out }, { own: 'plain' }, 'only own keys reach the output')
 })
 
 test('redactResultValue: shallow behavior is unchanged (regression)', () => {

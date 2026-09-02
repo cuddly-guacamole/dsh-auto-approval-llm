@@ -66,45 +66,81 @@ export function redactSecrets(value: string): string {
 export const REDACTED_FIELD = '[redacted:field]'
 
 /**
- * Recursively mask credential-shaped material inside one tool result value.
- * Pure JSON semantics: only replace, NEVER truncate (a benign large result
- * such as a file read must survive byte-exact), and return the ORIGINAL
- * reference when nothing changed (zero copying on the common path). `maxDepth`
- * bounds recursion into objects/arrays only — a performance guard for huge
- * results — never STRING cleaning: string values still run through
- * redactSecrets at any depth. Containers beyond `maxDepth` are passed through
- * whole, so their field names are not checked either (acceptable trade-off;
- * raise `maxDepth` when a stronger guarantee is needed).
+ * Depth past which the walk stops descending. It carries three jobs at once,
+ * which is why it stays even though it bounds secret coverage:
+ *
+ * - Stack guard. The walk is recursive and a tool result is untrusted JSON:
+ *   `JSON.parse` accepts 20000 levels, while an unbounded version of this walk
+ *   was measured dying with a RangeError between 5000 and 8000. That failure is
+ *   worse than a missed secret — the caller's catch reports `auditMaskFailed`
+ *   and forwards the UNMASKED result, so a deep-nesting payload would defeat
+ *   masking entirely rather than partially.
+ * - Cycle terminator. A self-referencing result stops here.
+ * - Cost guard on pathological shapes.
+ *
+ * 64 rather than 6: the copy-on-write walk below made the realistic cases
+ * cheaper (2000 file rows: 4.50ms → 0.91ms), which buys the headroom to cover
+ * far deeper results while staying an order of magnitude inside the stack.
  */
-export function redactResultValue(value: unknown, depth = 0, maxDepth = 6): unknown {
+const DEFAULT_MAX_DEPTH = 64
+
+/**
+ * Recursively mask credential-shaped material inside one tool result value.
+ * Pure JSON semantics: only replace, NEVER truncate (a benign large result such
+ * as a file read must survive byte-exact), and return the ORIGINAL reference
+ * when nothing changed.
+ *
+ * Copy-on-write: a container is cloned only once something inside it actually
+ * changed, so a benign result costs a walk and no allocation. The previous
+ * shape built a replacement object for every container and threw it away when
+ * nothing matched, which is where the old depth cost came from — and the clone
+ * is a spread, so an own `__proto__` key (JSON.parse creates one) stays an
+ * ordinary data key instead of hijacking the copy's prototype.
+ *
+ * Coverage is honest about its edge: everything down to `maxDepth`, plus the
+ * field names and string values of the containers sitting one level past it.
+ * Nothing deeper is inspected at all — a string buried below that boundary is
+ * NOT cleaned, because the walk never reaches it. `{token: …}` at the boundary
+ * itself is masked rather than handed back raw, which is the leak this bound
+ * used to have at 6.
+ */
+export function redactResultValue(value: unknown, depth = 0, maxDepth = DEFAULT_MAX_DEPTH): unknown {
   if (typeof value === 'string') {
     const cleaned = redactSecrets(value)
     return cleaned === value ? value : cleaned
   }
-  if (depth > maxDepth) return value
   if (typeof value !== 'object' || value === null) return value
+  const beyond = depth > maxDepth
   if (Array.isArray(value)) {
-    let changed = false
-    const out = new Array<unknown>(value.length)
+    // An array carries no field names, so there is nothing to check at the
+    // bound: pass it through untouched.
+    if (beyond) return value
+    let out: unknown[] | null = null
     for (let i = 0; i < value.length; i += 1) {
       const item = redactResultValue(value[i], depth + 1, maxDepth)
-      out[i] = item
-      if (item !== value[i]) changed = true
+      if (out === null && item !== value[i]) out = value.slice()
+      if (out !== null) out[i] = item
     }
-    return changed ? out : value
+    return out ?? value
   }
   const record = value as Record<string, unknown>
-  let changed = false
-  const out: Record<string, unknown> = {}
-  for (const [key, entry] of Object.entries(record)) {
+  let out: Record<string, unknown> | null = null
+  for (const key in record) {
+    if (!Object.hasOwn(record, key)) continue
+    const entry = record[key]
+    let cleaned: unknown
     if (SECRET_KEYS.test(key)) {
-      out[key] = REDACTED_FIELD
-      changed = true
+      cleaned = REDACTED_FIELD
+    } else if (beyond) {
+      // At the bound the field name above has already been checked; hand the
+      // value back without descending (stack/cycle/cost guard). A string is
+      // still cheap to clean and can hide a secret of its own.
+      cleaned = typeof entry === 'string' ? redactSecrets(entry) : entry
     } else {
-      const cleaned = redactResultValue(entry, depth + 1, maxDepth)
-      out[key] = cleaned
-      if (cleaned !== entry) changed = true
+      cleaned = redactResultValue(entry, depth + 1, maxDepth)
     }
+    if (out === null && cleaned !== entry) out = { ...record }
+    if (out !== null) out[key] = cleaned
   }
-  return changed ? out : value
+  return out ?? value
 }
