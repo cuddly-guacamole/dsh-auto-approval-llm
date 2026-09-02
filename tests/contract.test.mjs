@@ -3190,6 +3190,14 @@ test('client bundle: learning keys survive every sync point (anti-clearing pin)'
   )
 })
 
+test('client bundle: settings-card grid bodies keep constrained tracks (control-clipping pin)', () => {
+  const client = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
+  assert.ok(
+    client.includes('gridTemplateColumns') && client.includes('minmax(0, 1fr)'),
+    'grid bodies must carry a minmax(0,1fr) track so a long hint can never push the row control past the card edge',
+  )
+})
+
 // ── reviewer route availability: explicit pair ∥ baseUrl ∥ session fallback ──
 
 test('sessionModelRoute: live request header wins over recorded header events', () => {

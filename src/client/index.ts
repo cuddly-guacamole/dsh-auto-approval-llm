@@ -1204,7 +1204,7 @@ function SettingsSection() {
     )
 
   // Top-level toggle rows (not inside a card): instant-save on change.
-  const topLevelBody = React.createElement('div', { style: { display: 'grid', gap: 10 } },
+  const topLevelBody = React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 10 } },
     row(t('settings.enable'), React.createElement(CapsuleSelect, {
       value: draft.enabled,
       options: onOffOptions(),
@@ -1247,7 +1247,7 @@ function SettingsSection() {
   )
 
   // Timers & breaker card body (the numeric/dangerous group).
-  const buildTimerBody = () => React.createElement('div', { style: { display: 'grid', gap: 10 } },
+  const buildTimerBody = () => React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 10 } },
     row(t('settings.riskSeconds'), React.createElement('div', { style: { display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' } },
       React.createElement('span', { className: 'dsa-inlineTag' }, t('option.risk.low')),
       React.createElement('input', {
@@ -1310,7 +1310,7 @@ function SettingsSection() {
     ), t('settings.denialBreakerHint')),
   )
 
-  const buildReviewBody = () => React.createElement('div', { style: { display: 'grid', gap: 10 } },
+  const buildReviewBody = () => React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 10 } },
     React.createElement('p', { className: 'dsa-hint', style: { margin: 0 } }, t('settings.reviewer.description')),
     React.createElement('p', { className: 'dsa-hint', style: { margin: 0 } }, t('settings.reviewer.fallbackHint')),
     row(t('settings.reviewer.protocol'), React.createElement(CapsuleSelect, {
@@ -1354,7 +1354,7 @@ function SettingsSection() {
     ),
   )
 
-  const buildSecurityBody = () => React.createElement('div', { style: { display: 'grid', gap: 10 } },
+  const buildSecurityBody = () => React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 10 } },
     field(t('settings.rules.safetyPrompt'), React.createElement('textarea', {
       value: draft.safetyPrompt,
       onChange: (e: any) => update({ safetyPrompt: e.target.value }),
@@ -1411,7 +1411,7 @@ function SettingsSection() {
       : []),
   )
 
-  const buildCategoryBody = () => React.createElement('div', { style: { display: 'grid', gap: 10 } },
+  const buildCategoryBody = () => React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 10 } },
     row(t('settings.category.mode'), React.createElement(CapsuleSelect, {
       value: draft.categoryMode,
       options: categoryModeOptions(),
@@ -1469,7 +1469,7 @@ function SettingsSection() {
     }, saving ? t('settings.saving') : t('settings.save')),
   )
 
-  const buildLearningBody = () => React.createElement('div', { style: { display: 'grid', gap: 10 } },
+  const buildLearningBody = () => React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 10 } },
     row(t('settings.learning.enabled'), React.createElement(CapsuleSelect, {
       value: draft.learningEnabled,
       options: onOffOptions(),
@@ -1497,7 +1497,7 @@ function SettingsSection() {
       : null,
     learningEntries.length === 0
       ? React.createElement('p', { className: 'dsa-hint', style: { margin: 0 } }, t('settings.learning.entriesEmpty'))
-      : React.createElement('div', { style: { display: 'grid', gap: 4 } },
+      : React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 4 } },
           ...learningEntries.map((e: any) => React.createElement('div', {
             key: e.key,
             style: {
@@ -1539,7 +1539,7 @@ function SettingsSection() {
           ),
   )
 
-  const buildHistoryBody = () => React.createElement('div', { style: { display: 'grid', gap: 8 } },
+  const buildHistoryBody = () => React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 8 } },
     historyError ? React.createElement('p', { style: { color: 'var(--dsw-alias-state-error-primary)', fontSize: 12, margin: 0 } }, historyError) : null,
     llmLatency === null || (llmLatency.count ?? 0) === 0
       ? React.createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center', fontSize: 12, color: 'var(--dsw-alias-label-tertiary)', padding: '2px 0' } },
@@ -1562,7 +1562,7 @@ function SettingsSection() {
     }),
     filteredHistory.length === 0
       ? React.createElement('p', { style: { color: 'var(--dsw-alias-label-tertiary)', fontSize: 12, margin: 0 } }, t('settings.history.empty'))
-      : React.createElement('div', { style: { display: 'grid', gap: 4 } },
+      : React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 4 } },
           visibleHistory.map((r: any) => React.createElement('div', {
             key: r.id,
             style: {
@@ -1941,7 +1941,7 @@ function SessionApprovalPanel(props: any) {
       React.createElement('div', null, t('panel.stats', { total, allow, deny, timeout, breaker })),
       records.length === 0
         ? React.createElement('p', { style: { color: 'var(--dsw-alias-label-tertiary)', margin: 0 } }, t('panel.empty'))
-        : React.createElement('div', { style: { display: 'grid', gap: 4 } },
+        : React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 4 } },
             records.slice(0, MAX_PANEL_RECORDS).map((r: any) => React.createElement('div', {
               key: r.id,
               className: 'dsa-recordClamp',
@@ -2260,7 +2260,7 @@ function installSettingsCardStyles(): () => void {
 .dsa-subcardHeader:hover{background:var(--dsw-alias-interactive-bg-hover)}
 .dsa-subcardHeader:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-2px}
 .dsa-subcardTitle{flex:1;min-width:0;font-weight:600;font-size:14px;color:var(--dsw-alias-label-primary)}
-.dsa-subcardBody{display:grid;gap:12px;padding:4px 16px 14px;border-top:1px solid var(--dsw-alias-border-l2)}
+.dsa-subcardBody{display:grid;grid-template-columns:minmax(0,1fr);gap:12px;padding:4px 16px 14px;border-top:1px solid var(--dsw-alias-border-l2)}
 .dsa-subcardFooter{display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:10px 16px;border-top:1px solid var(--dsw-alias-border-l2)}
 .dsa-badgeOk,.dsa-badgeMuted{white-space:nowrap;border-radius:999px;padding:1px 8px;font-size:11px;font-weight:500;line-height:17px;border:1px solid var(--dsw-alias-border-l1);flex:none}
 .dsa-badgeOk{color:var(--dsw-alias-state-success-primary);background:rgba(var(--dsw-alias-state-success-primary-rgb,34 197 94),0.08)}
