@@ -977,6 +977,19 @@ test('static anchors: breaker guard is mounted via the shared factory (F5 wiring
   assert.ok(client.includes('breaker.dispose()'), 'dispose must release every breaker timer')
 })
 
+test('static anchors: the guard is armed by the breaker marker, not by localized copy', () => {
+  // The guard's internals were well covered while the trigger reaching them was
+  // not, so a host note written in English only and a client testing for the
+  // Chinese word "熔断" shipped from v0.0.1 and the window never armed. Pin the
+  // trigger itself: it must come from the shared detector.
+  const client = readFileSync(new URL('../src/client/index.ts', import.meta.url), 'utf8')
+  const host = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
+  assert.ok(client.includes('if (hasBreakerNote(text)) breaker.apply(panel, key)'), 'scan must arm the guard through the shared detector')
+  assert.ok(!/\/熔断\/\.test/.test(client), 'the localized-word trigger must be gone')
+  assert.ok(host.includes('breakerNote(limitText, reasons)'), 'the host must write the note through the shared builder')
+  assert.ok(!host.includes('⚠️ Breaker: model was'), 'the old inline note must be gone from the host')
+})
+
 test('static anchors: hideDiffBlock strips via text-node rewrites, never textContent rewrite (F6 pinned)', () => {
   const shared = readFileSync(new URL('../src/client/approvals/shared.ts', import.meta.url), 'utf8')
   const client = readFileSync(new URL('../src/client/index.ts', import.meta.url), 'utf8')

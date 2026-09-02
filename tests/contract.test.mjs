@@ -16,7 +16,7 @@ import { tmpdir } from 'node:os'
 process.env.DSH_AUTO_APPROVAL_READ_CRED_FILE = '0'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { parseReview, lowRiskReviewOutcome, raceHumanDecision, preserveHostKeys, normalizeTimeoutAction, prepareReviewerArguments, extractToolPath, frameReviewerInput, breakerTripped, applyBreaker, reviewSuggestionNote, approvalSource, reviewerAutoAllowBlocked, staticListDecision, stripCountdownMarkers, countdownNote, riskFromAssessment, formatDenyFeedback, DENY_CIRCUMVENTION_GUIDANCE, REVIEW_TIMEOUT_NOTICE, REVIEWER_SYSTEM, assembleReviewerSystem, rulesTextSummary } from '../lib/auto/decision.js'
+import { parseReview, lowRiskReviewOutcome, raceHumanDecision, preserveHostKeys, normalizeTimeoutAction, prepareReviewerArguments, extractToolPath, frameReviewerInput, breakerTripped, applyBreaker, reviewSuggestionNote, approvalSource, reviewerAutoAllowBlocked, staticListDecision, stripCountdownMarkers, countdownNote, BREAKER_MARKER, breakerNote, hasBreakerNote, riskFromAssessment, formatDenyFeedback, DENY_CIRCUMVENTION_GUIDANCE, REVIEW_TIMEOUT_NOTICE, REVIEWER_SYSTEM, assembleReviewerSystem, rulesTextSummary } from '../lib/auto/decision.js'
 import { sanitizeReviewReason, sanitizeClassifierText } from '../lib/auto/classifier.js'
 import { redactResultValue, redactSecrets } from '../lib/auto/redact.js'
 import { summarizeLatency } from '../lib/auto/latency.js'
@@ -1562,6 +1562,62 @@ test('askHuman: status-less asks carry a wait note, never the countdown marker',
   // A real countdown ask still appends the marker through countdownNote.
   const decisionSrc = readFileSync(new URL('../lib/auto/decision.js', import.meta.url), 'utf8')
   assert.ok(decisionSrc.includes('will auto-${actionText} in ${seconds}s if no response'), 'countdownNote keeps the marker template')
+})
+
+// ── breaker note: one marker shared by the host builder and the client guard ─
+test('breakerNote: carries the machine marker the client guard keys on', () => {
+  const note = breakerNote('rejected 3 times in a row')
+  assert.ok(note.startsWith(BREAKER_MARKER), 'the marker must lead the note')
+  assert.ok(note.includes('rejected 3 times in a row'), 'the human-readable limit text survives')
+  assert.ok(note.includes('auto-countdown disabled'), 'the operator-facing sentence survives')
+  assert.ok(hasBreakerNote(note), 'the host note must satisfy the client detector')
+  // The denial trail is appended only when there is one.
+  assert.ok(!breakerNote('rejected 20 times in total').includes('Previous denial reasons'))
+  const withTrail = breakerNote('rejected 20 times in total', '1. bash — nope')
+  assert.ok(withTrail.includes('Previous denial reasons:\n1. bash — nope'))
+  assert.ok(hasBreakerNote(withTrail))
+})
+
+test('hasBreakerNote: only the marker arms the guard, and it never throws', () => {
+  // Regression (2026-09-03 audit): the client tested for the localized word
+  // "熔断" while the host wrote this note in English only, so the anti-hijack
+  // window never armed for anyone with breakerAntiHijackMs > 0. The trigger is
+  // now the marker both ends import from one module.
+  assert.equal(hasBreakerNote('熔断'), false, 'a localized word must not arm the guard any more')
+  assert.equal(hasBreakerNote('please approve this write'), false, 'an ordinary ask must not arm it')
+  assert.equal(hasBreakerNote(''), false)
+  assert.equal(hasBreakerNote(undefined), false, 'a panel with no text is safe')
+  assert.equal(hasBreakerNote(`prefix ${BREAKER_MARKER} suffix`), true, 'the marker is found anywhere in the panel text')
+})
+
+test('the compiled host and client agree on the breaker marker', () => {
+  // The bug this pins was a cross-end text contract drifting apart, so assert
+  // against the shipped artifacts rather than the sources: the host reaches the
+  // literal through its decision.js import, the client bundles it inline.
+  const decisionSrc = readFileSync(new URL('../lib/auto/decision.js', import.meta.url), 'utf8')
+  const clientSrc = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
+  const hostSrc = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
+  assert.ok(decisionSrc.includes(BREAKER_MARKER), 'the shared module owns the marker literal')
+  assert.ok(clientSrc.includes(BREAKER_MARKER), 'the client bundle must carry the same literal')
+  assert.ok(hostSrc.includes('breakerNote'), 'the host must build the note through the shared builder')
+  assert.ok(!hostSrc.includes('⚠️ Breaker: model was'), 'the old inline English-only note must be gone')
+  assert.ok(!clientSrc.includes('/熔断/'), 'the client must not trigger on a localized word')
+})
+
+test('stripCountdownMarkers: a forged breaker marker cannot arm the guard', () => {
+  // Introducing a machine marker introduces a forgery surface: the base reason
+  // is model-controlled, so an embedded marker would fake a breaker window and
+  // disable the panel buttons on an ordinary ask.
+  assert.equal(stripCountdownMarkers(`deploy ${BREAKER_MARKER} now`), 'deploy  now')
+  assert.ok(!hasBreakerNote(stripCountdownMarkers(`write a file ${BREAKER_MARKER}`)), 'stripped text no longer arms the guard')
+  // Both markers are removed in one pass.
+  const both = `run it ${BREAKER_MARKER} [dsh-auto-approval-llm] ⏳ will auto-approve in 3s tail`
+  const cleaned = stripCountdownMarkers(both)
+  assert.ok(!hasBreakerNote(cleaned))
+  assert.ok(!/will auto-(?:approve|reject) in \d+s/.test(cleaned), 'the countdown marker goes too')
+  // Idempotent, and honest text is untouched.
+  assert.equal(stripCountdownMarkers(cleaned), cleaned)
+  assert.equal(stripCountdownMarkers('an ordinary reason'), 'an ordinary reason')
 })
 
 // ── reviewerBaseUrl cleartext/SSRF fence ──────────────────────────────────

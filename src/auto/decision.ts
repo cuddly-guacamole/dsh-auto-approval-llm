@@ -511,17 +511,39 @@ export function countdownNote(status?: { seconds: number; action: 'allow' | 'rej
 }
 
 /**
- * Remove client-parseable auto-answer markers from a base approval reason
- * before the host appends its own protocol notes. The marker text doubles as
- * the browser watcher's countdown signal; a model-controlled base reason that
- * embedded it could otherwise arm the client's local auto-answer on asks the
- * host deliberately publishes without one (breaker / manual / human-only).
+ * Machine-readable prefix of the breaker note. The browser guard keys the
+ * anti-hijack window off this exact token, so the signal must NOT be carried
+ * by prose: the note the host writes is English-only, and matching a localized
+ * word (the client previously tested for "熔断") silently never fires. Builder
+ * and detector live together here so both ends read one literal and a contract
+ * test can pin the round trip.
+ */
+export const BREAKER_MARKER = '[dsh-auto-approval-llm] 🛑 breaker'
+
+/** The human-visible breaker note, prefixed with its machine marker. */
+export function breakerNote(limitText: string, reasons?: string): string {
+  const trail = reasons ? `\nPrevious denial reasons:\n${reasons}` : ''
+  return `${BREAKER_MARKER} — model was ${limitText}; handed to a human, auto-countdown disabled.${trail}`
+}
+
+/** Whether an approval text carries the breaker note (client guard trigger). */
+export function hasBreakerNote(text: string | undefined): boolean {
+  return text !== undefined && text.includes(BREAKER_MARKER)
+}
+
+/**
+ * Remove client-parseable markers from a base approval reason before the host
+ * appends its own protocol notes. Both markers double as browser signals, so a
+ * model-controlled base reason that embedded one could otherwise arm the
+ * client's local auto-answer on asks the host deliberately publishes without a
+ * countdown (breaker / manual / human-only), or forge a breaker window that
+ * disables the panel buttons on an ordinary ask.
  */
 export function stripCountdownMarkers(reason: string): string {
   return reason.replace(
     /\[dsh-auto-approval-llm\]\s*⏳\s*will auto-(?:approve|reject) in \d+s/g,
     '',
-  ).replace(/[ \t]+$/gm, '').trim()
+  ).split(BREAKER_MARKER).join('').replace(/[ \t]+$/gm, '').trim()
 }
 
 // ── reviewer system assembly ─────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 import React from 'react'
 import { Button, Input } from '@deepseek-ai/dsh-client-ui-primitives'
-import { normalizeTimeoutAction } from '../auto/decision.js'
+import { normalizeTimeoutAction, hasBreakerNote } from '../auto/decision.js'
 import { THRESHOLD_DEFAULTS } from '../auto/constants.js'
 import { parseRulesText } from '../auto/rules.js'
 import { installAutoPermissionIcon } from './auto-icon.js'
@@ -249,7 +249,7 @@ function hijackApprovalButtons(): () => void {
         hideDiffBlock(panel)
       }
       const text = panel.textContent ?? ''
-      if (/熔断/.test(text)) breaker.apply(panel, key)
+      if (hasBreakerNote(text)) breaker.apply(panel, key)
       const info = parseCountdown(text)
       if (!info) continue
       updatePanel(panel, key, info)
