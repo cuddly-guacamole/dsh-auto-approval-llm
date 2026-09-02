@@ -28,7 +28,7 @@ import { hardDenyReason, assessTool } from '../lib/auto/policy.js'
 import { isCriticalPath } from '../lib/auto/paths.js'
 import { probeTargetFacts } from '../lib/auto/probe.js'
 import { ArtifactRegistry } from '../lib/auto/artifacts.js'
-import { isTrustedRequest, isLoopbackIp, validateReviewerBaseUrl } from '../lib/auto/trust.js'
+import { isTrustedRequest, isLoopbackHostname, isLoopbackIp, validateReviewerBaseUrl } from '../lib/auto/trust.js'
 import { parseClassifierDecision } from '../lib/auto/classifier.js'
 import { RISK_NAME_PATTERN, RISK_REASON_PATTERN } from '../lib/auto/risk-tokens.js'
 import { buildAskReason, buildEditDiffText } from '../lib/auto/editdiff.js'
@@ -1242,6 +1242,39 @@ test('isTrustedRequest: IPv6 loopback combinations (M2, 2026-09-03 audit)', () =
   // Loopback Host from a non-loopback peer must stay rejected.
   assert.equal(isTrustedRequest({ headers: { host: '[::1]:8080' }, socket: { remoteAddress: '192.168.1.9' } }, []), false, 'IPv6 loopback Host, LAN peer -> rejected')
   assert.equal(isTrustedRequest({ headers: { host: '[::1]:8080' }, socket: { remoteAddress: '::ffff:192.168.1.9' } }, []), false, 'IPv4-mapped LAN peer -> rejected')
+})
+
+test('isLoopbackHostname: IPv4-mapped IPv6 loopback is a loopback authority', () => {
+  // `new URL('http://[::ffff:127.0.0.1]')` compresses the dotted tail to hex,
+  // so this is the spelling a parsed Host actually presents.
+  assert.equal(isLoopbackHostname('[::ffff:7f00:1]'), true, 'compressed hex form (what new URL produces)')
+  assert.equal(isLoopbackHostname('[::ffff:127.0.0.1]'), true, 'bracketed dotted form')
+  assert.equal(isLoopbackHostname('::ffff:127.0.0.1'), true, 'bare dotted form')
+  assert.equal(isLoopbackHostname('[::FFFF:7F00:1]'), true, 'hex form is case-insensitive')
+  // The existing forms must keep working.
+  assert.equal(isLoopbackHostname('localhost'), true)
+  assert.equal(isLoopbackHostname('[::1]'), true)
+  assert.equal(isLoopbackHostname('127.0.0.1'), true)
+  // Not loopback: IPv4-mapped LAN addresses and lookalikes must stay out.
+  assert.equal(isLoopbackHostname('[::ffff:192.168.1.9]'), false, 'IPv4-mapped LAN address')
+  assert.equal(isLoopbackHostname('[::ffff:7f00:2]'), false, 'mapped hex host other than 127.0.0.1')
+  assert.equal(isLoopbackHostname('[::ffff:8f00:1]'), false, 'mapped hex outside 127/8')
+  assert.equal(isLoopbackHostname('::ffff:127.0.0.1.evil.com'), false, 'suffix past the mapped address')
+  assert.equal(isLoopbackHostname('evil.com'), false)
+})
+
+test('isTrustedRequest: an IPv4-mapped IPv6 loopback Host is trusted on the privileged plane', () => {
+  // Regression: the Host authority a local client sends as [::ffff:127.0.0.1]
+  // reaches the predicate as [::ffff:7f00:1]; judging it non-loopback made
+  // every plugin route answer 403 to a genuine local caller.
+  const host = new URL('http://[::ffff:127.0.0.1]:3080').host
+  assert.equal(host, '[::ffff:7f00:1]:3080', 'pin the normalization this fix depends on')
+  assert.equal(isTrustedRequest({ headers: { host }, socket: { remoteAddress: '::ffff:127.0.0.1' } }, []), true, 'mapped Host + mapped peer -> trusted')
+  assert.equal(isTrustedRequest({ headers: { host }, socket: { remoteAddress: '::1' } }, []), true, 'mapped Host + ::1 peer -> trusted')
+  assert.equal(isTrustedRequest({ headers: { host, origin: `http://${host}` }, socket: { remoteAddress: '127.0.0.1' } }, []), true, 'same-origin request stays trusted')
+  // The loopback-peer demand still applies to this spelling.
+  assert.equal(isTrustedRequest({ headers: { host }, socket: { remoteAddress: '192.168.1.9' } }, []), false, 'mapped loopback Host from a LAN peer -> rejected')
+  assert.equal(isTrustedRequest({ headers: { host, origin: 'http://evil.com' }, socket: { remoteAddress: '::1' } }, []), false, 'cross-origin still rejected')
 })
 
 test('isTrustedRequest: Origin edge cases fail closed (M3, 2026-09-03 audit)', () => {
