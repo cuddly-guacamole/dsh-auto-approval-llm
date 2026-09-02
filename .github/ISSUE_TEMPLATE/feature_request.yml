@@ -1,0 +1,90 @@
+name: Feature Request
+description: Suggest a new feature or improvement for dsh-auto-approval-llm
+title: "[Feature] "
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Feature Request
+        
+        Thank you for suggesting an improvement!
+        
+        **Tip**: For general questions or usage help, please use [Discussions](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/discussions/new?category=q-a) instead.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or Use Case
+      description: |
+        What problem does this feature solve? What workflow is blocked or difficult?
+        Describe the real-world scenario where you need this.
+      placeholder: |
+        I'm trying to [workflow], but currently I have to [workaround]...
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: |
+        Describe the feature you'd like. Be specific about behavior and UI.
+      placeholder: |
+        I want the plugin to [action] when [condition]...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Feature Scope
+      description: Which area does this affect?
+      options:
+        - Auto-approval logic (when/how to approve)
+        - Timeout and retry behavior
+        - Configuration options
+        - User interface / notifications
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: |
+        Have you considered any workarounds or alternative approaches?
+        What didn't work about them?
+    validations:
+      required: false
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: |
+        Any other information: screenshots, examples, related issues, or references.
+        **Remove any sensitive data (API keys, tokens, private paths) before submitting.**
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-submission Checklist
+      options:
+        - label: I searched existing issues and discussions to avoid duplicates
+          required: true
+        - label: This feature request is specific to dsh-auto-approval-llm (not DSH core)
+          required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        ---
+        
+        **Note**: Feature requests are community-driven. The more detail you provide, the more likely it is to be implemented.
+        
+        If you'd like to contribute this feature yourself, check out the [CONTRIBUTING.md](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/blob/main/CONTRIBUTING.md) guide.

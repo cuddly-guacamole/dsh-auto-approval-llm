@@ -1,0 +1,167 @@
+name: Bug Report
+description: Report a reproducible problem with dsh-auto-approval-llm
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Thanks for reporting!
+        
+        **⚠️ Security Reminder**: Before submitting, remove ALL sensitive information:
+        - API keys, tokens, authorization headers
+        - Complete prompts or conversation logs
+        - Private file paths or workspace contents
+        - LLM responses that may contain sensitive data
+        
+        We take security seriously. Issues with sensitive data will be edited or closed.
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      description: Where are you running DSH with this plugin?
+      options:
+        - macOS
+        - Linux
+        - Windows
+        - WSL (Windows Subsystem for Linux)
+        - Android (Browser access)
+        - Android (Native app / Termux)
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: dsh_version
+    attributes:
+      label: DSH Version
+      description: |
+        Your DeepSeek Harness version. Check with `dsh --version` or look at the Web UI footer.
+        Example: `0.1.1-rc.2`, `snapshot0810`, `latest`
+      placeholder: "e.g., 0.1.1-rc.2 or snapshot0810"
+    validations:
+      required: true
+
+  - type: input
+    id: plugin_version
+    attributes:
+      label: Plugin Version
+      description: |
+        dsh-auto-approval-llm version. Check in Settings → Plugins or run `dsh plugin list`.
+        Example: `1.0.0`, `latest`
+      placeholder: "e.g., 1.0.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Affected Component
+      description: Which part of the plugin is affected?
+      options:
+        - Auto-approval decision logic
+        - Timeout fallback behavior
+        - Plugin configuration / Settings
+        - Installation or startup
+        - Sandbox permission handling
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear description of what went wrong.
+      placeholder: |
+        What happened? What did you expect to happen instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction Steps
+      description: |
+        Steps to reproduce the behavior. Be specific and include sanitized examples.
+        **Remove any API keys, tokens, or sensitive content from commands/logs.**
+      placeholder: |
+        1. Install plugin with `dsh plugin add ...`
+        2. Configure settings in Settings → Plugins
+        3. Run a command that triggers auto-approval
+        4. Observe [what goes wrong]
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What should have happened?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened? Include any error messages.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized Logs or Error Output
+      description: |
+        Paste relevant logs, terminal output, or console errors.
+        **⚠️ CRITICAL: Remove ALL sensitive data before pasting:**
+        - API keys, tokens, passwords
+        - Full prompts or LLM responses
+        - Private file paths
+        - Authorization headers
+        
+        If using code blocks, mark sensitive sections with `[REDACTED]`.
+      render: shell
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Plugin Configuration (Sanitized)
+      description: |
+        Your dsh-auto-approval-llm configuration (from Settings → Plugins).
+        **Remove any API keys or secrets.** Example with sensitive data removed:
+        ```json
+        {
+          "enabled": true,
+          "timeoutAction": "reject",
+          "llmReviewScope": "low-or-above",
+          "rejectGuidance": false
+        }
+        ```
+      render: json
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-submission Checklist
+      description: Please confirm the following before submitting.
+      options:
+        - label: I searched existing issues and confirmed this is not a duplicate
+          required: true
+        - label: I am using the latest version of dsh-auto-approval-llm
+          required: true
+        - label: I removed all sensitive data (API keys, tokens, prompts, private paths) from this report
+          required: true
+        - label: I can reproduce this issue consistently or have identified the conditions
+          required: false
+
+  - type: markdown
+    attributes:
+      value: |
+        ---
+        
+        **Thank you for helping improve dsh-auto-approval-llm!**
+        
+        Maintainers may edit or redact sensitive content. Issues with exposed credentials will be closed immediately.

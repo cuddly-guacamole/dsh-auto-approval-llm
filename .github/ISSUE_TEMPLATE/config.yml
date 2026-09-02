@@ -1,0 +1,13 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💡 Feature Request
+    url: https://github.com/cuddly-guacamole/dsh-auto-approval-llm/discussions/new?category=ideas
+    about: Suggest new features or improvements. Feature requests in Discussions get more visibility and community input.
+  
+  - name: ❓ Question or Help
+    url: https://github.com/cuddly-guacamole/dsh-auto-approval-llm/discussions/new?category=q-a
+    about: Ask installation, configuration, or usage questions. Check the README first.
+  
+  - name: 📖 Documentation
+    url: https://github.com/cuddly-guacamole/dsh-auto-approval-llm/blob/main/README.md
+    about: Read the documentation before opening an issue.
