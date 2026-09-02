@@ -1565,7 +1565,7 @@ export function installSettingsRoute(ctx: any, settings: any): void {
         value: desc?.value ?? settings.get(SETTINGS_NS),
         revision: desc?.revision ?? 0,
         writable: settings.writable,
-        applies: desc?.applies ?? 'restart',
+        applies: desc?.applies ?? 'live',
         configError: configError ?? null,
       }
     } catch (error) {
@@ -2093,15 +2093,14 @@ export function apply(ctx: Context, rawConfig: Config): void {
   try {
     if (settings) {
       // Stale registrations from earlier builds may carry an invalid `applies`
-      // value ('immediate' was never legal; the settings schema only accepts
-      // 'live' | 'restart'). Normalize such a registration in place so a hot
-      // reload fixes a broken running process instead of re-breaking on the
-      // next `settings.describe()`. Mutating applies needs no re-resolve and
-      // creates no register disposer race.
+      // value; with the official hot-reload era the only legal value is
+      // 'live' (settings take effect without a restart). Normalize in place
+      // so a hot reload fixes a broken running process instead of re-breaking
+      // on the next `settings.describe()`. Mutating applies needs no
+      // re-resolve and creates no register disposer race.
       const stale = (settings as any).registrations?.get?.(SETTINGS_NS)
       if (stale !== undefined) {
-        const VALID_APPLIES = ['live', 'restart']
-        if (!VALID_APPLIES.includes(stale.applies)) stale.applies = 'live'
+        if (stale.applies !== 'live') stale.applies = 'live'
       }
       try {
         const registered = settings.describe().some((row: any) => row.ns === SETTINGS_NS)

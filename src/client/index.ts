@@ -1790,7 +1790,6 @@ function SettingsSection() {
         onClick: restoreTopDefaults,
       }, t('settings.reset')),
     ),
-    snapshot.applies === 'restart' ? React.createElement('p', { style: { color: 'var(--dsw-alias-label-tertiary)', fontSize: 12, margin: 0 } }, t('settings.restartHint')) : null,
     error ? React.createElement('p', { className: 'dsa-failed', role: 'status' }, error) : null,
   );
   return React.createElement('li', { className: open ? 'dsa-card dsa-cardOpen' : 'dsa-card' },
