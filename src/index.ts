@@ -956,6 +956,9 @@ export interface HistoryRecord {
   llmDecision?: string
   llmRisk?: string
   llmReason?: string
+  /** Free-text reason for decisions that are NOT LLM-adjudicated (e.g. the
+   * pre-execute hard fuse) — same sanitization path as `llmReason`. */
+  reason?: string
   /** Per-attempt failure trail when the review was retried (1-based `n`). */
   attempts?: RetryAttempt[]
   breaker?: boolean
@@ -1052,6 +1055,9 @@ function loadHistory(): void {
 function pushHistory(entry: Omit<HistoryRecord, 'id' | 'at'>): void {
   if (entry.llmReason !== undefined) {
     entry = { ...entry, llmReason: sanitizeReviewReason(entry.llmReason) }
+  }
+  if (entry.reason !== undefined) {
+    entry = { ...entry, reason: sanitizeReviewReason(entry.reason) }
   }
   const record: HistoryRecord = {
     ...entry,
@@ -2301,7 +2307,10 @@ export function apply(ctx: Context, rawConfig: Config): void {
         toolName: exec.name,
         outcome: 'rejected',
         source: 'hard-deny',
-        llmReason: assessment.reason,
+        // Not `llmReason`: this verdict is the policy layer's, not the LLM's —
+        // carried in the generic reason slot so audit consumers never mistake
+        // it for reviewer output.
+        reason: assessment.reason,
       })
       debugLog({ ev: 'hard-deny', callId: exec.callId ?? null, toolName: exec.name, reason: sanitizeReviewReason(assessment.reason) })
       return { kind: 'deny', reason: `[auto-mode hard deny] ${assessment.reason}` }

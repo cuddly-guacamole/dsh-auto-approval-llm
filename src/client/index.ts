@@ -1114,7 +1114,7 @@ function SettingsSection() {
   const filteredHistory = history.filter((r: any) => {
     const q = search.trim().toLowerCase()
     if (!q) return true
-    const haystack = [r.toolName, r.source, r.outcome, r.llmReason, ...(r.breakerReasons ?? [])].join(' ').toLowerCase()
+    const haystack = [r.toolName, r.source, r.outcome, r.reason, r.llmReason, ...(r.breakerReasons ?? [])].join(' ').toLowerCase()
     return haystack.includes(q)
   })
   const pageCount = Math.max(1, Math.ceil(filteredHistory.length / PAGE_SIZE))
@@ -1575,7 +1575,7 @@ function SettingsSection() {
           },
             React.createElement('div', null,
               t('record.line', { time: formatShortDateTime(r.at), toolName: r.toolName, source: r.source, outcome: r.outcome }) +
-              (r.llmReason ? ` — ${r.llmReason}` : '') +
+              (((r.reason ?? r.llmReason) ? ` — ${r.reason ?? r.llmReason}` : '')) +
               (r.breaker ? ' ' + t('record.breaker') : ''),
             ),
             r.breakerReasons?.length ? React.createElement('div', { style: { marginTop: 4, color: 'var(--dsw-alias-state-warn-primary)', whiteSpace: 'pre-line' } },
@@ -1948,7 +1948,7 @@ function SessionApprovalPanel(props: any) {
               style: { padding: '6px 8px', border: '1px solid var(--dsw-alias-border-l1)', borderRadius: 8, background: 'var(--dsw-alias-bg-layer-1)' },
             },
               t('record.line', { time: formatShortDateTime(r.at), toolName: r.toolName, source: r.source, outcome: r.outcome }) +
-              (r.llmReason ? ` — ${r.llmReason}` : '') +
+              (((r.reason ?? r.llmReason) ? ` — ${r.reason ?? r.llmReason}` : '')) +
               (r.breaker ? ' ' + t('record.breaker') : ''),
             )),
             total > MAX_PANEL_RECORDS
@@ -2080,7 +2080,7 @@ function installFloatingApprovalButton(ctx: any): () => void {
         d.className = 'dsa-recordClamp'
         d.style.cssText = 'padding:6px 8px;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-1);margin-top:4px'
         d.textContent = t('record.line', { time: formatShortDateTime(r.at), toolName: r.toolName, source: r.source, outcome: r.outcome }) +
-          (r.llmReason ? ` — ${r.llmReason}` : '') +
+          (((r.reason ?? r.llmReason) ? ` — ${r.reason ?? r.llmReason}` : '')) +
           (r.breaker ? ' ' + t('record.breaker') : '')
         popup.appendChild(d)
       }
