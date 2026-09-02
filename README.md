@@ -63,7 +63,14 @@
 dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 ```
 
-本地开发构建 / 注入（dsh-super-injector 环境）：
+本地开发构建 / 注入：
+
+```bash
+npx tsc -p tsconfig.json   # 编译 host → lib/
+npx tsdown                 # 构建 client bundle → lib/client.js
+```
+
+以 `link:` 依赖在 web profile 加载本仓库后：host 改动重新编译并重启 dsh 生效；client 改动重建后浏览器自动热载。
 
 > 提示：本插件依赖 DSH 的 `auto` 权限预设（`danger-full-access` + `approval: ask`），并作为 `approval/request` 的唯一终结者——**不要与其他审批类插件（如 dsh-approval-llm / dsh-auto-review）同时启用**。
 

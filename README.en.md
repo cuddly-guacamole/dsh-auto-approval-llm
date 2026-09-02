@@ -57,13 +57,14 @@ Published to npm (`@quill507/dsh-auto-approval-llm`) — install directly:
 dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 ```
 
-Local development build / injection (dsh-super-injector environment):
+Local development build / injection:
 
 ```bash
-DSH_CHECKOUT=<dsh source checkout> bash scripts/build.sh   # compile host → lib/
-npx tsdown                                               # build client bundle → lib/client.js
-dev_inject_plugin <this dir>
+npx tsc -p tsconfig.json   # compile host → lib/
+npx tsdown                 # build client bundle → lib/client.js
 ```
+
+With the repo loaded in a web profile as a `link:` dependency: host changes take effect after recompiling and restarting dsh; client changes are hot-delivered after rebuilding.
 
 > Note: the plugin depends on DSH's `auto` permission preset (`danger-full-access` + `approval: ask`) and is the single terminal for `approval/request` — **do not enable it together with other approval plugins** (e.g. dsh-approval-llm / dsh-auto-review).
 
