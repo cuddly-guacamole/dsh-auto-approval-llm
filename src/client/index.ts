@@ -428,6 +428,18 @@ function normalizeShowSessionPanel(value: any): 'on' | 'auto' | 'off' {
   return 'off'
 }
 
+/**
+ * Single source of truth for session-panel visibility, shared by the header
+ * button (React branch) and the floating button (DOM branch) — both must
+ * evaluate the same flags or the two modes drift apart. Pure; the behavior
+ * is pinned by the compiled-client anchor below.
+ */
+function computePanelVisible(panelMode: 'on' | 'auto' | 'off', sessionMode: string | undefined): boolean {
+  if (panelMode === 'off') return false
+  if (panelMode === 'auto' && sessionMode !== 'auto') return false
+  return true
+}
+
 function formatShortDateTime(at: number): string {
   const d = new Date(at)
   const pad = (n: number) => String(n).padStart(2, '0')
@@ -1907,8 +1919,7 @@ function SessionApprovalPanel(props: any) {
   }, [open])
 
   if (buttonPosition !== 'header') return null
-  if (panelMode === 'off') return null
-  if (panelMode === 'auto' && sessionMode !== 'auto') return null
+  if (!computePanelVisible(panelMode, sessionMode)) return null
 
   const total = records.length
   const allow = records.filter((r: any) => r.outcome === 'allowed-once').length
@@ -2134,7 +2145,7 @@ function installFloatingApprovalButton(ctx: any): () => void {
     } else {
       sessionMode = undefined
     }
-    const visible = buttonPosition === 'floating' && panelMode !== 'off' && (panelMode === 'on' || sessionMode === 'auto')
+    const visible = buttonPosition === 'floating' && computePanelVisible(panelMode, sessionMode)
     btn.style.display = visible ? '' : 'none'
     if (!visible) {
       popup.style.display = 'none'
