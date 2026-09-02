@@ -320,6 +320,7 @@ interface Draft {
   debug: 'on' | 'off'
   redactResults: 'on' | 'off'
   editDiffPreview: 'on' | 'off'
+  rejectGuidance: 'on' | 'off'
   categoryPolicy: Record<string, 'auto' | 'ask' | 'deny'>
   categoryMode: 'standard' | 'aggressive'
   privilegeAutoReview: 'on' | 'off'
@@ -359,6 +360,7 @@ function draftOf(value: any): Draft {
     debug: value?.debug === true ? 'on' : 'off',
     redactResults: value?.redactResults === true ? 'on' : 'off',
     editDiffPreview: value?.editDiffPreview === true ? 'on' : 'off',
+    rejectGuidance: value?.rejectGuidance === true ? 'on' : 'off',
     categoryPolicy: (typeof value?.categoryPolicy === 'object' && value.categoryPolicy !== null)
       ? { ...value.categoryPolicy }
       : {},
@@ -403,6 +405,7 @@ function valueOf(draft: Draft): any {
     debug: draft.debug === 'on',
     redactResults: draft.redactResults === 'on',
     editDiffPreview: draft.editDiffPreview === 'on',
+    rejectGuidance: draft.rejectGuidance === 'on',
     categoryPolicy: draft.categoryPolicy,
     categoryMode: draft.categoryMode,
     privilegeAutoReview: draft.privilegeAutoReview === 'on',
@@ -441,7 +444,7 @@ function formatLatencySeconds(ms: number | null): string {
 // unknown enum, out-of-range number). The settings card shows a red banner and
 // offers to delete those keys so the schema defaults recover.
 const INVALID_CONFIG_TYPES: Record<string, string> = {
-  enabled: 'boolean', autoSwitchPolicyToAsk: 'boolean', rulesDryRun: 'boolean', notifyUser: 'boolean', debug: 'boolean', redactResults: 'boolean', editDiffPreview: 'boolean', learningEnabled: 'boolean',
+  enabled: 'boolean', autoSwitchPolicyToAsk: 'boolean', rulesDryRun: 'boolean', notifyUser: 'boolean', debug: 'boolean', redactResults: 'boolean', editDiffPreview: 'boolean', rejectGuidance: 'boolean', learningEnabled: 'boolean',
   lowRiskSeconds: 'number', mediumRiskSeconds: 'number', highRiskSeconds: 'number', learningThreshold: 'number',
   maxConsecutiveDenials: 'number', maxTotalDenials: 'number', breakerAntiHijackMs: 'number',
   maxArgsChars: 'number', classifierTimeoutMs: 'number', classifierMaxOutputTokens: 'number',
@@ -662,6 +665,7 @@ function SettingsSection() {
   const [openHistory, setOpenHistory] = React.useState(false)
   const [openCategory, setOpenCategory] = React.useState(false)
   const [openLearning, setOpenLearning] = React.useState(false)
+  const [openUtility, setOpenUtility] = React.useState(false)
   const [learningEntries, setLearningEntries] = React.useState<any[]>([])
   const [learningEntriesError, setLearningEntriesError] = React.useState('')
   // In-card feedback: the most recent ok/error text for each sub-card, shown
@@ -760,7 +764,8 @@ function SettingsSection() {
   const TOP_KEYS = ['enabled', 'autoSwitchPolicyToAsk', 'timeoutAction', 'llmReviewScope', 'llmTakeoverScope', 'defaultReviewMode', 'showSessionPanel', 'aiButtonPosition', 'onboardingMessageEnabled', 'autoModeNoticeEnabled']
   const TIMER_KEYS = ['breakerAntiHijackMs', 'lowRiskSeconds', 'mediumRiskSeconds', 'highRiskSeconds', 'maxConsecutiveDenials', 'maxTotalDenials', 'reviewWaitSeconds']
   const REVIEW_KEYS = ['reviewerProtocol', 'reviewerBaseUrl', 'reviewerModel']
-  const SECURITY_KEYS = ['safetyPrompt', 'allowlist', 'denyList', 'humanOnlyList', 'rulesText', 'rulesDryRun', 'redactResults', 'editDiffPreview']
+  const SECURITY_KEYS = ['safetyPrompt', 'allowlist', 'denyList', 'humanOnlyList', 'rulesText', 'rulesDryRun']
+  const UTILITY_KEYS = ['redactResults', 'editDiffPreview', 'rejectGuidance']
   const LEARNING_KEYS = ['learningEnabled', 'learningThreshold']
   const pick = (keys: string[], from: Draft): Partial<Draft> => {
     const out: any = {}
@@ -787,6 +792,7 @@ function SettingsSection() {
     || draft.categoryMode !== baseDraft.categoryMode
     || draft.privilegeAutoReview !== baseDraft.privilegeAutoReview
   const learningDirty = cardDirty(LEARNING_KEYS)
+  const utilityDirty = cardDirty(UTILITY_KEYS)
   const invalidKeys = findInvalidConfigKeys(snapshot.value)
   const configError = (snapshot as any)?.configError ?? null
   const bannerMessage = configError
@@ -1382,11 +1388,6 @@ function SettingsSection() {
       ),
       t('settings.rules.listsHint'),
     ),
-    row(t('settings.rules.redactResults'), React.createElement(CapsuleSelect, {
-      value: draft.redactResults,
-      options: onOffOptions(),
-      onChange: (v: any) => update({ redactResults: v as 'on' | 'off' }),
-    }), t('settings.rules.redactResultsHint')),
     row(t('settings.rules.editDiffPreview'), React.createElement(CapsuleSelect, {
       value: draft.editDiffPreview,
       options: onOffOptions(),
@@ -1467,6 +1468,24 @@ function SettingsSection() {
       disabled: saving || !snapshot.writable || !categoryDirty,
       onClick: () => saveCard(['categoryPolicy', 'categoryMode', 'privilegeAutoReview'], 'category'),
     }, saving ? t('settings.saving') : t('settings.save')),
+  )
+
+  const buildUtilityBody = () => React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 10 } },
+    row(t('settings.rules.redactResults'), React.createElement(CapsuleSelect, {
+      value: draft.redactResults,
+      options: onOffOptions(),
+      onChange: (v: any) => update({ redactResults: v as 'on' | 'off' }),
+    }), t('settings.rules.redactResultsHint')),
+    row(t('settings.rules.editDiffPreview'), React.createElement(CapsuleSelect, {
+      value: draft.editDiffPreview,
+      options: onOffOptions(),
+      onChange: (v: any) => update({ editDiffPreview: v as 'on' | 'off' }),
+    }), t('settings.rules.editDiffPreviewHint')),
+    row(t('settings.utility.rejectGuidance'), React.createElement(CapsuleSelect, {
+      value: draft.rejectGuidance,
+      options: onOffOptions(),
+      onChange: (v: any) => update({ rejectGuidance: v as 'on' | 'off' }),
+    }), t('settings.utility.rejectGuidanceHint')),
   )
 
   const buildLearningBody = () => React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 10 } },
@@ -1744,6 +1763,7 @@ function SettingsSection() {
           : null, t('settings.group.safetyBase')),
     subcard(t('settings.category.title'), openCategory, categoryDirty, () => setOpenCategory((o) => !o), buildCategoryBody, buildCategoryFooter, undefined, t('settings.group.safetyBase')),
     subcard(t('settings.learning.title'), openLearning, learningDirty, () => setOpenLearning((o) => !o), buildLearningBody, () => cardFooter(LEARNING_KEYS, 'learning', learningDirty), undefined, t('settings.group.safetyBase')),
+    subcard(t('settings.utility.title'), openUtility, utilityDirty, () => setOpenUtility((o) => !o), buildUtilityBody, () => cardFooter(UTILITY_KEYS, 'utility', utilityDirty)),
     subcard(t('settings.reviewer.title'), openReview, reviewDirty, () => setOpenReview((o) => !o), buildReviewBody, buildReviewFooter),
     subcard(t('settings.history.title'), openHistory, false, () => setOpenHistory((o) => !o), buildHistoryBody, buildHistoryFooter),
     React.createElement('div', { style: { borderTop: '1px solid var(--dsw-alias-border-l2)', marginTop: 4 } },

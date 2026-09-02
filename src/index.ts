@@ -109,6 +109,8 @@ export interface Config {
   reviewerContextFacts: boolean
   /** Show a line-level diff preview of edit-class targets on the human approval panel. */
   editDiffPreview: boolean
+  /** Inject short guidance to the agent when a tool call is rejected. */
+  rejectGuidance: boolean
   /** Per-category tri-state override; empty = inherit current behavior. */
   categoryPolicy: Record<string, 'auto' | 'ask' | 'deny'>
   /** Position-gate mode: 'standard' (current) | 'aggressive' (location-unrestricted, hardened). */
@@ -190,6 +192,10 @@ export const Config: z<Config> = z.object({
   // (any read/diff failure omits the block), never part of the review payload.
   // Off by default (fail-closed): enable explicitly to see the panel diff.
   editDiffPreview: z.boolean().default(false),
+  // Rejected-call guidance for the agent (user-message injection with a
+  // whitelist-only payload: source/category enums, never tool names or free
+  // text). Off by default; rate-limited per callId and per 60s window.
+  rejectGuidance: z.boolean().default(false),
   // Per-category tri-state override: a dict accepts any key but resolveConfig
   // clamps unknown/LOCKED keys (see resolveConfig); empty = inherit.
   categoryPolicy: z.dict(z.union(['auto', 'ask', 'deny'] as const), z.string()).default({}),
@@ -371,6 +377,8 @@ export function resolveConfig(raw: Config): Config {
     reviewWaitSeconds: raw.reviewWaitSeconds ?? THRESHOLD_DEFAULTS.reviewWaitSeconds,
     // Default-off (fail-closed): only an explicit true enables the preview.
     editDiffPreview: raw.editDiffPreview === true,
+    // Default-off (fail-closed): only an explicit true enables guidance.
+    rejectGuidance: raw.rejectGuidance === true,
   }
 }
 
@@ -834,6 +842,43 @@ function queueNotice(agent: any, callId: string, text: string): void {
   byCall.set(callId, { text, seen: false, agent })
 }
 
+// ── rejectGuidance: short whitelist-only guidance injected on rejection ──
+// The agent-inbox text is a user-role message (higher authority than tool
+// results), so the payload is frozen to enum constants: a known source and an
+// optional category key. Tool names, reviewer reasons and any free text NEVER
+// enter it (prompt-injection surface). Dedup per (session, callId); global
+// sliding window of 5 per 60s so a denial loop cannot flood the context.
+const REJECT_GUIDANCE_KNOWN_SOURCES = ['rule', 'denyList', 'category', 'policy', 'llm', 'timeout', 'human']
+const REJECT_GUIDANCE_MAX_PER_MINUTE = 5
+const rejectGuidanceSeen = new Set<string>()
+let rejectGuidanceWindow: number[] = []
+
+export function buildRejectGuidanceText(source: string, category?: string): string {
+  const src = REJECT_GUIDANCE_KNOWN_SOURCES.includes(source) ? source : 'policy'
+  const cat = category !== undefined && CATEGORY_KEYS.includes(category as (typeof CATEGORY_KEYS)[number]) ? ` (category: ${category})` : ''
+  return `[reject-guidance] Tool call denied by ${src} policy${cat}. Try a different approach or review the approval settings.`
+}
+
+export const OFFICIAL_REJECT_GUIDANCE_TEXT =
+  '[reject-guidance] Tool call rejected outside plugin control (user or official channel). Try a different approach or review the approval settings.'
+
+export function maybeInjectRejectGuidance(agent: unknown, callId: unknown, config: { rejectGuidance?: boolean }, text: string): void {
+  if (!config?.rejectGuidance || !agent || typeof callId !== 'string') return
+  const sessionId = (agent as any)?.session?.id ?? ''
+  const key = `${sessionId}:${callId}`
+  if (rejectGuidanceSeen.has(key)) return
+  const now = Date.now()
+  rejectGuidanceWindow = rejectGuidanceWindow.filter((t) => now - t < 60_000)
+  if (rejectGuidanceWindow.length >= REJECT_GUIDANCE_MAX_PER_MINUTE) return
+  try {
+    rejectGuidanceSeen.add(key)
+    rejectGuidanceWindow.push(now)
+    queueNotice(agent, callId, text)
+  } catch {
+    // fail-closed: guidance is best-effort; never disturb the approval path.
+  }
+}
+
 /**
  * Dequeue and settle ONE pending notice by its own callId. Parallel tool
  * executions each land a `tools/result`; flushing the whole session map on the
@@ -908,6 +953,12 @@ function watchNotices(ctx: any, getConfig: () => Config): void {
   // session event — which is why it may only decide THAT a notice is due, and
   // never where the message lands; the inbox handles the seating.
   ctx.on('tools/result', (exec: any) => {
+    // rejectGuidance: the official approval channel translates user declines
+    // into a bare denial ("the user rejected tool ...") with no rationale;
+    // spot that shape and hand the agent a whitelist-only guidance note.
+    if (getConfig().rejectGuidance && /user rejected tool/i.test(String(exec?.result ?? ''))) {
+      maybeInjectRejectGuidance(exec?.agent, exec?.callId, getConfig(), OFFICIAL_REJECT_GUIDANCE_TEXT)
+    }
     const session = exec?.agent?.session
     const callId = exec?.callId
     if (!session || !callId) return
@@ -3004,6 +3055,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
               source: 'rule-deny',
               llmReason: `matched ${matched.rule.source}`,
             })
+            maybeInjectRejectGuidance(req.agent, req.callId, config, buildRejectGuidanceText('rule'))
             return 'rejected'
           } else if (matched.policy === 'allow') {
             // Declared-rule allow is an approval decision too: keep it in the
@@ -3047,6 +3099,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
         outcome: 'rejected',
         source: staticDecision.source,
       })
+      maybeInjectRejectGuidance(req.agent, req.callId, config, buildRejectGuidanceText('denyList'))
       return 'rejected'
     }
     // Category layer (Q2 order: denyList → category-deny → allowlist →
@@ -3070,6 +3123,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
         categoryDecision: 'deny',
         mode: classified.mode,
       })
+      maybeInjectRejectGuidance(req.agent, req.callId, config, buildRejectGuidanceText('category', classified.category))
       return 'rejected'
     }
     if (staticDecision.kind === 'allow') {
