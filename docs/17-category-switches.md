@@ -56,7 +56,7 @@ delete / protected / privilege / disk 四类在配置面上默认**只能收 `as
 
 **例外：`privilegeAutoReview`（默认关，fail-closed）**。开启后 `privilege` 类别从 LOCKED 名单中剔除（delete / protected / disk 仍锁死）：配置面上 privilege 可设 auto/ask/deny，未配置时走 `inherit`——类别层不再强制转人，命令进入正常评审管线（classifier + LLM 评审 + 倒计时）。三层改动：schema 新键（<span class="lnum">index.ts:L190</span>）、resolveConfig 解锁分支（<span class="lnum">index.ts:L234</span>）、categoryDirective 解锁判定（<span class="lnum">category.ts:L642-647</span>）；client 设置卡「分类开关与信任模式」子卡新增同名开关（locale 键 `settings.category.privilegeAutoReview`），开启后 privilege 行的下拉才出现 自动/拒绝 选项。
 
-**LOCKED 类的转人行为（2026-08-27 起）**：LOCKED 类（delete / protected / disk；privilege 未解锁时）的类别 ask **不再是 status-less**——answerer 注入硬拒倒计时（`action:'reject'` 恒拒、秒数取 `highRiskSeconds` 默认 10），无 LLM 接管 handle、无学习上下文；超时未响应自动 `timeout-deny`（agent 收到「no response: auto-rejected」），**任何 timeoutAction 配置都无法把它变成自动放行**。无人值守会话不再因危险命令无限挂起；面板上拒绝按钮带 10s 倒计时可直接点击。
+**LOCKED 类的转人行为**：LOCKED 类（delete / protected / disk；privilege 未解锁时）的类别 ask **不再是 status-less**——answerer 注入硬拒倒计时（`action:'reject'` 恒拒、秒数取 `highRiskSeconds` 默认 10），无 LLM 接管 handle、无学习上下文；超时未响应自动 `timeout-deny`（agent 收到「no response: auto-rejected」），**任何 timeoutAction 配置都无法把它变成自动放行**。无人值守会话不再因危险命令无限挂起；面板上拒绝按钮带 10s 倒计时可直接点击。
 
 ## 17.5　复合命令：类别取先、指令取严
 
@@ -105,5 +105,5 @@ auto-approval-llm:
     # delete/protected/privilege/disk 写 auto/deny 会被 warn+丢弃，仅 ask 有效
   categoryMode: aggressive   # 取消位置白名单：任意位置视为常规位置（危险度门、敏感名 fuse 不动）
   trustedDirs:
-    - D:\work\shared-lib     # 绝对路径；落在凭据树/home/critical 内会被丢弃
+    - C:\projects\shared-lib   # 绝对路径（POSIX 如 /opt/shared-lib）；落在凭据树/home/critical 内会被丢弃
 ```

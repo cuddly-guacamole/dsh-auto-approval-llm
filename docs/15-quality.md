@@ -22,7 +22,7 @@
 | 信任/传输 | isTrustedRequest（loopback Host 要真回路对端、LAN 白名单、空白名单=特权、cross-site/cross-origin 拒）；validateReviewerBaseUrl 明文 http 回环栅栏 |
 | 并发/一致性 | createKeyedMutex（同键原子无丢失更新/异键并发/异常保链）；exports↔产物一致性 |
 
-七个测试文件：contract 281 · category 102 · classifier 11 · editdiff 33 · contract-devloop 22 · probe 9 · approvals-protocol 33 = **491 例**（0.0.12 起：approvals-protocol 覆盖双协议应答纯函数/双通道 mock/反向场景/静态锚）。
+11 个测试文件，合计 **578 例**（node --test 全绿基线）。
 
 ## 15.2　验收命令与运行时证据
 

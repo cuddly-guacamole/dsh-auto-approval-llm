@@ -77,7 +77,7 @@ With the repo loaded in a web profile as a `link:` dependency: host changes take
 3. To route approval through your own model: in the "Online review model" card fill in protocol / API base URL / model name / API key → Save → Test connection.
 4. If medium-risk popups are too frequent or timeouts slip through: raise "Medium-risk countdown", or set "Timeout action" to `Reject` / `Auto-approve low-risk`.
 
-> 📚 In-repo docs: [how-it-works.html](how-it-works.html) (plain-language explanation) · [how-it-works-detailed.html](how-it-works-detailed.html) (detailed how-it-works with source line references).
+> 📚 Detailed documentation site: <https://cuddly-guacamole.github.io/dsh-auto-approval-llm/>
 
 ---
 

@@ -35,13 +35,10 @@ src/
      └─ locale.ts        zh/en 双语 354 行
 
 tests/
-├─ contract.test.mjs         250 例（host 纯函数契约：含评审重试/确认制学习/类别层/diff 预览/上下文探针各族）
-├─ category.test.mjs         101 例（类别层专测：归类/优先级/LOCKED 钳制/复合命令合并/信任目录模式）
-├─ editdiff.test.mjs          33 例（diff 边界与官方语义镜像）
-├─ contract-devloop.test.mjs  19 例（开发闭环回归）
-└─ probe.test.mjs              9 例（工作区事实探针边界）
-
-                              合计 412 例（node --test 全绿基线）
+├─ contract.test.mjs / category.test.mjs / classifier.test.mjs / redact.test.mjs
+├─ editdiff.test.mjs / probe.test.mjs / history-robust.test.mjs / audit.test.mjs
+├─ approvals-protocol.test.mjs / contract-devloop.test.mjs / trusted-dsh-subpaths.test.mjs
+└─ 合计 578 例（node --test 全绿基线）
 scripts/
 ├─ build.sh             （DSH 源码仓库布局）tsc 编译 src→lib
 ├─ audit-query.mjs      审计查询 CLI

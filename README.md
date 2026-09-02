@@ -143,7 +143,7 @@ npx tsdown                 # 构建 client bundle → lib/client.js
 | `maxTotalDenials` | 20 | 累计拒绝熔断阈值，0 关闭 |
 | `reviewerProtocol` | `openai` | 在线评审协议：`openai`(chat/completions) / `anthropic`(messages) |
 | `reviewerBaseUrl` | '' | 在线评审 API 地址；非空才走在线评审，空则跟随会话模型。三件齐备（地址＋模型名＋已配置密钥）才启用直连；缺任一自动跟随会话模型 |
-| `reviewerModel` | '' | 在线评审模型名；连同 `reviewerBaseUrl` 与已配置密钥三件齐备才启用直连（`reviewerProvider` 已于 2026-08-26 退役：classifier 恒跟随会话模型） |
+| `reviewerModel` | '' | 在线评审模型名；连同 `reviewerBaseUrl` 与已配置密钥三件齐备才启用直连（`reviewerProvider` 已退役：classifier 恒跟随会话模型） |
 | `safetyPrompt` | '' | 附加给评审模型的额外策略（保存即热生效） |
 | `allowlist` / `denyList` / `humanOnlyList` | [] | 工具名精确匹配 |
 | `rulesText` | '' | 声明式规则（优先于内置列表执行；支持 `[agent:main|subagent|名]`、`[workspace:路径]` 维度前缀，逗号组合=AND；解析错误=整段失效） |
@@ -157,7 +157,7 @@ npx tsdown                 # 构建 client bundle → lib/client.js
 | `reviewMaxRetries` | 1 | LLM 复审失败后的额外重试次数（0 单次 / 1 默认 / 2 上限；仅瞬时故障重试——限流·5xx·传输·空响应，LOW 同步含超时——重试窗口受审批倒计时剩余约束，认证/配置错误不重试） |
 | `autoModeNoticeEnabled` | true | 自动审批模式进入/退出时向 agent 注入英文上下文声明（独立开关） |
 | `onboardingMessageEnabled` | true | 首次 Auto 会话向 agent 注入一次性英文引导消息（上下文声明，非用户横幅）；关掉后不再注入 |
-| `reviewWaitSeconds` | 5 | 每次 LLM 评审尝试的等待时间（秒，1–10）；官方通道 TTFB 慢时调大（直连 DeepSeek 实测 266ms–4.9s），建议不超过低风险倒计时 |
+| `reviewWaitSeconds` | 5 | 每次 LLM 评审尝试的等待时间（秒，1–10）；官方通道 TTFB 慢时调大，建议不超过低风险倒计时 |
 | `debug` | false | 调试模式：写 `approval-debug.jsonl` 与 `[debug]` 日志 |
 | `reviewerContextFacts` | false | 仅 YAML 可配（设置卡无此控件）。上下文增强复审：给 LLM 复审输入附加结构化工作区事实（目标存在性/类型/大小 + 本会话最近创建文件，最多 8 条）；默认关（载荷与既往一致）。边界：工作区外只报存在性/类型不报大小；tempRoots 文件不入 recent_creates；探测失败整体省略 |
 | `editDiffPreview` | false | 编辑类工具（write/edit/str_replace_editor 非 view/apply_patch）进入人工审批时，面板展示目标文件行级红绿 diff。纯展示：不参与裁决、不进 LLM 复审输入；失败自动省略。边界：可读的工作区内非受保护目标对比现有内容；全量写类（write/create）目标不可读（外部/受保护/新文件）预览仅新内容全量新增（零读目标文件）；对比类（edit/str_replace/insert/apply_patch）目标不可读整体省略；≤1MiB（lstat 不跟随 + 读后字节复核，防 junction 逃逸）；LCS ≤1024 行/侧、单行 ≤200 字符省略、输出 ≤200 行且 ≤32KiB（截断带 `…truncated`）；语义镜像官方（多匹配/已存在/越界 → 省略）；diff 块内倒计时字面量剥离防伪造 |
