@@ -117,6 +117,13 @@ export interface Config {
   privilegeAutoReview: boolean
   /** Extra trusted directories for Standard mode (host-only, absolute paths). */
   trustedDirs: string[]
+  /**
+   * DSH_HOME subtrees an Auto session may write (host-only, absolute paths).
+   * Empty by default: DSH_HOME stays hard-denied unless an operator names a
+   * subtree here. Membership grants the same allow as the plugin's own
+   * development zone, so name the narrowest directory that unblocks the work.
+   */
+  trustedDshSubpaths: string[]
   /** Confirmation learning master switch: off by default (zero behavior change). */
   learningEnabled: boolean
   /** Human confirmations before a same-signature ask may auto-allow; clamped to [2,10]. */
@@ -194,6 +201,10 @@ export const Config: z<Config> = z.object({
   // delete/protected/disk stay locked regardless.
   privilegeAutoReview: z.boolean().default(false),
   trustedDirs: z.array(z.string()).default([]),
+  // DSH_HOME write openings: fail-closed default (empty). resolveConfig drops
+  // any entry that is not an absolute path inside DSH_HOME, or that would
+  // re-expose the credential/session/runtime-state trees.
+  trustedDshSubpaths: z.array(z.string()).default([]),
   // Confirmation learning: fail-closed default (off). The threshold accepts a
   // wide numeric range here; resolveConfig warns and clamps into [2,10]
   // instead of throwing, mirroring the categoryPolicy schema/decision split.
@@ -271,6 +282,48 @@ export function resolveConfig(raw: Config): Config {
     }
     trustedDirs.push(normalized)
   }
+  // DSH_HOME write openings. DSH_HOME is hard-denied as one tree, which also
+  // blocks legitimate operator work (editing a skill, a profile). An operator
+  // may name subtrees here, under clamps that keep the reason the fence exists:
+  // the entry must be absolute and inside DSH_HOME, must not be DSH_HOME
+  // itself (that would erase the fence wholesale), and must not re-open the
+  // trees whose contents are credentials, transcripts, or this plugin's own
+  // audit trail. Everything dropped is warned, never silently ignored.
+  const trustedDshSubpaths: string[] = []
+  // Named relative to DSH_HOME: session transcripts, the web auth token, the
+  // resolved web URL, and the plugin tree whose runtime state is the audit
+  // trail (the plugin's own dev zone is granted separately and keeps its
+  // narrower runtime-state deny).
+  const FENCED_DSH_SUBTREES = ['sessions', 'plugins', 'dsh-web-token.txt', 'dsh-web-url.txt', 'credentials', 'credentials.json']
+  for (const dir of raw.trustedDshSubpaths ?? []) {
+    if (typeof dir !== 'string' || dir.trim() === '' || !/^(?:[A-Za-z]:[\\/]|\\\\|\/|~[\\/])/.test(dir)) {
+      console.warn(`[dsh-auto-approval-llm] ignoring non-absolute trustedDshSubpath "${String(dir)}"`)
+      continue
+    }
+    const normalized = normalizePath(dir, dshHome, home)
+    const normalizedDshHome = normalizePath(dshHome, dshHome, home)
+    if (!isWithin(normalizedDshHome, normalized)) {
+      console.warn(`[dsh-auto-approval-llm] ignoring trustedDshSubpath outside DSH_HOME: ${normalized}`)
+      continue
+    }
+    if (normalized === normalizedDshHome) {
+      console.warn(`[dsh-auto-approval-llm] ignoring trustedDshSubpath that is DSH_HOME itself: ${normalized}`)
+      continue
+    }
+    const fenced = FENCED_DSH_SUBTREES
+      .map((name) => normalizePath(join(normalizedDshHome, name), dshHome, home))
+      .find((root) => isWithin(root, normalized) || isWithin(normalized, root))
+    if (fenced !== undefined) {
+      console.warn(`[dsh-auto-approval-llm] ignoring trustedDshSubpath covering a fenced DSH_HOME tree (${fenced}): ${normalized}`)
+      continue
+    }
+    const roots = { workspace: normalized, home, dshHome }
+    if (isCriticalPath(normalized, roots)) {
+      console.warn(`[dsh-auto-approval-llm] ignoring trustedDshSubpath inside a critical tree: ${normalized}`)
+      continue
+    }
+    trustedDshSubpaths.push(normalized)
+  }
   // Learning-threshold clamp: warn + clamp, never throw and never drop — a
   // wild value keeps the magnitude of the user's intent (mirrors the
   // categoryPolicy warn+normalize pattern, but numeric instead of tri-state).
@@ -305,6 +358,7 @@ export function resolveConfig(raw: Config): Config {
     // (delete/protected/disk stay locked regardless).
     privilegeAutoReview: raw.privilegeAutoReview === true,
     trustedDirs,
+    trustedDshSubpaths,
     // Default-off (fail-closed): only an explicit true enables learning.
     learningEnabled: raw.learningEnabled === true,
     learningThreshold,
@@ -2022,7 +2076,15 @@ export function apply(ctx: Context, rawConfig: Config): void {
       mode?: 'standard' | 'aggressive'
       trustedDirs?: string[]
     }
-    roots.allowedDshSubpaths = [normalizePath(join(roots.dshHome, 'plugins', 'dsh-auto-approval-llm'), roots.workspace, roots.home)]
+    // The plugin's own development zone is always granted; operator-named
+    // DSH_HOME subtrees join it. Both share one list, so every existing
+    // consumer (guard, policy, shell, symlink escape) honours the opening
+    // without a second code path — and the plugin zone keeps its narrower
+    // runtime-state deny, which sits inside that same list's semantics.
+    roots.allowedDshSubpaths = [
+      normalizePath(join(roots.dshHome, 'plugins', 'dsh-auto-approval-llm'), roots.workspace, roots.home),
+      ...(config.trustedDshSubpaths ?? []).map((dir) => normalizePath(dir, roots.workspace, roots.home)),
+    ]
     roots.mode = config.categoryMode
     roots.trustedDirs = (config.trustedDirs ?? []).map((dir) => normalizePath(dir, roots.workspace, roots.home))
     return roots

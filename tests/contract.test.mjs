@@ -1098,7 +1098,7 @@ test('assessTool: apply_patch honors allowedDshSubpaths like write/edit', () => 
   const artifacts = { has: () => false }
   const d = assessTool({ name: 'apply_patch', arguments: { patches: [{ file_path: 'C:/Users/u/.dsh/dev/x.ts' }] } }, roots, artifacts)
   assert.equal(d.decision, 'allow')
-  assert.ok(d.reason.includes('trusted plugin development path'))
+  assert.ok(d.reason.includes('trusted DSH_HOME path'))
 })
 
 // ── audit loop (6th round) fixes ──────────────────────────────────────────
@@ -2508,6 +2508,76 @@ test('resolveConfig: trustedDirs keeps only absolute, non-critical, non-home pat
 test('resolveConfig: trustedDirs are normalized (folded) before storage (D-3)', () => {
   const out = resolveConfig({ timeoutAction: 'reject', trustedDirs: ['C:/Others/../ok2', 'D:/Trusted Dir/'] })
   assert.deepEqual(out.trustedDirs, ['c:\\ok2', 'd:\\trusted dir\\'])
+})
+
+// ── trustedDshSubpaths: opt-in DSH_HOME write openings ──────────────────────
+// DSH_HOME is hard-denied as one tree, which also blocks legitimate operator
+// work (editing a skill, a profile). This key names subtrees that may be
+// written; it is fail-closed (empty default) and clamped so an opening cannot
+// re-expose credentials, transcripts, or the plugin's own audit trail.
+
+const DSH_HOME_FOR_TESTS = (process.env.DSH_HOME?.trim() || `${process.env.USERPROFILE ?? process.env.HOME}/.dsh`)
+  .replaceAll('\\', '/')
+
+test('resolveConfig: trustedDshSubpaths defaults to empty (DSH_HOME stays fenced)', () => {
+  assert.deepEqual(resolveConfig({ timeoutAction: 'reject' }).trustedDshSubpaths, [], 'omitted key = no opening')
+  assert.deepEqual(resolveConfig({ timeoutAction: 'reject', trustedDshSubpaths: [] }).trustedDshSubpaths, [])
+})
+
+test('resolveConfig: trustedDshSubpaths accepts a subtree inside DSH_HOME', () => {
+  const out = resolveConfig({ timeoutAction: 'reject', trustedDshSubpaths: [`${DSH_HOME_FOR_TESTS}/skills`] })
+  assert.equal(out.trustedDshSubpaths.length, 1, `expected one accepted opening, got ${JSON.stringify(out.trustedDshSubpaths)}`)
+  assert.ok(out.trustedDshSubpaths[0].endsWith('skills'), 'stored normalized')
+  // A nested single directory is accepted too (narrowest opening).
+  const nested = resolveConfig({ timeoutAction: 'reject', trustedDshSubpaths: [`${DSH_HOME_FOR_TESTS}/skills/aios`] })
+  assert.equal(nested.trustedDshSubpaths.length, 1)
+})
+
+test('resolveConfig: trustedDshSubpaths drops openings that would erase the fence', () => {
+  const drop = (list) => resolveConfig({ timeoutAction: 'reject', trustedDshSubpaths: list }).trustedDshSubpaths
+  // DSH_HOME itself would be the whole tree.
+  assert.deepEqual(drop([DSH_HOME_FOR_TESTS]), [], 'DSH_HOME itself is refused')
+  // Fenced subtrees: session transcripts, the web token, and the plugin tree
+  // holding the audit trail.
+  assert.deepEqual(drop([`${DSH_HOME_FOR_TESTS}/sessions`]), [], 'sessions is refused')
+  assert.deepEqual(drop([`${DSH_HOME_FOR_TESTS}/plugins`]), [], 'plugins is refused')
+  assert.deepEqual(drop([`${DSH_HOME_FOR_TESTS}/dsh-web-token.txt`]), [], 'the web token is refused')
+  // Traversal must be resolved BEFORE the fence check, not after.
+  assert.deepEqual(drop([`${DSH_HOME_FOR_TESTS}/skills/../sessions`]), [], 'traversal into a fenced tree is refused')
+  // Anything outside DSH_HOME belongs to trustedDirs, not here.
+  assert.deepEqual(drop([`${DSH_HOME_FOR_TESTS}/../.ssh`]), [], 'a credential tree outside DSH_HOME is refused')
+  assert.deepEqual(drop(['rel/path', '']), [], 'non-absolute spellings are refused')
+})
+
+test('resolveConfig: trustedDshSubpaths warns for every dropped entry (never silent)', () => {
+  const warnings = []
+  const original = console.warn
+  console.warn = (message) => warnings.push(String(message))
+  try {
+    resolveConfig({
+      timeoutAction: 'reject',
+      trustedDshSubpaths: [DSH_HOME_FOR_TESTS, `${DSH_HOME_FOR_TESTS}/sessions`, 'rel/path'],
+    })
+  } finally {
+    console.warn = original
+  }
+  const own = warnings.filter((w) => w.includes('trustedDshSubpath'))
+  assert.equal(own.length, 3, `each dropped entry warns: ${JSON.stringify(own)}`)
+})
+
+test('trustedDshSubpaths is host-only (a settings POST cannot grant itself an opening)', () => {
+  // The key widens a hard-deny fence, so it belongs to the same plane as
+  // workspaceRoot/dshHome/trustedDirs: the stored value always wins.
+  assert.ok(HOST_ONLY_KEYS.includes('trustedDshSubpaths'), 'listed in HOST_ONLY_KEYS')
+  // preserveHostKeys(current, submitted): the STORED value wins.
+  const merged = preserveHostKeys(
+    { trustedDshSubpaths: ['c:\\users\\u\\.dsh\\skills'] },
+    { trustedDshSubpaths: ['c:\\users\\u\\.dsh\\evil'] },
+  )
+  assert.deepEqual(merged.trustedDshSubpaths, ['c:\\users\\u\\.dsh\\skills'], 'the submitted opening is discarded')
+  // A save that omits the key must not clear an existing opening.
+  const omitted = preserveHostKeys({ trustedDshSubpaths: ['c:\\users\\u\\.dsh\\skills'] }, { enabled: true })
+  assert.deepEqual(omitted.trustedDshSubpaths, ['c:\\users\\u\\.dsh\\skills'])
 })
 
 // ── dev-loop audit round: omitted learningThreshold must not spam a warning ──

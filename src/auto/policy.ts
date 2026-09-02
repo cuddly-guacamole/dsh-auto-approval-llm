@@ -270,7 +270,7 @@ export function assessTool(exec: ExecLike, roots: Roots, artifacts: unknown): To
             // countdown into an allow, silently rewriting the audit trail.
             if (runtimeStateTargetInZone(normalized, roots.allowedDshSubpaths))
                 return { decision: 'deny', reason: `mutation of ${runtimeStateTargetReason(normalized)} is not permitted`, classifierEligible: false };
-            return { decision: 'allow', reason: 'trusted plugin development path', classifierEligible: false };
+            return { decision: 'allow', reason: 'trusted DSH_HOME path', classifierEligible: false };
         }
         if (!isEffectiveRoutine(normalized, roots) || isProtectedProjectPath(normalized, roots)
             || (!isWithin(roots.workspace, normalized) && sensitiveBasenameAt(normalized, roots))) {
@@ -293,7 +293,7 @@ export function assessTool(exec: ExecLike, roots: Roots, artifacts: unknown): To
         if (patchState !== undefined)
             return { decision: 'deny', reason: `mutation of ${runtimeStateTargetReason(patchState)} is not permitted`, classifierEligible: false };
         if (normalized.every((n) => (roots.allowedDshSubpaths ?? []).some((root) => isWithin(root, n)))) {
-            return { decision: 'allow', reason: 'trusted plugin development path', classifierEligible: false };
+            return { decision: 'allow', reason: 'trusted DSH_HOME path', classifierEligible: false };
         }
         const allRoutine = normalized.every((n) => isEffectiveRoutine(n, roots) && !isProtectedProjectPath(n, roots)
             && !(!isWithin(roots.workspace, n) && sensitiveBasenameAt(n, roots)));
@@ -317,7 +317,7 @@ export function assessTool(exec: ExecLike, roots: Roots, artifacts: unknown): To
             // timeout allow under timeoutAction=allow.
             if (runtimeStateTargetInZone(normalized, roots.allowedDshSubpaths))
                 return { decision: 'deny', reason: `mutation of ${runtimeStateTargetReason(normalized)} is not permitted`, classifierEligible: false };
-            return { decision: 'allow', reason: 'trusted plugin development path', classifierEligible: false };
+            return { decision: 'allow', reason: 'trusted DSH_HOME path', classifierEligible: false };
         }
         if (command === 'view') {
             if (!isEffectiveRoutine(normalized, roots))
