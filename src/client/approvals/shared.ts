@@ -159,6 +159,12 @@ export function startReviewPolling(
   // every later tick stack a second request for the same callId. Only one
   // outstanding review-status fetch per poller instance, ever.
   let inFlight = false
+  let lastPollAt = 0
+  // Debounce primitive shared by pollNow bursts: event-driven immediate
+  // polls (visibility/thaw/resume) can fire in a cluster; merging into the
+  // standing interval beats one fetch per event. inFlight stays the
+  // concurrency guard.
+  const MIN_POLL_GAP_MS = 200
   let interval: any
   let graceTimer: any
   let meta: string | undefined
@@ -248,6 +254,7 @@ export function startReviewPolling(
 
   const poll = async () => {
     if (settled || inFlight) return
+    lastPollAt = Date.now()
     inFlight = true
     let status: any
     try {
@@ -280,7 +287,9 @@ export function startReviewPolling(
 
   return {
     dispose: detach,
-    pollNow: () => { void poll() },
+    pollNow: () => {
+      if (Date.now() - lastPollAt >= MIN_POLL_GAP_MS) void poll()
+    },
   }
 }
 
