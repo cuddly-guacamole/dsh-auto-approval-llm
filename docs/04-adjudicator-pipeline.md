@@ -2,7 +2,7 @@
 
 > *The Lone Adjudicator*
 
-这是整个插件的心脏。以下决策顺序与 <span class="lnum">index.ts:L2407-2822</span>（注册体；互斥器/askHuman/learnAttempt 等前置件自节注释 <span class="lnum">index.ts:L2031</span> 起）逐行一致，红色 = 拒绝、蓝色 = 转人工/面板、绿色 = 放行。
+这是整个插件的心脏。以下决策顺序与 <span class="lnum">index.ts:L2894-3341</span>（注册体；互斥器/askHuman/learnAttempt 等前置件自节注释 <span class="lnum">index.ts:L2797</span> 起）逐行一致，红色 = 拒绝、蓝色 = 转人工/面板、绿色 = 放行。
 
 ```mermaid
 flowchart TD

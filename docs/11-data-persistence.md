@@ -14,7 +14,7 @@
  "at":1787305877691}
 ```
 
-字段全集（<span class="lnum">index.ts:L735-753</span>）：`id` / `at` / `sessionId` / `toolName` / `outcome` / `source` / `llmDecision?` / `llmRisk?` / `llmReason?`（先脱敏）/ `attempts?`（重试时逐次失败轨迹）/ `breaker?` / `breakerReasons?` / 类别三字段 `category?` · `categoryDecision?` · `mode?`。写入走 `pushHistory`（<span class="lnum">index.ts:L798-822</span>）：llmReason 先过脱敏 → 内存窗口 200 条 → `history.jsonl` 追加、>1MB 用内存窗口重写轮转；同一条再以 `type:'decision'` 落进审计。启动时 loadHistory 恢复。
+字段全集（<span class="lnum">index.ts:L949-968</span>）：`id` / `at` / `sessionId` / `toolName` / `outcome` / `source` / `llmDecision?` / `llmRisk?` / `llmReason?`（先脱敏）/ `reason?`（非 LLM 决定的原因，如 pre-execute 硬拒，同一脱敏路径）/ `attempts?`（重试时逐次失败轨迹）/ `breaker?` / `breakerReasons?` / 类别三字段 `category?` · `categoryDecision?` · `mode?`。写入走 `pushHistory`（<span class="lnum">index.ts:L1055-1085</span>）：llmReason / reason 先过脱敏 → 内存窗口 200 条 → `history.jsonl` 追加、>1MB 用内存窗口重写轮转；同一条再以 `type:'decision'` 落进审计。启动时 loadHistory 恢复。pre-execute 快路径（不经 approval/request）也落记录：`hard-deny`（策略硬拒，携带 `reason`）、`classifier-allow` / `classifier-deny`（LLM 预分类器自主裁决，携带 `llmDecision` / `llmRisk` / `llmReason`）。
 
 ### 11.1.2 audit.jsonl（append-only，清空留墓碑）
 
