@@ -6,6 +6,8 @@
 
 `Auto 档` = `sandbox: danger-full-access` + `approval: ask`。本插件在 Auto 会话里充当 `approval/request` 的**唯一终结裁决者**：常规操作放行、危险/模糊操作交给「静态规则 → LLM 分类 → LLM/人工裁决 → 倒计时兜底 → 熔断」的自动管线，把「自动但安全」的吞吐做高，同时保证有人工与审计兜底。
 
+> 🖥️ **平台支持**：主要在 **Windows + Git Bash** 环境开发与测试；macOS / Linux / WSL 欢迎反馈（见 [平台支持](#平台支持)）。**Android 浏览器访问仅收集 UI 反馈、不承诺支持；Auto 权限档不支持 Android 原生环境**（Termux / root / adb / shizuku 等）。
+
 ---
 
 📖 **工作原理详解文档站**：<https://cuddly-guacamole.github.io/dsh-auto-approval-llm/>
@@ -52,6 +54,19 @@
 - **HIGH**：弹面板 + 倒计时，LLM 只给建议不接管；超时严格按 `timeoutAction`（unattended 下 HIGH 超时仍转人工/失败关闭）。
 - **LLM 复审自动重试**：审查请求遇瞬时故障（429 / 5xx / 传输 / 空响应等）自动重试一次；重试受审批窗口剩余约束（不挤占倒计时）、尊重 `Retry-After`、认证/配置类错误不重发凭据；失败轨迹记入 `attempts` 审计。
 - 所有「需要人」的场景都委托官方面板显示倒计时；**超时标记唯一作者是 host 计时器**，客户端只上报 outcome，伪造不了。
+
+---
+
+## 平台支持
+
+| 平台 | 状态 | 说明 |
+|---|---|---|
+| Windows（Git Bash） | ✅ 主开发/测试环境 | 路径判定与 shell 解析以此基线开发并测试 |
+| macOS / Linux / WSL | 🟡 未真实用户验证 | 代码已跨平台适配：路径按语法自动分派 posix/win32、bash 为主解析器（pwsh 分支仅 Windows 启用）、macOS `/tmp→/private/tmp` 别名与 POSIX 关键路径保护已由契约测试锚定（`tests/posix-platform.test.mjs`）。欢迎反馈实际表现 |
+| Android 浏览器访问 dsh web | ⚠️ 仅收集反馈 | 设置卡 / 审批面板在窄视口与触屏上的体验可反馈，**不承诺支持**（不按手机宽度改造官方 UI） |
+| Android 原生环境（Auto 档） | ❌ 明确不支持 | Termux / root / adb / shizuku 等环境差异过大（国产安卓定制路径繁多），Auto 档在此类环境视为玩家实验场景 |
+
+**反馈**：请在 [GitHub Issues](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/issues) 报告，注明平台、dsh 版本、插件版本、复现命令与预期行为。
 
 ---
 

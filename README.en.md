@@ -4,6 +4,8 @@
 
 `Auto` = `sandbox: danger-full-access` + `approval: ask`. This plugin is the **single terminal decision-maker** for `approval/request` inside Auto sessions: routine operations pass, risky/ambiguous ones go through the automatic pipeline `static rules → LLM classifier → LLM/human decision → countdown fallback → breaker`, maximizing "automatic yet safe" throughput while keeping human and audit fallbacks.
 
+> 🖥️ **Platform support**: primarily developed and tested on **Windows + Git Bash**; feedback from macOS / Linux / WSL is welcome (see [Platform support](#platform-support)). **Android-browser access collects UI feedback only, with no support promise; the Auto preset is not supported in Android-native environments** (Termux / root / adb / shizuku and the like).
+
 ---
 
 ## Features
@@ -46,6 +48,19 @@ Tool call
 - **HIGH**: shows the panel with a countdown; the LLM only advises; on timeout it strictly follows `timeoutAction` (even under unattended, a HIGH timeout still goes to a human / fails closed).
 - **Automatic LLM review retry**: a review request that hits a transient failure (429 / 5xx / transport / empty response, etc.) retries once; retries are bounded by the leftover approval window (they never eat into the countdown), honor `Retry-After`, and auth/config-class errors never resend credentials; the failure trail is recorded in the `attempts` audit.
 - Every "needs a human" case delegates to the official panel for the countdown; **the timeout marker is written only by the host timer** — the client only reports an outcome, so it cannot be forged.
+
+---
+
+## Platform support
+
+| Platform | Status | Notes |
+|---|---|---|
+| Windows (Git Bash) | ✅ primary dev/test environment | path decisions and shell parsing are developed and tested against this baseline |
+| macOS / Linux / WSL | 🟡 not yet validated by real users | the code is cross-platform: paths are dispatched by syntax (posix vs win32), bash is the primary parser (pwsh branches run on Windows only), and the macOS `/tmp→/private/tmp` alias plus POSIX critical-path protection are pinned by contract tests (`tests/posix-platform.test.mjs`). Real-world feedback is welcome |
+| Android browser access to dsh web | ⚠️ feedback only | UI experience of the settings card / approval panel on narrow viewports and touch screens can be reported, but **no support promise** (no phone-width adaptation of the official UI) |
+| Android-native environments (Auto preset) | ❌ explicitly unsupported | Termux / root / adb / shizuku and similar environments differ too much (custom paths are rampant across Chinese Android vendors); the Auto preset there is a hobbyist experiment at best |
+
+**Feedback**: report at [GitHub Issues](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/issues) with the platform, dsh version, plugin version, the exact command, and the expected behavior.
 
 ---
 
