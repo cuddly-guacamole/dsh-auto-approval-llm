@@ -1006,11 +1006,13 @@ function watchNotices(ctx: any, getConfig: () => Config): void {
   // EXECUTION finishes, i.e. before the agent appends the `tool/result`
   // session event — which is why it may only decide THAT a notice is due, and
   // never where the message lands; the inbox handles the seating.
-  ctx.on('tools/result', (exec: any) => {
+  ctx.on('tools/result', (exec: any, result: any) => {
     // rejectGuidance: the official approval channel translates user declines
     // into a bare denial ("the user rejected tool ...") with no rationale;
     // spot that shape and hand the agent a whitelist-only guidance note.
-    if (getConfig().rejectGuidance && officialRejectionIn(exec?.result)) {
+    // The official dispatch calls observers with (exec, result): the finished
+    // tool outcome arrives as the second argument and does not ride on exec.
+    if (getConfig().rejectGuidance && officialRejectionIn(result ?? exec?.result)) {
       maybeInjectRejectGuidance(exec?.agent, exec?.callId, getConfig(), OFFICIAL_REJECT_GUIDANCE_TEXT)
     }
     const session = exec?.agent?.session
