@@ -5,7 +5,7 @@ function link(from, to) {
   const target = path.resolve(from)
   fs.rmSync(to, { recursive: true, force: true })
   fs.mkdirSync(path.dirname(to), { recursive: true })
-  fs.symlinkSync(target, to, 'junction')
+  fs.symlinkSync(target, to, process.platform === 'win32' ? 'junction' : 'dir')
   const resolved = fs.realpathSync(to)
   console.log(`LINK ${to} -> ${target} (resolved=${resolved})`)
 }
