@@ -40,10 +40,28 @@ export interface ApprovalHandle {
 // approvals actually seen.
 export const answeredApprovals = new Set<string>()
 
+// FIFO order companion so the tombstone set stays bounded even when many
+// sessions churn (each key is also removed on forgetAnsweredKeys).
+const MAX_ANSWERED_KEYS = 2000
+const answeredOrder: string[] = []
+
+function rememberAnsweredKey(key: string): void {
+  if (answeredApprovals.has(key)) return
+  answeredApprovals.add(key)
+  answeredOrder.push(key)
+  while (answeredOrder.length > MAX_ANSWERED_KEYS) {
+    const oldest = answeredOrder.shift()
+    if (oldest !== undefined) answeredApprovals.delete(oldest)
+  }
+}
+
 export function forgetAnsweredKeys(sessionId: string): void {
   const prefix = `${sessionId}:`
   for (const key of [...answeredApprovals]) {
     if (key.startsWith(prefix)) answeredApprovals.delete(key)
+  }
+  for (let i = answeredOrder.length - 1; i >= 0; i -= 1) {
+    if (answeredOrder[i].startsWith(prefix)) answeredOrder.splice(i, 1)
   }
 }
 
@@ -73,7 +91,7 @@ export async function answerOnce(handle: ApprovalHandle, outcome: ApprovalOutcom
   if (answeredApprovals.has(key)) return
   // Add before answering: a settle-race (host resolved, respond throws) must
   // never permit a second answer for the same callId.
-  answeredApprovals.add(key)
+  rememberAnsweredKey(key)
   try {
     if (handle.callId) {
       // Only the outcome crosses the wire; host generates the notice text.
