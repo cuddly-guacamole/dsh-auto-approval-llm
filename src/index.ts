@@ -1987,11 +1987,35 @@ function installSessionModeRoute(ctx: any): void {
   }), 'dsh-auto-approval-llm: session mode route')
 }
 
-function trustedUserMessages(authority: any) {
+export function trustedUserMessages(authority: any) {
   if (authority === undefined) return []
   const events = sessionEventList(authority.session)
   const messages: string[] = []
   let remaining = 4_000
+  const pushText = (text: unknown): void => {
+    const trimmed = String(text ?? '').trim()
+    if (trimmed === '') return
+    const sanitized = sanitizeClassifierText(trimmed).slice(0, remaining)
+    if (messages.includes(sanitized)) return
+    messages.push(sanitized)
+    remaining -= sanitized.length
+  }
+  // Steered/interjected prompts live in the agent inbox until the next step
+  // consumes them, so the event stream cannot see them yet — admit them as
+  // the newest trusted user intent (deduped against the events below; only
+  // genuine user sources, never plugin injections).
+  const inbox = authority.inbox as { nextStep?: unknown[]; nextTurn?: unknown[] } | undefined
+  if (inbox !== undefined && messages.length < 4 && remaining > 0) {
+    for (const batch of [...(inbox.nextStep ?? []), ...(inbox.nextTurn ?? [])]) {
+      const msg: any = Array.isArray(batch) ? batch[0] : batch
+      if (msg?.source?.kind !== 'user') continue
+      const content = msg.content
+      pushText(Array.isArray(content)
+        ? content.filter((block: any) => block.type === 'text').map((block: any) => block.text).join('\n')
+        : content)
+      if (messages.length >= 4 || remaining <= 0) break
+    }
+  }
   for (let index = events.length - 1; index >= 0 && messages.length < 4 && remaining > 0; index -= 1) {
     const event = events[index]
     if (event?.type !== 'user/message' || event.data.source.kind !== 'user') continue
@@ -1999,11 +2023,7 @@ function trustedUserMessages(authority: any) {
       .filter((block: any) => block.type === 'text')
       .map((block: any) => block.text)
       .join('\n')
-      .trim()
-    if (text === '') continue
-    const sanitized = sanitizeClassifierText(text).slice(0, remaining)
-    messages.push(sanitized)
-    remaining -= sanitized.length
+    pushText(text)
   }
   return messages.reverse()
 }

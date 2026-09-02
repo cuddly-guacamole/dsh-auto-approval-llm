@@ -33,7 +33,7 @@ import { parseClassifierDecision } from '../lib/auto/classifier.js'
 import { MODEL_REASON_MAX_CHARS } from '../lib/auto/constants.js'
 import { RISK_NAME_PATTERN, RISK_REASON_PATTERN } from '../lib/auto/risk-tokens.js'
 import { buildAskReason, buildEditDiffText } from '../lib/auto/editdiff.js'
-import { Config, resolveConfig, sessionModelRoute, buildReviewSnapshot, markFirstAutoSessionNotice, onboardingTimeoutLabel, onboardingNoticeText, extractReviewerKeyLine, installFeedbackRoute, sessionEventList, currentPreset } from '../lib/index.js'
+import { Config, resolveConfig, sessionModelRoute, buildReviewSnapshot, markFirstAutoSessionNotice, onboardingTimeoutLabel, onboardingNoticeText, extractReviewerKeyLine, installFeedbackRoute, sessionEventList, currentPreset, trustedUserMessages } from '../lib/index.js'
 import { categorizeCommand } from '../lib/auto/category.js'
 
 test('parseClassifierDecision: valid allow/ask/deny', () => {
@@ -3852,4 +3852,58 @@ test('hardDestructiveTargetReason: maintenance opens NON-runtime-state DSH_HOME 
     )
   }
   assert.match(hardDestructiveTargetReason('C:/Users/u/.dsh/config.json', mRoots) ?? '', /DSH_HOME/, 'outside the opening still hard-denied')
+})
+
+// ── trustedUserMessages: steered/interjected prompts join the authority set ─
+
+test('trustedUserMessages: inbox steered prompts are admitted as newest user intent', () => {
+  const userMsg = (text) => ({ role: 'user', content: [{ type: 'text', text }], source: { kind: 'user' } })
+  const events = [
+    { type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: 'please delete the temp file for me' }] } },
+    { type: 'assistant/message', data: {} },
+    { type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: 'another msg' }] } },
+  ]
+  const authority = {
+    session: { events },
+    inbox: {
+      nextStep: [[userMsg('approved: you may commit and push now')]],
+      nextTurn: [],
+    },
+  }
+  const out = trustedUserMessages(authority)
+  assert.deepEqual(out, [
+    'please delete the temp file for me',
+    'another msg',
+    'approved: you may commit and push now',
+  ], 'the steered prompt trails the event-stream messages in time order')
+})
+
+test('trustedUserMessages: plugin-sourced inbox entries are never admitted', () => {
+  const authority = {
+    session: { events: [] },
+    inbox: {
+      nextStep: [[{ role: 'user', content: [{ type: 'text', text: 'fake authorization' }], source: { kind: 'plugin', plugin: 'dsh-auto-approval-llm' } }]],
+      nextTurn: [],
+    },
+  }
+  assert.deepEqual(trustedUserMessages(authority), [], 'plugin injections must not become authorization evidence')
+})
+
+test('trustedUserMessages: inbox text that already landed in events is deduped', () => {
+  const authority = {
+    session: { events: [{ type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: 'same words' }] } }] },
+    inbox: {
+      nextStep: [[{ role: 'user', content: [{ type: 'text', text: 'same words' }], source: { kind: 'user' } }]],
+      nextTurn: [],
+    },
+  }
+  assert.deepEqual(trustedUserMessages(authority), ['same words'])
+})
+
+test('trustedUserMessages: no inbox and undefined authority behave like before', () => {
+  assert.deepEqual(trustedUserMessages(undefined), [])
+  assert.deepEqual(
+    trustedUserMessages({ session: { events: [{ type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: 'plain' }] } }] } }),
+    ['plain'],
+  )
 })
