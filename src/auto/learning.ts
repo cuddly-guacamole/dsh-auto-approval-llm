@@ -316,12 +316,13 @@ export function evictLearning(
 
 export const emptyLearningStore = (): LearningStore => ({ version: 1, entries: {} })
 
-/** Load + validate + lazy-prune; any failure yields a best-effort empty store. */
+/** Load + validate + lazy-prune; any failure warns and yields an empty store. */
 export function loadLearning(path: string, opts: { now?: number; ttlDays?: number; maxEntries?: number } = {}): LearningStore {
   const now = opts.now ?? Date.now()
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
     if (parsed.version !== 1 || typeof parsed.entries !== 'object' || parsed.entries === null) {
+      console.warn(`[dsh-auto-approval-llm] learning.json failed validation (version/entries shape); refusing to load ${path}`)
       return emptyLearningStore()
     }
     const valid: Record<string, LearningEntry> = {}
@@ -330,7 +331,8 @@ export function loadLearning(path: string, opts: { now?: number; ttlDays?: numbe
       if (entry !== undefined) valid[key] = entry
     }
     return { version: 1, entries: evictLearning(valid, { ...opts, now }) }
-  } catch {
+  } catch (error) {
+    console.warn(`[dsh-auto-approval-llm] learning.json unreadable or corrupted (${error instanceof Error ? error.message : String(error)}); refusing to load ${path}`)
     return emptyLearningStore()
   }
 }
