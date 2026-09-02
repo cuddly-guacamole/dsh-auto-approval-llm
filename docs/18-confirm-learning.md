@@ -24,7 +24,7 @@
 
 ```
 enabled ∧ staticRisk ∈ {LOW, MEDIUM}          ← HIGH 永不学
-        ∧ category 非 LOCKED 四类、非 unknown/harnessInternal
+        ∧ category 非 LOCKED 四类、非 harnessInternal（unknown 自 0.0.15 起可学）
         ∧ 无 fuse（风险名/理由正则或敏感路径命中，index.ts:L1688-1707）
 ```
 

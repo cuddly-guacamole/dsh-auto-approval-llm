@@ -2860,7 +2860,7 @@ test('clampLearningThreshold: NaN/non-integers fall back; integers clamp into [2
   assert.equal(clampLearningThreshold(5), 5)
 })
 
-test('learnGateEligible: only LOW/MEDIUM × non-locked × non-unknown × fuse-free passes', () => {
+test('learnGateEligible: only LOW/MEDIUM × non-locked × non-internal × fuse-free passes', () => {
   const gate = (over = {}) => learnGateEligible({ enabled: true, staticRisk: 'MEDIUM', category: 'fileEdit', ...over })
   assert.equal(gate(), true)
   assert.equal(gate({ staticRisk: 'LOW' }), true)
@@ -2870,7 +2870,7 @@ test('learnGateEligible: only LOW/MEDIUM × non-locked × non-unknown × fuse-fr
   for (const locked of ['delete', 'protected', 'privilege', 'disk']) {
     assert.equal(gate({ category: locked }), false, locked)
   }
-  assert.equal(gate({ category: 'unknown' }), false, 'unknown v1 stays unlearnable')
+  assert.equal(gate({ category: 'unknown' }), true, 'unknown is learnable since E-line (still re-reviewed before every learned release)')
   assert.equal(gate({ category: 'harnessInternal' }), false)
   assert.equal(gate({ category: undefined }), false)
   assert.equal(gate({ fuseHit: true }), false, 'sensitive fuse vetoes even LOW/readOnly')
