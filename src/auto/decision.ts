@@ -7,7 +7,7 @@
  */
 
 import { sanitizeClassifierArguments, sanitizeClassifierText, sanitizeReviewReason } from './classifier.js'
-import { THRESHOLD_DEFAULTS } from './constants.js'
+import { MODEL_REASON_MAX_CHARS, THRESHOLD_DEFAULTS } from './constants.js'
 import { redactSecrets } from './redact.js'
 import { RISK_NAME_PATTERN, RISK_REASON_PATTERN } from './risk-tokens.js'
 import type { RetryAttempt } from './retry.js'
@@ -25,6 +25,15 @@ export interface ReviewResult {
  * Strictly parse a reviewer text into a {@link ReviewResult}. Any deviation
  * (missing JSON, invalid decision/risk level, non-string reason) throws so the
  * caller's catch path fails closed; a half-parsed decision is never trusted.
+ *
+ * `reason` is bounded rather than rejected. Every reviewer request asks for
+ * `max_tokens: 256`, but that is a request hint an endpoint may ignore, and
+ * `reviewerBaseUrl` is user-configurable — so the length of this string is not
+ * ours to trust. It flows into history.jsonl, the approval panel and the
+ * countdown note, and `sanitizeReviewReason` redacts without truncating.
+ * Truncating (instead of throwing, as the classifier does) keeps a decisive
+ * ALLOW/DENY decisive: discarding the verdict would silently downgrade it to
+ * the escalation path.
  */
 export function parseReview(text: string): ReviewResult {
   const stripped = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '')
@@ -40,8 +49,11 @@ export function parseReview(text: string): ReviewResult {
   if (riskLevel !== undefined && !['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'].includes(riskLevel)) {
     throw new Error(`reviewer output has invalid risk_level "${String(riskLevel)}"`)
   }
-  const reason = parsed?.reason
-  if (reason !== undefined && typeof reason !== 'string') throw new Error('reviewer output has non-string reason')
+  const rawReason = parsed?.reason
+  if (rawReason !== undefined && typeof rawReason !== 'string') throw new Error('reviewer output has non-string reason')
+  const reason = rawReason === undefined || rawReason.length <= MODEL_REASON_MAX_CHARS
+    ? rawReason
+    : `${rawReason.slice(0, MODEL_REASON_MAX_CHARS)}…[truncated]`
   return {
     decision,
     ...(riskLevel === undefined ? {} : { riskLevel }),

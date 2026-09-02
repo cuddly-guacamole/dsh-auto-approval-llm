@@ -30,6 +30,7 @@ import { probeTargetFacts } from '../lib/auto/probe.js'
 import { ArtifactRegistry } from '../lib/auto/artifacts.js'
 import { isTrustedRequest, isLoopbackHostname, isLoopbackIp, validateReviewerBaseUrl } from '../lib/auto/trust.js'
 import { parseClassifierDecision } from '../lib/auto/classifier.js'
+import { MODEL_REASON_MAX_CHARS } from '../lib/auto/constants.js'
 import { RISK_NAME_PATTERN, RISK_REASON_PATTERN } from '../lib/auto/risk-tokens.js'
 import { buildAskReason, buildEditDiffText } from '../lib/auto/editdiff.js'
 import { Config, resolveConfig, sessionModelRoute, buildReviewSnapshot, markFirstAutoSessionNotice, onboardingTimeoutLabel, onboardingNoticeText, extractReviewerKeyLine, installFeedbackRoute, sessionEventList, currentPreset } from '../lib/index.js'
@@ -99,6 +100,35 @@ test('parseReview: rejects non-JSON garbage', () => {
 
 test('parseReview: rejects non-string reason', () => {
   assert.throws(() => parseReview('{"decision":"DENY","reason":42}'), /non-string reason/)
+})
+
+test('parseReview: bounds an oversized reason without losing the decision', () => {
+  // `max_tokens: 256` on every reviewer request is a hint an endpoint may
+  // ignore, and reviewerBaseUrl is user-configurable — so an unbounded reason
+  // could reach history.jsonl, the panel and the countdown note (sanitize
+  // redacts but never truncates).
+  const huge = 'A'.repeat(200_000)
+  const out = parseReview(JSON.stringify({ decision: 'DENY', risk_level: 'HIGH', reason: huge }))
+  assert.equal(out.decision, 'DENY', 'a decisive verdict must survive truncation')
+  assert.equal(out.riskLevel, 'HIGH')
+  assert.ok(out.reason.length < 1_100, `reason stays bounded, got ${out.reason.length}`)
+  assert.ok(out.reason.endsWith('…[truncated]'), 'truncation is visible in the text')
+  assert.equal(out.reason.slice(0, MODEL_REASON_MAX_CHARS), huge.slice(0, MODEL_REASON_MAX_CHARS), 'the kept prefix is verbatim')
+})
+
+test('parseReview: a reason at or under the cap is passed through verbatim', () => {
+  const exact = 'B'.repeat(MODEL_REASON_MAX_CHARS)
+  assert.equal(parseReview(JSON.stringify({ decision: 'ALLOW', reason: exact })).reason, exact, 'boundary length is untouched')
+  assert.equal(parseReview('{"decision":"ALLOW","reason":"short and fine"}').reason, 'short and fine')
+  assert.ok(!('reason' in parseReview('{"decision":"ESCALATE"}')), 'an absent reason stays absent')
+})
+
+test('parseClassifierDecision and parseReview share one reason bound', () => {
+  // The classifier rejects (strict response schema) where the reviewer
+  // truncates, but the threshold itself must not drift apart.
+  const overLimit = 'C'.repeat(MODEL_REASON_MAX_CHARS + 1)
+  assert.throws(() => parseClassifierDecision({ decision: 'allow', reason: overLimit }), /reason is invalid/)
+  assert.deepEqual(parseClassifierDecision({ decision: 'allow', reason: 'C'.repeat(MODEL_REASON_MAX_CHARS) }), { decision: 'allow', reason: 'C'.repeat(MODEL_REASON_MAX_CHARS) })
 })
 
 test('lowRiskReviewOutcome: ALLOW -> allow', () => {

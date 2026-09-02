@@ -1,4 +1,14 @@
 /**
+ * Hard cap on a free-text reason accepted from a model, in characters. Not a
+ * user setting: it bounds what a reviewer endpoint can push into
+ * history/audit/UI regardless of configuration. `parseClassifierDecision`
+ * rejects a longer reason outright (its response schema is strict);
+ * `parseReview` truncates instead, because dropping a decisive reviewer
+ * verdict over a long explanation would turn a DENY into an ESCALATE.
+ */
+export const MODEL_REASON_MAX_CHARS = 1_000
+
+/**
  * Single source of truth for numeric threshold defaults. The host Config
  * schema, host fallbacks and the client settings draft/reset values all
  * reference these so one change lands everywhere at once.

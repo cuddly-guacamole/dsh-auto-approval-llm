@@ -5,6 +5,7 @@
 // redactSecrets and SECRET_KEYS now live in ./redact.js (single implementation
 // shared with the result-side masker); the MIT attribution moved with them.
 import { redactSecrets, SECRET_KEYS } from './redact.js'
+import { MODEL_REASON_MAX_CHARS } from './constants.js'
 /** Shared policy for native and OpenAI-compatible classifier calls. */
 export const CLASSIFIER_SYSTEM_PROMPT = [
     'You are an independent security classifier for a coding agent tool call.',
@@ -89,7 +90,7 @@ export function parseClassifierDecision(value) {
     const reason = value.reason;
     if (decision !== 'allow' && decision !== 'ask' && decision !== 'deny')
         throw new Error('classifier decision is invalid');
-    if (typeof reason !== 'string' || reason.trim() === '' || reason.length > 1_000)
+    if (typeof reason !== 'string' || reason.trim() === '' || reason.length > MODEL_REASON_MAX_CHARS)
         throw new Error('classifier reason is invalid');
     return { decision, reason: reason.trim() };
 }
