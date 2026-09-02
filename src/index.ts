@@ -1530,7 +1530,7 @@ export function installFeedbackRoute(ctx: any): void {
   }), 'dsh-auto-approval-llm: feedback route')
 }
 
-function installSettingsRoute(ctx: any, settings: any): void {
+export function installSettingsRoute(ctx: any, settings: any): void {
   const webServer = ctx.get('webServer')
   if (!webServer || !settings) return
 
@@ -1682,7 +1682,7 @@ function installReviewerCredentialRoute(ctx: any, credentials: any): void {
   }), 'dsh-auto-approval-llm: reviewer credential route')
 }
 
-function installHistoryRoute(ctx: any): void {
+export function installHistoryRoute(ctx: any): void {
   const webServer = ctx.get('webServer')
   if (!webServer) return
   ctx.effect(() => webServer.register({
@@ -1785,7 +1785,7 @@ function installLearningStoreRoute(ctx: any, revoke: (key: string) => Promise<bo
   }), 'dsh-auto-approval-llm: learning-store route')
 }
 
-function installReviewStatusRoute(ctx: any): void {
+export function installReviewStatusRoute(ctx: any): void {
   const webServer = ctx.get('webServer')
   if (!webServer) return
   ctx.effect(() => webServer.register({

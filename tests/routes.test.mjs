@@ -1,0 +1,142 @@
+/**
+ * dsh-auto-approval-llm · route-handler contract tests (M5).
+ *
+ * Drive the registered web handlers directly with fake req/res, covering the
+ * routes that previously had no handler-level coverage: settings (GET shape,
+ * POST validation + host-only preservation), history (GET/DELETE + auth
+ * fence) and review-status (never 404; {ok:false} contract).
+ *
+ * Feedback-route handler tests live in contract.test.mjs (loopback privileged
+ * plane). Run: node --test tests/routes.test.mjs
+ */
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import {
+  installHistoryRoute, installReviewStatusRoute, installSettingsRoute,
+} from '../lib/index.js'
+
+const LOOPBACK = { method: 'GET', headers: { host: 'localhost:3080' }, socket: { remoteAddress: '127.0.0.1' } }
+
+function capture(installer, ...args) {
+  const registrations = []
+  const ctx = {
+    get: (name) => (name === 'webServer' ? { register: (desc) => registrations.push(desc) } : undefined),
+    effect: (fn) => fn(),
+  }
+  installer(ctx, ...args)
+  assert.ok(registrations.length >= 1, 'at least one registration')
+  return { registrations }
+}
+
+function handlerOf(registrations, pathPart) {
+  const spec = registrations.find((r) => r.path.includes(pathPart))
+  assert.ok(spec, `no route matching ${pathPart}`)
+  return spec.handler
+}
+
+function fakeRes() {
+  const state = { statusCode: 0, body: '' }
+  const res = {
+    setHeader: () => {},
+    writeHead: (code) => { state.statusCode = code },
+    end: (chunk) => { state.body = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk) },
+  }
+  return { res, state }
+}
+
+async function callJson(handler, req) {
+  const { res, state } = fakeRes()
+  await handler(req, res)
+  return { status: state.statusCode, body: state.body ? JSON.parse(state.body) : null }
+}
+
+// ── settings route ────────────────────────────────────────────────────────
+
+function fakeSettings(initial) {
+  let value = { ...initial }
+  let revision = 1
+  return {
+    describe: () => [{ ns: 'auto-approval-llm', value, revision, applies: 'live' }],
+    get: () => value,
+    writable: true,
+    replace: async (ns, v, rev) => {
+      if (rev !== revision) throw new Error('revision conflict')
+      value = v
+      revision += 1
+    },
+  }
+}
+
+function settingsReq(over = {}) {
+  return { ...LOOPBACK, ...over }
+}
+
+test('settings GET: loopback returns the describe shape; foreign Host is 403', async () => {
+  const settings = fakeSettings({ timeoutAction: 'reject', rejectGuidance: true })
+  const { registrations: regs } = capture(installSettingsRoute, settings)
+  const handler = handlerOf(regs, 'settings')
+  const ok = await callJson(handler, settingsReq())
+  assert.equal(ok.status, 200)
+  assert.equal(ok.body.ok, true)
+  assert.equal(ok.body.value.value.rejectGuidance, true)
+  assert.equal(ok.body.value.revision, 1)
+  const denied = await callJson(handler, settingsReq({ headers: { host: 'evil.example:3080' }, socket: { remoteAddress: '192.168.1.9' } }))
+  assert.equal(denied.status, 403)
+  assert.equal(denied.body.ok, false)
+})
+
+test('settings POST: requires expectedRevision, preserves host-only keys', async () => {
+  const settings = fakeSettings({ timeoutAction: 'reject', trustedDirs: ['C:/etc/x'] })
+  const { registrations: regs } = capture(installSettingsRoute, settings)
+  const handler = handlerOf(regs, 'settings')
+  const missing = await callJson(handler, {
+    ...settingsReq({ method: 'POST' }),
+    body: null,
+  })
+  assert.equal(missing.body.ok, false, 'POST without a value object fails')
+  const noRev = await callJson(handler, {
+    ...settingsReq({ method: 'POST' }),
+    headers: { host: 'localhost:3080', 'content-type': 'application/json' },
+    [Symbol.asyncIterator]: async function* () { yield JSON.stringify({ value: { timeoutAction: 'reject', trustedDirs: [] } }) },
+  })
+  assert.equal(noRev.status, 400, 'expectedRevision is mandatory')
+  const good = await callJson(handler, {
+    ...settingsReq({ method: 'POST' }),
+    headers: { host: 'localhost:3080', 'content-type': 'application/json' },
+    [Symbol.asyncIterator]: async function* () {
+      yield JSON.stringify({ value: { timeoutAction: 'allow', trustedDirs: [] }, expectedRevision: 1 })
+    },
+  })
+  assert.equal(good.status, 200)
+  assert.equal(good.body.value.value.timeoutAction, 'allow')
+  assert.deepEqual(good.body.value.value.trustedDirs, ['C:/etc/x'], 'host-only key survives the save')
+  assert.equal(good.body.ok, true)
+})
+
+// ── history route ─────────────────────────────────────────────────────────
+
+test('history GET: loopback 200 with records + llmLatency; foreign Host 403', async () => {
+  const { registrations: regs } = capture(installHistoryRoute)
+  const handler = handlerOf(regs, 'history')
+  const ok = await callJson(handler, LOOPBACK)
+  assert.equal(ok.status, 200)
+  assert.equal(ok.body.ok, true)
+  assert.ok(Array.isArray(ok.body.value.records))
+  assert.ok('llmLatency' in ok.body.value)
+  const denied = await callJson(handler, { ...LOOPBACK, headers: { host: 'evil.example:3080' }, socket: { remoteAddress: '10.0.0.7' } })
+  assert.equal(denied.status, 403)
+})
+
+test('review-status GET: never 404 — unknown callId returns ok:false at 200', async () => {
+  const { registrations: regs } = capture(installReviewStatusRoute)
+  const handler = handlerOf(regs, 'review')
+  const res = await callJson(handler, {
+    ...LOOPBACK,
+    headers: { host: 'localhost:3080', 'x-auto-approval-call-id': 'call-does-not-exist' },
+  })
+  assert.equal(res.status, 200, 'the route always answers 200')
+  assert.equal(res.body.ok, false, 'an unknown call reads as {ok:false}')
+  assert.equal(res.body.error, 'not-found')
+  const denied = await callJson(handler, { ...LOOPBACK, headers: { host: 'evil.example' }, socket: { remoteAddress: '192.168.1.9' } })
+  assert.equal(denied.status, 403)
+})
