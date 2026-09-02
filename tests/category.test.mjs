@@ -843,7 +843,7 @@ test('F1: the guard re-checks resolved runtime-state landings before (and indepe
 // Roots shaped so D:/work IS the workspace: the redirect targets below are
 // routine project content, the exact spelling that used to be silently
 // absorbed by the static read-only allow.
-const winRoots = { workspace: 'D:/work', home: 'C:/Users/Administrator', dshHome: 'C:/Users/Administrator/.dsh', tempRoots: [] }
+const winRoots = { workspace: 'D:/work', home: 'C:/Users/u', dshHome: 'C:/Users/u/.dsh', tempRoots: [] }
 const verdictOf = (command, shell = 'bash', r = winRoots) =>
   assessTool({ name: shell, arguments: { command }, agent: {} }, r, artifacts)
 
@@ -876,10 +876,10 @@ test('redirect matrix: fd-form `2>` is a real-file write too', () => {
 })
 
 test('redirect matrix: credential target stays hard-denied and labels protected', () => {
-  const v = verdictOf('echo x > C:/Users/Administrator/.ssh/config')
+  const v = verdictOf('echo x > C:/Users/u/.ssh/config')
   assert.equal(v.decision, 'deny')
   assert.equal(v.classifierEligible, false)
-  assert.equal(cat('echo x > C:/Users/Administrator/.ssh/config', 'bash', winRoots), 'protected')
+  assert.equal(cat('echo x > C:/Users/u/.ssh/config', 'bash', winRoots), 'protected')
 })
 
 test('redirect matrix: external target asks with fileEdit label (not readOnly)', () => {
@@ -967,33 +967,33 @@ test('build fast path survives `>>` and discard-sink redirects', () => {
 })
 
 test('build fast path leaves on an outside-workspace redirect', () => {
-  const v = verdictOf('npm test > C:/Users/Administrator/outside.txt')
+  const v = verdictOf('npm test > C:/Users/u/outside.txt')
   assert.equal(v.decision, 'ask')
   assert.equal(v.classifierEligible, true)
-  assert.equal(cat('npm test > C:/Users/Administrator/outside.txt', 'bash', winRoots), 'fileEdit')
-  const probe = verdictOf('node --version > C:/Users/Administrator/outside.txt')
+  assert.equal(cat('npm test > C:/Users/u/outside.txt', 'bash', winRoots), 'fileEdit')
+  const probe = verdictOf('node --version > C:/Users/u/outside.txt')
   assert.equal(probe.decision, 'ask')
   assert.equal(probe.classifierEligible, true)
   // Probe-family read-only commands keep the echo-batch semantics: any
   // real-file redirect already drops them out of the read-only allow.
-  const status = verdictOf('git status > C:/Users/Administrator/outside.txt')
+  const status = verdictOf('git status > C:/Users/u/outside.txt')
   assert.equal(status.decision, 'ask')
   assert.equal(status.classifierEligible, true)
 })
 
 test('an outside redirect cannot ride the build fast path under relaxations', () => {
   const aggressive = { ...winRoots, mode: 'aggressive' }
-  assert.equal(verdictOf('npm test > C:/Users/Administrator/outside.txt', 'bash', aggressive).decision, 'ask')
-  assert.equal(verdictOf('npm run build >> C:/Users/Administrator/outside.txt', 'bash', aggressive).decision, 'ask')
-  assert.equal(verdictOf('node --version > C:/Users/Administrator/outside.txt', 'bash', aggressive).decision, 'ask')
-  const trusted = { ...winRoots, trustedDirs: ['C:/Users/Administrator'] }
-  assert.equal(verdictOf('npm test > C:/Users/Administrator/outside.txt', 'bash', trusted).decision, 'ask')
-  assert.equal(verdictOf('node --version > C:/Users/Administrator/outside.txt', 'bash', trusted).decision, 'ask')
+  assert.equal(verdictOf('npm test > C:/Users/u/outside.txt', 'bash', aggressive).decision, 'ask')
+  assert.equal(verdictOf('npm run build >> C:/Users/u/outside.txt', 'bash', aggressive).decision, 'ask')
+  assert.equal(verdictOf('node --version > C:/Users/u/outside.txt', 'bash', aggressive).decision, 'ask')
+  const trusted = { ...winRoots, trustedDirs: ['C:/Users/u'] }
+  assert.equal(verdictOf('npm test > C:/Users/u/outside.txt', 'bash', trusted).decision, 'ask')
+  assert.equal(verdictOf('node --version > C:/Users/u/outside.txt', 'bash', trusted).decision, 'ask')
 })
 
 test('a sensitive redirect target stays hard-denied on the build fast path', () => {
-  for (const r of [winRoots, { ...winRoots, mode: 'aggressive' }, { ...winRoots, trustedDirs: ['C:/Users/Administrator'] }]) {
-    const v = verdictOf('npm test > C:/Users/Administrator/.ssh/config', 'bash', r)
+  for (const r of [winRoots, { ...winRoots, mode: 'aggressive' }, { ...winRoots, trustedDirs: ['C:/Users/u'] }]) {
+    const v = verdictOf('npm test > C:/Users/u/.ssh/config', 'bash', r)
     assert.equal(v.decision, 'deny', JSON.stringify(r))
     assert.equal(v.classifierEligible, false)
   }
@@ -1013,12 +1013,12 @@ test('pwsh build commands obey the same retention rule', () => {
   const kept = verdictOf('npm run build > D:/work/build.log', 'pwsh')
   assert.equal(kept.decision, 'allow')
   assert.equal(kept.classifierEligible, false)
-  const dropped = verdictOf('npm run build > C:/Users/Administrator/outside.txt', 'pwsh')
+  const dropped = verdictOf('npm run build > C:/Users/u/outside.txt', 'pwsh')
   assert.equal(dropped.decision, 'ask')
   assert.equal(dropped.classifierEligible, true)
   const probeKept = verdictOf('node --version > D:/work/v.txt', 'pwsh')
   assert.equal(probeKept.decision, 'allow')
-  const allStreams = verdictOf('npm test *> C:/Users/Administrator/outside.txt', 'pwsh')
+  const allStreams = verdictOf('npm test *> C:/Users/u/outside.txt', 'pwsh')
   assert.equal(allStreams.decision, 'ask')
 })
 
@@ -1038,7 +1038,7 @@ const auditRoots = winRoots
 test('runtimeStateReadHits: reader-command operands are reported', () => {
   assert.deepEqual(runtimeStateReadHits('cat approval-debug.jsonl', 'bash', auditRoots), ['approval-debug.jsonl'])
   assert.deepEqual(runtimeStateReadHits('head -n 20 history.jsonl | wc -l', 'bash', auditRoots), ['history.jsonl'])
-  assert.deepEqual(runtimeStateReadHits('Get-Content C:/Users/Administrator/.dsh/review-mode.json', 'pwsh', auditRoots), ['review-mode.json'])
+  assert.deepEqual(runtimeStateReadHits('Get-Content C:/Users/u/.dsh/review-mode.json', 'pwsh', auditRoots), ['review-mode.json'])
 })
 
 test('runtimeStateReadHits: cp/mv sources are reported, destinations are not', () => {

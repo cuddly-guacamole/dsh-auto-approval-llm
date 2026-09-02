@@ -28,7 +28,7 @@
 # bundles array only supplies patch layers, it does not create entries.
 # 2026-08-30 regression note: removing the insert (or keeping only id-targeted
 # config rows) leaves the plugin with no loader entry -> all plugin routes 404.
-# A duplicate-apply crash (00:23-00:28) came from this insert PLUS the
+# A duplicate-apply crash came from this insert PLUS the
 # super-injector runtime re-injecting the same package from its registry;
 # the registry no longer lists this plugin, so the insert alone is the single
 # entry source and the config rows below are the shipped defaults.
