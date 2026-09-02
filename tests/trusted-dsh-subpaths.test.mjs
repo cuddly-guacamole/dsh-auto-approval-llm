@@ -69,7 +69,7 @@ test('an opening covers its own subtree but never a sibling or a prefix match', 
   for (const target of [
     'C:/Users/u/.dsh/cordis.patch.yml',
     'C:/Users/u/.dsh/sessions/s.jsonl',
-    'C:/Users/u/.dsh/dsh-web-token.txt',
+    'C:/Users/u/.dsh/credentials.json',
     'C:/Users/u/.dsh/skills-evil/x.md',
   ]) {
     assert.match(

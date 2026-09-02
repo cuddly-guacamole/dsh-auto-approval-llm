@@ -2537,11 +2537,11 @@ test('resolveConfig: trustedDshSubpaths drops openings that would erase the fenc
   const drop = (list) => resolveConfig({ timeoutAction: 'reject', trustedDshSubpaths: list }).trustedDshSubpaths
   // DSH_HOME itself would be the whole tree.
   assert.deepEqual(drop([DSH_HOME_FOR_TESTS]), [], 'DSH_HOME itself is refused')
-  // Fenced subtrees: session transcripts, the web token, and the plugin tree
-  // holding the audit trail.
+  // Fenced subtrees: session transcripts, credential files, and the plugin
+  // tree holding the audit trail.
   assert.deepEqual(drop([`${DSH_HOME_FOR_TESTS}/sessions`]), [], 'sessions is refused')
   assert.deepEqual(drop([`${DSH_HOME_FOR_TESTS}/plugins`]), [], 'plugins is refused')
-  assert.deepEqual(drop([`${DSH_HOME_FOR_TESTS}/dsh-web-token.txt`]), [], 'the web token is refused')
+  assert.deepEqual(drop([`${DSH_HOME_FOR_TESTS}/credentials.json`]), [], 'a credential file is refused')
   // Traversal must be resolved BEFORE the fence check, not after.
   assert.deepEqual(drop([`${DSH_HOME_FOR_TESTS}/skills/../sessions`]), [], 'traversal into a fenced tree is refused')
   // Anything outside DSH_HOME belongs to trustedDirs, not here.

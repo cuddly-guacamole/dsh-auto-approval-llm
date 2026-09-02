@@ -158,7 +158,7 @@ dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 | `privilegeAutoReview` | false | 特权类别解锁开关（默认关=fail-closed）：开启后 privilege 可设 auto/ask/deny 并走分类器 + LLM 评审 + 倒计时管线；delete/protected/disk 不受影响仍锁 ask |
 | `categoryMode` | `standard` | 信任目录模式：`standard` 常规位置=workspace ∪ `trustedDirs`；`aggressive` 取消位置白名单，任意位置视为常规（敏感名 fuse、运行态硬拒、symlink 复检等危险度门不动；切换时 UI 明示放开范围） |
 | `trustedDirs` | [] | host-only 键：额外信任目录根（绝对路径数组），作为 standard 档位置白名单成员与两档共用的 symlink 复检区成员；凭据段/home/dshHome/critical 路径排除；仅 patch/YAML 可配，设置卡保存不会抹掉 |
-| `trustedDshSubpaths` | [] | host-only 键：允许 Auto 会话写入的 DSH_HOME 子目录（绝对路径数组）。默认空 = DSH_HOME 整树恒拒（`edit`/`write`/`apply_patch`/`str_replace_editor` 四路一致）；列出子树后该树获得与插件开发区同级放行，仅 patch/YAML 可配。清洗规则：非绝对路径、DSH_HOME 之外、等于 DSH_HOME 本身、覆盖 `sessions`/`plugins`/`dsh-web-token.txt`/`dsh-web-url.txt`/`credentials*`、归一化后落入 critical 树的条目全部 warn+丢弃。**开启前请知情**：技能文件会作为指令注入 agent 上下文，放开 `skills` = 允许 agent 持久改写自身行为约束；插件运行态文件（history/audit/learning…）恒拒与本键正交，不受影响 |
+| `trustedDshSubpaths` | [] | host-only 键：允许 Auto 会话写入的 DSH_HOME 子目录（绝对路径数组）。默认空 = DSH_HOME 整树恒拒（`edit`/`write`/`apply_patch`/`str_replace_editor` 四路一致）；列出子树后该树获得与插件开发区同级放行，仅 patch/YAML 可配。清洗规则：非绝对路径、DSH_HOME 之外、等于 DSH_HOME 本身、覆盖 `sessions`/`plugins`/`credentials*`、归一化后落入 critical 树的条目全部 warn+丢弃。**开启前请知情**：技能文件会作为指令注入 agent 上下文，放开 `skills` = 允许 agent 持久改写自身行为约束；插件运行态文件（history/audit/learning…）恒拒与本键正交，不受影响 |
 | `learningEnabled` | false | 确认制学习：同一操作被人工反复确认达阈值后自动放行（命中仍须过一次标准在线评审）；默认关 = 零行为差异。高风险/锁定四类/unknown/敏感路径永不参与；每根会话学习放行上限 50 次 |
 | `learningThreshold` | 3 | 触发学习放行所需的人工确认次数（保存时钳入 2–10）；同签名操作被人工拒绝即清零计数 |
 
