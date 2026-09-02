@@ -761,11 +761,11 @@ function SettingsSection() {
   // Per-card ownership: saving a card only persists the fields it owns,
   // overlaid on the last-saved baseline; other cards' unsaved edits are left
   // in the local draft and never accidentally persisted by another card.
-  const TOP_KEYS = ['enabled', 'autoSwitchPolicyToAsk', 'timeoutAction', 'llmReviewScope', 'llmTakeoverScope', 'defaultReviewMode', 'showSessionPanel', 'aiButtonPosition', 'onboardingMessageEnabled', 'autoModeNoticeEnabled']
+  const TOP_KEYS = ['enabled', 'autoSwitchPolicyToAsk', 'timeoutAction', 'llmReviewScope', 'llmTakeoverScope', 'defaultReviewMode', 'showSessionPanel', 'aiButtonPosition', 'autoModeNoticeEnabled']
   const TIMER_KEYS = ['breakerAntiHijackMs', 'lowRiskSeconds', 'mediumRiskSeconds', 'highRiskSeconds', 'maxConsecutiveDenials', 'maxTotalDenials', 'reviewWaitSeconds']
   const REVIEW_KEYS = ['reviewerProtocol', 'reviewerBaseUrl', 'reviewerModel']
   const SECURITY_KEYS = ['safetyPrompt', 'allowlist', 'denyList', 'humanOnlyList', 'rulesText', 'rulesDryRun']
-  const UTILITY_KEYS = ['redactResults', 'editDiffPreview', 'rejectGuidance']
+  const UTILITY_KEYS = ['onboardingMessageEnabled', 'redactResults', 'editDiffPreview', 'rejectGuidance']
   const LEARNING_KEYS = ['learningEnabled', 'learningThreshold']
   const pick = (keys: string[], from: Draft): Partial<Draft> => {
     const out: any = {}
@@ -1245,11 +1245,6 @@ function SettingsSection() {
       options: buttonPositionOptions(),
       onChange: (v: string) => { void instantSaveKey('aiButtonPosition', v as any) },
     })) : null,
-    row(t('settings.onboardingMessage'), React.createElement(CapsuleSelect, {
-      value: draft.onboardingMessageEnabled,
-      options: [{ label: t('option.off'), value: 'off' }, { label: t('option.on'), value: 'on' }],
-      onChange: (v: string) => { void instantSaveKey('onboardingMessageEnabled', v === 'on') },
-    })),
   )
 
   // Timers & breaker card body (the numeric/dangerous group).
@@ -1388,11 +1383,6 @@ function SettingsSection() {
       ),
       t('settings.rules.listsHint'),
     ),
-    row(t('settings.rules.editDiffPreview'), React.createElement(CapsuleSelect, {
-      value: draft.editDiffPreview,
-      options: onOffOptions(),
-      onChange: (v: any) => update({ editDiffPreview: v as 'on' | 'off' }),
-    }), t('settings.rules.editDiffPreviewHint')),
     field(t('settings.rules.rulesText'), React.createElement('textarea', {
       value: draft.rulesText,
       onChange: (e: any) => update({ rulesText: e.target.value }),
@@ -1471,6 +1461,11 @@ function SettingsSection() {
   )
 
   const buildUtilityBody = () => React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 10 } },
+    row(t('settings.onboardingMessage'), React.createElement(CapsuleSelect, {
+      value: draft.onboardingMessageEnabled,
+      options: [{ label: t('option.off'), value: 'off' }, { label: t('option.on'), value: 'on' }],
+      onChange: (v: any) => update({ onboardingMessageEnabled: v as 'on' | 'off' }),
+    }), t('settings.onboardingMessageHint')),
     row(t('settings.rules.redactResults'), React.createElement(CapsuleSelect, {
       value: draft.redactResults,
       options: onOffOptions(),
