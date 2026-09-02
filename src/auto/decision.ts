@@ -260,6 +260,7 @@ export const HOST_ONLY_KEYS = [
   'tempRoots',
   'trustedDirs',
   'trustedDshSubpaths',
+  'maintenanceDshPaths',
   'classifierTimeoutMs',
   'classifierMaxOutputTokens',
   'maxArgsChars',

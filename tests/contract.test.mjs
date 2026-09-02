@@ -2723,7 +2723,7 @@ import {
   signatureFor,
   validateLearningEntry,
 } from '../lib/auto/learning.js'
-import { RUNTIME_STATE_BASENAMES, runtimeStateTargetReason } from '../lib/auto/paths.js'
+import { RUNTIME_STATE_BASENAMES, runtimeStateTargetReason, hardDestructiveTargetReason } from '../lib/auto/paths.js'
 import { HOST_ONLY_KEYS } from '../lib/auto/decision.js'
 import { THRESHOLD_DEFAULTS } from '../lib/auto/constants.js'
 
@@ -3809,4 +3809,32 @@ test('shell DSH_HOME fuse does not over-block non-DSH_HOME writes', () => {
   assert.notEqual(nodeTmp.decision, 'deny', 'writes outside DSH_HOME must not be hard-denied')
   const nodeRead = assessShell(`node -e "require('./package.json')"`, 'bash', roots, artifacts, undefined)
   assert.notEqual(nodeRead.decision, 'deny', 'inline probes without writes must not be hard-denied')
+})
+
+// ── maintenanceDshPaths: operator maintenance outside guard hard-deny ────
+
+test('resolveConfig: maintenanceDshPaths defaults empty, drops non-absolute and outside entries', () => {
+  const clean = resolveConfig({
+    timeoutAction: 'reject',
+    maintenanceDshPaths: [`${DSH_HOME_FOR_TESTS}/skills`, 'rel/path', 'D:/elsewhere'],
+  })
+  assert.equal(clean.maintenanceDshPaths.length, 1, 'only the inside absolute entry survives')
+  assert.ok(String(clean.maintenanceDshPaths[0]).endsWith('skills'), 'stored normalized')
+  assert.deepEqual(resolveConfig({ timeoutAction: 'reject' }).maintenanceDshPaths, [], 'defaults to empty')
+})
+
+test('hardDestructiveTargetReason: maintenance opens NON-runtime-state DSH_HOME files only', () => {
+  const base = { workspace: 'C:/ws', home: 'C:/Users/u', dshHome: 'C:/Users/u/.dsh', tempRoots: [] }
+  const mRoots = { ...base, maintenanceDshPaths: ['C:/Users/u/.dsh/skills'] }
+  const skill = 'C:/Users/u/.dsh/skills/foo/SKILL.md'
+  assert.equal(hardDestructiveTargetReason(skill, mRoots), undefined, 'a skill file inside a maintenance opening is not hard-denied')
+  assert.match(hardDestructiveTargetReason(skill, base) ?? '', /DSH_HOME/, 'without an opening it stays hard-denied')
+  for (const stateFile of ['history.jsonl', 'audit.jsonl', 'learning.json']) {
+    assert.match(
+      hardDestructiveTargetReason(`C:/Users/u/.dsh/skills/${stateFile}`, mRoots) ?? '',
+      /DSH_HOME/,
+      `${stateFile} inside a maintenance opening stays hard-denied (runtime state)`,
+    )
+  }
+  assert.match(hardDestructiveTargetReason('C:/Users/u/.dsh/config.json', mRoots) ?? '', /DSH_HOME/, 'outside the opening still hard-denied')
 })

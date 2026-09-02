@@ -111,6 +111,8 @@ export interface Config {
   editDiffPreview: boolean
   /** Inject short guidance to the agent when a tool call is rejected. */
   rejectGuidance: boolean
+  /** DSH_HOME subtrees for operator maintenance (non-runtime-state files only). */
+  maintenanceDshPaths: string[]
   /** Per-category tri-state override; empty = inherit current behavior. */
   categoryPolicy: Record<string, 'auto' | 'ask' | 'deny'>
   /** Position-gate mode: 'standard' (current) | 'aggressive' (location-unrestricted, hardened). */
@@ -196,6 +198,11 @@ export const Config: z<Config> = z.object({
   // whitelist-only payload: source/category enums, never tool names or free
   // text). Off by default; rate-limited per callId and per 60s window.
   rejectGuidance: z.boolean().default(false),
+  // Operator maintenance openings: DSH_HOME subtrees where the guard's
+  // DSH_HOME hard-deny is relaxed for NON-runtime-state files (skills,
+  // profiles, docs…); runtime-state basenames stay hard-denied everywhere,
+  // and the shell DSH_HOME fuse is unaffected. Host-only, patch/YAML only.
+  maintenanceDshPaths: z.array(z.string()).default([]),
   // Per-category tri-state override: a dict accepts any key but resolveConfig
   // clamps unknown/LOCKED keys (see resolveConfig); empty = inherit.
   categoryPolicy: z.dict(z.union(['auto', 'ask', 'deny'] as const), z.string()).default({}),
@@ -329,6 +336,31 @@ export function resolveConfig(raw: Config): Config {
     }
     trustedDshSubpaths.push(normalized)
   }
+  // Maintenance openings: same absolute/inside/fenced discipline as
+  // trustedDshSubpaths. Only non-runtime-state files inside them are
+  // relaxed at the guard (see hardDestructiveTargetReason); runtime-state
+  // basenames and shell vectors never inherit the relief.
+  const maintenanceDshPaths: string[] = []
+  for (const dir of raw.maintenanceDshPaths ?? []) {
+    if (typeof dir !== 'string' || dir.trim() === '' || !/^(?:[A-Za-z]:[\\/]|\\\\|\/|~[\\/])/.test(dir)) {
+      console.warn(`[dsh-auto-approval-llm] ignoring non-absolute maintenanceDshPath "${String(dir)}"`)
+      continue
+    }
+    const normalized = normalizePath(dir, dshHome, home)
+    const normalizedDshHome = normalizePath(dshHome, dshHome, home)
+    if (!isWithin(normalizedDshHome, normalized) || normalized === normalizedDshHome) {
+      console.warn(`[dsh-auto-approval-llm] ignoring maintenanceDshPath outside DSH_HOME: ${normalized}`)
+      continue
+    }
+    const fenced = FENCED_DSH_SUBTREES
+      .map((name) => normalizePath(join(normalizedDshHome, name), dshHome, home))
+      .find((root) => isWithin(root, normalized) || isWithin(normalized, root))
+    if (fenced !== undefined) {
+      console.warn(`[dsh-auto-approval-llm] ignoring maintenanceDshPath covering a fenced DSH_HOME tree (${fenced}): ${normalized}`)
+      continue
+    }
+    maintenanceDshPaths.push(normalized)
+  }
   // Learning-threshold clamp: warn + clamp, never throw and never drop — a
   // wild value keeps the magnitude of the user's intent (mirrors the
   // categoryPolicy warn+normalize pattern, but numeric instead of tri-state).
@@ -364,6 +396,7 @@ export function resolveConfig(raw: Config): Config {
     privilegeAutoReview: raw.privilegeAutoReview === true,
     trustedDirs,
     trustedDshSubpaths,
+    maintenanceDshPaths,
     // Default-off (fail-closed): only an explicit true enables learning.
     learningEnabled: raw.learningEnabled === true,
     learningThreshold,
@@ -2123,6 +2156,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       dshHome: string
       tempRoots?: string[]
       allowedDshSubpaths?: string[]
+      maintenanceDshPaths?: string[]
       mode?: 'standard' | 'aggressive'
       trustedDirs?: string[]
     }
@@ -2135,6 +2169,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       normalizePath(join(roots.dshHome, 'plugins', 'dsh-auto-approval-llm'), roots.workspace, roots.home),
       ...(config.trustedDshSubpaths ?? []).map((dir) => normalizePath(dir, roots.workspace, roots.home)),
     ]
+    roots.maintenanceDshPaths = (config.maintenanceDshPaths ?? []).map((dir) => normalizePath(dir, roots.workspace, roots.home))
     roots.mode = config.categoryMode
     roots.trustedDirs = (config.trustedDirs ?? []).map((dir) => normalizePath(dir, roots.workspace, roots.home))
     return roots

@@ -179,7 +179,13 @@ export function hardDestructiveTargetReason(target, roots) {
     }
     if (normalized === roots.home)
         return `user home root ${normalized}`;
-    if (isWithin(roots.dshHome, normalized) && !(roots.allowedDshSubpaths ?? []).some(root => isWithin(root, normalized)))
+    // Operator maintenance openings relax the DSH_HOME hard-deny for
+    // NON-runtime-state files only: any plugin runtime-state basename inside
+    // a maintenance subtree stays hard-denied (the audit trail must not
+    // become writable through a maintenance path).
+    const inMaintenance = (roots.maintenanceDshPaths ?? []).some(root => isWithin(root, normalized))
+        && runtimeStateTargetReason(normalized) === undefined;
+    if (isWithin(roots.dshHome, normalized) && !(roots.allowedDshSubpaths ?? []).some(root => isWithin(root, normalized)) && !inMaintenance)
         return `DSH_HOME path ${normalized}`;
     if (isCriticalPath(normalized, roots))
         return `system or credential-critical path ${normalized}`;
