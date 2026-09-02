@@ -2576,6 +2576,13 @@ export function apply(ctx: Context, rawConfig: Config): void {
     sweepFollowPhase(Date.now())
   }, 1_000)
   ctx.effect(() => () => clearInterval(followSweep))
+  // Keep the trusted Host authorities fresh (webRuntime service values can
+  // change while a deployment stays up); the hot paths read the module-level
+  // array directly, so only this assignment mutates it.
+  const trustedHostRefresh = setInterval(() => {
+    trustedHosts = resolveTrustedHosts(anyCtx)
+  }, 5 * 60_000)
+  ctx.effect(() => () => clearInterval(trustedHostRefresh))
 
   anyCtx.on('tools/post-execute', (exec: any, result: any, next: any) => {
     sweepFeedbackMaps()

@@ -2959,6 +2959,21 @@ test('loadLearning: corrupt file / wrong root version / missing file degrade to 
   }
 })
 
+test('loadLearning: a corrupt file surfaces a console warning (tamper signal)', () => {
+  const f = learningFixture()
+  const warnings = []
+  const original = console.warn
+  console.warn = (message) => { warnings.push(String(message)) }
+  try {
+    writeFileSync(f.file, '{ this is not json')
+    assert.deepEqual(loadLearning(f.file).entries, {})
+    assert.ok(warnings.some((w) => w.includes('learning.json')), 'a corruption/tamper warning is emitted')
+  } finally {
+    console.warn = original
+    f.cleanup()
+  }
+})
+
 test('validateLearningEntry: poisoned metacharacters and timestamp violations are dropped', () => {
   const now = 1_000_000
   const good = { sigVersion: LEARNING_SIG_VERSION, workspace: 'c:/ws', kind: 'shell-bash', skeleton: 'git status', count: 3, firstAt: 900, lastAt: 999 }
