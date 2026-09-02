@@ -3196,27 +3196,27 @@ test('onboarding: copy stays free of countdown literals and unconditional-reject
 test('onboarding injection: only after the AUTO gate, through queueNotice, plugin source', () => {
   // Static anchor over the compiled host: the one-shot mark call must sit
   // inside the tools/pre-execute handler after the isAutoExecution gate, and
-  // the notice must reach the session only via queueNotice -> appendNotice.
+  // the notice must reach the agent only via queueNotice -> injectNotice.
   const src = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
   const preAt = src.indexOf("anyCtx.on('tools/pre-execute'")
   const gateAt = src.indexOf('if (!isAutoExecution(exec))', preAt)
   const markAt = src.indexOf('markFirstAutoSessionNotice(authorityKeyFor(exec))')
-  const queueAt = src.indexOf("queueNotice(exec.agent.session, exec.callId, onboardingNoticeText(config.timeoutAction, 'en'))")
+  const queueAt = src.indexOf("queueNotice(exec.agent, exec.callId, onboardingNoticeText(config.timeoutAction, 'en'))")
   assert.ok(preAt !== -1 && gateAt !== -1, 'AUTO gate must exist in pre-execute')
   assert.ok(markAt !== -1 && queueAt !== -1, 'injection must mark then queue')
   assert.ok(markAt > gateAt, 'injection must run only after the AUTO gate')
   assert.ok(queueAt > markAt, 'injection must go through the notice queue')
   // Channel invariant: the notice never fakes a user message.
   assert.ok(src.includes("source: { kind: 'plugin', plugin: 'dsh-auto-approval-llm' }"))
-  // Flush path is appendNotice (never a bare append): the notice queue's
-  // flush body must contain the appendNotice call, and both helpers exist
-  // module-level (appendNotice is defined before flushNotices consumes it).
+  // Flush path is injectNotice (never a bare session append): the notice
+  // queue's flush body must contain the injectNotice call, and both helpers
+  // exist module-level (injectNotice is defined before flushNotices uses it).
   const flushAt = src.indexOf('function flushNotices')
-  const appendCallAt = src.indexOf('appendNotice(session, text);')
-  const appendDefAt = src.indexOf('function appendNotice')
-  assert.ok(flushAt !== -1 && appendCallAt !== -1 && appendDefAt !== -1, 'flush helpers must exist')
-  assert.ok(appendCallAt > flushAt, 'flush must append through appendNotice')
-  assert.ok(appendDefAt < flushAt, 'appendNotice must be defined before the flush body')
+  const injectCallAt = src.indexOf('injectNotice(session, agent, text);')
+  const injectDefAt = src.indexOf('function injectNotice')
+  assert.ok(flushAt !== -1 && injectCallAt !== -1 && injectDefAt !== -1, 'flush helpers must exist')
+  assert.ok(injectCallAt > flushAt, 'flush must deliver through injectNotice')
+  assert.ok(injectDefAt < flushAt, 'injectNotice must be defined before the flush body')
   // Flush trigger: the reliable point is the tools/result event (scope carrier
   // keys on exec.agent, same chain as tools/pre-execute) — the session/event
   // subscription alone may be filtered for plugin contexts. Parallel tool
@@ -3509,4 +3509,62 @@ test('remote watcher: visibility restore re-probes after give-up (F1)', async ()
     globalThis.document = originalDocument
     console.warn = originalWarn
   }
+})
+
+// ── fast-path decisions must reach the recording surface ──────────────────
+// Regression: the `tools/pre-execute` fast path answers without entering the
+// `approval/request` answerer, where every other pushHistory site lives. Its
+// hard deny and both classifier verdicts therefore recorded nothing — with
+// the shipped defaults no path reached the panel at all, so a session that
+// reviewed and blocked several calls still read "Total 0 · No records".
+test('pre-execute fast path: the hard fuse and both classifier verdicts write history', () => {
+  const src = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
+  const preAt = src.indexOf("anyCtx.on('tools/pre-execute'")
+  const endAt = src.indexOf("anyCtx.on('tools/result'", preAt)
+  assert.ok(preAt !== -1 && endAt > preAt, 'the pre-execute handler must be locatable')
+  const pre = src.slice(preAt, endAt)
+  // The code-enforced fuse: a durable record AND a debug line, both written
+  // before the deny is handed back — it used to leave no trace whatsoever.
+  const hardRecordAt = pre.indexOf("source: 'hard-deny'")
+  const hardDebugAt = pre.indexOf("ev: 'hard-deny'")
+  const hardReturnAt = pre.indexOf('[auto-mode hard deny]')
+  assert.ok(hardRecordAt !== -1, 'the hard deny must push a history record')
+  assert.ok(hardDebugAt !== -1, 'the hard deny must leave a debug line')
+  assert.ok(hardRecordAt < hardReturnAt && hardDebugAt < hardReturnAt, 'both are written before the deny returns')
+  // Classifier plane: its own sources, so the model's autonomous decisions
+  // stay separable from the static fuse and from the answerer's records.
+  const classifierRecordAt = pre.indexOf("'classifier-allow'")
+  assert.ok(classifierRecordAt !== -1 && pre.includes("'classifier-deny'"), 'both classifier verdicts must be recorded')
+  assert.ok(classifierRecordAt < pre.indexOf('[auto-mode classifier deny]'), 'the record precedes the deny return')
+  assert.ok(classifierRecordAt > pre.indexOf("ev: 'classifier-decision'"), 'the record consumes the settled decision')
+  // Nothing is recomputed for the record: the risk tier and the reason are
+  // the exact values the decision was made and logged with.
+  assert.ok(pre.includes('llmRisk: riskTier'), 'the already-computed risk tier is reused')
+  assert.ok(pre.includes('llmReason: decision.reason'), 'the reviewer reason is carried into the record')
+  // 'ask' stays out: it continues into the answerer, which records the
+  // settled outcome downstream (recording here too would double-count it).
+  assert.ok(pre.includes("decision.decision !== 'ask'"), 'the ask branch must not be recorded twice')
+  assert.ok(!pre.includes("'classifier-ask'"), 'no ask source may exist on the fast path')
+})
+
+// ── notice delivery: agent inbox, never a direct session append ───────────
+// Regression: `session.append('user/message', …)` seats the notice at the
+// current log position, which can be between an assistant tool_calls message
+// and its tool/result. OpenAI-shaped providers reject that whole history
+// ("An assistant message with 'tool_calls' must be followed by tool messages
+// responding to each 'tool_call_id'"), and every later request in the session
+// then fails because the invalid history is replayed. An injected message is
+// claimed at a step boundary, so no flush timing can misplace it.
+test('approval notices are delivered through the agent inbox, never appended to the log', () => {
+  const src = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
+  assert.ok(!/session\.append\(\s*'user\/message'/.test(src), 'no notice may be written straight into the session log')
+  const injectAt = src.indexOf('function injectNotice')
+  assert.ok(injectAt !== -1, 'the notice delivery helper must exist')
+  const inject = src.slice(injectAt, injectAt + 900)
+  assert.ok(inject.includes('agent.inject(createUserMessage'), 'delivery goes through the agent inbox')
+  assert.ok(inject.includes("typeof agent.inject !== 'function'"), 'delivery stays best-effort when no agent is reachable')
+  // The queue survives for one reason only: a notice about a call that never
+  // ran (rejected/cancelled) must not reach the model.
+  assert.ok(src.includes('entry.seen'), 'the settle marker must still gate delivery')
+  assert.ok(src.includes('工具未执行，仅控制台通知'), 'an unsettled notice stays console-only')
 })

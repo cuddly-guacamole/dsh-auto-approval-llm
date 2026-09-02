@@ -687,16 +687,34 @@ async function reviewWithLLM(
   }
 }
 
-function appendNotice(session: any, text: string): void {
+/**
+ * Deliver a settled notice to the agent through its inbox.
+ *
+ * `agent.inject` — the same call `autoPolicyNotice` already uses — queues
+ * model-facing context that the driver claims at the nearest step boundary,
+ * so the message can never be seated between an assistant `tool_calls`
+ * message and its `tool/result`. A direct `session.append` could: it writes at
+ * whatever log position happens to be current, and OpenAI-shaped providers
+ * reject that whole history ("An assistant message with 'tool_calls' must be
+ * followed by tool messages responding to each 'tool_call_id'"), which then
+ * fails every later request in the session because the invalid history is
+ * replayed on each one. Timing therefore stops mattering: no flush point can
+ * put an injected notice in the wrong place.
+ */
+function injectNotice(session: any, agent: any, text: string): void {
   try {
-    session.append('user/message', createUserMessage({
+    if (!agent || typeof agent.inject !== 'function') {
+      debugLog({ ev: 'notice-inject', sessionId: session?.id ?? null, ok: false, error: 'agent-unavailable' })
+      return
+    }
+    agent.inject(createUserMessage({
       content: [{ type: 'text', text }],
       source: { kind: 'plugin', plugin: 'dsh-auto-approval-llm' },
-    }), { surfaceOp: 'append' })
-    debugLog({ ev: 'onboarding-append', sessionId: session?.id ?? null, ok: true })
+    }))
+    debugLog({ ev: 'notice-inject', sessionId: session?.id ?? null, ok: true })
   } catch (error) {
     // Notification is best-effort; never changes the approval outcome.
-    debugLog({ ev: 'onboarding-append', sessionId: session?.id ?? null, ok: false, error: error instanceof Error ? error.message : String(error) })
+    debugLog({ ev: 'notice-inject', sessionId: session?.id ?? null, ok: false, error: error instanceof Error ? error.message : String(error) })
   }
 }
 
@@ -741,20 +759,26 @@ export function onboardingNoticeText(timeoutAction: string, lang: 'zh' | 'en' = 
 }
 
 // ── approval notice queue ────────────────────────────────────────────────
-// Appending a user message between an assistant tool-calls message and its
-// tool result breaks the OpenAI-compatible message sequence (400
-// invalid_request_error). Queue the notice, mark it seen when the matching
-// tool/result lands, and flush at step/end — after every tool result of the
-// step, where an extra user message is legal.
-const pendingNotices = new Map<string, Map<string, { text: string; seen: boolean }>>()
+// Message-sequence safety is no longer this queue's job — `injectNotice`
+// hands the notice to the agent inbox, which can only land it at a step
+// boundary. What remains is the one thing delivery cannot decide on its own:
+// whether the tool the notice talks about actually ran. The entry is marked
+// seen when the matching tool/result lands, and the step/end flush settles
+// whatever is still pending; an unseen notice is never delivered to the model
+// (the call was rejected or cancelled, so "approved X" would be a lie).
+// The originating agent travels with the entry: it is the exact agent whose
+// turn the notice belongs to, and both flush points hold only the session.
+const pendingNotices = new Map<string, Map<string, { text: string; seen: boolean; agent: any }>>()
 
-function queueNotice(session: any, callId: string, text: string): void {
+function queueNotice(agent: any, callId: string, text: string): void {
+  const session = agent?.session
+  if (!session?.id) return
   let byCall = pendingNotices.get(session.id)
   if (!byCall) {
     byCall = new Map()
     pendingNotices.set(session.id, byCall)
   }
-  byCall.set(callId, { text, seen: false })
+  byCall.set(callId, { text, seen: false, agent })
 }
 
 /**
@@ -772,13 +796,13 @@ function flushNotice(session: any, callId: string): void {
   if (entry === undefined) return
   byCall.delete(callId)
   if (!entry.seen) {
-    // The tool never produced a result (rejected/cancelled): inserting a
-    // user message there would still break the tool-calls sequence, so keep
-    // it out of the session log.
+    // The tool never produced a result (rejected/cancelled): a notice about a
+    // call that never ran would only mislead the model, so it stays on the
+    // console and never reaches the conversation.
     console.log(`[dsh-auto-approval-llm] (工具未执行，仅控制台通知) ${entry.text}`)
     return
   }
-  appendNotice(session, entry.text)
+  injectNotice(session, entry.agent, entry.text)
 }
 
 function flushNotices(session: any): void {
@@ -790,15 +814,15 @@ function flushNotices(session: any): void {
   pendingNotices.delete(session.id)
   const queued = [...byCall.values()]
   debugLog({ ev: 'onboarding-flush', sessionId: session?.id ?? null, queued: queued.length, seen: queued.filter((e) => e.seen).length, dropped: queued.filter((e) => !e.seen).length })
-  for (const { text, seen } of byCall.values()) {
+  for (const { text, seen, agent } of byCall.values()) {
     if (!seen) {
-      // The tool never produced a result (rejected/cancelled): inserting a
-      // user message there would still break the tool-calls sequence, so keep
-      // it out of the session log.
+      // The tool never produced a result (rejected/cancelled): a notice about
+      // a call that never ran would only mislead the model, so it stays on
+      // the console and never reaches the conversation.
       console.log(`[dsh-auto-approval-llm] (工具未执行，仅控制台通知) ${text}`)
       continue
     }
-    appendNotice(session, text)
+    injectNotice(session, agent, text)
   }
 }
 
@@ -823,10 +847,13 @@ function watchNotices(ctx: any, getConfig: () => Config): void {
     }))
     debugLog({ ev: 'auto-mode-notice', sessionId: session?.id ?? null, preset })
   }
-  // Reliable flush point: `tools/result` — its scope carrier keys on
+  // Reliable settle point: `tools/result` — its scope carrier keys on
   // exec.agent, the same chain `tools/pre-execute` proves to reach plugin
   // contexts. A `session/event` subscription may be filtered away for plugin
-  // contexts (probes: injection fired, flush never did).
+  // contexts (probes: injection fired, flush never did). It fires when tool
+  // EXECUTION finishes, i.e. before the agent appends the `tool/result`
+  // session event — which is why it may only decide THAT a notice is due, and
+  // never where the message lands; the inbox handles the seating.
   ctx.on('tools/result', (exec: any) => {
     const session = exec?.agent?.session
     const callId = exec?.callId
@@ -2199,7 +2226,15 @@ export function apply(ctx: Context, rawConfig: Config): void {
       // covers every textual target — the remaining credential/system fence.
       const inTrustedZone = trustedZone.some(root => isWithin(root, textual))
       if (!isWithin(roots.workspace, textual) && !inTrustedZone && !aggressive) continue
-      const resolved = resolveDeepest(target)
+      // Resolve the NORMALIZED path, never the raw argument: `resolveDeepest`
+      // ends in `realpathSync`, which anchors a relative spelling ('hello.txt',
+      // '.') to `process.cwd()` — the dsh process's directory, not the session
+      // workspace. `dsh web` serves every workspace from one process, so the
+      // raw form turned each relative target into a realpath rooted outside the
+      // workspace and hard-denied it. Resolving `textual` keeps the guard's
+      // intent (compare the judged target against where it actually lands)
+      // while making the resolution independent of the process cwd.
+      const resolved = resolveDeepest(textual)
       if (resolved === undefined) continue
       const normalized = normalizePath(resolved, roots.workspace, roots.home)
       // Independent runtime-state re-check, orthogonal to zone escape: a
@@ -2240,19 +2275,37 @@ export function apply(ctx: Context, rawConfig: Config): void {
     // First-use onboarding: the first tool call of an AUTO root session (per
     // process lifetime) queues a one-shot greeting through the safe notice
     // queue — it only registers a pending entry, never touches the decision
-    // flow below, and the flush point (step/end) keeps it out of the
-    // tool-calls message-sequence window.
+    // flow below, and delivery goes through the agent inbox, which seats the
+    // message at a step boundary rather than inside the tool-calls window.
     if (config.onboardingMessageEnabled !== false && markFirstAutoSessionNotice(authorityKeyFor(exec))) {
       // The notice is context for the agent (whose reasoning runs in
       // English), so it is injected in English rather than the UI language;
       // it is not an interactive user banner. Can be turned off entirely.
-      queueNotice(exec.agent.session, exec.callId, onboardingNoticeText(config.timeoutAction, 'en'))
+      queueNotice(exec.agent, exec.callId, onboardingNoticeText(config.timeoutAction, 'en'))
       debugLog({ ev: 'onboarding-inject', sessionId: exec.agent?.session?.id ?? null, callId: exec.callId ?? null, action: config.timeoutAction })
     }
     const roots = rootsFor(exec)
     const assessment = assessTool(exec, roots, artifacts)
     if (assessment.plannedCreates !== undefined) artifacts.plan(exec, assessment.plannedCreates, roots)
-    if (assessment.decision === 'deny') return { kind: 'deny', reason: `[auto-mode hard deny] ${assessment.reason}` }
+    if (assessment.decision === 'deny') {
+      // The code-enforced fuse is the decision users trust most, so it must
+      // leave the same durable trace as every other terminal. Until this
+      // record existed a hard deny was visible only as the error string
+      // handed back to the model: no panel entry, no history.jsonl line, not
+      // even a debug one. Its own `hard-deny` source keeps the static fuse
+      // separable from the classifier plane; `category`/`riskTier` are
+      // derived further down this handler and are left off rather than
+      // recomputed here, since neither took part in this verdict.
+      pushHistory({
+        sessionId: authorityKeyFor(exec),
+        toolName: exec.name,
+        outcome: 'rejected',
+        source: 'hard-deny',
+        llmReason: assessment.reason,
+      })
+      debugLog({ ev: 'hard-deny', callId: exec.callId ?? null, toolName: exec.name, reason: sanitizeReviewReason(assessment.reason) })
+      return { kind: 'deny', reason: `[auto-mode hard deny] ${assessment.reason}` }
+    }
     // Audit-only trail: a shell command that cleared the hard fuse and may
     // still run (statically allowed or classifier-approved) while opening one
     // of the plugin's own runtime-state files for reading (approval history,
@@ -2307,6 +2360,27 @@ export function apply(ctx: Context, rawConfig: Config): void {
         ...(route === undefined ? {} : { route }),
       }, exec.signal)
       debugLog({ ev: 'classifier-decision', callId: exec.callId ?? null, toolName: exec.name, category, directive, mode: config.categoryMode, aggressiveAuto, riskTier, decision: decision.decision, reason: sanitizeReviewReason(decision.reason) })
+      // This fast path answers without ever entering the `approval/request`
+      // answerer, where every other pushHistory site lives — so an allow or a
+      // deny is recorded here or nowhere, and the panel stayed empty for the
+      // one plane where the model decides on its own. 'ask' is deliberately
+      // left out: it continues into the answerer, which records the settled
+      // outcome downstream (recording here too would double-count it). The
+      // sources are distinct from the answerer's so the two decision planes
+      // stay separable in the history.
+      if (decision.decision !== 'ask') {
+        pushHistory({
+          sessionId: authorityKeyFor(exec),
+          toolName: exec.name,
+          outcome: decision.decision === 'allow' ? 'allowed-once' : 'rejected',
+          source: decision.decision === 'allow' ? 'classifier-allow' : 'classifier-deny',
+          category,
+          mode: config.categoryMode,
+          llmDecision: decision.decision,
+          llmRisk: riskTier,
+          llmReason: decision.reason,
+        })
+      }
       if (decision.decision === 'allow') return next()
       if (decision.decision === 'deny') return { kind: 'deny', reason: `[auto-mode classifier deny] ${decision.reason}` }
       return { kind: 'ask', reason: `[auto-mode classifier asks] ${decision.reason}` }
@@ -2786,7 +2860,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
         debugLog({ ev: 'learn-cap', sessionId: sessionKey, allows: used })
       }
       if (config.notifyUser && req.callId !== undefined) {
-        queueNotice(req.agent.session, req.callId, `✅ 已学习放行（仍通过一次在线评审）"${req.toolName}"`)
+        queueNotice(req.agent, req.callId, `✅ 已学习放行（仍通过一次在线评审）"${req.toolName}"`)
       }
       pushHistory({
         sessionId: sessionKey,
@@ -3060,7 +3134,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
             // breaker is also never reset by an LLM allow: only a human
             // decision resets it (LOW/MEDIUM parity).
             reviewVerdicts.set(req.callId, { ...review, attempts })
-            if (config.notifyUser) queueNotice(req.agent.session, req.callId, `✅ Model approved "${toolName}"`)
+            if (config.notifyUser) queueNotice(req.agent, req.callId, `✅ Model approved "${toolName}"`)
             lowHandle.claim('allowed-once')
             reviewStates.set(req.callId, {
               risk: staticRisk,
