@@ -33,7 +33,7 @@ import { parseClassifierDecision } from '../lib/auto/classifier.js'
 import { MODEL_REASON_MAX_CHARS } from '../lib/auto/constants.js'
 import { RISK_NAME_PATTERN, RISK_REASON_PATTERN } from '../lib/auto/risk-tokens.js'
 import { buildAskReason, buildEditDiffText } from '../lib/auto/editdiff.js'
-import { Config, resolveConfig, sessionModelRoute, buildReviewSnapshot, markFirstAutoSessionNotice, onboardingTimeoutLabel, onboardingNoticeText, extractReviewerKeyLine, installFeedbackRoute, sessionEventList, currentPreset, trustedUserMessages } from '../lib/index.js'
+import { Config, resolveConfig, sessionModelRoute, buildReviewSnapshot, markFirstAutoSessionNotice, onboardingTimeoutLabel, onboardingNoticeText, extractReviewerKeyLine, installFeedbackRoute, sessionEventList, currentPreset, trustedUserMessages, officialRejectionIn } from '../lib/index.js'
 import { categorizeCommand } from '../lib/auto/category.js'
 
 test('parseClassifierDecision: valid allow/ask/deny', () => {
@@ -3906,4 +3906,20 @@ test('trustedUserMessages: no inbox and undefined authority behave like before',
     trustedUserMessages({ session: { events: [{ type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: 'plain' }] } }] } }),
     ['plain'],
   )
+})
+
+// ── officialRejectionIn: the structured isError denial shape (fix anchor) ──
+
+test('officialRejectionIn: official structured isError result is detected', () => {
+  const shaped = {
+    content: [{ type: 'text', text: 'Error: the user rejected tool "bash"' }],
+    isError: true,
+    error: { message: 'the user rejected tool "bash"' },
+  }
+  assert.equal(officialRejectionIn(shaped), true)
+  assert.equal(officialRejectionIn('Error: the user rejected tool "bash"'), true, 'plain string form still matches')
+  assert.equal(officialRejectionIn({ error: { message: 'the user rejected tool "bash"' } }), true)
+  assert.equal(officialRejectionIn({ content: [{ type: 'text', text: 'command ran fine' }] }), false)
+  assert.equal(officialRejectionIn(null), false)
+  assert.equal(officialRejectionIn('[object Object]'), false, '[object Object] from a naive String() must not match')
 })

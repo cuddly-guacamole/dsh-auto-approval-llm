@@ -895,6 +895,27 @@ export function buildRejectGuidanceText(source: string, category?: string): stri
 export const OFFICIAL_REJECT_GUIDANCE_TEXT =
   '[reject-guidance] Tool call rejected outside plugin control (user or official channel). Try a different approach or review the approval settings.'
 
+/**
+ * Whether a finished tool result carries the official "user rejected tool"
+ * denial. The official executioner builds it as a structured isError result
+ * (content text "Error: the user rejected tool ..." plus error.message), so a
+ * naive String() of the result object would yield "[object Object]" and never
+ * match. Pure; contract-tested.
+ */
+export function officialRejectionIn(result: unknown): boolean {
+  if (typeof result === 'string') return /user rejected tool/i.test(result)
+  const res = result as { content?: unknown; error?: { message?: unknown } } | null | undefined
+  const candidates: string[] = []
+  if (typeof res?.error?.message === 'string') candidates.push(res.error.message)
+  if (Array.isArray(res?.content)) {
+    for (const block of res.content) {
+      const b = block as { type?: string; text?: string }
+      if (b?.type === 'text' && typeof b.text === 'string') candidates.push(b.text)
+    }
+  }
+  return candidates.some((text) => /user rejected tool/i.test(text))
+}
+
 export function maybeInjectRejectGuidance(agent: unknown, callId: unknown, config: { rejectGuidance?: boolean }, text: string): void {
   if (!config?.rejectGuidance || !agent || typeof callId !== 'string') return
   const sessionId = (agent as any)?.session?.id ?? ''
@@ -989,7 +1010,7 @@ function watchNotices(ctx: any, getConfig: () => Config): void {
     // rejectGuidance: the official approval channel translates user declines
     // into a bare denial ("the user rejected tool ...") with no rationale;
     // spot that shape and hand the agent a whitelist-only guidance note.
-    if (getConfig().rejectGuidance && /user rejected tool/i.test(String(exec?.result ?? ''))) {
+    if (getConfig().rejectGuidance && officialRejectionIn(exec?.result)) {
       maybeInjectRejectGuidance(exec?.agent, exec?.callId, getConfig(), OFFICIAL_REJECT_GUIDANCE_TEXT)
     }
     const session = exec?.agent?.session
