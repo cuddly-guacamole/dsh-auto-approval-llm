@@ -476,6 +476,19 @@ function destructiveNestedSource(source) {
     return /(?:^|[\s;&|()])(?:rm|rmdir|unlink|shred|remove-item|del|erase)(?:\s|$)|\b(?:shutil\.rmtree|os\.(?:remove|unlink|rmdir|removedirs)|file\.(?:delete|unlink)|directory\.delete)\s*\(|\.(?:rm|rmsync|unlink|unlinksync|rmdir|rmdirsync|delete)\s*\(|\b(?:delete\s+from|drop\s+(?:table|database)|truncate\s+table)\b/i.test(source);
 }
 /**
+ * Whether a visible nested-execution source combines a file-write function
+ * call with a DSH_HOME path literal. Static heuristic: catches the common
+ * `node -e "fs.writeFileSync('~/.dsh/…')"` shape while leaving dynamic path
+ * construction to the LLM classifier. Closes the node -e / python -c write
+ * vectors to DSH_HOME.
+ */
+export function nestedSourceWritesToDshHome(source, roots) {
+    if (typeof source !== 'string' || source.length === 0)
+        return false;
+    const WRITE_FN = /(?:writefilesync|writefile|createwritestream|appendfilesync|appendfile|copyfilesync|cpsync|copy\s*\(|open\s*\([^)]*['"][wa]['"]|io\.open|\.write\s*\(|os\.write|path\s*\(\s*['"]|file\s*\(\s*['"]\s*[,]\s*['"]w)|(?:shutil\.copy|shutil\.move|open\s*\([^)]*['"]w['"])/i;
+    return WRITE_FN.test(source) && dshHomeExfil(source, roots) === true;
+}
+/**
  * Bash expands `~name/…` (and `~name`) to another user's home directory — a
  * location no configured root can statically contain. Such operands must never
  * count as routine workspace/temp paths, in reads or in writes. Plain `~`,
@@ -832,6 +845,16 @@ function writeOperandCandidates(words) {
     }
     return candidates;
 }
+// Unconditional DSH_HOME write fuse for shell vectors. Structured tools
+// (edit/write/apply_patch/…) honor trustedDshSubpaths openings; shell write
+// targets are extracted by a shallow lexer that cannot verify shell
+// semantics (nested execution, here-docs, process substitution), so shell
+// writes to DSH_HOME stay hard-denied even inside an opening.
+function shellWriteToDshHomeDenied(normalizedPath, roots) {
+    if (isWithin(roots.dshHome, normalizedPath))
+        return 'shell write to DSH_HOME is not permitted by auto mode — use the write or edit tool instead';
+    return undefined;
+}
 function segmentHardDenyReason(segment, shell, roots) {
     for (const target of segment.writeTargets) {
         if (isNullSink(target, shell))
@@ -847,6 +870,9 @@ function segmentHardDenyReason(segment, shell, roots) {
         const stateReason = runtimeStateWriteReason(normalizePath(target.text, roots.workspace, roots.home), roots);
         if (stateReason !== undefined)
             return `redirection targets ${stateReason}`;
+        const dshReason = shellWriteToDshHomeDenied(normalizePath(target.text, roots.workspace, roots.home), roots);
+        if (dshReason !== undefined)
+            return `redirection targets ${dshReason}`;
     }
     const unwrapped = unwrapCommand(segment.words);
     const name = commandName(unwrapped.words[0]?.text ?? '');
@@ -893,9 +919,19 @@ function segmentHardDenyReason(segment, shell, roots) {
     if (writeOperands !== null) {
         for (const operand of writeOperands) {
             if (operand.dynamic || operand.glob) continue;
-            const stateReason = runtimeStateWriteReason(normalizePath(operand.text, roots.workspace, roots.home), roots);
+            const normalized = normalizePath(operand.text, roots.workspace, roots.home);
+            // Runtime-state files keep their precise reason (zone basename
+            // match), then the unconditional DSH_HOME fuse covers the rest of
+            // DSH_HOME. Only explicit path shapes are fused: bare flag values
+            // like `truncate -s 0`'s `0` are not write targets.
+            const stateReason = runtimeStateWriteReason(normalized, roots);
             if (stateReason !== undefined)
                 return `${name} targets ${stateReason}`;
+            if (looksLikeExplicitPath(operand.text)) {
+                const dshReason = shellWriteToDshHomeDenied(normalized, roots);
+                if (dshReason !== undefined)
+                    return `${name} targets ${dshReason}`;
+            }
         }
     }
     if (name === 'find' && findHasDestructiveAction(unwrapped.words)) {
@@ -1010,6 +1046,8 @@ function assessSegment(segment, shell, roots, artifacts, owner) {
             return manualReview('opaque nested execution requires manual review');
         if (destructiveNestedSource(nested.source))
             return manualReview('nested deletion requires manual review');
+        if (nestedSourceWritesToDshHome(nested.source, roots))
+            return denied('nested execution writes to DSH_HOME — use the write or edit tool instead');
         return semanticReview('visible nested or inline-code execution requires independent classification');
     }
     const base = classifyEffectiveCommand(name, words, segment, shell, roots, artifacts, owner, unwrapped.dynamicInput);
@@ -1120,6 +1158,12 @@ export function assessShell(source, shell, roots, artifacts, owner) {
             : semanticReview(`${shell} command requires independent classification because it cannot be read statically: ${decomposition.reason}`);
     }
     const assessments = decomposition.segments.map(segment => assessSegment(segment, shell, roots, artifacts, owner));
+    // A segment-level hard deny (e.g. the nested-execution DSH_HOME write
+    // fuse) must propagate to the whole line, not degrade into a classifier
+    // ask via the generic merge below.
+    const deniedSegment = assessments.find(assessment => assessment.decision === 'deny');
+    if (deniedSegment !== undefined)
+        return deniedSegment;
     const blocked = assessments.find(assessment => assessment.decision === 'ask' && !assessment.classifierEligible);
     if (blocked !== undefined)
         return blocked;

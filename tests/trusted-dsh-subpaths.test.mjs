@@ -15,6 +15,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { assessTool, hardDenyReason } from '../lib/auto/policy.js'
+import { assessShell, hardDenyShellReason } from '../lib/auto/shell.js'
 
 const HOME = 'C:/Users/u'
 const DSH_HOME = 'C:/Users/u/.dsh'
@@ -109,4 +110,28 @@ test('an opening does not grant deletion or reach outside DSH_HOME', () => {
   const removal = assessTool({ name: 'delete_file', arguments: { path: SKILL } }, roots, artifacts)
   assert.equal(removal.decision, 'ask', 'deletion is reviewed, not allowed by the write opening')
   assert.match(removal.reason, /destructive operation/)
+})
+
+// ── shell 写 DSH_HOME 收口：开口不影响 shell 向量（结构化工具才享用） ──
+
+test('shell writes to DSH_HOME stay hard-denied even inside an opening', () => {
+  const roots = dshRoots(['C:/Users/u/.dsh/skills'])
+  for (const cmd of [
+    `cp /tmp/x ${SKILL}`,
+    `tee ${SKILL}`,
+    `sed -i s/a/b/ ${SKILL}`,
+    `mkdir -p C:/Users/u/.dsh/skills/new`,
+    `touch C:/Users/u/.dsh/skills/foo.txt`,
+  ]) {
+    assert.match(hardDenyShellReason(cmd, 'bash', roots) ?? '', /DSH_HOME/, `${cmd} inside an opening stays hard-denied`)
+  }
+  assert.match(hardDenyShellReason(`echo hi > ${SKILL}`, 'bash', roots) ?? '', /DSH_HOME/, 'echo > inside an opening stays hard-denied')
+})
+
+test('shell writes outside DSH_HOME are not denied by this fuse', () => {
+  const roots = dshRoots(['C:/Users/u/.dsh/skills'])
+  for (const cmd of [`cp /tmp/x /tmp/y`, `echo hi > /tmp/out.txt`]) {
+    const reason = hardDenyShellReason(cmd, 'bash', roots)
+    if (reason) assert.ok(!reason.includes('DSH_HOME'), `${cmd} must not be denied for DSH_HOME`)
+  }
 })

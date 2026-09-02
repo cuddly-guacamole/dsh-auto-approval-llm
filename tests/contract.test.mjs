@@ -1764,8 +1764,10 @@ test('assessShell: same runtime-state basename outside the zone is NOT over-bloc
   // Project-local history.jsonl in the workspace is not plugin state: it is
   // neither hard-denied nor auto-allowed — the redirection asks instead.
   assert.equal(assessShell('echo x > C:/ws/history.jsonl', 'bash', roots, HO(), undefined).decision, 'ask')
-  // Zone non-state source files keep the ordinary semantic path (not deny, not auto-allow).
-  assert.equal(assessShell(`echo x > ${ZONE}/src/index.ts`, 'bash', roots, HO(), undefined).decision, 'ask')
+  // Zone files sit inside DSH_HOME: since the shell write-vector closure,
+  // the shell DSH_HOME fuse hard-denies them (structured tools keep the
+  // opening; shell vectors do not inherit it).
+  assert.equal(assessShell(`echo x > ${ZONE}/src/index.ts`, 'bash', roots, HO(), undefined).decision, 'deny')
 })
 
 // ── POSIX write-vector heads (tee/dd/sed -i/truncate/install) join the fuse ──
@@ -3764,4 +3766,47 @@ test('approval notices are delivered through the agent inbox, never appended to 
   // ran (rejected/cancelled) must not reach the model.
   assert.ok(src.includes('entry.seen'), 'the settle marker must still gate delivery')
   assert.ok(src.includes('工具未执行，仅控制台通知'), 'an unsettled notice stays console-only')
+})
+
+// ── shell 写 DSH_HOME 收口：无 shell 词法可绕过的硬拒 ───────────────────
+
+test('hardDenyShellReason: write-head operands targeting DSH_HOME are hard-denied', () => {
+  const roots = { workspace: 'C:/ws', home: 'C:/Users/u', dshHome: 'C:/Users/u/.dsh', tempRoots: [] }
+  const t = 'C:/Users/u/.dsh/skills/foo/SKILL.md'
+  for (const cmd of [
+    `cp /tmp/x ${t}`,
+    `tee ${t}`,
+    `sed -i s/a/b/ ${t}`,
+    `dd if=/tmp/x of=${t}`,
+    `mkdir -p C:/Users/u/.dsh/skills/new`,
+    `touch C:/Users/u/.dsh/foo.txt`,
+    `install -D /tmp/x C:/Users/u/.dsh/bin/tool`,
+    `truncate -s 0 C:/Users/u/.dsh/foo.log`,
+  ]) {
+    assert.match(hardDenyShellReason(cmd, 'bash', roots) ?? '', /DSH_HOME/, `${cmd} must be hard-denied`)
+  }
+})
+
+test('assessShell: nested execution writing to DSH_HOME is hard-denied, not classifier-eligible', () => {
+  const roots = { workspace: 'C:/ws', home: 'C:/Users/u', dshHome: 'C:/Users/u/.dsh', tempRoots: [] }
+  const artifacts = { has: () => false }
+  for (const src of [
+    `node -e "require('fs').writeFileSync('C:/Users/u/.dsh/foo', 'bar')"`,
+    `python -c "open('C:/Users/u/.dsh/foo', 'w').write('bar')"`,
+  ]) {
+    const a = assessShell(src, 'bash', roots, artifacts, undefined)
+    assert.equal(a.decision, 'deny', `${src} must be denied`)
+    assert.equal(a.classifierEligible, false, 'must not reach the classifier')
+  }
+})
+
+test('shell DSH_HOME fuse does not over-block non-DSH_HOME writes', () => {
+  const roots = { workspace: 'C:/ws', home: 'C:/Users/u', dshHome: 'C:/Users/u/.dsh', tempRoots: [] }
+  const artifacts = { has: () => false }
+  assert.equal(hardDenyShellReason('cp /tmp/x /tmp/y', 'bash', roots), undefined)
+  assert.equal(hardDenyShellReason('echo hi > /tmp/test.txt', 'bash', roots), undefined)
+  const nodeTmp = assessShell(`node -e "require('fs').writeFileSync('/tmp/test', 'bar')"`, 'bash', roots, artifacts, undefined)
+  assert.notEqual(nodeTmp.decision, 'deny', 'writes outside DSH_HOME must not be hard-denied')
+  const nodeRead = assessShell(`node -e "require('./package.json')"`, 'bash', roots, artifacts, undefined)
+  assert.notEqual(nodeRead.decision, 'deny', 'inline probes without writes must not be hard-denied')
 })

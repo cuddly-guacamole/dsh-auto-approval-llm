@@ -298,9 +298,12 @@ test('G2 tilde-user expansion: reads and writes via `~name/` are never routine',
   // …and ordinary workspace reads stay on the static allow path, while a
   // workspace write through a redirection asks (it never takes that path).
   assert.equal(shell('cat ./notes.md').decision, 'allow')
+  // Shell writes into DSH_HOME (the zone roots here sit inside ~/.dsh) are
+  // hard-denied by the shell DSH_HOME fuse — the 2026-09 shell write-vector
+  // closure narrowed this from ask to deny.
   const redirected = shell('echo hi > out.txt', zoneRoots)
-  assert.equal(redirected.decision, 'ask')
-  assert.equal(redirected.classifierEligible, true)
+  assert.equal(redirected.decision, 'deny')
+  assert.match(redirected.reason ?? '', /DSH_HOME/)
 })
 
 test('G3 flag tokens: embedded absolute paths are judged like bare operands', () => {
