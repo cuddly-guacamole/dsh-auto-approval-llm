@@ -37,8 +37,8 @@ src/
 tests/
 ├─ contract.test.mjs / category.test.mjs / classifier.test.mjs / redact.test.mjs
 ├─ editdiff.test.mjs / probe.test.mjs / history-robust.test.mjs / audit.test.mjs
-├─ approvals-protocol.test.mjs / contract-devloop.test.mjs / trusted-dsh-subpaths.test.mjs
-└─ 合计 578 例（node --test 全绿基线）
+├─ approvals-protocol.test.mjs / contract-devloop.test.mjs / trusted-dsh-subpaths.test.mjs / posix-platform.test.mjs
+└─ 合计 591 例（node --test 全绿基线）
 scripts/
 ├─ build.sh             （DSH 源码仓库布局）tsc 编译 src→lib
 ├─ audit-query.mjs      审计查询 CLI

@@ -72,7 +72,7 @@ hero:
 
 <div class="navgrid">
   <a class="navcard" href="/dsh-auto-approval-llm/14-code-map"><span class="nn">14</span><span class="nt">代码地图与构建发布</span><span class="nd">tsc + tsdown + patch 层</span></a>
-  <a class="navcard" href="/dsh-auto-approval-llm/15-quality"><span class="nn">15</span><span class="nt">质量保障体系</span><span class="nd">578 测试 + 运行时验证</span></a>
+  <a class="navcard" href="/dsh-auto-approval-llm/15-quality"><span class="nn">15</span><span class="nt">质量保障体系</span><span class="nd">591 测试 + 运行时验证</span></a>
   <a class="navcard" href="/dsh-auto-approval-llm/16-axioms"><span class="nn">16</span><span class="nt">设计公理</span><span class="nd">为什么不追求完美</span></a>
   <a class="navcard" href="/dsh-auto-approval-llm/19-platform-support"><span class="nn">19</span><span class="nt">平台支持与反馈</span><span class="nd">Windows 基线 · 非 Windows 欢迎反馈</span></a>
 </div>
