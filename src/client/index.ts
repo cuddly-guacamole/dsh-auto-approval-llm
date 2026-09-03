@@ -118,8 +118,16 @@ function hijackApprovalButtons(): () => void {
         reject.textContent = `${originalText(reject)}${suffix}`
       }
       if (remaining <= 0) {
+        // Expired: stop ticking but KEEP the key registered so a later scan
+        // cannot re-arm this panel with the marker's static seconds — the
+        // countdown restarted at its full value on every DOM mutation before
+        // (R008). The live-keys sweep in scan() releases the key when the
+        // panel actually leaves the DOM. Restore the clean button text so the
+        // stale "（0s）" suffix does not linger on a panel the host already
+        // resolved.
+        if (info.action === 'allow' && allow) allow.textContent = originalText(allow)
+        else if (reject) reject.textContent = originalText(reject)
         clearInterval(interval)
-        intervals.delete(key)
       }
     }
     interval = setInterval(apply, 200)
