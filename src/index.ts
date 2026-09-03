@@ -515,6 +515,8 @@ interface ReviewSnapshot {
   system: string
   route?: { provider: string; model: string }
   baseUrl?: string
+  /** Reviewer model fixed at snapshot time (online attempts re-read it otherwise). */
+  model?: string
   protocol?: 'openai' | 'anthropic'
   apiKey?: string
 }
@@ -573,8 +575,10 @@ export async function buildReviewSnapshot(
   const system = assembleReviewerSystem(config.safetyPrompt, config.rulesText)
 
   // Online reviewer: a direct HTTP call to the configured OpenAI-compatible
-  // (chat/completions) or Anthropic (messages) endpoint. The API key is
-  // resolved once into the snapshot (never cached beyond one review).
+  // (chat/completions) or Anthropic (messages) endpoint. The API key and the
+  // model name are resolved once into the snapshot (never cached beyond one
+  // review), so a settings change mid-review cannot steer a retry toward a
+  // different endpoint or model.
   if (String(config.reviewerBaseUrl ?? '').trim().length > 0) {
     const validated = validateReviewerBaseUrl(config.reviewerBaseUrl ?? '')
     if (!validated.ok) {
@@ -611,6 +615,7 @@ export async function buildReviewSnapshot(
         payload,
         system,
         baseUrl: validated.baseUrl,
+        model: String(config.reviewerModel ?? '').trim(),
         protocol: config.reviewerProtocol === 'anthropic' ? 'anthropic' : 'openai',
         apiKey,
       }
@@ -688,7 +693,7 @@ async function runReviewAttempt(
       signal,
       redirect: 'error',
       body: JSON.stringify({
-        model: config.reviewerModel || undefined,
+        model: snapshot.model || undefined,
         max_tokens: 256,
         system: snapshot.system,
         messages: [{ role: 'user', content: snapshot.payload }],
@@ -708,7 +713,7 @@ async function runReviewAttempt(
       signal,
       redirect: 'error',
       body: JSON.stringify({
-        model: config.reviewerModel || undefined,
+        model: snapshot.model || undefined,
         max_tokens: 256,
         messages: [
           { role: 'system', content: snapshot.system },
