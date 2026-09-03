@@ -471,6 +471,37 @@ function routineInlineProbe(name, source) {
     }
     return false;
 }
+/**
+ * git `rev:path` object-read operands (`git show HEAD:.env`, `HEAD:src/x`, or
+ * the index form `:./file`) bypass the bare-word path gate: `HEAD:.env` is not
+ * an explicit-path spelling, so `explicitPaths` never sees the `.env` part and
+ * an empty `.every()` over the extracted paths short-circuits to a static
+ * allow. Extract colon operands and judge the path portion with the same
+ * routine / protected / sensitive gates as a bare path. Returns the offending
+ * operand text or undefined.
+ */
+function gitObjectReadProtected(words, roots) {
+    for (const word of words) {
+        const text = word?.text ?? word;
+        if (typeof text !== 'string' || text === '' || text.startsWith('-'))
+            continue;
+        const colon = text.indexOf(':');
+        if (colon < 0)
+            continue;
+        // `:./file` is the index form; `rev:path` splits on the first colon
+        // (a rev can be `HEAD`, `HEAD~3`, `abc123`, `v1.0.0`).
+        const pathPart = colon === 0 ? text.slice(1) : text.slice(colon + 1);
+        if (pathPart === '' || pathPart.startsWith(':'))
+            continue;
+        const normalized = normalizePath(pathPart, roots.workspace, roots.home);
+        if (isProtectedProjectPath(normalized, roots)
+            || !isEffectiveRoutine(normalized, roots)
+            || sensitiveBasenameAt(normalized, roots)) {
+            return text;
+        }
+    }
+    return undefined;
+}
 /** Deletion hidden behind an interpreter stays outside classifier authority. */
 function destructiveNestedSource(source) {
     return /(?:^|[\s;&|()])(?:rm|rmdir|unlink|shred|remove-item|del|erase)(?:\s|$)|\b(?:shutil\.rmtree|os\.(?:remove|unlink|rmdir|removedirs)|file\.(?:delete|unlink)|directory\.delete)\s*\(|\.(?:rm|rmsync|unlink|unlinksync|rmdir|rmdirsync|delete)\s*\(|\b(?:delete\s+from|drop\s+(?:table|database)|truncate\s+table)\b/i.test(source);
@@ -1107,6 +1138,12 @@ function classifyEffectiveCommand(name, words, segment, shell, roots, artifacts,
             : 'find executes or writes through a non-read-only action and requires independent classification');
     }
     if (!redirectedToFile && readOnlyCommand(name, words, shell)) {
+        // git `rev:path` operands (`HEAD:.env`) hide a path inside a colon
+        // token that `explicitPaths` never lifts; judge them with the same
+        // gates so the read-only fast path cannot expose protected content.
+        const objectRead = name === 'git' ? gitObjectReadProtected(words, roots) : undefined;
+        if (objectRead !== undefined)
+            return semanticReview(`git object read references a protected or external path: ${objectRead}`);
         return readPathsAreRoutine(operands, roots)
             ? allowed('static read-only command inside the workspace or temporary area')
             : semanticReview('read-only command references a protected or external path');
