@@ -55,4 +55,4 @@ verify-*.mjs            3 个运行时验证脚本（verify-auth / verify-config
 
 **bundle 层（patch.yml）**：权限预设（auto = danger-full-access + approval ask，**禁飙到 never**）+ 装包配置覆盖（`autoSwitchPolicyToAsk:true`；`humanOnlyList` 保持代码默认空）。
 
-**exports**：`.`（lib/index.js + types）、`./client`（lib/client.js + types contact）、`./package.json`；peerDeps 全覆盖（cordis ≥4<5、dsh-llm/dsh-tools ≥0.1.0-rc.0<2、schemastery ^3.18.0）── 0.1.1-rc.1 兼容性已验。
+**exports**：`.`（lib/index.js + types）、`./client`（lib/client.js + types contact）、`./package.json`；peerDeps 全覆盖（cordis ≥4.0.1<5、dsh-llm/dsh-tools ≥0.1.2-rc.1<2、schemastery ^3.18.0）── 0.1.2-rc.1 兼容性已验（0.0.16 起仅支持 rc.1 契约，下限随兼容层移除同步提高）。
