@@ -817,24 +817,28 @@ function writesThroughOperands(name, words) {
         return sedEditsInPlace(words);
     return false;
 }
-/** Explicit path operands of a command word list that act as write targets. */
+/**
+ * Explicit path operands of a command word list that act as write targets.
+ * cp/mv/install: the destination is the last non-flag operand; the earlier
+ * ones are sources (reads) and must not be denied as writes. `-t DEST` /
+ * `--target-directory=DEST` invert the operand order: their value IS the
+ * destination no matter where it sits. Dynamic/glob operands are KEPT in the
+ * result: callers must judge them (a dynamic target cannot be statically
+ * proven inside the routine roots, and `$HOME` spellings are hard-denied
+ * exactly like the redirection and deletion branches do).
+ */
 function writeOperandCandidates(words) {
-    // cp/mv: the destination is the last non-flag operand; the earlier ones
-    // are sources (reads) and must not be denied as writes.
     const candidates = [];
     for (let index = 1; index < words.length; index += 1) {
         const word = words[index];
-        if (word.dynamic || word.glob || word.text.startsWith('-')) continue;
+        if (word.text.startsWith('-')) continue;
         if (index === words.length - 1) candidates.push(word);
     }
-    // `-t DEST` / `--target-directory=DEST` invert the operand order: their
-    // value IS the destination no matter where it sits, so a runtime-state or
-    // otherwise protected target must be judged from it too.
     for (let index = 1; index < words.length; index += 1) {
         const text = words[index].text;
         if (text === '-t' || text === '--target-directory') {
             const value = words[index + 1];
-            if (value !== undefined && !value.dynamic && !value.glob)
+            if (value !== undefined)
                 candidates.push(value);
         }
         else if (text.startsWith('--target-directory=')) {
@@ -918,7 +922,22 @@ function segmentHardDenyReason(segment, shell, roots) {
     }
     if (writeOperands !== null) {
         for (const operand of writeOperands) {
-            if (operand.dynamic || operand.glob) continue;
+            if (operand.dynamic) {
+                // Mirror the redirection / deletion branches: a dynamic write
+                // target spelling the user home is an unconditional hard deny
+                // (a compromised model reaches for `$HOME/.ssh/…` in practice).
+                if (dynamicHomeTarget(operand.text))
+                    return `dynamic ${name} targeting the user home is not permitted`;
+                continue;
+            }
+            if (operand.glob) {
+                // A globbed write target cannot be proven inside the routine
+                // roots; judge its deepest statically-readable prefix.
+                const reason = hardDestructiveTargetReason(globRoot(operand.text), roots);
+                if (reason !== undefined)
+                    return `${name} targets ${reason}`;
+                continue;
+            }
             const normalized = normalizePath(operand.text, roots.workspace, roots.home);
             // Runtime-state files keep their precise reason (zone basename
             // match), then the unconditional DSH_HOME fuse covers the rest of
@@ -1114,6 +1133,21 @@ function classifyEffectiveCommand(name, words, segment, shell, roots, artifacts,
             : allowed('create exact project-local artifacts', creation.paths);
     }
     if (shell === 'bash' && (['cp', 'mv'].includes(name) || writesThroughOperands(name, words))) {
+        // The write destinations must be statically readable before a static
+        // allow: a dynamic/globbed destination (e.g. `cp ./x "$DEST"` or
+        // `tee ./a "$FOO"`) cannot be proven inside the routine roots — and a
+        // `$HOME` spelling is already hard-denied in segmentHardDenyReason.
+        // Only the destination operands matter here (sources are reads and
+        // may be dynamic without endangering the write).
+        const writeTargets = name === 'dd'
+            ? ddOutputTargets(words)
+            : name === 'sed'
+                ? sedInPlaceTargets(words)
+                : name === 'install' || name === 'cp' || name === 'mv'
+                    ? writeOperandCandidates(words)
+                    : words.slice(1).filter(word => !word.text.startsWith('-'));
+        if (writeTargets.some(word => word.dynamic || word.glob))
+            return semanticReview('file write target is dynamic or globbed and cannot be statically proven inside the routine roots');
         // Flags stay in the list: explicitPaths lifts embedded values out of
         // them, so `--target-directory=C:/abs` is judged like a bare operand.
         // dd hides its destination inside `of=…`, so the extracted output
