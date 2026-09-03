@@ -3920,3 +3920,16 @@ test('officialRejectionIn: official structured isError result is detected', () =
   assert.equal(officialRejectionIn(null), false)
   assert.equal(officialRejectionIn('[object Object]'), false, '[object Object] from a naive String() must not match')
 })
+
+test('officialRejectionIn: successful payloads containing the bare phrase are NOT rejections (mis-injection guard)', () => {
+  // 2026-09-03 regression: read/grep/command output that merely quotes the
+  // official phrase ("user rejected tool" appears in docs, source comments,
+  // skill text) used to be treated as a rejection, injecting phantom
+  // OFFICIAL_REJECT_GUIDANCE_TEXT — 13 mis-injections, zero real rejections.
+  assert.equal(officialRejectionIn({ content: [{ type: 'text', text: 'check the "user rejected tool" docs line' }] }), false, 'file content quoting the phrase')
+  assert.equal(officialRejectionIn({ content: [{ type: 'text', text: 'grep hit: the user rejected tool "bash" is official wording' }] }), false, 'grep output quoting the phrase')
+  assert.equal(officialRejectionIn('output: the user rejected tool "bash" appears in SKILL.md'), false, 'bare string without the Error: prefix')
+  assert.equal(officialRejectionIn({ content: [{ type: 'text', text: 'Error: the user rejected tool "bash"' }] }), true, 'content text with official Error: prefix still matches')
+  assert.equal(officialRejectionIn({ isError: true, content: [{ type: 'text', text: 'Error: command not found' }] }), false, 'isError without the phrase must not match')
+  assert.equal(officialRejectionIn({ content: [{ type: 'text', text: 'Error: the user rejected tool "bash" (see docs)' }] }), true, 'official prefix survives trailing context')
+})

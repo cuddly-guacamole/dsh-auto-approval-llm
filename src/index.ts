@@ -907,17 +907,28 @@ export const OFFICIAL_REJECT_GUIDANCE_TEXT =
  * denial. The official executioner builds it as a structured isError result
  * (content text "Error: the user rejected tool ..." plus error.message), so a
  * naive String() of the result object would yield "[object Object]" and never
- * match. Pure; contract-tested.
+ * match. Only the structured denial shape counts: error.message present, an
+ * isError flag set, or the official "Error: the user rejected tool" text
+ * prefix. Successful tool payloads (file reads, grep output, command output)
+ * may legitimately carry the bare phrase and must NOT match on their own —
+ * 2026-09-03 mis-injection: 13 phantom injections, zero real rejections.
+ * Pure; contract-tested.
  */
 export function officialRejectionIn(result: unknown): boolean {
-  if (typeof result === 'string') return /user rejected tool/i.test(result)
-  const res = result as { content?: unknown; error?: { message?: unknown } } | null | undefined
+  if (typeof result === 'string') return /^Error: the user rejected tool/i.test(result)
+  const res = result as { content?: unknown; error?: { message?: unknown }; isError?: unknown } | null | undefined
   const candidates: string[] = []
   if (typeof res?.error?.message === 'string') candidates.push(res.error.message)
+  const structured = res?.isError === true || typeof res?.error?.message === 'string'
   if (Array.isArray(res?.content)) {
     for (const block of res.content) {
       const b = block as { type?: string; text?: string }
-      if (b?.type === 'text' && typeof b.text === 'string') candidates.push(b.text)
+      if (b?.type === 'text' && typeof b.text === 'string') {
+        // Content text is only evidence inside a structured error result; a
+        // successful payload (file read / grep / command output) may contain
+        // the bare phrase and must never trigger on its own.
+        if (structured || /^Error: the user rejected tool/i.test(b.text)) candidates.push(b.text)
+      }
     }
   }
   return candidates.some((text) => /user rejected tool/i.test(text))
