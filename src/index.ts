@@ -1655,7 +1655,7 @@ export function installSettingsRoute(ctx: any, settings: any): void {
   }), 'dsh-auto-approval-llm: settings route')
 }
 
-function installReviewerCredentialRoute(ctx: any, credentials: any): void {
+export function installReviewerCredentialRoute(ctx: any): void {
   const webServer = ctx.get('webServer')
   if (!webServer) return
   ctx.effect(() => webServer.register({
@@ -1667,6 +1667,11 @@ function installReviewerCredentialRoute(ctx: any, credentials: any): void {
         responseJson(res, 403, { ok: false, error: 'forbidden' })
         return
       }
+      // Resolve the service per request: the provider mounts asynchronously
+      // after apply(), so a closure captured earlier would stay undefined and
+      // report "unavailable" even when the store is up (2026-09-03, web
+      // profile: GET returned configured:false / POST 400 on a live store).
+      const credentials = ctx.get('credentials')
       try {
         if (req.method === 'GET') {
           if (!credentials) {
@@ -2111,8 +2116,11 @@ export function apply(ctx: Context, rawConfig: Config): void {
   const settings = anyCtx.get('settings')
   // Optional: DSH credential store for the online-reviewer API key (present
   // in the web profile). Absent → online reviewer degrades to ESCALATE and
-  // the credential UI reports "unavailable".
-  const credentials = anyCtx.get('credentials')
+  // the credential UI reports "unavailable". Resolved per use, never captured
+  // at apply() time: the provider mounts asynchronously (Service.init), so a
+  // one-shot `ctx.get()` here would freeze every credential route on
+  // undefined for the whole process life even when the service is up.
+  const getCredentials = (): any => anyCtx.get('credentials')
 
   let config: Config
   // Never hard-crash apply() because of a bad config: every risky step is
@@ -2612,7 +2620,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
   trustedHosts = resolveTrustedHosts(anyCtx)
   installFeedbackRoute(anyCtx)
   installSettingsRoute(anyCtx, settings)
-  installReviewerCredentialRoute(anyCtx, anyCtx.get('credentials'))
+  installReviewerCredentialRoute(anyCtx)
   installHistoryRoute(anyCtx)
   installReviewStatusRoute(anyCtx)
   installLearningStoreRoute(anyCtx, (key: string) =>
@@ -3058,7 +3066,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       // assertion only narrows the tier type for the per-risk budget.
       const seconds = riskSeconds(classified.risk as 'LOW' | 'MEDIUM' | 'HIGH')
       const start = Date.now()
-      const { review, attempts } = await reviewWithLLM(credentials, llm, tools, req.agent.session, req, config, seconds * 1000, reviewOpts, {
+      const { review, attempts } = await reviewWithLLM(getCredentials(), llm, tools, req.agent.session, req, config, seconds * 1000, reviewOpts, {
         maxRetries: config.reviewMaxRetries ?? THRESHOLD_DEFAULTS.reviewMaxRetries,
         budgetMs: seconds * 1000,
         asyncPath: false,
@@ -3344,7 +3352,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       // waits for the countdown to allow via timeoutAction=allow).
       const lowAskPromise = askHuman(req, undefined, next, false, lowStatus, lowHandle, true, learnableContextFor(req, args, classified))
       const lowReviewStart = Date.now()
-      void reviewWithLLM(credentials, llm, tools, req.agent.session, req, config, seconds * 1000, reviewOpts, {
+      void reviewWithLLM(getCredentials(), llm, tools, req.agent.session, req, config, seconds * 1000, reviewOpts, {
         maxRetries: config.reviewMaxRetries ?? THRESHOLD_DEFAULTS.reviewMaxRetries,
         budgetMs: seconds * 1000,
         asyncPath: false,
@@ -3459,7 +3467,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       const mediumHandle: RaceHumanHandle = { claim: () => {} }
       const askPromise = askHuman(req, undefined, next, false, status, mediumHandle, true, learnableContextFor(req, args, classified))
       const reviewStart = Date.now()
-      void reviewWithLLM(credentials, llm, tools, req.agent.session, req, config, seconds * 1000, reviewOpts, {
+      void reviewWithLLM(getCredentials(), llm, tools, req.agent.session, req, config, seconds * 1000, reviewOpts, {
         maxRetries: config.reviewMaxRetries ?? THRESHOLD_DEFAULTS.reviewMaxRetries,
         budgetMs: seconds * 1000,
         asyncPath: true,
@@ -3531,7 +3539,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
     const askPromise = askHuman(req, undefined, next, false, status, undefined, undefined, learnableContextFor(req, args, classified))
     if (llmReviews) {
       const reviewStart = Date.now()
-      void reviewWithLLM(credentials, llm, tools, req.agent.session, req, config, seconds * 1000, reviewOpts, {
+      void reviewWithLLM(getCredentials(), llm, tools, req.agent.session, req, config, seconds * 1000, reviewOpts, {
         maxRetries: config.reviewMaxRetries ?? THRESHOLD_DEFAULTS.reviewMaxRetries,
         budgetMs: seconds * 1000,
         asyncPath: true,

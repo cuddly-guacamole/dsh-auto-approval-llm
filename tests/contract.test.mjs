@@ -33,7 +33,7 @@ import { parseClassifierDecision } from '../lib/auto/classifier.js'
 import { MODEL_REASON_MAX_CHARS } from '../lib/auto/constants.js'
 import { RISK_NAME_PATTERN, RISK_REASON_PATTERN } from '../lib/auto/risk-tokens.js'
 import { buildAskReason, buildEditDiffText } from '../lib/auto/editdiff.js'
-import { Config, resolveConfig, sessionModelRoute, buildReviewSnapshot, markFirstAutoSessionNotice, onboardingTimeoutLabel, onboardingNoticeText, extractReviewerKeyLine, installFeedbackRoute, sessionEventList, currentPreset, trustedUserMessages, officialRejectionIn } from '../lib/index.js'
+import { Config, resolveConfig, sessionModelRoute, buildReviewSnapshot, markFirstAutoSessionNotice, onboardingTimeoutLabel, onboardingNoticeText, extractReviewerKeyLine, installFeedbackRoute, installReviewerCredentialRoute, sessionEventList, currentPreset, trustedUserMessages, officialRejectionIn } from '../lib/index.js'
 import { categorizeCommand } from '../lib/auto/category.js'
 
 test('parseClassifierDecision: valid allow/ask/deny', () => {
@@ -1397,6 +1397,70 @@ test('feedback route: loopback peer cannot address a LAN Host header (403)', asy
   assert.equal(state.statusCode, 403)
   assert.deepEqual(JSON.parse(state.body), { ok: false, error: 'forbidden' })
   assert.equal(consumed.value, false, 'rejection must precede any body/state processing')
+})
+
+// ── REVIEWER-CREDENTIAL route: per-request credential service resolution ──
+// The service mounts asynchronously after apply(); capturing it once at
+// install time (the pre-2026-09-03 behavior) froze every credential route on
+// undefined — GET reported configured:false, POST answered 400 "credential
+// service unavailable" even when the store was live in the composition. The
+// handler must re-read ctx.get('credentials') on every request.
+
+function captureCredentialHandler() {
+  const registrations = []
+  const ctx = {
+    get: (name) => (name === 'webServer' ? { register: (desc) => registrations.push(desc) } : undefined),
+    effect: (fn) => fn(),
+  }
+  installReviewerCredentialRoute(ctx)
+  assert.equal(registrations.length, 1, 'reviewer-credential route must be registered exactly once')
+  return { handler: registrations[0].handler, ctx }
+}
+
+function credentialReq(host = 'localhost:8080', ip = '127.0.0.1') {
+  return {
+    method: 'GET',
+    headers: { host },
+    socket: { remoteAddress: ip },
+    [Symbol.asyncIterator]: async function* () {},
+  }
+}
+
+test('reviewer-credential route: service missing still answers 200 with configured:false (unavailable, not crash)', async () => {
+  const { handler } = captureCredentialHandler()
+  const { res, state } = feedbackFakeRes()
+  await handler(credentialReq(), res)
+  assert.equal(state.statusCode, 200)
+  const body = JSON.parse(state.body)
+  assert.equal(body.ok, true)
+  assert.equal(body.value.configured, false)
+  assert.equal(body.value.writable, false)
+  assert.equal('source' in body.value, false, 'no source when the service is absent')
+})
+
+test('reviewer-credential route: per-request ctx.get resolves a late-mounted service (late-service fix)', async () => {
+  const { handler, ctx } = captureCredentialHandler()
+  // First request: service not yet mounted → unavailable shape.
+  let firstState
+  {
+    const { res, state } = feedbackFakeRes()
+    await handler(credentialReq(), res)
+    firstState = JSON.parse(state.body)
+    assert.equal(firstState.value.configured, false)
+  }
+  // Mount the service after install (the async Service.init race) and make
+  // ctx.get('credentials') return it: the next request must see it.
+  ctx.get = (name) => {
+    if (name === 'webServer') return { register: () => {} }
+    if (name === 'credentials') return {
+      describe: async () => ({ configured: true, source: 'file', writable: true }),
+    }
+    return undefined
+  }
+  const { res, state } = feedbackFakeRes()
+  await handler(credentialReq(), res)
+  assert.equal(state.statusCode, 200)
+  assert.deepEqual(JSON.parse(state.body), { ok: true, value: { configured: true, source: 'file', writable: true } })
 })
 
 // ── 7th audit round — A2: bare-dot protected-path read carve-out bypass ────
