@@ -879,6 +879,11 @@ function queueNotice(agent: any, callId: string, text: string): void {
 // sliding window of 5 per 60s so a denial loop cannot flood the context.
 const REJECT_GUIDANCE_KNOWN_SOURCES = ['rule', 'denyList', 'category', 'policy', 'llm', 'timeout', 'human']
 const REJECT_GUIDANCE_MAX_PER_MINUTE = 5
+// Bounded the same way as firstAutoNoticeSeen: keys are (sessionId, callId)
+// and would otherwise grow without limit in a long-lived process. The cap is
+// a simple insert-order FIFO (Set iteration follows insertion order), and
+// session/disposed drops a session's prefix wholesale (see apply()).
+const REJECT_GUIDANCE_SEEN_CAP = 4096
 const rejectGuidanceSeen = new Set<string>()
 let rejectGuidanceWindow: number[] = []
 
@@ -921,6 +926,12 @@ export function maybeInjectRejectGuidance(agent: unknown, callId: unknown, confi
   rejectGuidanceWindow = rejectGuidanceWindow.filter((t) => now - t < 60_000)
   if (rejectGuidanceWindow.length >= REJECT_GUIDANCE_MAX_PER_MINUTE) return
   try {
+    // Insert-order FIFO cap: evict the oldest key when the set is full so a
+    // long-lived process never grows rejectGuidanceSeen without bound.
+    if (rejectGuidanceSeen.size >= REJECT_GUIDANCE_SEEN_CAP) {
+      const oldest = rejectGuidanceSeen.values().next().value
+      if (oldest !== undefined) rejectGuidanceSeen.delete(oldest)
+    }
     rejectGuidanceSeen.add(key)
     rejectGuidanceWindow.push(now)
     queueNotice(agent, callId, text)
@@ -2745,6 +2756,13 @@ export function apply(ctx: Context, rawConfig: Config): void {
       // long-lived process never grows the Set with disposed sessions (L1,
       // 2026-09-03 audit).
       firstAutoNoticeSeen.delete(key)
+      // rejectGuidanceSeen keys are `${sessionId}:${callId}`; drop every key
+      // of a disposed session wholesale (same L1 discipline — the Set is
+      // additionally capped by insert-order FIFO in maybeInjectRejectGuidance).
+      const prefix = `${key}:`
+      for (const seenKey of rejectGuidanceSeen) {
+        if (seenKey.startsWith(prefix)) rejectGuidanceSeen.delete(seenKey)
+      }
     })
     if (requestAtByKey.has(key)) requestAtByKey.delete(key)
     // Persisted per-session review mode is keyed by the same authority id; drop
