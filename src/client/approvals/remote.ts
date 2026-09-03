@@ -145,6 +145,58 @@ export function watchRemoteApprovals(ctx: any, options: WatcherOptions = {}): vo
     return true
   }
 
+  // ── connection-resume resync ────────────────────────────────────────────
+  // The official client exposes ctx.connection.state (connecting /
+  // disconnected / connected, with getSnapshot+subscribe). While the stream
+  // is down, review-status polls keep failing benignly, countdown UI ticks
+  // against a stale local deadline, and the snapshot may churn unseen. On a
+  // disconnected→connected transition, resync every armed poller now (fresh
+  // review-status → countdown realigned / follow panels closed) and re-run
+  // the snapshot reconcile so approvals the host already dropped are closed.
+  // Mirrors the official ConnectionIndicator recovery semantics (alpha.4).
+  const resyncAll = () => {
+    if (disposed) return
+    for (const [, poller] of active) poller.pollNow()
+    check()
+  }
+
+  let lastConnectionState: unknown
+  let unsubConnection: (() => void) | undefined
+
+  const armConnectionWatcher = (): boolean => {
+    const conn = ctx.get('connection')
+    const state = conn?.state
+    if (
+      disposed ||
+      state === undefined ||
+      typeof state.getSnapshot !== 'function' ||
+      typeof state.subscribe !== 'function'
+    ) {
+      return false
+    }
+    lastConnectionState = state.getSnapshot()
+    unsubConnection = state.subscribe((next: unknown) => {
+      const prev = lastConnectionState
+      lastConnectionState = next
+      // Only a real recovery from a down/connecting state triggers a resync;
+      // steady-state connected or first connect must not. Official recovery
+      // confirmation uses the same previous-state rule.
+      if ((prev === 'disconnected' || prev === 'connecting') && next === 'connected') {
+        console.warn('[dsh-auto-approval-llm] approval watcher (remote): connection resumed; resyncing approvals')
+        resyncAll()
+      }
+    })
+    return true
+  }
+
+  if (!armConnectionWatcher()) {
+    // connection is a wire-root service normally present at mount; if it is
+    // missing (unusual), the resume resync silently stays a no-op — warn-级
+    // silence is not needed here because uiSession absence already has its
+    // own probe/announce chain, and doubling warns would confuse the
+    // contract tests that count them.
+  }
+
   if (armOnce()) {
     // armed at mount (pre-alpha.4 ordering)
   } else {
@@ -225,6 +277,7 @@ export function watchRemoteApprovals(ctx: any, options: WatcherOptions = {}): vo
     clearProbeTimer()
     detachVisibilityProbe?.()
     unsub?.()
+    unsubConnection?.()
     for (const [, poller] of active) poller.dispose()
     active.clear()
     resolvedKeys.clear()

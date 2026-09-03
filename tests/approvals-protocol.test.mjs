@@ -134,6 +134,29 @@ function fakeRemoteEnv() {
   }
 }
 
+// Fake ctx.connection.state (dsh-client-connection wire-root service): a
+// HostObservable {getSnapshot, subscribe} publishing the official
+// connecting/disconnected/connected states.
+function fakeConnectionEnv(initial = 'connected') {
+  const subs = new Set()
+  let state = initial
+  return {
+    connection: {
+      state: {
+        getSnapshot: () => state,
+        subscribe: (fn) => {
+          subs.add(fn)
+          return () => subs.delete(fn)
+        },
+      },
+    },
+    setState: (next) => {
+      state = next
+      for (const fn of [...subs]) fn(state)
+    },
+  }
+}
+
 // ── pure functions ─────────────────────────────────────────────────────────
 
 test('parseCountdown: real host marker parses with action mapping and seconds floor', () => {
@@ -517,6 +540,80 @@ test('remote watcher: replacing the same-session entry disposes the old poller (
   await sleep(60)
   const cOldAfter = fetchLog.filter((f) => f.init?.headers?.['x-auto-approval-call-id'] === 'cOld').length
   assert.equal(cOldAfter, cOldFetches, 'the overshadowed old entry stops polling')
+  cleanup()
+})
+
+// ── connection-resume resync (ctx.connection.state recovery, alpha.4) ─────
+// The official client publishes connection.state via dsh-client-connection;
+// on a disconnected/connecting → connected transition the watcher must call
+// pollNow() on every armed poller (fresh review-status → countdown realigned,
+// follow panels closed) and re-run the snapshot reconcile. Steady-state
+// transitions must not resync. A helper wraps routeFetch with a network
+// toggle so the offline window really fails polls (the recovery only matters
+// when the standing polls could not see the host's resolution).
+
+function toggleableFetch(inner) {
+  let offline = false
+  const fn = async (url, init) => {
+    if (offline) throw new Error('network down')
+    return inner(url, init)
+  }
+  fn.setOffline = (v) => { offline = v }
+  return fn
+}
+
+test('remote watcher: disconnected→connected resync answers a follow the offline window missed', async () => {
+  const statuses = { c9: { phase: 'countdown', action: 'reject', seconds: 30 } }
+  const fetchLog = []
+  const answers = []
+  globalThis.fetch = toggleableFetch(routeFetch({ statusByCallId: statuses, fetchLog }))
+  const item = {
+    kind: 'approval', key: 'approval:9', sessionId: 's1', callId: 'c9',
+    result: null, answer: async (o) => { answers.push(o) },
+  }
+  const env = fakeRemoteEnv()
+  const conn = fakeConnectionEnv('connected')
+  const { ctx, cleanup } = fakeCtx({ uiSession: env.uiSession, ...conn })
+  watchRemoteApprovals(ctx, { pollMs: 60000 }) // standing interval far slower than resync
+  env.setMap(new Map([['s1', item]]))
+  await until(() => fetchLog.length >= 1, 'armed')
+  await sleep(300) // let the pollNow gap (200ms) lapse so resync polls can fire
+  globalThis.fetch.setOffline(true) // stream drops: polls start failing
+  conn.setState('disconnected') // no resync on the way down
+  await sleep(60) // a couple of failed standing polls
+  statuses.c9 = { phase: 'follow', source: 'llm', action: 'reject', seconds: 0 } // host resolved during the outage
+  globalThis.fetch.setOffline(false) // link restored
+  conn.setState('connected') // recovery → resync
+  await until(() => answers.length === 1, 'resync answered the missed follow')
+  assert.deepEqual(answers, ['rejected'])
+  assert.ok(fetchLog.length >= 2, 'resync actually re-polled after recovery')
+  cleanup()
+})
+
+test('remote watcher: steady-state and first-connect never resync; connecting→connected resyncs', async () => {
+  const statuses = { c9: { phase: 'countdown', action: 'allow', seconds: 30 } }
+  const fetchLog = []
+  globalThis.fetch = routeFetch({ statusByCallId: statuses, fetchLog })
+  const item = {
+    kind: 'approval', key: 'approval:10', sessionId: 's1', callId: 'c9',
+    result: null, answer: async () => {},
+  }
+  const env = fakeRemoteEnv()
+  const conn = fakeConnectionEnv('connected')
+  const { ctx, cleanup } = fakeCtx({ uiSession: env.uiSession, ...conn })
+  watchRemoteApprovals(ctx, { pollMs: 60000 }) // standing interval far slower than resync
+  env.setMap(new Map([['s1', item]]))
+  await until(() => fetchLog.length >= 1, 'armed')
+  await sleep(300) // pollNow gap lapses, so any later resync can actually poll
+  const base = fetchLog.length
+  conn.setState('connected') // steady-state noise
+  await sleep(60)
+  assert.equal(fetchLog.length, base, 'connected→connected must not resync')
+  conn.setState('connecting') // down/connecting alone
+  await sleep(60)
+  assert.equal(fetchLog.length, base, 'connecting alone must not resync')
+  conn.setState('connected') // recovery
+  await until(() => fetchLog.length >= base + 1, 'connecting→connected resyncs')
   cleanup()
 })
 
