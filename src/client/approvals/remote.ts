@@ -156,6 +156,12 @@ export function watchRemoteApprovals(ctx: any, options: WatcherOptions = {}): vo
   // the ui-session service does not probe forever, then hands over to the
   // visibility re-probe below.
   function startProbing(): void {
+    // A visibility-triggered restart must never stack a second probe interval
+    // over a live one: the two would race their independent retry counters,
+    // and the first to give up would clearProbeTimer() the OTHER interval
+    // (retryTimer is a shared slot), terminating the probe early (F1,
+    // 2026-09-03 audit).
+    if (retryTimer !== undefined) return
     let retries = 0
     retryTimer = setInterval(() => {
       if (disposed) {

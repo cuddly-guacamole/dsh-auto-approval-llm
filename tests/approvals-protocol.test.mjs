@@ -674,6 +674,10 @@ test('static anchors: remote-only wiring stays pinned; the legacy adapter is gon
   const remote = readFileSync(new URL('../src/client/approvals/remote.ts', import.meta.url), 'utf8')
   assert.ok(remote.includes('pendingInteractions'), 'remote adapter must subscribe to pendingInteractions')
   assert.ok(remote.includes('.answer('), 'remote adapter must answer through pending.answer')
+  // F1 (2026-09-03 audit): a visibility-triggered restart must never stack a
+  // second probe interval over a live one — two intervals racing their own
+  // retry counters made the first give-up clear the other's timer.
+  assert.ok(remote.includes('if (retryTimer !== undefined) return'), 'startProbing must not stack a second probe interval')
   const shared = readFileSync(new URL('../src/client/approvals/shared.ts', import.meta.url), 'utf8')
   assert.ok(!shared.includes('snapshot.pending'), 'the legacy snapshot.pending source must be gone from the shared core')
   const client = readFileSync(new URL('../src/client/index.ts', import.meta.url), 'utf8')
