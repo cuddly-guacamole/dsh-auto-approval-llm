@@ -1988,7 +1988,7 @@ function installTestRoute(ctx: any, llm: any): void {
   }), 'dsh-auto-approval-llm: test route')
 }
 
-function installSessionModeRoute(ctx: any): void {
+export function installSessionModeRoute(ctx: any): void {
   const webServer = ctx.get('webServer')
   if (!webServer) return
   ctx.effect(() => webServer.register({
@@ -2004,8 +2004,11 @@ function installSessionModeRoute(ctx: any): void {
         responseJson(res, 405, { ok: false, error: 'method-not-allowed' })
         return
       }
-      const url = new URL(req.url ?? '/', 'http://x')
-      const sessionId = url.searchParams.get('sessionId') ?? ''
+      // Session id travels in a request header (never the URL query) so it
+      // does not leak into devtools/logs/Referer — the same discipline as the
+      // review-status call-id header (shared.ts documents the rule
+      // client-side; 2026-09-03 audit).
+      const sessionId = String(req.headers?.['x-auto-approval-session-id'] ?? '').trim()
       if (!sessionId) {
         responseJson(res, 400, { ok: false, error: 'sessionId is required' })
         return
@@ -3564,8 +3567,9 @@ export function apply(ctx: Context, rawConfig: Config): void {
           responseJson(res, 405, { ok: false, error: 'method-not-allowed' })
           return
         }
-        const url = new URL(req.url ?? '/', 'http://x')
-        const sessionId = url.searchParams.get('sessionId') ?? ''
+        // Session id travels in a request header, never the URL query (same
+        // discipline as SESSION_MODE_ROUTE; 2026-09-03 audit).
+        const sessionId = String(req.headers?.['x-auto-approval-session-id'] ?? '').trim()
         if (!sessionId) {
           responseJson(res, 400, { ok: false, error: 'sessionId is required' })
           return

@@ -12,7 +12,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  installHistoryRoute, installReviewStatusRoute, installSettingsRoute,
+  installHistoryRoute, installReviewStatusRoute, installSessionModeRoute, installSettingsRoute,
 } from '../lib/index.js'
 
 const LOOPBACK = { method: 'GET', headers: { host: 'localhost:3080' }, socket: { remoteAddress: '127.0.0.1' } }
@@ -139,4 +139,45 @@ test('review-status GET: never 404 — unknown callId returns ok:false at 200', 
   assert.equal(res.body.error, 'not-found')
   const denied = await callJson(handler, { ...LOOPBACK, headers: { host: 'evil.example' }, socket: { remoteAddress: '192.168.1.9' } })
   assert.equal(denied.status, 403)
+})
+
+// ── session-mode route ────────────────────────────────────────────────────
+
+function sessionModeHarness() {
+  const registrations = []
+  const agent = { session: { id: 'sess-1' } }
+  const ctx = {
+    get: (name) => {
+      if (name === 'webServer') return { register: (desc) => registrations.push(desc) }
+      if (name === 'agents') return { get: (sid) => (sid === 'sess-1' ? agent : undefined) }
+      if (name === 'permissionPresets') return { current: () => 'auto' }
+      return undefined
+    },
+    effect: (fn) => fn(),
+  }
+  installSessionModeRoute(ctx)
+  return handlerOf(registrations, 'session-mode')
+}
+
+test('session-mode GET: session id arrives in a request header; the query form is dead', async () => {
+  const handler = sessionModeHarness()
+  const ok = await callJson(handler, {
+    ...LOOPBACK,
+    headers: { host: 'localhost:3080', 'x-auto-approval-session-id': 'sess-1' },
+  })
+  assert.equal(ok.status, 200)
+  assert.equal(ok.body.ok, true)
+  assert.equal(ok.body.value.mode, 'auto')
+  // Legacy query transport must not be honored: the header discipline is the
+  // same as the review-status call-id (2026-09-03 audit).
+  const legacy = await callJson(handler, {
+    ...LOOPBACK,
+    headers: { host: 'localhost:3080' },
+    url: '/_dsh/auto-approval-llm/session-mode?sessionId=sess-1',
+  })
+  assert.equal(legacy.status, 400, 'a query-only call must fail: sessionId is required')
+  const missing = await callJson(handler, LOOPBACK)
+  assert.equal(missing.status, 400)
+  const foreign = await callJson(handler, { ...LOOPBACK, headers: { host: 'evil.example:3080' }, socket: { remoteAddress: '10.0.0.7' } })
+  assert.equal(foreign.status, 403)
 })

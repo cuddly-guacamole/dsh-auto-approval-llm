@@ -1871,7 +1871,13 @@ function SessionApprovalPanel(props: any) {
   React.useEffect(() => {
     if (!sessionId) return
     let disposed = false
-    ;(globalThis as any).fetch(`${SESSION_MODE_ROUTE}?sessionId=${encodeURIComponent(sessionId)}`, { credentials: 'same-origin' })
+    ;(globalThis as any).fetch(SESSION_MODE_ROUTE, {
+      credentials: 'same-origin',
+      // Session id travels in a request header, never the URL query (the same
+      // discipline as the review-status call-id header), so it cannot leak
+      // into devtools/logs/Referer.
+      headers: { 'x-auto-approval-session-id': sessionId },
+    })
       .then((r: any) => r.json())
       .then((data: any) => {
         if (disposed || !data?.ok) return
@@ -1885,7 +1891,10 @@ function SessionApprovalPanel(props: any) {
     const g = globalThis as any
     const onSessionChanged = () => {
       if (!sessionId) return
-      g.fetch(`${SESSION_MODE_ROUTE}?sessionId=${encodeURIComponent(sessionId)}`, { credentials: 'same-origin' })
+      g.fetch(SESSION_MODE_ROUTE, {
+        credentials: 'same-origin',
+        headers: { 'x-auto-approval-session-id': sessionId },
+      })
         .then((r: any) => r.json())
         .then((data: any) => {
           if (data?.ok) setSessionMode(data.value.mode)
@@ -2142,7 +2151,10 @@ function installFloatingApprovalButton(ctx: any): () => void {
     currentSessionId = list?.current
     if (currentSessionId) {
       try {
-        const res = await g.fetch(`${SESSION_MODE_ROUTE}?sessionId=${encodeURIComponent(currentSessionId)}`, { credentials: 'same-origin' })
+        const res = await g.fetch(SESSION_MODE_ROUTE, {
+          credentials: 'same-origin',
+          headers: { 'x-auto-approval-session-id': currentSessionId },
+        })
         const data = await res.json()
         sessionMode = data?.ok ? data.value.mode : undefined
       } catch {
