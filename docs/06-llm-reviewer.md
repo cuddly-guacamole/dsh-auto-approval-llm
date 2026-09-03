@@ -12,8 +12,10 @@ flowchart TD
     A2 -->|↓ 都没有| A3["没有评审路由 → 返回 ESCALATE/failure='no reviewer route'，fail-closed 交人 [escalate]"]
 ```
 
-::: tip 在线通道安全约束（<span class="lnum">src/auto/trust.ts:L79-102</span>，validateReviewerBaseUrl）
-仅 http/https；**明文 http 只允许回环地址**（localhost/127.0.0.1/[::1]，栅栏在 <span class="lnum">trust.ts:L92-100</span>），否则密钥会裸奔在局域网/Docker 桥上。
+::: tip 在线通道安全约束（<span class="lnum">src/auto/trust.ts</span>：validateReviewerBaseUrl + resolvePublicReviewerTarget）
+**协议栅栏**（validateReviewerBaseUrl）：仅 http/https；**明文 http 只允许回环地址**（localhost/127.0.0.1/[::1]），否则密钥会裸奔在局域网/Docker 桥上。
+**公网地址强制**（resolvePublicReviewerTarget，v0.0.17，对齐官方 dsh-web-fetch-http）：非回环目标解析一次，解析集**任一地址非公网单播即整体拒绝**（私网/回环/链路本地/CGNAT/多播/保留/文档段/映射/NAT64 前缀全查），防 DNS rebinding 把密钥打进内网/metadata。**回环豁免**：本地 mock 评审/Ollama/LM Studio 等回环端点照常可用；**fake-ip 代理豁免**：解析集全部落在 198.18.0.0/15（Clash/Surge TUN 接管按域名路由）时视为代理接管放行，混入真实私网地址仍拒。
+**测试连接同栅栏**：https 外网可测（含公网强制+fake-ip 豁免）；明文 http 仅回环；非 2xx 返回错误摘要（如 429 GoUsageLimitError）。
 :::
 
 ## 6.2　发给模型的载荷（frameReviewerInput 产出）

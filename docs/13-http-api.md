@@ -12,7 +12,7 @@
 | `/history` | GET/DELETE | 记录查询（逆序）/ 清空（仅清内存+history，审计留墓碑） | trustedHosts |
 | `/history/export` | GET | attachment 下载 approval-history.json | trustedHosts |
 | `/models` | GET | `?provider=` 列可用模型 {id,name} | trustedHosts |
-| `/test` | POST | 在线端点连通性探针（回环 hostname 校验 + 8s 超时 max_tokens:1）；模型库校验 modelFound | <span class="badgeerr">特权 [ ] 仅回环</span> |
+| `/test` | POST | 在线端点连通性探针（https 外网放行 + 公网地址强制 + fake-ip 豁免，8s 超时 max_tokens:1，非 2xx 带回错误摘要；空草稿密钥回退已存凭据）；模型库校验 modelFound | <span class="badgeerr">特权 [ ] 仅回环</span> |
 | `/session-mode` | GET | 查会话权限 preset（mode） | trustedHosts |
 | `/review-status` | GET | 单审批 countdown/follow 状态；callId 走 `x-auto-approval-call-id` 头（防 URL/devtools 泄漏） | trustedHosts |
 | `/stats` | GET | 会话统计 {mode, reviewMode, counts{total,allow,deny,timeout,breaker}, breaker{…tripped}} | trustedHosts |
