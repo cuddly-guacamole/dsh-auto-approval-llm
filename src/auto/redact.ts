@@ -32,7 +32,7 @@ export function redactSecrets(value: string): string {
   return value
     .replace(/\b(?:sk|ghp|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{8,}\b/g, '[redacted-secret]')
     .replace(/\bBearer\s+[A-Za-z0-9._~+\/-]{8,}/gi, 'Bearer [redacted-secret]')
-    .replace(/((?:api[_-]?key|token|secret|password)=)[^&\s]+/gi, '$1[redacted-secret]')
+    .replace(/((?:api[_-]?key|token|secret|password)\s*=\s*)[^&\s]+/gi, '$1[redacted-secret]')
     // JSON colon forms (`{"token": "…"}`, `'api_key': '…'`): keep the key and
     // the quoted structure, replace the value only (quotes preserved so the
     // text stays parseable after redaction).
