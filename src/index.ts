@@ -2443,6 +2443,76 @@ export function apply(ctx: Context, rawConfig: Config): void {
       const stateReads = runtimeStateReadHits(exec.arguments.command, exec.name, roots)
       if (stateReads.length > 0) debugLog({ ev: 'runtime-state-read', callId: exec.callId ?? null, files: stateReads })
     }
+    // ── user terminal gates (B1/G2 mirrored onto the pre-execute plane) ────
+    // The answerer alone cannot be a terminal for these: the static allow
+    // below and the classifier allow both return next() without ever creating
+    // an approval/request, so denyList / declared-rule denies / humanOnly were
+    // silently bypassed by statically-routine calls (e.g. `bash ls` under
+    // denyList:['bash'], or an in-workspace `write` under
+    // humanOnlyList:['write']). Evaluate the same user policy HERE, before
+    // any fast-path allow, so an explicit operator terminal holds on every
+    // Auto-session call — matching the answerer's precedence (rules →
+    // denyList → humanOnly). allowlist is deliberately NOT mirrored: its job
+    // is answering asks, and a statically-allowed call proceeds identically
+    // either way. Rules evaluated here cannot see the approval reason
+    // (reason-field rules still bind ask-path calls in the answerer; a
+    // reason-rule deny on a static-allow call is the one remaining gap,
+    // inherent to the pre-execute plane).
+    if (config.rulesText.trim() !== '') {
+      const declared = parseRulesText(config.rulesText)
+      if (declared.errors.length === 0) {
+        const subject = {
+          toolName: exec.name,
+          arguments: exec.arguments,
+          agentName: exec.agent?.session?.id,
+          agentKind: agentKind(exec.agent?.session?.header?.origin),
+          workspaceRoot: roots.workspace,
+        }
+        const matched = evaluateRules(declared.rules, subject)
+        if (matched !== undefined) {
+          if (config.rulesDryRun) {
+            console.log(`[dsh-auto-approval-llm][rules-dry-run] ${exec.name} matched rule ${matched.rule.source} (would ${matched.policy}); dry-run: not enforced`)
+          } else if (matched.policy === 'deny') {
+            recordDecisionFeedback(exec.callId, formatDenyFeedback('rule', { reason: matched.rule.source }))
+            pushHistory({
+              sessionId: authorityKeyFor(exec),
+              toolName: exec.name,
+              outcome: 'rejected',
+              source: 'rule-deny',
+              llmReason: `matched ${matched.rule.source}`,
+            })
+            maybeInjectRejectGuidance(exec.agent, exec.callId, config, buildRejectGuidanceText('rule'))
+            return { kind: 'deny', reason: `[auto-mode rule deny] ${exec.name}` }
+          } else if (matched.policy === 'human') {
+            return { kind: 'ask', reason: `[auto-mode rule ask] ${exec.name}` }
+          } else {
+            pushHistory({
+              sessionId: authorityKeyFor(exec),
+              toolName: exec.name,
+              outcome: 'allowed-once',
+              source: 'rule-allow',
+              llmReason: `matched ${matched.rule.source}`,
+            })
+            return next()
+          }
+        }
+      }
+    }
+    const listDecision = staticListDecision(config, exec.name)
+    if (listDecision.kind === 'reject') {
+      recordDecisionFeedback(exec.callId, formatDenyFeedback('denyList', { toolName: exec.name }))
+      pushHistory({
+        sessionId: authorityKeyFor(exec),
+        toolName: exec.name,
+        outcome: 'rejected',
+        source: 'denyList-deny',
+      })
+      maybeInjectRejectGuidance(exec.agent, exec.callId, config, buildRejectGuidanceText('denyList'))
+      return { kind: 'deny', reason: `[auto-mode denyList] ${exec.name}` }
+    }
+    if (listDecision.kind === 'ask-human') {
+      return { kind: 'ask', reason: `[auto-mode human-only] ${exec.name}` }
+    }
     // Category tightening (only deny/ask; auto/inherit never intercept here).
     // Deny/ask apply to every non-hard-denied result, including static allows,
     // so a routine read/write cannot slip past a category deny/ask. deny
