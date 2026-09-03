@@ -5,6 +5,9 @@
  * is unit-testable (contract tests import from lib/auto/trust.js).
  */
 
+import { lookup as nodeLookup } from 'node:dns/promises'
+import { isIP } from 'node:net'
+
 /** Whether a Host value is a loopback hostname (localhost, 127.*, ::1). */
 export function isLoopbackHostname(hostname: string): boolean {
   if (hostname === 'localhost' || hostname === '[::1]' || hostname === '::1') return true
@@ -87,6 +90,151 @@ export function isTrustedRequest(req: { headers?: any; socket?: any }, trustedHo
  */
 export function reviewerProbeTargetAllowed(probeUrl: URL): boolean {
   return probeUrl.protocol === 'https:' || isLoopbackHostname(probeUrl.hostname)
+}
+
+// ── public-address enforcement (SSRF hardening, mirrors @deepseek-ai/
+// dsh-web-fetch-http's isPublicIpAddress; zero new deps, net.isIP + manual
+// segment tables) ─────────────────────────────────────────────────────────
+
+/**
+ * Whether an IPv4 dotted-quad is globally reachable unicast. Aligned with
+ * ipaddr.js `range() === 'unicast'` (verified 2026-09-03 against the official
+ * package's own tables): rejects private/link-local/loopback/unspecified/
+ * CGNAT/multicast/reserved/documentation/testing 100.64/10, 127/8, 169.254/16,
+ * 10/8, 172.16/12, 192.168/16, 198.18/15, 224/4, 240/4, 0/8, and the
+ * documentation/test ranges 192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24.
+ */
+export function isPublicIpv4(text: string): boolean {
+  const parts = text.split('.')
+  if (parts.length !== 4) return false
+  const octets: number[] = []
+  for (const part of parts) {
+    if (!/^\d{1,3}$/.test(part)) return false
+    const n = Number(part)
+    if (n > 255) return false
+    octets.push(n)
+  }
+  const [a, b, c, d] = octets
+  if (a === 0) return false                       // 0.0.0.0/8 unspecified
+  if (a === 10) return false                      // 10/8 private
+  if (a === 100 && b >= 64 && b <= 127) return false // 100.64/10 CGNAT
+  if (a === 127) return false                     // 127/8 loopback
+  if (a === 169 && b === 254) return false        // 169.254/16 link-local
+  if (a === 172 && b >= 16 && b <= 31) return false // 172.16/12 private
+  if (a === 192 && b === 168) return false        // 192.168/16 private
+  if (a === 192 && b === 0 && c === 0) return false  // 192.0.0.0/24 IETF protocol assignments
+  if (a === 192 && b === 0 && c === 2) return false  // 192.0.2.0/24 TEST-NET-1
+  if (a === 198 && (b === 18 || b === 19)) return false // 198.18/15 benchmarking
+  if (a === 198 && b === 51 && c === 100) return false // 198.51.100/24 TEST-NET-2
+  if (a === 203 && b === 0 && c === 113) return false // 203.0.113/24 TEST-NET-3
+  if (a >= 224) return false                      // 224/4 multicast + 240/4 reserved
+  return true
+}
+
+/**
+ * Whether an IPv6 literal is globally reachable unicast — the mirror of
+ * ipaddr.js `range() === 'unicast'` for what this module needs: reject
+ * loopback/unspecified/link-local/unique-local/multicast/documentation/
+ * mapped/NAT64 prefixes. The official provider additionally discovers
+ * deployment DNS64 prefixes; here the well-known RFC 6052 64:ff9b::/96
+ * prefix is the conservative baseline.
+ */
+export function isPublicIpv6(text: string): boolean {
+  const stripped = text.startsWith('[') && text.endsWith(']') ? text.slice(1, -1) : text
+  const lower = stripped.toLowerCase()
+  // IPv4-mapped (::ffff:a.b.c.d, also 0:0:0:0:0:ffff:...) → judge the embedded IPv4.
+  const mapped = lower.match(/^(?:0+:)*0*ffff:([0-9.]+)$/)
+  if (mapped) return isPublicIpv4(mapped[1])
+  if (lower === '::' || lower === '::1') return false
+  if (lower.startsWith('fe8') || lower.startsWith('fe9') || lower.startsWith('fea') || lower.startsWith('feb')) return false // fe80::/10
+  if (lower.startsWith('fc') || lower.startsWith('fd')) return false // fc00::/7
+  if (lower.startsWith('ff')) return false // ff00::/8 multicast
+  if (lower.startsWith('2001:db8')) return false // documentation
+  if (lower.startsWith('64:ff9b')) return false // well-known NAT64 prefix
+  // Teredo (2001:0000::/32) — second hextet all-zero, in any compression
+  // (2001::1, 2001:0:1, …). ORCHID (2001:10::/28) and benchmarking
+  // (2001:2::/48) are separate specific blocks; 2001:4860 etc stay public.
+  const hextets = lower.split(':')
+  if (hextets[0] === '2001' && (hextets[1] === undefined || hextets[1] === '' || /^0+$/.test(hextets[1]))) return false
+  if (lower.startsWith('2001:10:') || lower.startsWith('2001:2:')) return false
+  if (lower.startsWith('2002:')) return false // 6to4
+  if (lower.startsWith('3fff:')) return false // documentation analog
+  return /^[0-9a-f:]+$/i.test(lower)
+}
+
+/**
+ * Whether a text address (IPv4 or IPv6, brackets tolerated) is globally
+ * reachable unicast — the single predicate the reviewer fetch path uses.
+ */
+export function isPublicIpAddress(text: string): boolean {
+  const stripped = text.startsWith('[') && text.endsWith(']') ? text.slice(1, -1) : text
+  const family = isIP(stripped)
+  if (family === 4) return isPublicIpv4(stripped)
+  if (family === 6) return isPublicIpv6(stripped)
+  return false
+}
+
+/**
+ * Resolve a hostname once and reject the complete answer set if any address
+ * is not public unicast — mirrors `resolvePublicAddresses` from the official
+ * dsh-web-fetch-http provider. IP literals skip DNS and are judged directly.
+ * @param hostname - URL hostname (bracketed IPv6 tolerated).
+ * @param resolver - lookup override, injectable in contract tests.
+ * @returns the validated address set, or a { ok:false, reason } refusal.
+ */
+export async function resolvePublicReviewerTarget(
+  hostname: string,
+  resolver: (hostname: string) => Promise<{ address: string; family: number }[]> = systemLookupAll,
+): Promise<{ ok: true; addresses: { address: string; family: number }[] } | { ok: false; reason: string }> {
+  const stripped = hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname
+  const literalFamily = isIP(stripped)
+  let resolved: { address: string; family: number }[]
+  if (literalFamily === 0) {
+    try {
+      resolved = await resolver(stripped)
+    } catch (error: unknown) {
+      return { ok: false, reason: `hostname 解析失败：${error instanceof Error ? error.message : String(error)}` }
+    }
+  } else {
+    resolved = [{ address: stripped, family: literalFamily }]
+  }
+  if (resolved.length === 0) return { ok: false, reason: `hostname "${hostname}" 未解析出任何地址` }
+  // Fake-IP proxy takeover (Clash/Surge/TUN): every hostname resolves into
+  // 198.18.0.0/15 and the proxy routes by domain, so the local answer set is
+  // meaningless for SSRF — the official provider skips these checks on its
+  // proxied hop for the same reason. Exemption requires the WHOLE set to be
+  // fake-IP; any real private address (10/8, 192.168/16, 169.254, …) still
+  // refuses. 198.18/15 is the IETF benchmarking block and carries no real
+  // public service, so a mixed set is anomalous and stays rejected.
+  const allFakeIp = resolved.length > 0 && resolved.every((entry) =>
+    entry.family === 4 && isFakeIpv4(entry.address),
+  )
+  if (!allFakeIp) {
+    for (const entry of resolved) {
+      if ((entry.family !== 4 && entry.family !== 6) || isIP(entry.address) === 0) {
+        return { ok: false, reason: `hostname "${hostname}" 解析出非法地址` }
+      }
+      if (!isPublicIpAddress(entry.address)) {
+        return { ok: false, reason: `hostname "${hostname}" 解析到非公网地址（${entry.address}）；已阻止，防止 SSRF` }
+      }
+    }
+  }
+  return { ok: true, addresses: resolved }
+}
+
+/** Whether an IPv4 sits in the 198.18.0.0/15 block (fake-IP proxy pool). */
+function isFakeIpv4(address: string): boolean {
+  const parts = address.split('.')
+  if (parts.length !== 4) return false
+  const a = Number(parts[0])
+  const b = Number(parts[1])
+  return a === 198 && (b === 18 || b === 19)
+}
+
+/** Default resolver: Node's system DNS, all addresses verbatim. */
+export async function systemLookupAll(hostname: string): Promise<{ address: string; family: number }[]> {
+  const entries = await nodeLookup(hostname, { all: true, verbatim: true })
+  return entries.map((e) => ({ address: e.address, family: e.family as number }))
 }
 
 /**

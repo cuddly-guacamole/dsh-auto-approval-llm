@@ -59,7 +59,7 @@ import { agentKind, evaluateRules, parseRulesText } from './auto/rules.js'
 import { isReviewRetryable, retryAfterMs, retryReviewLoop, toLlmFailure, type RetryAttempt, type ReviewFailure } from './auto/retry.js'
 import { type ReviewMode, loadReviewModes, normalizeReviewMode, persistReviewModes } from './auto/review-mode.js'
 import { runtimeStateReadHits } from './auto/shell.js'
-import { isLoopbackHostname, isTrustedRequest, reviewerProbeTargetAllowed, validateReviewerBaseUrl } from './auto/trust.js'
+import { isLoopbackHostname, isTrustedRequest, resolvePublicReviewerTarget, reviewerProbeTargetAllowed, validateReviewerBaseUrl } from './auto/trust.js'
 
 export const name = 'dsh-auto-approval-llm'
 export const inject = ['approval', 'permissionPresets', 'tools', 'llm', 'agents', 'webServer', 'settings', 'commands']
@@ -683,7 +683,19 @@ async function runReviewAttempt(
 
   // Online (custom endpoint): raw fetch with redirect:'error' keeping the
   // loopback fence honest — a 302 must not steer this request (and its
-  // credential headers) toward some other host.
+  // credential headers) toward some other host. Public-address enforcement
+  // (SSRF hardening, mirrors the official dsh-web-fetch-http provider):
+  // non-loopback targets resolve once and are refused unless every answer is
+  // public unicast, so a configured FQDN that (re)binds to a private or
+  // metadata address can never be piped through the reviewer endpoint with
+  // the API key. Loopback stays exempt — a local review endpoint (mock
+  // reviewer, Ollama, LM Studio) is a legitimate admin configuration, and
+  // cleartext http is already loopback-fenced by validateReviewerBaseUrl.
+  const reviewTargetHost = new URL(String(snapshot.baseUrl)).hostname
+  if (!isLoopbackHostname(reviewTargetHost)) {
+    const resolved = await resolvePublicReviewerTarget(reviewTargetHost)
+    if (!resolved.ok) throw new TypeError(resolved.reason)
+  }
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   let text = ''
   if (snapshot.protocol === 'anthropic') {
@@ -1949,6 +1961,15 @@ function installTestRoute(ctx: any, llm: any): void {
           }
           if (!reviewerProbeTargetAllowed(probeUrl)) {
             throw new TypeError('在线评审测试仅支持 https 地址或本机回环地址（127.0.0.1 / localhost / [::1]）')
+          }
+          // Public-address enforcement (SSRF hardening, mirrors the official
+          // dsh-web-fetch-http provider): resolve once, refuse the whole set
+          // when any address is not public unicast, so an https intranet or
+          // metadata host cannot be probed even through a public-looking FQDN.
+          // Loopback stays exempt (local mock reviewer / Ollama / LM Studio).
+          if (!isLoopbackHostname(probeUrl.hostname)) {
+            const resolved = await resolvePublicReviewerTarget(probeUrl.hostname)
+            if (!resolved.ok) throw new TypeError(resolved.reason)
           }
           const headers: Record<string, string> = { 'Content-Type': 'application/json' }
           if (apiKey) {

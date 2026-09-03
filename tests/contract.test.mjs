@@ -28,7 +28,7 @@ import { hardDenyReason, assessTool } from '../lib/auto/policy.js'
 import { isCriticalPath } from '../lib/auto/paths.js'
 import { probeTargetFacts } from '../lib/auto/probe.js'
 import { ArtifactRegistry } from '../lib/auto/artifacts.js'
-import { isTrustedRequest, isLoopbackHostname, isLoopbackIp, reviewerProbeTargetAllowed, validateReviewerBaseUrl } from '../lib/auto/trust.js'
+import { isTrustedRequest, isLoopbackHostname, isLoopbackIp, isPublicIpAddress, isPublicIpv4, isPublicIpv6, resolvePublicReviewerTarget, reviewerProbeTargetAllowed, validateReviewerBaseUrl } from '../lib/auto/trust.js'
 import { parseClassifierDecision } from '../lib/auto/classifier.js'
 import { MODEL_REASON_MAX_CHARS } from '../lib/auto/constants.js'
 import { RISK_NAME_PATTERN, RISK_REASON_PATTERN } from '../lib/auto/risk-tokens.js'
@@ -1731,6 +1731,85 @@ test('reviewerProbeTargetAllowed: cleartext http stays loopback-only', () => {
   assert.equal(reviewerProbeTargetAllowed(new URL('http://[::1]:9111')), true)
   assert.equal(reviewerProbeTargetAllowed(new URL('http://192.168.1.10:8000')), false, 'plaintext intranet probe stays closed')
   assert.equal(reviewerProbeTargetAllowed(new URL('http://api.example.com')), false, 'plaintext internet probe stays closed')
+})
+
+// ── public-address enforcement (SSRF hardening, official-parity) ──────────
+// Predicates mirror @deepseek-ai/dsh-web-fetch-http's isPublicIpAddress
+// (ipaddr.js range()==='unicast'); segment tables were cross-validated
+// against the official package 2026-09-03 (38-case matrix, all match).
+
+test('isPublicIpv4: private/special ranges are refused, public unicast passes', () => {
+  for (const bad of ['10.0.0.1', '172.16.5.5', '192.168.1.1', '169.254.1.1', '127.0.0.1', '0.0.0.0', '100.64.0.1', '224.0.0.1', '240.0.0.1', '198.18.0.1', '198.51.100.1', '203.0.113.1', '192.0.2.1']) {
+    assert.equal(isPublicIpv4(bad), false, bad)
+  }
+  for (const good of ['8.8.8.8', '1.1.1.1', '9.9.9.9', '114.114.114.114']) {
+    assert.equal(isPublicIpv4(good), true, good)
+  }
+})
+
+test('isPublicIpv6: guarded prefixes refused, public unicast passes', () => {
+  for (const bad of ['::1', '::', 'fe80::1', 'fc00::1', 'fd00::1', 'ff02::1', '2001:db8::1', '2001::1', '2001:0:1::1', '2001:10::5', '2001:2::3', '3fff::1', '2002::1', '64:ff9b::a00:1', '::ffff:10.0.0.1']) {
+    assert.equal(isPublicIpv6(bad), false, bad)
+  }
+  for (const good of ['2606:4700:4700::1111', '2001:4860:4860::8888', '2607:f8b0::1', '2400:3200::1']) {
+    assert.equal(isPublicIpv6(good), true, good)
+  }
+})
+
+test('isPublicIpAddress: IPv4-mapped judged by embedded IPv4', () => {
+  assert.equal(isPublicIpAddress('::ffff:8.8.8.8'), false, 'mapped public IPv4 is refused (range()!=unicast in ipaddr.js)')
+  assert.equal(isPublicIpAddress('::ffff:10.0.0.1'), false, 'mapped private IPv4 is refused')
+  assert.equal(isPublicIpAddress('[::1]'), false, 'brackets tolerated, loopback refused')
+  assert.equal(isPublicIpAddress('8.8.8.8'), true)
+  assert.equal(isPublicIpAddress('not-an-ip'), false)
+})
+
+test('resolvePublicReviewerTarget: literal private/loopback refused, public IP literal accepted', async () => {
+  const loopback = await resolvePublicReviewerTarget('127.0.0.1')
+  assert.equal(loopback.ok, false)
+  const lan = await resolvePublicReviewerTarget('192.168.1.10')
+  assert.equal(lan.ok, false)
+  const publicIp = await resolvePublicReviewerTarget('8.8.8.8')
+  assert.equal(publicIp.ok, true)
+  assert.equal((publicIp).addresses.length, 1)
+})
+
+test('resolvePublicReviewerTarget: resolver answer set refused when ANY address is non-public', async () => {
+  const mixed = { address: '8.8.8.8', family: 4 }
+  const spy = { address: '10.0.0.1', family: 4 }
+  const res = await resolvePublicReviewerTarget('api.example.com', async () => [mixed, spy])
+  assert.equal(res.ok, false)
+  assert.match(res.reason, /非公网地址/)
+  const dual = await resolvePublicReviewerTarget('api.example.com', async () => [{ address: '8.8.8.8', family: 4 }, { address: '2606:4700:4700::1111', family: 6 }])
+  assert.equal(dual.ok, true)
+})
+
+test('resolvePublicReviewerTarget: resolver failure is a soft refusal', async () => {
+  const res = await resolvePublicReviewerTarget('nx.example', async () => { throw new Error('ENOTFOUND') })
+  assert.equal(res.ok, false)
+  assert.match(res.reason, /解析失败/)
+})
+
+test('resolvePublicReviewerTarget: fake-IP proxy takeover is exempt, mixed sets still refuse', async () => {
+  // Clash/Surge TUN mode resolves every hostname into 198.18.0.0/15 and the
+  // proxy routes by domain; the local answer set is meaningless then (the
+  // official provider skips these checks on its proxied hop). Exemption needs
+  // the WHOLE set to be fake-IP; a real private address in the mix still
+  // refuses (2026-09-03: the user host resolves all domains via fake-IP).
+  const fake = await resolvePublicReviewerTarget('api.example.com', async () => [
+    { address: '198.18.0.19', family: 4 },
+    { address: '198.19.4.90', family: 4 },
+  ])
+  assert.equal(fake.ok, true, 'all-fake-IP set is treated as proxy takeover')
+  const mixed = await resolvePublicReviewerTarget('api.example.com', async () => [
+    { address: '198.18.0.19', family: 4 },
+    { address: '10.0.0.5', family: 4 },
+  ])
+  assert.equal(mixed.ok, false, 'fake-IP mixed with a private address refuses')
+  const otherPrivate = await resolvePublicReviewerTarget('api.example.com', async () => [
+    { address: '192.168.1.10', family: 4 },
+  ])
+  assert.equal(otherPrivate.ok, false, 'plain private set still refuses')
 })
 
 // ── unknown tools fail closed to independent classification ───────────────
