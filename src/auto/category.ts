@@ -125,12 +125,19 @@ const SENSITIVE_DIRS = new Set(['.ssh', '.gnupg', '.aws', '.azure', '.kube'])
  * Whether a normalized path carries a sensitive basename or traverses a
  * sensitive directory at any position (G1). `roots` is accepted for signature
  * symmetry with the policy call sites; the check itself is location-free.
+ * `.config/gcloud` is a two-level marker (mirrors the paths.ts
+ * credentialRoots entry) that single-segment lookup cannot see, so it is
+ * checked as an adjacent pair.
  */
 export function sensitiveBasenameAt(normalized: string, roots: CategoryRoots): boolean {
   const parts = normalized.split(/[\\/]/).filter(Boolean)
   const base = parts[parts.length - 1] ?? ''
   if (SENSITIVE_BASE(base)) return true
-  return parts.some((part) => SENSITIVE_DIRS.has(part))
+  if (parts.some((part) => SENSITIVE_DIRS.has(part))) return true
+  for (let index = 0; index < parts.length - 1; index += 1) {
+    if (parts[index] === '.config' && parts[index + 1] === 'gcloud') return true
+  }
+  return false
 }
 
 /**
