@@ -59,7 +59,7 @@ import { agentKind, evaluateRules, parseRulesText } from './auto/rules.js'
 import { isReviewRetryable, retryAfterMs, retryReviewLoop, toLlmFailure, type RetryAttempt, type ReviewFailure } from './auto/retry.js'
 import { type ReviewMode, loadReviewModes, normalizeReviewMode, persistReviewModes } from './auto/review-mode.js'
 import { runtimeStateReadHits } from './auto/shell.js'
-import { isLoopbackHostname, isTrustedRequest, validateReviewerBaseUrl } from './auto/trust.js'
+import { isLoopbackHostname, isTrustedRequest, reviewerProbeTargetAllowed, validateReviewerBaseUrl } from './auto/trust.js'
 
 export const name = 'dsh-auto-approval-llm'
 export const inject = ['approval', 'permissionPresets', 'tools', 'llm', 'agents', 'webServer', 'settings', 'commands']
@@ -1926,10 +1926,13 @@ function installTestRoute(ctx: any, llm: any): void {
 
         // Online-reviewer mode: hit the endpoint directly with the typed
         // (not-yet-saved) key and model from the draft. The key is never
-        // logged or returned. Loopback-only: unlike the configured reviewer
-        // BaseUrl (admin-controlled), this value comes straight from the
-        // request body, so an https target must not become an SSRF probe
-        // surface (RISK-03).
+        // logged or returned. Scheme fence matches the saved-reviewer path
+        // (validateReviewerBaseUrl): https is allowed anywhere (the live
+        // review relay already sends real requests there), cleartext http
+        // only to loopback hosts (no key over plaintext to the LAN/Docker).
+        // Unlike the configured BaseUrl (admin-controlled), this value comes
+        // from the request body, so the target is still muzzled to https or
+        // loopback — an http probe of an arbitrary intranet host stays closed.
         if (body?.online) {
           const protocol = body.protocol === 'anthropic' ? 'anthropic' : 'openai'
           const validated = validateReviewerBaseUrl(body.baseUrl ?? '')
@@ -1944,8 +1947,8 @@ function installTestRoute(ctx: any, llm: any): void {
           } catch {
             throw new TypeError('API 地址不是合法 URL')
           }
-          if (!isLoopbackHostname(probeUrl.hostname)) {
-            throw new TypeError('在线评审测试仅支持本机回环地址（127.0.0.1 / localhost / [::1]）')
+          if (!reviewerProbeTargetAllowed(probeUrl)) {
+            throw new TypeError('在线评审测试仅支持 https 地址或本机回环地址（127.0.0.1 / localhost / [::1]）')
           }
           const headers: Record<string, string> = { 'Content-Type': 'application/json' }
           if (apiKey) {

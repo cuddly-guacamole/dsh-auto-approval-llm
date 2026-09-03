@@ -28,7 +28,7 @@ import { hardDenyReason, assessTool } from '../lib/auto/policy.js'
 import { isCriticalPath } from '../lib/auto/paths.js'
 import { probeTargetFacts } from '../lib/auto/probe.js'
 import { ArtifactRegistry } from '../lib/auto/artifacts.js'
-import { isTrustedRequest, isLoopbackHostname, isLoopbackIp, validateReviewerBaseUrl } from '../lib/auto/trust.js'
+import { isTrustedRequest, isLoopbackHostname, isLoopbackIp, reviewerProbeTargetAllowed, validateReviewerBaseUrl } from '../lib/auto/trust.js'
 import { parseClassifierDecision } from '../lib/auto/classifier.js'
 import { MODEL_REASON_MAX_CHARS } from '../lib/auto/constants.js'
 import { RISK_NAME_PATTERN, RISK_REASON_PATTERN } from '../lib/auto/risk-tokens.js'
@@ -1712,6 +1712,25 @@ test('validateReviewerBaseUrl: bare host:port auto-prefixes; trailing slashes tr
 test('validateReviewerBaseUrl: empty follows the session route', () => {
   const v = validateReviewerBaseUrl('')
   assert.deepEqual(v, { ok: true, baseUrl: '', insecure: false })
+})
+
+// ── reviewer connection-test target fence ─────────────────────────────────
+// The online reviewer test ("测试连接") hits the typed endpoint directly from
+// the request body. It must accept https anywhere — the live review relay
+// sends real (keyed) requests to the same https endpoints — while cleartext
+// http probes stay loopback-only so a body-driven test cannot scan intranet
+// hosts over plaintext (fixed 2026-09-03: was loopback-only across the board,
+// which made the button useless for exactly the https endpoints it tests).
+test('reviewerProbeTargetAllowed: https target is allowed anywhere', () => {
+  assert.equal(reviewerProbeTargetAllowed(new URL('https://opencode.ai/zen/go/v1')), true)
+  assert.equal(reviewerProbeTargetAllowed(new URL('https://api.example.com/v1')), true)
+})
+test('reviewerProbeTargetAllowed: cleartext http stays loopback-only', () => {
+  assert.equal(reviewerProbeTargetAllowed(new URL('http://localhost:9111')), true)
+  assert.equal(reviewerProbeTargetAllowed(new URL('http://127.0.0.1:9111')), true)
+  assert.equal(reviewerProbeTargetAllowed(new URL('http://[::1]:9111')), true)
+  assert.equal(reviewerProbeTargetAllowed(new URL('http://192.168.1.10:8000')), false, 'plaintext intranet probe stays closed')
+  assert.equal(reviewerProbeTargetAllowed(new URL('http://api.example.com')), false, 'plaintext internet probe stays closed')
 })
 
 // ── unknown tools fail closed to independent classification ───────────────

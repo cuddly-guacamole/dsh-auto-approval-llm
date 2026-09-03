@@ -77,6 +77,19 @@ export function isTrustedRequest(req: { headers?: any; socket?: any }, trustedHo
 }
 
 /**
+ * Whether a parsed probe URL may be the target of the online-reviewer
+ * connection test. Aligned with the saved-reviewer scheme fence (https
+ * anywhere, cleartext http only to loopback): the body-driven test target is
+ * muzzled the same way `validateReviewerBaseUrl` muzzles the admin-configured
+ * endpoint, so an https intranet host stays an OPTIONAL test target (the live
+ * review relay also talks to it) while plaintext http probes of anything but
+ * loopback stay closed. Pure so the probe fence is contract-testable.
+ */
+export function reviewerProbeTargetAllowed(probeUrl: URL): boolean {
+  return probeUrl.protocol === 'https:' || isLoopbackHostname(probeUrl.hostname)
+}
+
+/**
  * Validate the online-reviewer base URL before any request crosses the
  * network. Bare "host:port" inputs are auto-prefixed with http:// so common
  * configs are not wrongly rejected; http:// is only permitted for loopback
