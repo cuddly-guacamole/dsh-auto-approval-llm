@@ -7,6 +7,7 @@
 // without the ui-session service keep working with an idle watcher.
 import {
   canonicalPendingKey,
+  createSeenSessionTracker,
   forgetAnsweredKeys,
   startReviewPolling,
 } from './shared.js'
@@ -45,7 +46,10 @@ export function watchRemoteApprovals(ctx: any, options: WatcherOptions = {}): vo
   // follow answered). Prevents check() from re-arming a stale approval
   // (R004); cleared when the item leaves the snapshot.
   const resolvedKeys = new Set<string>()
-  const seenSessions = new Set<string>()
+  // Session ids that ever showed an approval, bounded FIFO (R007): dispose
+  // clears their answered-key tombstones. Without the cap a long-lived
+  // browser tab grows this set with every historical session.
+  const seenSessions = createSeenSessionTracker()
   let unsub: (() => void) | undefined
   let pendingInteractions: any
   let disposed = false
@@ -218,6 +222,6 @@ export function watchRemoteApprovals(ctx: any, options: WatcherOptions = {}): vo
     for (const [, poller] of active) poller.dispose()
     active.clear()
     resolvedKeys.clear()
-    for (const sessionId of seenSessions) forgetAnsweredKeys(sessionId)
+    for (const sessionId of seenSessions.seen) forgetAnsweredKeys(sessionId)
   }, 'dsh-auto-approval-llm: approval watcher (remote)')
 }

@@ -64,6 +64,40 @@ export function forgetAnsweredKeys(sessionId: string): void {
   }
 }
 
+// Seen-session tracking for the remote watcher: which sessionIds ever showed
+// an approval, so the watcher's dispose can clear their answered-key
+// tombstones. Bounded with the same FIFO discipline as answeredApprovals —
+// a long-lived browser tab must not grow a per-session set without limit as
+// sessions are created and disposed (R007).
+export const MAX_SEEN_SESSIONS = 500
+
+export interface SeenSessionTracker {
+  seen: Set<string>
+  order: string[]
+  /** Track one session id; evicts the oldest beyond MAX_SEEN_SESSIONS. */
+  add(sessionId: string): void
+}
+
+export function createSeenSessionTracker(
+  seen: Set<string> = new Set(),
+  order: string[] = [],
+  cap = MAX_SEEN_SESSIONS,
+): SeenSessionTracker {
+  return {
+    seen,
+    order,
+    add(sessionId: string): void {
+      if (seen.has(sessionId)) return
+      seen.add(sessionId)
+      order.push(sessionId)
+      while (order.length > cap) {
+        const oldest = order.shift()
+        if (oldest !== undefined) seen.delete(oldest)
+      }
+    },
+  }
+}
+
 /** Unified dedup/tombstone identity: `${sessionId}:${callId}`; null without callId. */
 export function canonicalPendingKey(sessionId: string, callId: string | undefined): string | null {
   if (!callId) return null
