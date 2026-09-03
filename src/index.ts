@@ -946,6 +946,40 @@ export function officialRejectionIn(result: unknown): boolean {
   return candidates.some((text) => /user rejected tool/i.test(text))
 }
 
+/**
+ * Pull a bounded, alert-worthy summary out of an online-reviewer probe error
+ * (429/4xx/5xx handler). The provider body is user-typed-endpoint output, so
+ * it is capped and flattened to a single line before it can reach the
+ * settings card; the API key is never part of the body and never echoed.
+ * Pure; contract-tested.
+ */
+export function extractProbeErrorSummary(status: number, bodyText: unknown): string {
+  const prefix = `HTTP ${status}`
+  const raw = typeof bodyText === 'string' ? bodyText : ''
+  const trimmed = raw.trim()
+  if (trimmed === '') return prefix
+  let candidate = trimmed
+  try {
+    const parsed = JSON.parse(trimmed)
+    const pick = (v: any): string | undefined => {
+      if (typeof v !== 'object' || v === null) return undefined
+      if (typeof v.type === 'string' && typeof v.message === 'string') return `${v.type}: ${v.message}`
+      if (typeof v.error?.message === 'string') return v.error.message
+      if (typeof v.error === 'string') return v.error
+      if (typeof v.message === 'string') return v.message
+      if (typeof v.detail === 'string') return v.detail
+      return undefined
+    }
+    const picked = pick(parsed) ?? (typeof parsed === 'string' ? parsed : undefined)
+    if (picked !== undefined) candidate = picked
+  } catch {
+    // not JSON: use the raw body (already capped below)
+  }
+  const flat = candidate.replace(/\s+/g, ' ').trim()
+  const capped = flat.length > 400 ? `${flat.slice(0, 397)}…` : flat
+  return `${prefix}: ${capped}`
+}
+
 export function maybeInjectRejectGuidance(agent: unknown, callId: unknown, config: { rejectGuidance?: boolean }, text: string): void {
   if (!config?.rejectGuidance || !agent || typeof callId !== 'string') return
   const sessionId = (agent as any)?.session?.id ?? ''
@@ -1953,6 +1987,20 @@ function installTestRoute(ctx: any, llm: any): void {
           const model = String(body.model ?? '').trim()
           const apiKey = typeof body.apiKey === 'string' ? body.apiKey.trim() : ''
           if (!baseUrl || !model) throw new TypeError('API 地址和模型名称是必填项')
+          // Fall back to the stored reviewer key when the draft field is empty
+          // (the key was saved earlier and the input clears on save): resolve
+          // the credential service per request, then the shared credential
+          // file — the same chain the live review path uses, so the probe
+          // behaves exactly like the review it prepares for (2026-09-03:
+          // without this, a saved key probed as 401 when the field was blank).
+          const probeApiKey = apiKey || await (async () => {
+            const creds = ctx.get('credentials')
+            try {
+              const resolved = await creds?.resolve?.(REVIEWER_CREDENTIAL_REF)
+              if (resolved?.value) return String(resolved.value)
+            } catch { /* fall through to file */ }
+            return reviewerKeyFromCredentialFile() ?? ''
+          })()
           let probeUrl: URL
           try {
             probeUrl = new URL(baseUrl)
@@ -1972,9 +2020,9 @@ function installTestRoute(ctx: any, llm: any): void {
             if (!resolved.ok) throw new TypeError(resolved.reason)
           }
           const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-          if (apiKey) {
-            if (protocol === 'anthropic') headers['x-api-key'] = apiKey
-            else headers.Authorization = `Bearer ${apiKey}`
+          if (probeApiKey) {
+            if (protocol === 'anthropic') headers['x-api-key'] = probeApiKey
+            else headers.Authorization = `Bearer ${probeApiKey}`
           }
           const controller = new AbortController()
           const timer = setTimeout(() => controller.abort(), 8_000)
@@ -1989,7 +2037,10 @@ function installTestRoute(ctx: any, llm: any): void {
                 redirect: 'error',
                 body: JSON.stringify({ model, max_tokens: 1, messages: [{ role: 'user', content: 'ping' }] }),
               })
-              if (!r.ok) throw new Error(`HTTP ${r.status}`)
+              if (!r.ok) {
+                const body = await r.text().catch(() => '')
+                throw new Error(extractProbeErrorSummary(r.status, body))
+              }
             } else {
               const r = await fetch(`${baseUrl}/chat/completions`, {
                 method: 'POST',
@@ -1998,7 +2049,10 @@ function installTestRoute(ctx: any, llm: any): void {
                 redirect: 'error',
                 body: JSON.stringify({ model, messages: [{ role: 'user', content: 'ping' }], max_tokens: 1 }),
               })
-              if (!r.ok) throw new Error(`HTTP ${r.status}`)
+              if (!r.ok) {
+                const body = await r.text().catch(() => '')
+                throw new Error(extractProbeErrorSummary(r.status, body))
+              }
             }
             responseJson(res, 200, { ok: true, value: { reachable: true, modelFound: true } })
           } finally {

@@ -33,7 +33,7 @@ import { parseClassifierDecision } from '../lib/auto/classifier.js'
 import { MODEL_REASON_MAX_CHARS } from '../lib/auto/constants.js'
 import { RISK_NAME_PATTERN, RISK_REASON_PATTERN } from '../lib/auto/risk-tokens.js'
 import { buildAskReason, buildEditDiffText } from '../lib/auto/editdiff.js'
-import { Config, resolveConfig, sessionModelRoute, buildReviewSnapshot, markFirstAutoSessionNotice, onboardingTimeoutLabel, onboardingNoticeText, extractReviewerKeyLine, installFeedbackRoute, installReviewerCredentialRoute, sessionEventList, currentPreset, trustedUserMessages, officialRejectionIn } from '../lib/index.js'
+import { Config, resolveConfig, sessionModelRoute, buildReviewSnapshot, markFirstAutoSessionNotice, onboardingTimeoutLabel, onboardingNoticeText, extractProbeErrorSummary, extractReviewerKeyLine, installFeedbackRoute, installReviewerCredentialRoute, sessionEventList, currentPreset, trustedUserMessages, officialRejectionIn } from '../lib/index.js'
 import { categorizeCommand } from '../lib/auto/category.js'
 
 test('parseClassifierDecision: valid allow/ask/deny', () => {
@@ -4065,6 +4065,38 @@ test('trustedUserMessages: no inbox and undefined authority behave like before',
     trustedUserMessages({ session: { snapshotEvents: () => [{ type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: 'plain' }] } }] } }),
     ['plain'],
   )
+})
+
+// ── extractProbeErrorSummary: bounded, alert-worthy probe failure detail ──
+// The online-reviewer connection test surfaces provider errors (429 quota,
+// 4xx/5xx) on the settings card. The summary must pick the machine-readable
+// message out of common OpenAI-compatible error bodies, flatten and cap it,
+// and never echo anything else (the API key is not part of the body).
+
+test('extractProbeErrorSummary: OpenAI-compatible error.message becomes the detail', () => {
+  const body = JSON.stringify({ error: { message: 'Incorrect API key provided: sk-***' }, type: 'invalid_request_error' })
+  assert.equal(extractProbeErrorSummary(401, body), 'HTTP 401: Incorrect API key provided: sk-***')
+})
+
+test('extractProbeErrorSummary: quota-style {type,message} bodies keep the type', () => {
+  const body = JSON.stringify({ type: 'GoUsageLimitError', message: 'Weekly usage limit reached. Resets in 3 days.' })
+  const out = extractProbeErrorSummary(429, body)
+  assert.ok(out.startsWith('HTTP 429: GoUsageLimitError: Weekly usage limit reached.'), out)
+})
+
+test('extractProbeErrorSummary: raw text bodies are flattened and capped', () => {
+  const long = 'x'.repeat(500)
+  const out = extractProbeErrorSummary(500, long)
+  assert.ok(out.startsWith('HTTP 500: '))
+  assert.ok(out.length <= 415, `capped length ${out.length}`)
+  assert.ok(out.endsWith('…'))
+  assert.equal(extractProbeErrorSummary(500, '  up stream error \n '), 'HTTP 500: up stream error', 'leading/trailing whitespace stripped, inner flattened')
+})
+
+test('extractProbeErrorSummary: empty/invalid body degrades to bare status', () => {
+  assert.equal(extractProbeErrorSummary(429, ''), 'HTTP 429')
+  assert.equal(extractProbeErrorSummary(429, undefined), 'HTTP 429')
+  assert.equal(extractProbeErrorSummary(429, 'not json at all {broken'), 'HTTP 429: not json at all {broken')
 })
 
 // ── officialRejectionIn: the structured isError denial shape (fix anchor) ──

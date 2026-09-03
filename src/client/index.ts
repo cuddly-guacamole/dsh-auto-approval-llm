@@ -672,7 +672,7 @@ function SettingsSection() {
   const [history, setHistory] = React.useState<any[]>([])
   const [llmLatency, setLlmLatency] = React.useState<any>(null)
   const [historyError, setHistoryError] = React.useState('')
-  const [testResult, setTestResult] = React.useState('')
+  const [testResult, setTestResult] = React.useState<{ kind: 'ok' | 'err' | 'info'; text: string } | null>(null)
   const [credentialConfigured, setCredentialConfigured] = React.useState(false)
   const [credentialWritable, setCredentialWritable] = React.useState(false)
   const [reviewerApiKey, setReviewerApiKey] = React.useState('')
@@ -1007,16 +1007,16 @@ function SettingsSection() {
   const testOnline = async () => {
     const incomplete = reviewerDirectMissing()
     if (incomplete) {
-      setTestResult(t('settings.reviewer.incompleteDirect', { missing: incomplete.join(', ') }))
+      setTestResult({ kind: 'info', text: t('settings.reviewer.incompleteDirect', { missing: incomplete.join(', ') }) })
       return
     }
     const baseUrl = draft.reviewerBaseUrl.trim()
     const model = draft.reviewerModel.trim()
     if (!baseUrl || !model) {
-      setTestResult(t('test.enterProviderModel'))
+      setTestResult({ kind: 'info', text: t('test.enterProviderModel') })
       return
     }
-    setTestResult(t('test.onlineTesting'))
+    setTestResult({ kind: 'info', text: t('test.onlineTesting') })
     try {
       const res = await (globalThis as any).fetch(TEST_ROUTE, {
         method: 'POST',
@@ -1032,9 +1032,9 @@ function SettingsSection() {
       })
       const data = await res.json()
       if (!data?.ok) throw new Error(data?.error ?? t('test.failed'))
-      setTestResult(t('test.onlineOk'))
+      setTestResult({ kind: 'ok', text: t('test.onlineOk') })
     } catch (e) {
-      setTestResult(e instanceof Error ? e.message : String(e))
+      setTestResult({ kind: 'err', text: e instanceof Error ? e.message : String(e) })
     }
   }
 
@@ -1330,6 +1330,26 @@ function SettingsSection() {
     ), t('settings.denialBreakerHint')),
   )
 
+  // Test-result line: level-coded colors so a failed probe is unmistakable —
+  // a leading "HTTP <code>" is rendered red, the provider's error detail white;
+  // success is green, transient/info states stay secondary (2026-09-03 UX).
+  const renderTestResult = (r: { kind: 'ok' | 'err' | 'info'; text: string }) => {
+    if (r.kind === 'ok') {
+      return React.createElement('span', { className: 'dsa-success', role: 'status' }, r.text)
+    }
+    if (r.kind === 'err') {
+      const m = r.text.match(/^(HTTP \d+)(?::\s*)?(.*)$/s)
+      if (m) {
+        return React.createElement('span', { role: 'status', style: { fontSize: 12, display: 'inline-flex', gap: 6, alignItems: 'baseline', flexWrap: 'wrap' } },
+          React.createElement('strong', { style: { color: 'var(--dsw-alias-state-error-primary)' } }, m[1]),
+          m[2] ? React.createElement('span', { style: { color: 'var(--dsw-alias-label-primary)' } }, m[2]) : null,
+        )
+      }
+      return React.createElement('span', { className: 'dsa-failed', role: 'status' }, r.text)
+    }
+    return React.createElement('span', { style: { color: 'var(--dsw-alias-label-secondary)', fontSize: 12 } }, r.text)
+  }
+
   const buildReviewBody = () => React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 10 } },
     React.createElement('p', { className: 'dsa-hint', style: { margin: 0 } }, t('settings.reviewer.description')),
     React.createElement('p', { className: 'dsa-hint', style: { margin: 0 } }, t('settings.reviewer.fallbackHint')),
@@ -1370,7 +1390,7 @@ function SettingsSection() {
       credentialConfigured && credentialWritable
         ? React.createElement(Button, { variant: 'outline', size: 'sm', disabled: saving, onClick: clearReviewerCredential }, t('settings.reviewer.clearKey'))
         : null,
-      testResult ? React.createElement('span', { style: { color: 'var(--dsw-alias-label-secondary)', fontSize: 12 } }, testResult) : null,
+      testResult ? renderTestResult(testResult) : null,
     ),
   )
 
