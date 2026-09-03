@@ -394,6 +394,10 @@ const WRAPPER_VALUE_FLAGS = {
     stdbuf: /^-(?:i|o|e)$/,
     nice: /^-(?:n)$/,
     ionice: /^-(?:c|n|p)$/,
+    // timeout: `-s/--signal <SIG>` and `-k/--kill-after <DUR>` take a value;
+    // without them `timeout -s KILL 5 sudo …` unwraps to `KILL` as the
+    // "effective command" and skips the privilege/delete fuses entirely.
+    timeout: /^-(?:s|k)$|^--(?:signal|kill-after)$/,
 };
 /** Strip prefix wrappers so the effective command is judged, not the wrapper. */
 function unwrapCommand(words) {
