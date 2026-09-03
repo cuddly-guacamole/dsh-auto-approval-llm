@@ -1,10 +1,9 @@
 // Protocol-agnostic approval-responder core.
 //
-// Consumed by both protocol watchers (legacy rc.2 `snapshot.pending` and
-// remote alpha.1 `pendingInteractions`) and by the button hijack in index.ts.
-// Depends only on the plugin's own host routes (review-status/feedback) and
-// never on any dsh client protocol type — duck-typed structural interfaces
-// only — so this file survives the legacy protocol removal (0.0.15) unchanged.
+// Consumed by the remote protocol watcher (`pendingInteractions`) and by the
+// button hijack in index.ts. Depends only on the plugin's own host routes
+// (review-status/feedback) and never on any dsh client protocol type —
+// duck-typed structural interfaces only.
 
 export const FEEDBACK_ROUTE = '/_dsh/auto-approval-llm/feedback'
 export const REVIEW_STATUS_ROUTE = '/_dsh/auto-approval-llm/review-status'
@@ -123,8 +122,6 @@ export interface ReviewPollingOptions {
 
 /** Watcher-level options: polling options plus an injectable clock. */
 export interface WatcherOptions extends ReviewPollingOptions {
-  /** Clock for the legacy watcher's event-driven extra-poll debounce. */
-  now?: () => number
   /** Probe interval for the remote watcher's uiSession probe (default 500ms). */
   retryMs?: number
   /** Probe attempts before the remote watcher gives up (default 30 = 15s). */

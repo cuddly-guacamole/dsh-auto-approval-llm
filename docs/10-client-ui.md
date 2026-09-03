@@ -16,13 +16,13 @@
 
 - 从面板文本解析 `⏳ will auto-(approve|reject) in Ns` 标记，把 `（Ns）` 倒计时后缀**只贴到「会超时自动执行」的那个按钮**上（timeoutAction=allow → 允许一次；否则 → 拒绝），每 200ms 刷新。
 - 面板文本含「熔断」→ 双按钮禁用 `breakerAntiHijackMs`。
-- 非 UI 轮询器（0.0.12 起拆为 `approvals/` 双协议模块）：`legacy` watcher 以 `session.getSnapshot().pending` 为源（rc.2）、`remote` watcher 观察 `uiSession.pendingInteractions`（alpha.1），两源在对方协议下天然空转；共同核心 `shared.startReviewPolling` 500ms GET `/review-status`（callId 走 `x-auto-approval-call-id` 头，不进 URL），五分支处理 countdown/follow/grace/无状态。
+- 非 UI 轮询器（0.0.12 起拆为 `approvals/` 模块）：`remote` watcher 观察 `uiSession.pendingInteractions`（rc.1 唯一协议源；rc.2 的 `snapshot.pending` 适配器已随 0.0.16 移除）；核心 `shared.startReviewPolling` 500ms GET `/review-status`（callId 走 `x-auto-approval-call-id` 头，不进 URL），五分支处理 countdown/follow/grace/无状态。
 
-## 10.1　双协议应答状态机（自动应答的大脑，approvals/ 模块）
+## 10.1　应答状态机（自动应答的大脑，approvals/ 模块）
 
 ```mermaid
 flowchart TD
-    A["订阅协议源（legacy: snapshot.pending / remote: pendingInteractions），按 callId 匹配 kind==='approval' 项 → 布署轮询 [arm]"]
+    A["订阅协议源（remote: pendingInteractions），按 callId 匹配 kind==='approval' 项 → 布署轮询 [arm]"]
     A -->|500ms 轮询 review-status| B1["① follow + source='human'/'abort'：人已决定或已取消 → 只收面板，绝不代答 [observe]"]
     A -->|500ms 轮询 review-status| B2["② follow 其他（llm/timeout）：收面板 + 上报 outcome [answer]"]
     A -->|500ms 轮询 review-status| B3["③ status 消失但曾是 countdown：宽限 FOLLOW_GRACE_MS=120s，仍 pending 才按记录动作自动应答 [grace]"]
@@ -39,7 +39,7 @@ flowchart TD
     end
 ```
 
-`answerOnce`（shared）只把 `outcome ∈ {allowed-once, rejected}` 传上网（POST /feedback + `handle.respond`——legacy 为 `wait.respond({ok,value})` 原形、remote 为 `pending.answer(outcome)`，后者对已 settle 实例抛错被静默处置），通告文案由宿主生成；`answeredApprovals` 统一以 `sessionId:callId` 为键保证同一审批只答一次。协议探测（`approvals/feature.ts`）仅服务诊断与契约测试，不参与装配。
+`answerOnce`（shared）只把 `outcome ∈ {allowed-once, rejected}` 传上网（POST /feedback + 协议应答 `pending.answer(outcome)`，对已 settle 实例抛错被静默处置），通告文案由宿主生成；`answeredApprovals` 统一以 `sessionId:callId` 为键保证同一审批只答一次。
 
 ## 10.2　设置卡解剖（settings.plugin.item）
 

@@ -17,9 +17,9 @@ const DIALOG_ATTRIBUTE = 'data-dsh-auto-mode-risk-dialog';
 // shipped the English set, which silently dropped the zh menu).
 export const PERMISSION_LABEL_SETS = {
     readOnly: ['Read Only', '仅可查看'],
-    // alpha.4 reworded the workspace-write preset in zh ("工作区内修改");
-    // keep the rc.2 variant so both official generations match the menu gate.
-    workspaceWrite: ['Workspace Write', '可写入工作区', '工作区内修改'],
+    // rc.1 reworded the workspace-write preset in zh ("工作区内修改");
+    // the rc.2 variant is gone.
+    workspaceWrite: ['Workspace Write', '工作区内修改'],
     auto: ['Auto', '自动审批'],
     fullAccess: ['Full access', '完全权限'],
 };

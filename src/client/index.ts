@@ -7,7 +7,6 @@ import { installAutoPermissionIcon } from './auto-icon.js'
 import { zh, en } from './locale.js'
 import { computeTextNodeRewrites, createBreakerGuard, parseCountdown } from './approvals/shared.js'
 import type { CountdownInfo } from './approvals/shared.js'
-import { watchLegacyApprovals } from './approvals/legacy.js'
 import { watchRemoteApprovals } from './approvals/remote.js'
 
 export const name = 'dsh-auto-approval-llm'
@@ -2348,7 +2347,6 @@ export function apply(ctx: any): void {
   ctx.effect(() => installAutoPermissionIcon((globalThis as any).document), 'dsh-auto-approval-llm: auto permission icon')
   ctx.effect(() => installFloatingApprovalButton(ctx), 'dsh-auto-approval-llm: floating button')
   ctx.effect(installSettingsCardStyles, 'dsh-auto-approval-llm: settings card styles')
-  ctx.effect(() => watchLegacyApprovals(ctx), 'dsh-auto-approval-llm: approval watcher (legacy)')
   ctx.effect(() => watchRemoteApprovals(ctx), 'dsh-auto-approval-llm: approval watcher (remote)')
   watchSessionModeChanges(ctx)
   ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({

@@ -1,10 +1,10 @@
-// Remote (alpha.1) protocol adapter: subscribes to the optional `uiSession`
+// Remote protocol adapter: subscribes to the optional `uiSession`
 // service's `pendingInteractions` HostObservable (getSnapshot() =>
 // Map<sessionId, PendingApproval>) and answers `kind === 'approval'` entries
 // on countdown expiry via `pending.answer(outcome)`. Pure observation — never
 // registers for `remote.$on('approval/request')` and never imports an
-// alpha.1 package; the PendingApproval shape is duck-typed so rc.2 installs
-// (no ui-session service) keep working with an idle watcher.
+// @deepseek-ai package; the PendingApproval shape is duck-typed so installs
+// without the ui-session service keep working with an idle watcher.
 import {
   canonicalPendingKey,
   forgetAnsweredKeys,
@@ -12,10 +12,10 @@ import {
 } from './shared.js'
 import type { ApprovalHandle, ApprovalOutcome, WatcherOptions } from './shared.js'
 
-// Structural shape of an alpha.1 PendingApproval as surfaced by
+// Structural shape of a PendingApproval as surfaced by
 // ui-session.pendingInteractions. Deliberately not an import from any
-// @deepseek-ai package: alpha.1 is not on npm, and duck-typing keeps the
-// rc.2 bundle free of unavailable dependencies.
+// @deepseek-ai package: duck-typing keeps the client bundle free of
+// unavailable dependencies.
 export interface PendingApprovalLike {
   kind: 'approval'
   key: string
@@ -27,11 +27,10 @@ export interface PendingApprovalLike {
 }
 
 // The ui-session service is a browser-side dynamic package that registers
-// during the same application batch as this plugin; on alpha.4 it may not be
+// during the same application batch as this plugin; it may not be
 // queryable at plugin-mount time yet. Instead of silently idling forever
 // (which turns every official panel into an unclosable ghost), keep probing
 // for a bounded window and log when the watcher actually arms or gives up.
-// rc.2 installs simply keep the watcher idle after the probe window.
 const UI_SESSION_RETRY_MS = 500
 const UI_SESSION_MAX_RETRIES = 30 // 15s covers the client application batch
 
@@ -149,8 +148,8 @@ export function watchRemoteApprovals(ctx: any, options: WatcherOptions = {}): vo
     startProbing()
   }
 
-  // Probe loop. Gives up after `maxRetries` attempts so a rc.2 install (no
-  // ui-session service) does not probe forever, then hands over to the
+  // Probe loop. Gives up after `maxRetries` attempts so an install without
+  // the ui-session service does not probe forever, then hands over to the
   // visibility re-probe below.
   function startProbing(): void {
     let retries = 0
@@ -168,7 +167,7 @@ export function watchRemoteApprovals(ctx: any, options: WatcherOptions = {}): vo
       if (retries >= maxRetries) {
         clearProbeTimer()
         gaveUp = true
-        console.warn(`[dsh-auto-approval-llm] approval watcher (remote): uiSession.pendingInteractions unavailable after ${retries * retryMs}ms; approval auto-close disabled (rc.2 install? offline panel)`)
+        console.warn(`[dsh-auto-approval-llm] approval watcher (remote): uiSession.pendingInteractions unavailable after ${retries * retryMs}ms; approval auto-close disabled (offline panel)`)
         armVisibilityProbe()
       }
     }, retryMs)

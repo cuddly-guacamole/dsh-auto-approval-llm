@@ -430,29 +430,25 @@ function isModelRouteConfig(cfg: any): cfg is { provider: string; model: string 
     typeof cfg?.model === 'string' && cfg.model.length > 0
 }
 
-// One normalized "all session events" view across dsh host generations:
-// alpha.4+ removed `Session.events` in favor of `snapshotEvents()` (commit
-// 27bf1039, 2026-09); rc.2 keeps the `events` getter. Feature-detected and
-// duck-typed so the same binary serves both hosts.
+// One normalized "all session events" view: rc.1 (0.1.2+) removed the
+// `Session.events` getter in favor of `snapshotEvents()` (commit 27bf1039,
+// 2026-09). The rc.2 fallback was dropped; snapshotEvents is the only source.
 export function sessionEventList(session: any): readonly any[] {
   if (session === undefined || session === null) return []
   if (typeof session.snapshotEvents === 'function') {
     const events = session.snapshotEvents()
     return Array.isArray(events) ? events : []
   }
-  const events = session.events
-  return Array.isArray(events) ? events : []
+  return []
 }
 
-// Resolve the effective permission preset across host generations: rc.2
-// `current(events)` folds the event list; alpha.4+ `current(session)` reads
-// the session's folded knob state. The snapshotEvents method identifies the
-// new-generation Session.
+// Resolve the effective permission preset: rc.1 `current(session)` reads the
+// session's folded knob state directly. The rc.2 `current(events)` variant
+// was removed alongside Session.events.
 export function currentPreset(permissionPresets: any, session: any): string | undefined {
   if (permissionPresets === undefined || permissionPresets?.current == null) return undefined
   if (session === undefined || session === null) return undefined
-  if (typeof session.snapshotEvents === 'function') return permissionPresets.current(session)
-  return permissionPresets.current(session.events ?? [])
+  return permissionPresets.current(session)
 }
 
 // Single resolver for "which provider/model is this session talking through":

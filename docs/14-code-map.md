@@ -29,8 +29,8 @@ src/
 │    ├─ shell.ts         1224 bash/pwsh 词法分解 + 整行熔断 + 逐段静态分类（最大单文件）
 │    └─ trust.ts         101  web 路由信任平面（loopback/LAN 边界、Host 伪造防护、在线端点 URL 校验）
 └─ client/
-     ├─ index.ts         React 客户端主体 2347 行（设置卡 6 子卡/面板增强/双协议 watcher 装配/浮动按钮/CSS）
-     ├─ approvals/       双协议应答模块（0.0.12，shared 协议无关核心 253 行 / legacy rc.2 源适配 179 / remote alpha.1 源适配 123 / feature 协议探测 21）
+     ├─ index.ts         React 客户端主体 2347 行（设置卡 6 子卡/面板增强/应答 watcher 装配/浮动按钮/CSS）
+     ├─ approvals/       应答模块（0.0.12 起；0.0.16 起单协议——remote 源适配 + shared 协议无关核心；rc.2 legacy/feature 已删）
      ├─ auto-icon.ts     权限菜单图标 + Auto 风险确认弹窗 624 行
      └─ locale.ts        zh/en 双语 354 行
 
@@ -38,7 +38,7 @@ tests/
 ├─ contract.test.mjs / category.test.mjs / classifier.test.mjs / redact.test.mjs
 ├─ editdiff.test.mjs / probe.test.mjs / history-robust.test.mjs / audit.test.mjs
 ├─ approvals-protocol.test.mjs / contract-devloop.test.mjs / trusted-dsh-subpaths.test.mjs / posix-platform.test.mjs
-└─ 合计 591 例（node --test 全绿基线）
+└─ 合计 604 例（node --test 全绿基线）
 scripts/
 ├─ build.sh             （DSH 源码仓库布局）tsc 编译 src→lib
 ├─ audit-query.mjs      审计查询 CLI
