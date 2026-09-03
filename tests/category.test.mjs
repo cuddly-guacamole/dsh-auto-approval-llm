@@ -824,9 +824,7 @@ test('LP12: the learning layer is byte-inert while disabled', () => {
 })
 
 test('F1: the guard re-checks resolved runtime-state landings before (and independently of) escape', () => {
-  const start = HOST_SRC.indexOf('const symlinkEscapeReason')
-  const end = HOST_SRC.indexOf('tools?.guard')
-  const guard = HOST_SRC.slice(start, end > start ? end : start + 6000)
+  const guard = readFileSync(new URL('../lib/auto/symlink.js', import.meta.url), 'utf8')
   const normalizedIdx = guard.indexOf('const normalized = normalizePath(resolved')
   const recheckIdx = guard.indexOf('runtimeStateTargetInZone(normalized')
   const reasonIdx = guard.indexOf('target resolves into plugin runtime state via a symlink')
@@ -1144,11 +1142,16 @@ test('relative target: only the normalized path resolves inside the workspace (r
 })
 
 test('G-relative: the symlink guard resolves the normalized target, never the raw argument', () => {
-  const start = HOST_SRC.indexOf('const symlinkEscapeReason')
-  const end = HOST_SRC.indexOf('tools?.guard')
-  const guard = HOST_SRC.slice(start, end > start ? end : start + 6000)
-  assert.ok(guard.includes('const resolved = resolveDeepest(textual)'), 'the per-target resolution consumes the normalized path')
-  assert.ok(!guard.includes('resolveDeepest(target)'), 'the raw argument must never reach realpathSync')
+  const guard = readFileSync(new URL('../lib/auto/symlink.js', import.meta.url), 'utf8')
+  assert.ok(guard.includes('const resolved = resolve(textual)'), 'the per-target resolution consumes the normalized path')
+  assert.ok(!guard.includes('resolve(target)'), 'the raw argument must never reach realpathSync')
   // The workspace root is absolute already; that call site is unaffected.
-  assert.ok(guard.includes('resolveDeepest(roots.workspace)'), 'the cached workspace realpath still resolves the root itself')
+  assert.ok(guard.includes('const workspaceReal = resolve(roots.workspace)'), 'the workspace root resolves fresh per call')
+  // Multi-workspace regression (2026-09-03 audit): a process-wide cached
+  // anchor made every non-first workspace look like an escape. The guard may
+  // never cache a workspace resolution.
+  assert.ok(!guard.includes('realWorkspace'), 'no cached workspace anchor may exist inside the guard')
+  const host = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
+  assert.ok(host.includes('symlinkEscapeReason(exec, roots, resolveDeepest)'), 'the host wires the guard with the fresh per-call resolver')
+  assert.ok(!host.includes('let realWorkspace'), 'the host keeps no workspace-realpath cache')
 })
