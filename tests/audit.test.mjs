@@ -66,6 +66,27 @@ test('auditRotateContent: a single oversized line is kept, never dropped', () =>
   assert.ok(Buffer.byteLength(rotated) > MAX_AUDIT_BYTES, 'documented: one line cannot fit, so it is kept whole')
 })
 
+test('appendAuditLine: returns true on success and persists the line', () => {
+  withAuditBackup(() => {
+    const ok = appendAuditLine('{"type":"probe","n":1}')
+    assert.equal(ok, true)
+    const after = readFileSync(AUDIT_FILE, 'utf8')
+    assert.ok(after.endsWith('{"type":"probe","n":1}\n'))
+  })
+})
+
+test('appendAuditLine: returns false (fail-closed signal) when the audit path is blocked', () => {
+  withAuditBackup(() => {
+    // A directory at the audit path makes the append fail: the fail-closed
+    // commit gate (APPROVAL-07) depends on this false, and it must not throw.
+    mkdirSync(AUDIT_FILE)
+    try {
+      assert.equal(appendAuditLine('{"type":"probe","n":1}'), false)
+    } finally {
+      rmSync(AUDIT_FILE, { recursive: true, force: true })
+    }
+  })
+})
 test('appendAuditLine: rotation converges the real file atomically with no tmp residue', () => {
   withAuditBackup(() => {
     const lines = longLines(3000, 2048)

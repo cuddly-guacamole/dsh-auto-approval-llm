@@ -1282,7 +1282,7 @@ function loadHistory(): void {
   }
 }
 
-function pushHistory(entry: Omit<HistoryRecord, 'id' | 'at'>): void {
+function pushHistory(entry: Omit<HistoryRecord, 'id' | 'at'>): boolean {
   if (entry.llmReason !== undefined) {
     entry = { ...entry, llmReason: sanitizeReviewReason(entry.llmReason) }
   }
@@ -1308,7 +1308,22 @@ function pushHistory(entry: Omit<HistoryRecord, 'id' | 'at'>): void {
   }
   // Durable append-only audit (B2): same decision, additionally persisted with
   // a type marker; clearing history leaves a tombstone here, never an erase.
-  appendAuditLine(JSON.stringify({ type: 'decision', ...record }))
+  // The return value is the fail-closed commit gate (APPROVAL-07): allow
+  // verdicts must take effect only when their audit record persisted. The
+  // history.jsonl write above stays best-effort — the audit is the gate.
+  return appendAuditLine(JSON.stringify({ type: 'decision', ...record }))
+}
+
+/**
+ * Fail-closed downgrade for an allow verdict whose audit record could not be
+ * persisted: leave an honest feedback trail (surfaced to the model through
+ * the post-execute injection on the denied result) and let the caller answer
+ * denied. Callers must also skip any learning bookkeeping — an unaudited
+ * verdict must never train the confirmation layer.
+ */
+function denyOnAuditFailure(callId: string | undefined): void {
+  recordDecisionFeedback(callId, '[auto-mode audit failure] the decision audit could not be persisted; failing closed to rejected so no unaudited allow can take effect')
+  debugLog({ ev: 'audit-failure-deny', callId: callId ?? null })
 }
 
 loadHistory()
@@ -2586,13 +2601,17 @@ export function apply(ctx: Context, rawConfig: Config): void {
           } else if (matched.policy === 'human') {
             return { kind: 'ask', reason: `[auto-mode rule ask] ${exec.name}` }
           } else {
-            pushHistory({
+            const audited = pushHistory({
               sessionId: authorityKeyFor(exec),
               toolName: exec.name,
               outcome: 'allowed-once',
               source: 'rule-allow',
               llmReason: `matched ${matched.rule.source}`,
             })
+            if (!audited) {
+              denyOnAuditFailure(exec.callId)
+              return { kind: 'deny', reason: `[auto-mode audit failure] ${exec.name}` }
+            }
             return next()
           }
         }
@@ -2637,7 +2656,22 @@ export function apply(ctx: Context, rawConfig: Config): void {
     if (directive === 'ask') {
       return { kind: 'ask', reason: `[auto-mode category ask] ${exec.name}` }
     }
-    if (assessment.decision === 'allow') return next()
+    if (assessment.decision === 'allow') {
+      // A static-assessment allow is a verdict like any other: it takes
+      // effect only if its decision audit record persisted (APPROVAL-07).
+      const audited = pushHistory({
+        sessionId: authorityKeyFor(exec),
+        toolName: exec.name,
+        outcome: 'allowed-once',
+        source: 'static-allow',
+        ...(typeof assessment.reason === 'string' && assessment.reason !== '' ? { reason: assessment.reason } : {}),
+      })
+      if (!audited) {
+        denyOnAuditFailure(exec.callId)
+        return { kind: 'deny', reason: `[auto-mode audit failure] ${exec.name}` }
+      }
+      return next()
+    }
     if (!assessment.classifierEligible) return { kind: 'ask', reason: `[auto-mode approval required] ${assessment.reason}` }
     try {
       const authority = authorityFor(exec)
@@ -2667,8 +2701,9 @@ export function apply(ctx: Context, rawConfig: Config): void {
       // outcome downstream (recording here too would double-count it). The
       // sources are distinct from the answerer's so the two decision planes
       // stay separable in the history.
+      let audited = true
       if (decision.decision !== 'ask') {
-        pushHistory({
+        audited = pushHistory({
           sessionId: authorityKeyFor(exec),
           toolName: exec.name,
           outcome: decision.decision === 'allow' ? 'allowed-once' : 'rejected',
@@ -2680,7 +2715,13 @@ export function apply(ctx: Context, rawConfig: Config): void {
           llmReason: decision.reason,
         })
       }
-      if (decision.decision === 'allow') return next()
+      if (decision.decision === 'allow') {
+        if (!audited) {
+          denyOnAuditFailure(exec.callId)
+          return { kind: 'deny', reason: `[auto-mode audit failure] ${exec.name}` }
+        }
+        return next()
+      }
       if (decision.decision === 'deny') return { kind: 'deny', reason: `[auto-mode classifier deny] ${decision.reason}` }
       return { kind: 'ask', reason: `[auto-mode classifier asks] ${decision.reason}` }
     } catch (error) {
@@ -3056,7 +3097,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
     })
     const requestAt = requestAtByKey.get(key) ?? null
     debugLog({ ev: 'resolve', callId: req.callId ?? null, outcome, timedOut, source, seconds: status?.seconds ?? null, elapsedMs: Date.now() - t0, requestAt, requestToResolveMs: requestAt !== null ? Date.now() - requestAt : null, llmDecision: (follow as any)?.decision ?? null })
-    pushHistory({
+    const audited = pushHistory({
       sessionId: key,
       toolName: req.toolName,
       outcome,
@@ -3064,6 +3105,17 @@ export function apply(ctx: Context, rawConfig: Config): void {
       ...llmMeta,
       ...(breaker ? { breaker: true, breakerReasons } : {}),
     })
+    if (!audited) {
+      // Fail closed (APPROVAL-07): no unaudited allow may take effect. The
+      // learning bookkeeping below is skipped — an unaudited verdict must
+      // never train the confirmation layer — but the verdict map is still
+      // cleaned so a retry cannot reuse a claim from a dropped decision.
+      denyOnAuditFailure(req.callId)
+      if (req.callId !== undefined) {
+        reviewVerdicts.delete(req.callId)
+      }
+      return 'rejected'
+    }
     // Learning bookkeeping at the single convergence point, right next to the
     // history write. Only a genuine human allow on a qualified (countdown)
     // hook increments — `learnable` is produced exclusively by those four
@@ -3175,7 +3227,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       if (config.notifyUser && req.callId !== undefined) {
         queueNotice(req.agent, req.callId, `✅ 已学习放行（仍通过一次在线评审）"${req.toolName}"`)
       }
-      pushHistory({
+      const audited = pushHistory({
         sessionId: sessionKey,
         toolName: req.toolName,
         outcome: 'allowed-once',
@@ -3188,6 +3240,13 @@ export function apply(ctx: Context, rawConfig: Config): void {
         llmReason: review.reason,
         ...(attempts.length > 0 ? { attempts } : {}),
       })
+      if (!audited) {
+        // Fail closed: no unaudited learned allow may take effect. Fall
+        // through to the ordinary pipeline (same as a learning miss) — the
+        // eventual verdict carries its own audit gate below.
+        denyOnAuditFailure(req.callId)
+        return undefined
+      }
       return 'allowed-once'
     } catch (error) {
       debugLog({ ev: 'learn-error', callId: req.callId ?? null, error: error instanceof Error ? error.message : String(error) })
@@ -3252,13 +3311,17 @@ export function apply(ctx: Context, rawConfig: Config): void {
           } else if (matched.policy === 'allow') {
             // Declared-rule allow is an approval decision too: keep it in the
             // durable history/audit trail (same as rule-deny), no user notice.
-            pushHistory({
+            const audited = pushHistory({
               sessionId: sessionKey,
               toolName,
               outcome: 'allowed-once',
               source: 'rule-allow',
               llmReason: `matched ${matched.rule.source}`,
             })
+            if (!audited) {
+              denyOnAuditFailure(req.callId)
+              return 'rejected'
+            }
             return 'allowed-once'
           } else {
             return askHuman(req, undefined, next)
@@ -3321,12 +3384,16 @@ export function apply(ctx: Context, rawConfig: Config): void {
     if (staticDecision.kind === 'allow') {
       // Static-policy allow: the approval trail must not be silent about a
       // decision that permitted a tool call.
-      pushHistory({
+      const audited = pushHistory({
         sessionId: sessionKey,
         toolName,
         outcome: 'allowed-once',
         source: staticDecision.source,
       })
+      if (!audited) {
+        denyOnAuditFailure(req.callId)
+        return 'rejected'
+      }
       return 'allowed-once'
     }
     if (staticDecision.kind === 'ask-human') {
@@ -3405,13 +3472,17 @@ export function apply(ctx: Context, rawConfig: Config): void {
         // reviewer is a category-driven allow: label the history honestly
         // (G6/G11) and never show a countdown.
         const categoryAllow = classified.directive === 'auto'
-        pushHistory({
+        const audited = pushHistory({
           sessionId: sessionKey,
           toolName,
           outcome: 'allowed-once',
           source: categoryAllow ? 'category-allow' : 'auto-allow',
           ...(categoryAllow ? { category: classified.category, categoryDecision: 'auto', mode: classified.mode } : {}),
         })
+        if (!audited) {
+          denyOnAuditFailure(req.callId)
+          return 'rejected'
+        }
         return 'allowed-once'
       }
       const lowHandle: RaceHumanHandle = { claim: () => {} }

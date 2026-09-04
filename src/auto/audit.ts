@@ -57,21 +57,30 @@ export function auditRotateContent(content: string, maxBytes = MAX_AUDIT_BYTES, 
   return `${tail.slice(-keep).join('\n')}\n`
 }
 
-export function appendAuditLine(line: string): void {
+/**
+ * Append one JSONL line to the audit file. Returns whether the line was
+ * persisted. Fail-closed contract (APPROVAL-07): observational call sites may
+ * ignore the result, but every verdict commit (pushHistory) must fail closed
+ * to denied when this returns false, so no unaudited allow can take effect.
+ * The append itself is the writability check — no separate probe (a probe
+ * would only add a TOCTOU window between check and write).
+ */
+export function appendAuditLine(line: string): boolean {
   try {
     appendFileSync(AUDIT_FILE, `${line}\n`)
     if (statSync(AUDIT_FILE).size > MAX_AUDIT_BYTES) {
       const content = readFileSync(AUDIT_FILE, 'utf8')
       const rotated = auditRotateContent(content)
-      if (rotated === content) return
+      if (rotated === content) return true
       // Atomic replace (tmp + rename, same directory) so a crash mid-rotate
       // can never leave a torn audit file; the original survives write errors.
       const tmp = `${AUDIT_FILE}.tmp`
       writeFileSync(tmp, rotated)
       renameSync(tmp, AUDIT_FILE)
     }
+    return true
   } catch {
-    // Audit persistence is best-effort and never affects an approval outcome.
+    return false
   }
 }
 
