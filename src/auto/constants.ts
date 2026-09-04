@@ -17,7 +17,7 @@ export const MODEL_REASON_MAX_CHARS = 1_000
  * The name deliberately avoids the destructive / external-write /
  * security-change risk patterns so the policy sees it as an ordinary ask.
  */
-export const DIRECT_HUMAN_TOOL = 'dsa_request_human'
+export const DIRECT_HUMAN_TOOL = 'dsa_request_user'
 
 
 /**

@@ -727,7 +727,7 @@ test('T146: the learning query sits between the terminal policy-deny and risk ap
 
 test('LP3: exactly the four countdown hooks construct a learnable context', () => {
   // 2026-09-04 contract extension (user-approved): the direct-human-approval
-  // channel (dsa_request_human) builds ONE target learnable in the answerer
+  // channel (dsa_request_user) builds ONE target learnable in the answerer
   // before the learning query, so the total is 6 = four countdown hooks +
   // one query-side gate inside learnAttempt + one direct-human target. The
   // core invariant is unchanged: ordinary status-less asks never construct

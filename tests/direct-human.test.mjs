@@ -1,7 +1,7 @@
 /**
- * dsh-auto-approval-llm · direct-human-approval channel (dsa_request_human).
+ * dsh-auto-approval-llm · direct-human-approval channel (dsa_request_user).
  *
- * The agent calls dsa_request_human to route a follow-up operation to a human
+ * The agent calls dsa_request_user to route a follow-up operation to a human
  * instead of the LLM classifier; a granted approval trains the confirmation
  * layer against the TARGET operation's signature. These contracts pin the
  * policy special case (pure-human ask plane, never the classifier) and the
@@ -18,13 +18,13 @@ const artifacts = { has: () => false }
 
 // ── policy layer: the tool is pinned to the pure-human ask plane ──────────
 
-test('assessTool: dsa_request_human is a classifier-ineligible ask (never the LLM)', () => {
+test('assessTool: dsa_request_user is a classifier-ineligible ask (never the LLM)', () => {
   const verdict = assessTool({ name: DIRECT_HUMAN_TOOL, arguments: { toolName: 'memory_update' } }, roots, artifacts)
   assert.equal(verdict.decision, 'ask')
   assert.equal(verdict.classifierEligible, false)
 })
 
-test('assessTool: dsa_request_human with no args still routes to the human plane', () => {
+test('assessTool: dsa_request_user with no args still routes to the human plane', () => {
   const verdict = assessTool({ name: DIRECT_HUMAN_TOOL, arguments: {} }, roots, artifacts)
   assert.equal(verdict.decision, 'ask')
   assert.equal(verdict.classifierEligible, false)
@@ -45,9 +45,9 @@ test('assessTool: other unknown plugin tools keep the ordinary classifier-eligib
 
 // ── static wiring anchors (compile the fail-closed route in place) ────────
 
-test('static anchors: answerer routes dsa_request_human before the static lists', () => {
+test('static anchors: answerer routes dsa_request_user before the static lists', () => {
   const host = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
-  const directIdx = host.indexOf('direct-human-approval channel (dsa_request_human)')
+  const directIdx = host.indexOf('direct-human-approval channel (dsa_request_user)')
   const staticIdx = host.indexOf('const staticDecision = staticListDecision(config, toolName)')
   assert.ok(directIdx !== -1, 'answerer direct-human branch exists')
   assert.ok(staticIdx !== -1, 'static list decision still exists after the branch')
@@ -65,7 +65,7 @@ test('static anchors: the ask builds a learnable from the TARGET tool signature'
 
 test('static anchors: absent target args are normalized so a coarse signature is still learned', () => {
   // signatureFor returns undefined for an undefined args payload, which made
-  // an args-less dsa_request_human grant silently skip the confirmation
+  // an args-less dsa_request_user grant silently skip the confirmation
   // record (verified live: history showed human-allow, learning.json did not
   // move). Normalizing to {} yields a stable `toolName()` signature.
   const host = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
@@ -125,4 +125,16 @@ test('static anchors: execute refuses non-Auto sessions with a direct-execute er
   assert.match(host, /config\.directHumanEnabled !== true \|\| !isAutoExecution\(\{ agent: exec\?\.agent \}\)/, 'execute gates on the switch and Auto takeover')
   assert.match(host, /execute the target operation directly/, 'the error tells the agent to execute directly')
   assert.match(host, /do not request escalation/, 'the error forbids further escalation attempts')
+})
+
+test('static anchors: the tool was renamed to dsa_request_user (no stale old name)', () => {
+  // The direct-human tool is registered from the shared DIRECT_HUMAN_TOOL
+  // constant; a rename must land in the compiled lib and leave no stale
+  // dsa_request_human behind (the old name would silently break every
+  // session that stored it in learning signatures).
+  const constants = readFileSync(new URL('../lib/auto/constants.js', import.meta.url), 'utf8')
+  assert.ok(constants.includes("'dsa_request_user'"), 'constants carry the new name')
+  assert.ok(!constants.includes('dsa_request_human'), 'no stale old name in constants')
+  const host = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
+  assert.ok(!host.includes('dsa_request_human'), 'compiled host has no stale old name')
 })

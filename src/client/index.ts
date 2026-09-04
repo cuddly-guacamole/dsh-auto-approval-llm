@@ -345,6 +345,7 @@ interface Draft {
   autoModeNoticeEnabled: 'on' | 'off'
   breakerAntiHijackMs: string
   aiButtonPosition: 'header' | 'floating'
+  directHumanEnabled: 'on' | 'off'
   debug: 'on' | 'off'
   redactResults: 'on' | 'off'
   editDiffPreview: 'on' | 'off'
@@ -385,6 +386,7 @@ function draftOf(value: any): Draft {
     autoModeNoticeEnabled: value?.autoModeNoticeEnabled === false ? 'off' : 'on',
     breakerAntiHijackMs: String(value?.breakerAntiHijackMs ?? THRESHOLD_DEFAULTS.breakerAntiHijackMs),
     aiButtonPosition: value?.aiButtonPosition === 'floating' ? 'floating' : 'header',
+    directHumanEnabled: value?.directHumanEnabled === true ? 'on' : 'off',
     debug: value?.debug === true ? 'on' : 'off',
     redactResults: value?.redactResults === true ? 'on' : 'off',
     editDiffPreview: value?.editDiffPreview === true ? 'on' : 'off',
@@ -430,6 +432,7 @@ function valueOf(draft: Draft): any {
     autoModeNoticeEnabled: draft.autoModeNoticeEnabled === 'off' ? false : true,
     breakerAntiHijackMs: Math.max(0, Number(draft.breakerAntiHijackMs) || 0),
     aiButtonPosition: draft.aiButtonPosition,
+    directHumanEnabled: draft.directHumanEnabled === 'on',
     debug: draft.debug === 'on',
     redactResults: draft.redactResults === 'on',
     editDiffPreview: draft.editDiffPreview === 'on',
@@ -831,7 +834,7 @@ function SettingsSection() {
   // overlaid on the last-saved baseline; other cards' unsaved edits are left
   // in the local draft and never accidentally persisted by another card.
   const TOP_KEYS = ['enabled', 'autoSwitchPolicyToAsk', 'timeoutAction', 'llmReviewScope', 'llmTakeoverScope', 'defaultReviewMode', 'showSessionPanel', 'aiButtonPosition', 'autoModeNoticeEnabled']
-  const TIMER_KEYS = ['breakerAntiHijackMs', 'lowRiskSeconds', 'mediumRiskSeconds', 'highRiskSeconds', 'maxConsecutiveDenials', 'maxTotalDenials', 'reviewWaitSeconds']
+  const TIMER_KEYS = ['breakerAntiHijackMs', 'lowRiskSeconds', 'mediumRiskSeconds', 'highRiskSeconds', 'maxConsecutiveDenials', 'maxTotalDenials', 'reviewWaitSeconds', 'directHumanEnabled']
   const REVIEW_KEYS = ['reviewerProtocol', 'reviewerBaseUrl', 'reviewerModel']
   const SECURITY_KEYS = ['safetyPrompt', 'allowlist', 'denyList', 'humanOnlyList', 'rulesText', 'rulesDryRun']
   const UTILITY_KEYS = ['onboardingMessageEnabled', 'redactResults', 'editDiffPreview', 'rejectGuidance']
@@ -976,6 +979,7 @@ function SettingsSection() {
       breakerAntiHijackMs: String(THRESHOLD_DEFAULTS.breakerAntiHijackMs),
       maxConsecutiveDenials: String(THRESHOLD_DEFAULTS.maxConsecutiveDenials),
       maxTotalDenials: String(THRESHOLD_DEFAULTS.maxTotalDenials),
+      directHumanEnabled: 'off',
     })
   }
 
@@ -1432,6 +1436,11 @@ function SettingsSection() {
         style: { width: 80 },
       }),
     ), t('settings.denialBreakerHint')),
+    row(t('settings.directHuman.title'), React.createElement(CapsuleSelect, {
+      value: draft.directHumanEnabled,
+      options: onOffOptions(),
+      onChange: (v: string) => update({ directHumanEnabled: v as 'on' | 'off' }),
+    }), t('settings.directHuman.desc')),
   )
 
   // Test-result line: level-coded colors so a failed probe is unmistakable —

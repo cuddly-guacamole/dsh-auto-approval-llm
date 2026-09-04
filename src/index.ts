@@ -134,7 +134,7 @@ export interface Config {
   learningEnabled: boolean
   /** Human confirmations before a same-signature ask may auto-allow; clamped to [2,10]. */
   learningThreshold: number
-  /** Direct-human-approval channel: the agent may call dsa_request_human to route a follow-up operation to a human instead of the LLM classifier. Off by default (zero behavior change). */
+  /** Direct-human-approval channel: the agent may call dsa_request_user to route a follow-up operation to a human instead of the LLM classifier. Off by default (zero behavior change). */
   directHumanEnabled: boolean
 }
 
@@ -2545,7 +2545,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
   })
 
   // ── direct-human-approval tool ─────────────────────────────────────────
-  // dsa_request_human is the agent's explicit request for a human verdict on
+  // dsa_request_user is the agent's explicit request for a human verdict on
   // a follow-up operation. The tool itself executes nothing: the policy layer
   // pins the call onto the pure-human ask plane, the answerer routes the ask
   // through the confirmation-learning hook against the TARGET tool's
@@ -2618,7 +2618,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
         },
       } as any)
       if (disposeDirectHumanTool) {
-        ctx.effect(() => disposeDirectHumanTool, 'dsa_request_human register')
+        ctx.effect(() => disposeDirectHumanTool, 'dsa_request_user register')
       }
     } catch (error) {
       console.warn('[dsh-auto-approval-llm] failed to register direct-human tool', error instanceof Error ? error.message : String(error))
@@ -3460,7 +3460,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       }
     }
 
-    // ── direct-human-approval channel (dsa_request_human) ─────────────────
+    // ── direct-human-approval channel (dsa_request_user) ─────────────────
     // The agent asks that a FOLLOW-UP operation be judged by a human instead
     // of the LLM classifier. The channel only serves operations that are
     // safe-by-policy but plausibly misjudged as unauthorized (the classifier
