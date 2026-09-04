@@ -9,6 +9,7 @@
 import { hardDestructiveTargetReason, isProtectedProjectPath, isWithin, normalizePath, runtimeStateTargetInZone, runtimeStateTargetReason, } from './paths.js';
 import { assessShell, hardDenyShellReason } from './shell.js';
 import { isEffectiveRoutine, sensitiveBasenameAt } from './category.js';
+import { DIRECT_HUMAN_TOOL } from './constants.js';
 
 // Re-exported for callers/tests that referenced the policy-owned names; the
 // canonical definitions now live in paths.ts so shell.ts can share them
@@ -362,6 +363,15 @@ export function assessTool(exec: ExecLike, roots: Roots, artifacts: unknown): To
     const riskyReason = riskyPluginToolReason(exec.name);
     if (riskyReason !== undefined) {
         return { decision: 'ask', reason: riskyReason, classifierEligible: true };
+    }
+    // The direct-human-approval tool is the agent's explicit request for a
+    // human verdict on a follow-up operation: it must never reach the LLM
+    // classifier (the very layer the agent is asking to bypass), so it is
+    // pinned to a status-less human ask here — the same plane as the
+    // classifier-ineligible terminals above. Whether the answer trains the
+    // confirmation layer is decided in the answerer, not here.
+    if (exec.name === DIRECT_HUMAN_TOOL) {
+        return { decision: 'ask', reason: '[auto-mode direct human request]', classifierEligible: false };
     }
     // Fail closed on genuinely unknown names: a plugin/MCP tool this policy
     // cannot read must be classified independently instead of silently

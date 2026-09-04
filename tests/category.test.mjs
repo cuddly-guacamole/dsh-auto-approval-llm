@@ -726,19 +726,29 @@ test('T146: the learning query sits between the terminal policy-deny and risk ap
 })
 
 test('LP3: exactly the four countdown hooks construct a learnable context', () => {
+  // 2026-09-04 contract extension (user-approved): the direct-human-approval
+  // channel (dsa_request_human) builds ONE target learnable in the answerer
+  // before the learning query, so the total is 6 = four countdown hooks +
+  // one query-side gate inside learnAttempt + one direct-human target. The
+  // core invariant is unchanged: ordinary status-less asks never construct
+  // one, and the four qualified countdown hooks keep their positions.
   const all = [...HOST_SRC.matchAll(/learnableContextFor\(/g)]
-  assert.equal(all.length, 5, 'four record-time hooks + one query-side gate inside learnAttempt')
+  assert.equal(all.length, 6, 'four record-time hooks + one query-side gate inside learnAttempt + one direct-human target')
   const answererStart = HOST_SRC.indexOf("ev: 'request'")
   const slotY = HOST_SRC.indexOf('await learnAttempt(', answererStart)
   const preSlot = HOST_SRC.slice(answererStart, slotY)
   const postSlot = HOST_SRC.slice(slotY)
-  assert.equal([...preSlot.matchAll(/learnableContextFor\(/g)].length, 0, 'no status-less hook ever constructs one')
+  const preHits = [...preSlot.matchAll(/learnableContextFor\(/g)]
+  assert.equal(preHits.length, 1, 'only the direct-human target construction sits before the learning query')
+  const preHitGlobal = answererStart + preHits[0].index
+  assert.ok(preHitGlobal > HOST_SRC.indexOf('direct-human-approval channel'), 'the sole pre-slot construction belongs to the direct-human channel')
   assert.equal([...postSlot.matchAll(/, learnableContextFor\(/g)].length, 4, 'all four live in the countdown ask sites')
-  // 11 askHuman call sites: the four learnable countdown hooks, the LOCKED
+  // 12 askHuman call sites: the four learnable countdown hooks, the LOCKED
   // hard-reject countdown (added 2026-08-27, intentionally learnable-less),
-  // and six status-less asks (rules human / humanOnly / category-ask non-
-  // locked / manual / breaker / status-less fallbacks).
-  assert.equal([...HOST_SRC.matchAll(/askHuman\(/g)].length, 11, 'closed ask-site enum: 5 countdown + 6 status-less')
+  // the six status-less asks (rules human / humanOnly / category-ask non-
+  // locked / manual / breaker / status-less fallbacks), and the direct-human
+  // channel ask (2026-09-04, learns the target explicitly after resolution).
+  assert.equal([...HOST_SRC.matchAll(/askHuman\(/g)].length, 12, 'closed ask-site enum: 5 countdown + 6 status-less + 1 direct-human')
   const hookIndexes = [...postSlot.matchAll(/, learnableContextFor\(/g)].map((m) => m.index)
   const highAnchor = postSlot.indexOf('// HIGH')
   assert.ok(highAnchor !== -1, 'the HIGH branch marker survives compilation')

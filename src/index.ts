@@ -27,7 +27,7 @@ import { ArtifactRegistry } from './auto/artifacts.js'
 import { appendAuditLine, recordAuditClear } from './auto/audit.js'
 import { AGGRESSIVE_BUILTIN, applyCategoryDirective, CATEGORY_KEYS, categoryDirectiveFor, type CategoryKey, LOCKED_CATEGORIES, realpathCriticalReason, sensitiveBasenameAt } from './auto/category.js'
 import { sanitizeClassifierArguments, sanitizeClassifierText, sanitizeReviewReason } from './auto/classifier.js'
-import { THRESHOLD_DEFAULTS } from './auto/constants.js'
+import { DIRECT_HUMAN_TOOL, THRESHOLD_DEFAULTS } from './auto/constants.js'
 import { createDshClassifier } from './auto/dsh-classifier.js'
 import { type RaceHumanHandle, type ReviewResult, type StaticRisk, REVIEW_TIMEOUT_NOTICE, applyBreaker, approvalSource, assembleReviewerSystem, breakerNote, breakerTripped, countdownNote, createKeyedMutex, extractToolPath, followResolution, formatDenyFeedback, frameReviewerInput, lowRiskReviewOutcome, parseReview, preserveHostKeys, raceHumanDecision, reviewSuggestionNote, reviewerAutoAllowBlocked, riskFromAssessment, staticListDecision, type ContextSummary } from './auto/decision.js'
 import { loadLatencySamples, pushLatencySample, summarizeLatency, type LatencySample } from './auto/latency.js'
@@ -133,6 +133,8 @@ export interface Config {
   learningEnabled: boolean
   /** Human confirmations before a same-signature ask may auto-allow; clamped to [2,10]. */
   learningThreshold: number
+  /** Direct-human-approval channel: the agent may call dsa_request_human to route a follow-up operation to a human instead of the LLM classifier. Off by default (zero behavior change). */
+  directHumanEnabled: boolean
 }
 
 export const Config: z<Config> = z.object({
@@ -224,6 +226,10 @@ export const Config: z<Config> = z.object({
   // instead of throwing, mirroring the categoryPolicy schema/decision split.
   learningEnabled: z.boolean().default(false),
   learningThreshold: z.number().default(THRESHOLD_DEFAULTS.learningThreshold),
+  // Direct-human-approval channel: fail-closed default (off). Behavior is
+  // gated live on this key — the tool stays registered but the answerer
+  // special case only routes when enabled, so no HMR/restart semantic flip.
+  directHumanEnabled: z.boolean().default(false),
 })
 
 const AUTO_PRESET = 'auto'
@@ -2511,6 +2517,70 @@ export function apply(ctx: Context, rawConfig: Config): void {
     return symlinkEscapeReason(exec, roots, resolveDeepest)
   })
 
+  // ── direct-human-approval tool ─────────────────────────────────────────
+  // dsa_request_human is the agent's explicit request for a human verdict on
+  // a follow-up operation. The tool itself executes nothing: the policy layer
+  // pins the call onto the pure-human ask plane, the answerer routes the ask
+  // through the confirmation-learning hook against the TARGET tool's
+  // signature, and a granted approval is recorded as a human confirmation on
+  // that signature — never on this tool's own name. This registration just
+  // makes the tool visible/valid; the disposer is returned to the ctx.effect
+  // so an HMR reload unregisters it cleanly.
+  if (anyCtx.tools?.register && typeof anyCtx.tools.register === 'function') {
+    try {
+      const disposeDirectHumanTool = anyCtx.tools.register({
+        name: DIRECT_HUMAN_TOOL,
+        description:
+          'Request a human verdict on a follow-up tool operation instead of the automatic LLM classifier review. ' +
+          'Call this BEFORE the operation you believe is reasonable but may be misjudged as unauthorized; ' +
+          'the human approves or rejects it in the approval panel. Approval trains the confirmation-learning ' +
+          'layer for the named target operation (same signature), so repeated identical operations may later ' +
+          'pass without asking. Executes nothing by itself.',
+        parameters: {
+          type: 'object',
+          properties: {
+            toolName: { type: 'string', description: 'Name of the follow-up tool operation to submit for human review (e.g. "memory_update", "write").' },
+            args: { type: 'string', description: 'Optional JSON text of the target operation arguments, used to build the learned signature. Omit for a coarse tool-name-level confirmation.' },
+            reason: { type: 'string', description: 'Optional short reason for requesting a human review (bounded, display only).' },
+          },
+          required: ['toolName'],
+          additionalProperties: false,
+        },
+        output: {
+          schema: {
+            type: 'object',
+            properties: {
+              status: { type: 'string', enum: ['pending', 'granted', 'rejected'] },
+              message: { type: 'string' },
+              targetTool: { type: 'string' },
+            },
+            required: ['status', 'message', 'targetTool'],
+          },
+          render(args: any, value: any) {
+            // Contract: render returns ContentBlock[] ({type:'text', ...}),
+            // never a bare string — the host calls .some()/iterates on it.
+            return [{ type: 'text', text: value?.message ?? DIRECT_HUMAN_TOOL }]
+          },
+        },
+        execute: async (args: any) => {
+          // The human verdict is delivered by the approval answerer, which
+          // settles this call as allowed-once (granted) or rejected before
+          // execute runs; reaching execute means the panel granted it.
+          return {
+            status: 'granted',
+            message: `human approval granted for ${String(args?.toolName ?? '')}; you may retry the target operation`,
+            targetTool: String(args?.toolName ?? ''),
+          }
+        },
+      } as any)
+      if (disposeDirectHumanTool) {
+        ctx.effect(() => disposeDirectHumanTool, 'dsa_request_human register')
+      }
+    } catch (error) {
+      console.warn('[dsh-auto-approval-llm] failed to register direct-human tool', error instanceof Error ? error.message : String(error))
+    }
+  }
+
   anyCtx.on('tools/pre-execute', async (exec: any, next: any) => {
     if (!isAutoExecution(exec)) return next()
     // First-use onboarding: the first tool call of an AUTO root session (per
@@ -3343,6 +3413,105 @@ export function apply(ctx: Context, rawConfig: Config): void {
           return askHuman(req, undefined, next)
         }
       }
+    }
+
+    // ── direct-human-approval channel (dsa_request_human) ─────────────────
+    // The agent asks that a FOLLOW-UP operation be judged by a human instead
+    // of the LLM classifier. The channel only serves operations that are
+    // safe-by-policy but plausibly misjudged as unauthorized (the classifier
+    // is exactly the layer being bypassed), so a target that the static
+    // policy grades HIGH / DENY / LOCKED is refused here and must take the
+    // ordinary pipeline instead. A qualified target goes straight to a
+    // status-less human ask whose learnable is built from the TARGET's
+    // signature — a granted approval therefore trains the confirmation layer
+    // for the target operation, not for this request tool itself.
+    if (toolName === DIRECT_HUMAN_TOOL && config.directHumanEnabled === true) {
+      let targetTool: string | undefined
+      let targetArgs: unknown
+      let targetArgsText: string | undefined
+      if (typeof args === 'string') {
+        try {
+          const parsed = JSON.parse(args)
+          targetTool = typeof parsed?.toolName === 'string' ? parsed.toolName : undefined
+          targetArgs = parsed?.args
+          targetArgsText = typeof parsed?.args === 'string' ? parsed.args : undefined
+        } catch {
+          targetTool = undefined
+        }
+      } else if (args && typeof args === 'object') {
+        const rec = args as Record<string, unknown>
+        targetTool = typeof rec.toolName === 'string' ? rec.toolName : undefined
+        targetArgs = rec.args
+        targetArgsText = typeof rec.args === 'string' ? rec.args : undefined
+      }
+      if (targetTool === undefined || targetTool === '' || targetTool === DIRECT_HUMAN_TOOL) {
+        recordDecisionFeedback(req.callId, '[auto-mode direct human request] missing a valid target toolName')
+        pushHistory({
+          sessionId: sessionKey,
+          toolName,
+          outcome: 'rejected',
+          source: 'direct-human-rejected',
+          llmReason: 'missing or invalid target toolName',
+        })
+        return 'rejected'
+      }
+      // Grade the target through the same static pipeline so the channel can
+      // never smuggle a HIGH / DENY / LOCKED operation past the ordinary
+      // risk controls into a human-only shortcut.
+      const targetReq = { ...req, toolName: targetTool }
+      // Normalize an absent target-args payload to an empty object: a
+      // tool-name-level confirmation (no args) still gets a stable coarse
+      // signature (e.g. `memory_update()`), because signatureFor returns
+      // undefined for an undefined args payload and the confirmation would
+      // silently never be recorded. Empty-object args also keep the static
+      // risk grade honest.
+      const targetArgsPayload = targetArgs ?? targetArgsText ?? {}
+      const targetClassified = classifyStaticRisk(targetReq, targetArgsPayload)
+      const targetRisk = targetClassified.risk
+      const targetCategory = targetClassified.category
+      if ((targetRisk !== 'LOW' && targetRisk !== 'MEDIUM') || (targetRisk === 'MEDIUM' && targetClassified.directive === 'deny')) {
+        recordDecisionFeedback(req.callId, `[auto-mode direct human request] target "${targetTool}" is high-risk and cannot use this channel; it takes the ordinary approval pipeline`)
+        pushHistory({
+          sessionId: sessionKey,
+          toolName,
+          outcome: 'rejected',
+          source: 'direct-human-refused',
+          llmReason: `target ${targetTool} graded ${targetRisk ?? 'UNKNOWN'}`,
+          category: targetCategory,
+        })
+        return 'rejected'
+      }
+      // Build the target learnable (may be undefined when learning is off or
+      // the target is non-learnable — the human ask still happens either way).
+      // The learnable is NOT handed to askHuman (that would add a fifth
+      // learnable-construction site beyond the four countdown hooks the LP3
+      // contract pins); instead the resolution below records the confirmation
+      // explicitly when the human grants it.
+      const targetLearnable = learnableContextFor(targetReq, targetArgsPayload, {
+        risk: targetRisk,
+        category: targetCategory,
+      })
+      debugLog({ ev: 'direct-human', callId: req.callId ?? null, toolName, targetTool, targetRisk: targetRisk ?? null, learnable: targetLearnable !== undefined })
+      // Status-less explicit human ask: no countdown, no LLM takeover, no
+      // breaker interaction. The answer resolves as allowed-once (grant) or
+      // rejected (denial); the target learnable is recorded/reset below.
+      const directOutcome = await askHuman(req, undefined, next, false, undefined, undefined, false, undefined)
+      if (targetLearnable !== undefined) {
+        try {
+          await learningMutex.run(targetLearnable.key, () => {
+            if (directOutcome === 'allowed-once') {
+              recordConfirm(learningStore, targetLearnable.key, { workspace: targetLearnable.workspace, kind: targetLearnable.kind, skeleton: targetLearnable.skeleton }, Date.now())
+            } else {
+              resetConfirmation(learningStore, targetLearnable.key, Date.now())
+            }
+            persistLearning(LEARNING_FILE, learningStore)
+          })
+          debugLog({ ev: 'learn-record', callId: req.callId ?? null, source: 'direct-human', action: directOutcome === 'allowed-once' ? 'increment' : 'reset' })
+        } catch (error) {
+          debugLog({ ev: 'learn-record-error', callId: req.callId ?? null, error: error instanceof Error ? error.message : String(error) })
+        }
+      }
+      return directOutcome
     }
 
     const staticDecision = staticListDecision(config, toolName)
