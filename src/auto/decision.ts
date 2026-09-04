@@ -337,20 +337,39 @@ export type StaticListDecision =
   | { kind: 'continue' }
 
 /**
+ * Whether one user-configured list entry matches a tool name.
+ *
+ * A single trailing `*` makes the entry a prefix wildcard (`mcp__inkstone__*`
+ * matches every `mcp__inkstone__…` tool). Everything else — an exact name, a
+ * bare `*`, an embedded/multiple `*`, a leading `*` — matches by exact string
+ * equality, so an unrecognised wildcard shape can never widen a match into an
+ * unintended allow/deny (fail-closed). Exact entries behave exactly as before,
+ * which keeps every historical precise-list contract intact.
+ */
+export function toolListEntryMatches(entry: string, toolName: string): boolean {
+  if (entry.endsWith('*') && entry.indexOf('*') === entry.length - 1) {
+    const prefix = entry.slice(0, -1)
+    return prefix !== '' && toolName.startsWith(prefix)
+  }
+  return entry === toolName
+}
+
+/**
  * Pure static-list policy for one tool call, evaluated before any LLM review
- * or denial breaker. Precedence is deny > allow > human-only, exact name
- * match. The signature deliberately takes no breaker state: static-list
- * outcomes never read or mutate the breaker counters. That isolation is
- * intentional — the breaker measures LLM-review failures only, while these
- * are deterministic user-configured decisions.
+ * or denial breaker. Precedence is deny > allow > human-only; each list
+ * matches an exact tool name or a trailing-`*` prefix wildcard entry. The
+ * signature deliberately takes no breaker state: static-list outcomes never
+ * read or mutate the breaker counters. That isolation is intentional — the
+ * breaker measures LLM-review failures only, while these are deterministic
+ * user-configured decisions.
  */
 export function staticListDecision(
   lists: { denyList: readonly string[]; allowlist: readonly string[]; humanOnlyList: readonly string[] },
   toolName: string,
 ): StaticListDecision {
-  if (lists.denyList.includes(toolName)) return { kind: 'reject', source: 'denyList-deny' }
-  if (lists.allowlist.includes(toolName)) return { kind: 'allow', source: 'allowlist-allow' }
-  if (lists.humanOnlyList.includes(toolName)) return { kind: 'ask-human' }
+  if (lists.denyList.some((entry) => toolListEntryMatches(entry, toolName))) return { kind: 'reject', source: 'denyList-deny' }
+  if (lists.allowlist.some((entry) => toolListEntryMatches(entry, toolName))) return { kind: 'allow', source: 'allowlist-allow' }
+  if (lists.humanOnlyList.some((entry) => toolListEntryMatches(entry, toolName))) return { kind: 'ask-human' }
   return { kind: 'continue' }
 }
 

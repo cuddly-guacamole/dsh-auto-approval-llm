@@ -60,6 +60,7 @@ import { isReviewRetryable, retryAfterMs, retryReviewLoop, toLlmFailure, type Re
 import { type ReviewMode, loadReviewModes, normalizeReviewMode, persistReviewModes } from './auto/review-mode.js'
 import { runtimeStateReadHits } from './auto/shell.js'
 import { isLoopbackHostname, isTrustedRequest, resolvePublicReviewerTarget, reviewerProbeTargetAllowed, validateReviewerBaseUrl } from './auto/trust.js'
+import { aggregateToolStats } from './auto/tool-stats.js'
 
 export const name = 'dsh-auto-approval-llm'
 export const inject = ['approval', 'permissionPresets', 'tools', 'llm', 'agents', 'webServer', 'settings', 'commands']
@@ -1361,6 +1362,7 @@ const SETTINGS_ROUTE = '/_dsh/auto-approval-llm/settings'
 const REVIEWER_CREDENTIAL_ROUTE = '/_dsh/auto-approval-llm/reviewer-credential'
 const HISTORY_ROUTE = '/_dsh/auto-approval-llm/history'
 const HISTORY_EXPORT_ROUTE = '/_dsh/auto-approval-llm/history/export'
+const TOOL_STATS_ROUTE = '/_dsh/auto-approval-llm/tool-stats'
 const MODELS_ROUTE = '/_dsh/auto-approval-llm/models'
 const TEST_ROUTE = '/_dsh/auto-approval-llm/test'
 const SESSION_MODE_ROUTE = '/_dsh/auto-approval-llm/session-mode'
@@ -1850,6 +1852,31 @@ export function installHistoryRoute(ctx: any): void {
       res.end(bytes)
     },
   }), 'dsh-auto-approval-llm: history export route')
+}
+
+export function installToolStatsRoute(ctx: any): void {
+  const webServer = ctx.get('webServer')
+  if (!webServer) return
+  ctx.effect(() => webServer.register({
+    kind: 'exact',
+    path: TOOL_STATS_ROUTE,
+    handler: async (req: any, res: any) => {
+      if (!isTrustedRequest(req, trustedHosts)) {
+        responseJson(res, 403, { ok: false, error: 'forbidden' })
+        return
+      }
+      if (req.method !== 'GET') {
+        res.setHeader('Allow', 'GET')
+        responseJson(res, 405, { ok: false, error: 'method-not-allowed' })
+        return
+      }
+      // Aggregates the same in-memory history window the history route serves
+      // (loaded from history.jsonl at boot, capped at 200 records). Read-only:
+      // chips are advisory candidates — the actual list lives in the settings
+      // value and is edited/saved entirely client-side.
+      responseJson(res, 200, { ok: true, value: { stats: aggregateToolStats(approvalHistory) } })
+    },
+  }), 'dsh-auto-approval-llm: tool-stats route')
 }
 
 function installLearningStoreRoute(ctx: any, revoke: (key: string) => Promise<boolean>): void {
@@ -2828,6 +2855,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
   installSettingsRoute(anyCtx, settings)
   installReviewerCredentialRoute(anyCtx)
   installHistoryRoute(anyCtx)
+  installToolStatsRoute(anyCtx)
   installReviewStatusRoute(anyCtx)
   installLearningStoreRoute(anyCtx, (key: string) =>
     // Serialize revoke + persist under the same per-key mutex the learning
