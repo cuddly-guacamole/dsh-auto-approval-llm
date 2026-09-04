@@ -31,15 +31,32 @@ export interface ToolStatsRecord {
   source?: string
 }
 
+/**
+ * Sources that represent an actual adjudication of the call — by a human, the
+ * LLM classifier, or the timeout rule. Audit-only trails that fire when a call
+ * NEVER went through approval (static-allow / allowlist-allow for statically
+ * trusted tools, hard-deny / denyList-deny / policy-deny / category-deny /
+ * rule-deny for statically refused ones) are NOT adjudications: the operator
+ * never decided anything about that call, so it is not "frequently allowed /
+ * denied" evidence for the chips.
+ */
+const ADJUDICATED_SOURCES = new Set([
+  'human-allow', 'human-deny',
+  'classifier-allow', 'classifier-deny',
+  'timeout-allow', 'timeout-deny',
+  'category-allow',
+  'llm-allow', 'llm-deny',
+])
+
 /** Whether a history record belongs to the given chips outcome bucket. */
 export function recordInBucket(record: ToolStatsRecord, tab: ToolStatsTab): boolean {
   const outcome = record.outcome ?? ''
   const source = record.source ?? ''
+  if (!ADJUDICATED_SOURCES.has(source)) return false
   if (tab === 'allow') return outcome === 'allowed-once'
   if (tab === 'deny') return outcome === 'rejected'
   // Human bucket: the operator actually decided this call (human-allow /
-  // human-deny). Records auto-settled by the classifier, static lists or a
-  // timeout are not "went to a human" evidence.
+  // human-deny). Auto-settled adjudications are not "went to a human".
   return source === 'human-allow' || source === 'human-deny'
 }
 

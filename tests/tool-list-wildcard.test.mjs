@@ -62,11 +62,16 @@ test('staticListDecision: deny wildcard precedes allow wildcard on the same pref
 // ── aggregateToolStats ─────────────────────────────────────────────────────
 
 const records = [
-  // allow bucket (outcome allowed-once; static/classifier/timeout/category all land here)
+  // allow bucket — only ADJUDICATED grants (classifier/timeout/human/category).
+  // static-allow / allowlist-allow are audit-only trails of calls that never
+  // went through approval and must NOT be counted as "frequently allowed".
   { toolName: 'bash', outcome: 'allowed-once', source: 'static-allow' },
   { toolName: 'bash', outcome: 'allowed-once', source: 'classifier-allow' },
+  { toolName: 'bash', outcome: 'allowed-once', source: 'timeout-allow' },
   { toolName: 'read', outcome: 'allowed-once', source: 'classifier-allow' },
-  // deny bucket (outcome rejected)
+  { toolName: 'write', outcome: 'allowed-once', source: 'allowlist-allow' },
+  // deny bucket (outcome rejected; only adjudicated rejections count —
+  // hard-deny / denyList-deny / policy-deny never reached a decision layer).
   { toolName: 'write', outcome: 'rejected', source: 'classifier-deny' },
   { toolName: 'write', outcome: 'rejected', source: 'timeout-deny' },
   { toolName: 'edit', outcome: 'rejected', source: 'hard-deny' },
@@ -75,20 +80,33 @@ const records = [
   { toolName: 'read', outcome: 'rejected', source: 'human-deny' },
 ]
 
-test('aggregateToolStats: buckets by outcome/source and frequency-sorts', () => {
+test('aggregateToolStats: only adjudicated records are counted', () => {
   const stats = aggregateToolStats(records)
-  // allow = every allowed-once record (human-allow granted counts too);
-  // deny = every rejected record (a human-deny rejection counts too);
-  // human = records a human actually adjudicated (grant or denial).
+  // allow = adjudicated grants only: bash(2: classifier+timeout, the
+  // static-allow audit line excluded), read(1), human-allow bash adds 1 more.
   assert.deepEqual(stats.allow.map((e) => e.name), ['bash', 'read'])
-  assert.deepEqual(stats.allow.find((e) => e.name === 'bash')?.count, 3)
-  assert.deepEqual(stats.deny.map((e) => e.name), ['write', 'edit', 'read'])
+  assert.equal(stats.allow.find((e) => e.name === 'bash')?.count, 3)
+  // deny = adjudicated rejections: write(2: classifier+timeout), read(human-deny).
+  // hard-deny edit excluded (never adjudicated).
+  assert.deepEqual(stats.deny.map((e) => e.name), ['write', 'read'])
   assert.deepEqual(stats.human.map((e) => e.name), ['bash', 'read'])
 })
 
 test('aggregateToolStats: records without toolName are ignored', () => {
-  const stats = aggregateToolStats([{ outcome: 'allowed-once', source: 'human-allow' }, { toolName: 'x', outcome: 'allowed-once', source: 'x' }])
+  const stats = aggregateToolStats([{ outcome: 'allowed-once', source: 'human-allow' }, { toolName: 'x', outcome: 'allowed-once', source: 'classifier-allow' }])
   assert.deepEqual(stats.allow.map((e) => e.name), ['x'])
+})
+
+test('aggregateToolStats: never-adjudicated sources are excluded from allow/deny', () => {
+  // Statically allowed or refused calls carry audit-only sources: the operator
+  // decided nothing, so these tools must not be suggested as "often allowed /
+  // denied" (adding them to a list would change nothing).
+  for (const source of ['static-allow', 'allowlist-allow']) {
+    assert.equal(recordInBucket({ toolName: 'x', outcome: 'allowed-once', source }, 'allow'), false, `${source} excluded from allow`)
+  }
+  for (const source of ['hard-deny', 'denyList-deny', 'policy-deny', 'category-deny', 'rule-deny']) {
+    assert.equal(recordInBucket({ toolName: 'x', outcome: 'rejected', source }, 'deny'), false, `${source} excluded from deny`)
+  }
 })
 
 test('recordInBucket: human bucket only counts explicit human sources', () => {
