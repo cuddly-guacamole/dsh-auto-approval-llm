@@ -2532,6 +2532,8 @@ export function apply(ctx: Context, rawConfig: Config): void {
         name: DIRECT_HUMAN_TOOL,
         description:
           'Request a human verdict on a follow-up tool operation instead of the automatic LLM classifier review. ' +
+          'Only available in an Auto-preset session with the direct-human channel enabled; ' +
+          'in any other session calling this fails with an error telling you to execute the operation directly. ' +
           'Call this BEFORE the operation you believe is reasonable but may be misjudged as unauthorized; ' +
           'the human approves or rejects it in the approval panel. Approval trains the confirmation-learning ' +
           'layer for the named target operation (same signature), so repeated identical operations may later ' +
@@ -2562,7 +2564,22 @@ export function apply(ctx: Context, rawConfig: Config): void {
             return [{ type: 'text', text: value?.message ?? DIRECT_HUMAN_TOOL }]
           },
         },
-        execute: async (args: any) => {
+        execute: async (args: any, exec: any) => {
+          // This tool is only meaningful under an Auto-preset session with the
+          // channel enabled: the answerer routes its ask onto the pure-human
+          // plane there. In any other session the approval request is NOT
+          // answered by this plugin, so reaching execute means the call went
+          // through an ordinary pipeline that granted nothing the tool
+          // promised. Fail loudly instead of returning a fake grant — the
+          // agent must not believe a human pre-approved its target operation;
+          // it should just execute the operation directly (its normal tools
+          // still carry their own approvals).
+          if (config.directHumanEnabled !== true || !isAutoExecution({ agent: exec?.agent })) {
+            throw new Error(
+              'this session has no direct-human approval channel (requires an Auto-preset session with the direct-human channel enabled); ' +
+              'do not request escalation — execute the target operation directly through its normal tool and let the ordinary approval flow decide',
+            )
+          }
           // The human verdict is delivered by the approval answerer, which
           // settles this call as allowed-once (granted) or rejected before
           // execute runs; reaching execute means the panel granted it.
