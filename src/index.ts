@@ -2772,6 +2772,27 @@ export function apply(ctx: Context, rawConfig: Config): void {
     if (directive === 'ask') {
       return { kind: 'ask', reason: `[auto-mode category ask] ${exec.name}` }
     }
+    // Explicit allowlist (mirrored onto the pre-execute plane, 2026-09-05):
+    // the allowlist used to answer only in the approval/request answerer, but
+    // the classifier fast path below returns next() without ever creating an
+    // approval/request, so a classifier deny could override a user's explicit
+    // allowlist entry. A listed tool is the operator's declared intent — let
+    // it through BEFORE the LLM classifier, exactly as the answerer already
+    // lets it beat human-only. Category deny/ask above still wins (LOCKED /
+    // protected categories cannot be pre-authorized by a name).
+    if (listDecision.kind === 'allow') {
+      const audited = pushHistory({
+        sessionId: authorityKeyFor(exec),
+        toolName: exec.name,
+        outcome: 'allowed-once',
+        source: 'allowlist-allow',
+      })
+      if (!audited) {
+        denyOnAuditFailure(exec.callId)
+        return { kind: 'deny', reason: `[auto-mode audit failure] ${exec.name}` }
+      }
+      return next()
+    }
     if (assessment.decision === 'allow') {
       // A static-assessment allow is a verdict like any other: it takes
       // effect only if its decision audit record persisted (APPROVAL-07).

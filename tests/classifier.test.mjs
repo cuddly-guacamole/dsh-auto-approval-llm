@@ -188,8 +188,8 @@ const HOST_SRC = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8
 
 test('host wiring: pre-execute passes mode/aggressiveAuto/riskTier into the classifier payload', () => {
   const start = HOST_SRC.indexOf("'tools/pre-execute'")
-  const end = HOST_SRC.indexOf("'tools/result'")
-  const pre = HOST_SRC.slice(start, end > start ? end : start + 12000)
+  const end = HOST_SRC.indexOf("'tools/result'", start)
+  const pre = HOST_SRC.slice(start, end > start ? end : start + 20000)
   const classifyAt = pre.indexOf('classifier.classify(')
   assert.ok(classifyAt !== -1, 'classifier call site is inside pre-execute')
   const classifyBlock = pre.slice(classifyAt, classifyAt + 1200)

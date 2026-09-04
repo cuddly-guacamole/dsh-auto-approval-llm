@@ -10,6 +10,14 @@
  * mirrored onto the pre-execute plane ahead of every fast-path allow, in the
  * answerer's precedence order (rules → denyList → humanOnly).
  *
+ * 2026-09-05 (user decision): the allowlist is mirrored too. It previously
+ * answered only in the answerer, so a classifier fast-path deny could
+ * override a user's explicit allowlist entry (memory_* under allowlist was
+ * still reviewable/rejectable by the LLM). A listed tool is the operator's
+ * declared intent, so it now lets through on the pre-execute plane BEFORE
+ * the classifier — still after category deny/ask, which LOCKED/protected
+ * categories must always win.
+ *
  * Run: node --test tests/audit-preexecute-lists.test.mjs
  */
 import test from 'node:test'
@@ -55,9 +63,27 @@ test('pre-execute: rule/denyList terminals leave the same durable trail as the a
   assert.ok(pre.includes("source: 'rule-deny'"), 'rule denies write history with the rule-deny source')
   assert.ok(pre.includes("source: 'denyList-deny'"), 'denyList denies write history with the denyList-deny source')
   assert.ok(pre.includes("source: 'rule-allow'"), 'rule allows write history with the rule-allow source')
-  assert.ok(!pre.includes('allowlist-allow'), 'the allowlist is not mirrored onto the fast path (it only answers asks)')
+  assert.ok(pre.includes("source: 'allowlist-allow'"), 'the allowlist writes the same audit trail when it lets a call through')
   assert.ok(pre.includes("config.rulesText.trim() !== ''"), 'rules are only evaluated when configured')
   assert.ok(pre.includes('config.rulesDryRun'), 'rules dry-run is honored on the pre-execute plane too')
+})
+
+test('pre-execute: allowlist mirror sits after category deny/ask and before the classifier', () => {
+  const start = HOST_SRC.indexOf("'tools/pre-execute'")
+  const end = HOST_SRC.indexOf("'tools/result'", start)
+  const pre = HOST_SRC.slice(start, end)
+  const allowListAllowIdx = pre.indexOf('listDecision.kind === \'allow\'')
+  const categoryDenyIdx = pre.indexOf('[auto-mode category deny]')
+  const categoryAskIdx = pre.indexOf('[auto-mode category ask]')
+  const staticAllowIdx = pre.indexOf("assessment.decision === 'allow'")
+  const classifyIdx = pre.indexOf('classifier.classify(')
+  assert.ok(allowListAllowIdx !== -1, 'allowlist allow branch exists in pre-execute')
+  // LOCKED/protected categories must always win over an explicit name allow.
+  assert.ok(categoryDenyIdx < allowListAllowIdx, 'category deny precedes the allowlist mirror')
+  assert.ok(categoryAskIdx < allowListAllowIdx, 'category ask precedes the allowlist mirror')
+  // The allowlist lets the call through before the classifier can override it.
+  assert.ok(allowListAllowIdx < classifyIdx, 'allowlist mirror precedes the classifier fast path')
+  assert.ok(staticAllowIdx < classifyIdx, 'static allow still precedes the classifier')
 })
 
 test('pre-execute: matched user rules short-circuit exactly like the answerer (no double record)', () => {
