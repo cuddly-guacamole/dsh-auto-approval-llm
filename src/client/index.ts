@@ -1,6 +1,6 @@
 import React from 'react'
 import { Button, Input } from '@deepseek-ai/dsh-client-ui-primitives'
-import { normalizeTimeoutAction, hasBreakerNote } from '../auto/decision.js'
+import { normalizeTimeoutAction, hasBreakerNote, REVIEWER_SYSTEM, assembleReviewerSystem } from '../auto/decision.js'
 import { THRESHOLD_DEFAULTS } from '../auto/constants.js'
 import { parseRulesText } from '../auto/rules.js'
 import { installAutoPermissionIcon } from './auto-icon.js'
@@ -702,6 +702,11 @@ function SettingsSection() {
   const [openTimers, setOpenTimers] = React.useState(false)
   const [openReview, setOpenReview] = React.useState(false)
   const [openSecurity, setOpenSecurity] = React.useState(false)
+  // Whether the「评审模型会看到什么？」read-only preview is expanded. The
+  // preview is a live assembly of the CURRENT draft (REVIEWER_SYSTEM + safety
+  // prompt + rules summary), so it needs no saved state and never touches the
+  // editor below it.
+  const [showReviewerPreview, setShowReviewerPreview] = React.useState(false)
   const [openHistory, setOpenHistory] = React.useState(false)
   const [openCategory, setOpenCategory] = React.useState(false)
   const [openLearning, setOpenLearning] = React.useState(false)
@@ -711,9 +716,6 @@ function SettingsSection() {
   // In-card feedback: the most recent ok/error text for each sub-card, shown
   // inside that card's footer (not piled at the bottom of the plugin body).
   const [cardStatus, setCardStatus] = React.useState<{ id: string; kind: 'ok' | 'err'; text: string } | null>(null)
-  // Whether the security card was edited/saved in this session (drives the
-  //「未生效」badge; a never-touched card shows no badge).
-  const [securityActive, setSecurityActive] = React.useState(false)
   // Restoring defaults must enable Save even when the stored values already
   // equal the defaults; otherwise the "please click save" hint is a dead end.
   const [securityForcedDirty, setSecurityForcedDirty] = React.useState(false)
@@ -823,7 +825,6 @@ function SettingsSection() {
 
   const update = (patch: Partial<Draft>) => {
     setDraft({ ...draft, ...patch })
-    if (Object.keys(patch).some((k) => SECURITY_KEYS.includes(k))) setSecurityActive(true)
   }
 
   // Per-card ownership: saving a card only persists the fields it owns,
@@ -909,7 +910,6 @@ function SettingsSection() {
       setDraft({ ...draft, ...pick(keys, draftOf(data.value.value)) })
       setCardStatus({ id: cardId, kind: 'ok', text: t('settings.saved') })
       if (cardId === 'security') {
-        setSecurityActive(true)
         setSecurityForcedDirty(false)
       }
     } catch (e) {
@@ -962,7 +962,6 @@ function SettingsSection() {
   const resetCard = () => {
     setDraft({ ...draft, ...pick(SECURITY_KEYS, draftOf({})) })
     setCardStatus({ id: 'security', kind: 'ok', text: t('settings.defaultsRestored') })
-    setSecurityActive(true)
     setSecurityForcedDirty(true)
     setError('')
   }
@@ -1211,9 +1210,14 @@ function SettingsSection() {
     )
 
   // Textarea-style field: title block on top, control full width below.
-  const field = (label: string, children: React.ReactNode, hint?: string) =>
+  // `titleExtra` renders on the same line as the title (right-aligned), for
+  // compact actions like the reviewer-preview toggle.
+  const field = (label: string, children: React.ReactNode, hint?: string, titleExtra?: React.ReactNode) =>
     React.createElement('div', { className: 'dsa-field' },
-      React.createElement('div', { className: 'dsa-title' }, label),
+      React.createElement('div', { className: 'dsa-titleRow' },
+        React.createElement('span', { className: 'dsa-title' }, label),
+        titleExtra ? React.createElement('span', { className: 'dsa-titleExtra' }, titleExtra) : null,
+      ),
       children,
       hint ? React.createElement('small', { className: 'dsa-desc' }, hint) : null,
     )
@@ -1495,13 +1499,37 @@ function SettingsSection() {
   )
 
   const buildSecurityBody = () => React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 10 } },
-    field(t('settings.rules.safetyPrompt'), React.createElement('textarea', {
-      value: draft.safetyPrompt,
-      onChange: (e: any) => update({ safetyPrompt: e.target.value }),
-      rows: 5,
-      placeholder: t('settings.rules.safetyPromptPlaceholder'),
-      className: 'dsa-textarea',
-    })),
+    field(t('settings.rules.safetyPrompt'),
+      React.createElement(React.Fragment, null,
+        React.createElement('textarea', {
+          value: draft.safetyPrompt,
+          onChange: (e: any) => update({ safetyPrompt: e.target.value }),
+          rows: 5,
+          placeholder: t('settings.rules.safetyPromptPlaceholder'),
+          className: 'dsa-textarea',
+        }),
+        // Read-only preview of exactly what the review model receives as its
+        // system prompt: REVIEWER_SYSTEM + this safety prompt + the declared
+        // rules summary, assembled live from the CURRENT draft. Purely
+        // informational — never edits the field above and needs no save.
+        showReviewerPreview
+          ? React.createElement('div', { className: 'dsa-reviewerPreview' },
+              React.createElement('div', { className: 'dsa-reviewerPreviewHead' },
+                React.createElement('span', null, t('settings.rules.previewDesc')),
+              ),
+              React.createElement('pre', { className: 'dsa-reviewerPreviewBody' },
+                assembleReviewerSystem(draft.safetyPrompt, draft.rulesText),
+              ),
+            )
+          : null,
+      ),
+      undefined,
+      React.createElement('button', {
+        type: 'button',
+        className: showReviewerPreview ? 'dsa-segBtn dsa-segBtnActive' : 'dsa-segBtn',
+        onClick: () => setShowReviewerPreview((v) => !v),
+      }, showReviewerPreview ? t('settings.rules.previewBack') : t('settings.rules.previewShow')),
+    ),
     field(t('settings.rules.lists'),
       React.createElement(React.Fragment, null,
         React.createElement('div', { className: 'dsa-segRow' },
@@ -1907,9 +1935,7 @@ function SettingsSection() {
     subcard(t('settings.rules.title'), openSecurity, securityDirtyEff, () => setOpenSecurity((o) => !o), buildSecurityBody, buildSecurityFooter,
       securityDirtyEff
         ? React.createElement('span', { className: 'dsa-pending' }, t('settings.unsaved'))
-        : securityActive
-          ? React.createElement('span', { className: 'dsa-pending', title: t('settings.notYetEffectiveHint') }, t('settings.notYetEffective'))
-          : null, t('settings.group.safetyBase')),
+        : null, t('settings.group.safetyBase')),
     subcard(t('settings.category.title'), openCategory, categoryDirty, () => setOpenCategory((o) => !o), buildCategoryBody, buildCategoryFooter, undefined, t('settings.group.safetyBase')),
     subcard(t('settings.learning.title'), openLearning, learningDirty, () => setOpenLearning((o) => !o), buildLearningBody, () => cardFooter(LEARNING_KEYS, 'learning', learningDirty), undefined, t('settings.group.safetyBase')),
     subcard(t('settings.utility.title'), openUtility, utilityDirty, () => setOpenUtility((o) => !o), buildUtilityBody, () => cardFooter(UTILITY_KEYS, 'utility', utilityDirty)),
@@ -2456,6 +2482,10 @@ function installSettingsCardStyles(): () => void {
 .dsa-rowText{display:flex;flex-direction:column;gap:4px;min-width:0;flex:1}
 .dsa-titleRow{display:flex;align-items:center;gap:8px;min-width:0}
 .dsa-titleRow .dsa-title{flex:none}
+.dsa-titleExtra{margin-left:auto;flex:none;display:inline-flex;align-items:center}
+.dsa-reviewerPreview{border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2);overflow:hidden}
+.dsa-reviewerPreviewHead{padding:6px 10px;border-bottom:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.5}
+.dsa-reviewerPreviewBody{margin:0;padding:10px;font-family:var(--ds-font-family-code,monospace);font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-word;max-height:320px;overflow:auto;color:var(--dsw-alias-label-primary);user-select:text}
 .dsa-title{color:var(--dsw-alias-label-primary);font-size:13px;font-weight:500;line-height:1.5}
 .dsa-desc{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.5;margin:0}
 .dsa-control{flex:none;display:flex;align-items:center;gap:8px}
