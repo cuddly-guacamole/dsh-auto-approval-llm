@@ -8,6 +8,35 @@
 export const FEEDBACK_ROUTE = '/_dsh/auto-approval-llm/feedback'
 export const REVIEW_STATUS_ROUTE = '/_dsh/auto-approval-llm/review-status'
 
+// ── link-state broadcast (connection down → countdown render freeze) ───────
+// The connection watcher (remote.ts) publishes the wire state here; render
+// paths (index.ts updatePanel) poll it on their own tick — no listeners, no
+// coupling. Per-tab local state only: it never crosses to the host, so one
+// tab's outage can never pause another tab's (let alone the host's)
+// countdown. The host timer stays authoritative throughout.
+// Observed behavior at this stage: the official panel itself unmounts when
+// the wire drops and is not re-published on resume, so a frozen suffix only
+// surfaces when a panel happens to outlive an outage. The flag stays
+// harmless either way.
+let linkDown = false
+/** Publish the current wire state (true while disconnected/connecting). */
+export function setLinkDown(down: boolean): void {
+  linkDown = down
+}
+/** Whether the wire is currently down (render paths freeze on true). */
+export function isLinkDown(): boolean {
+  return linkDown
+}
+
+/**
+ * Countdown button suffix: `（Ns）` while walking, `（Ns·断线）` while
+ * frozen offline. Pure for contract tests; the regexes that read panel text
+ * (parseCountdown, breaker button match) never match this shape.
+ */
+export function formatCountdownSuffix(remainingSeconds: number, offline = false): string {
+  return offline ? `（${remainingSeconds}s·断线）` : `（${remainingSeconds}s）`
+}
+
 // Grace (ms) during which a countdown approval whose host follow is not yet
 // observable keeps being watched before the client closes the panel with the
 // recorded countdown action. Aligned with the host's follow TTL so the client

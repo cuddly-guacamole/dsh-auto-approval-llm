@@ -5,7 +5,7 @@ import { THRESHOLD_DEFAULTS } from '../auto/constants.js'
 import { parseRulesText } from '../auto/rules.js'
 import { installAutoPermissionIcon } from './auto-icon.js'
 import { zh, en } from './locale.js'
-import { computeTextNodeRewrites, createBreakerGuard, parseCountdown } from './approvals/shared.js'
+import { computeTextNodeRewrites, createBreakerGuard, formatCountdownSuffix, isLinkDown, parseCountdown } from './approvals/shared.js'
 import type { CountdownInfo } from './approvals/shared.js'
 import { watchRemoteApprovals } from './approvals/remote.js'
 
@@ -107,9 +107,18 @@ function hijackApprovalButtons(): () => void {
     if (!reject && !allow) return
     const deadline = Date.now() + info.seconds * 1000
     let interval: any
-    const apply = () => {
-      const remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000))
-      const suffix = `（${remaining}s）`
+    // Frozen display while the wire is down (断线暂停倒计时): capture the
+    // last-known remaining once and stop walking the local deadline — the
+    // deadline goes stale offline and walking it would show a number we can
+    // no longer confirm. Reconnect resumes the normal walk; a stale deadline
+    // then expires immediately and restores clean text. Observed behavior at
+    // this stage: disconnect unmounts the official panel outright and resume
+    // does not bring it back, so the frozen display only surfaces when a
+    // panel outlives the outage. Render only: the poller owns answers and is
+    // untouched, and the host timer never pauses.
+    let frozen: number | undefined
+    const renderSuffix = (remaining: number, offline: boolean) => {
+      const suffix = formatCountdownSuffix(remaining, offline)
       // Only the button that will auto-execute on timeout carries the
       // countdown; the other button stays clean.
       if (info.action === 'allow') {
@@ -117,6 +126,16 @@ function hijackApprovalButtons(): () => void {
       } else if (reject) {
         reject.textContent = `${originalText(reject)}${suffix}`
       }
+    }
+    const apply = () => {
+      if (isLinkDown()) {
+        if (frozen === undefined) frozen = Math.max(0, Math.ceil((deadline - Date.now()) / 1000))
+        renderSuffix(frozen, true)
+        return
+      }
+      frozen = undefined
+      const remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000))
+      renderSuffix(remaining, false)
       if (remaining <= 0) {
         // Expired: stop ticking but KEEP the key registered so a later scan
         // cannot re-arm this panel with the marker's static seconds — the

@@ -9,6 +9,7 @@ import {
   canonicalPendingKey,
   createSeenSessionTracker,
   forgetAnsweredKeys,
+  setLinkDown,
   startReviewPolling,
 } from './shared.js'
 import type { ApprovalHandle, ApprovalOutcome, WatcherOptions } from './shared.js'
@@ -148,8 +149,12 @@ export function watchRemoteApprovals(ctx: any, options: WatcherOptions = {}): vo
   // ── connection-resume resync ────────────────────────────────────────────
   // The official client exposes ctx.connection.state (connecting /
   // disconnected / connected, with getSnapshot+subscribe). While the stream
-  // is down, review-status polls keep failing benignly, countdown UI ticks
-  // against a stale local deadline, and the snapshot may churn unseen. On a
+  // is down, review-status polls keep failing benignly, the countdown render
+  // freezes on its last-known value (断线暂停倒计时 — local display only,
+  // the host timer never pauses), and the snapshot may churn unseen. Observed
+  // behavior at this stage: disconnect unmounts the official panel outright
+  // and resume does not bring it back (one-shot remote frames), so the freeze
+  // only shows on panels that outlive the outage. On a
   // disconnected→connected transition, resync every armed poller now (fresh
   // review-status → countdown realigned / follow panels closed) and re-run
   // the snapshot reconcile so approvals the host already dropped are closed.
@@ -175,9 +180,13 @@ export function watchRemoteApprovals(ctx: any, options: WatcherOptions = {}): vo
       return false
     }
     lastConnectionState = state.getSnapshot()
+    // Publish the wire state for render paths (countdown freeze while down).
+    // Per-tab local only — never sent to the host.
+    setLinkDown(lastConnectionState === 'disconnected' || lastConnectionState === 'connecting')
     unsubConnection = state.subscribe((next: unknown) => {
       const prev = lastConnectionState
       lastConnectionState = next
+      setLinkDown(next === 'disconnected' || next === 'connecting')
       // Only a real recovery from a down/connecting state triggers a resync;
       // steady-state connected or first connect must not. Official recovery
       // confirmation uses the same previous-state rule.
