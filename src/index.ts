@@ -2550,10 +2550,12 @@ export function apply(ctx: Context, rawConfig: Config): void {
   // pins the call onto the pure-human ask plane, the answerer routes the ask
   // through the confirmation-learning hook against the TARGET tool's
   // signature, and a granted approval is recorded as a human confirmation on
-  // that signature — never on this tool's own name. This registration just
-  // makes the tool visible/valid; the disposer is returned to the ctx.effect
-  // so an HMR reload unregisters it cleanly.
-  if (anyCtx.tools?.register && typeof anyCtx.tools.register === 'function') {
+  // that signature — never on this tool's own name. The tool is registered
+  // ONLY when the switch is on at boot: the registration happens at apply()
+  // and the tool set is not hot-swappable, so toggling the switch needs a
+  // restart to take effect (mirrors the settings-card note). With the switch
+  // off the tool is simply absent from every agent's toolset.
+  if (config.directHumanEnabled === true && anyCtx.tools?.register && typeof anyCtx.tools.register === 'function') {
     try {
       const disposeDirectHumanTool = anyCtx.tools.register({
         name: DIRECT_HUMAN_TOOL,

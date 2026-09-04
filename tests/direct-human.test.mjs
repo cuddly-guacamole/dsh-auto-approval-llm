@@ -113,14 +113,17 @@ test('static anchors: render returns a ContentBlock array, never a bare string',
 test('static anchors: the new switch defaults to off (fail closed)', () => {
   const host = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
   assert.match(host, /directHumanEnabled: z\.boolean\(\)\.default\(false\)/, 'schema defaults off')
+  assert.match(host, /config\.directHumanEnabled === true && anyCtx\.tools\?\.register/, 'registration is gated on the switch (off = tool absent from toolsets)')
   assert.match(host, /config\.directHumanEnabled === true/, 'answerer branch is gated on the switch')
 })
 
 test('static anchors: execute refuses non-Auto sessions with a direct-execute error', () => {
-  // The tool is registered globally, so it is visible to every session; in a
-  // session without Auto takeover (or with the channel disabled) reaching
-  // execute must throw a clear "execute directly" error instead of returning
-  // a fake grant the agent would mistake for a human pre-approval.
+  // The tool is registered only when the switch was on at boot (tool sets are
+  // not hot-swappable). A session can still reach execute without Auto
+  // takeover though — the switch was flipped off while running, or a non-Auto
+  // session cached the tool definition — so reaching execute must throw a
+  // clear "execute directly" error instead of returning a fake grant the
+  // agent would mistake for a human pre-approval.
   const host = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
   assert.match(host, /config\.directHumanEnabled !== true \|\| !isAutoExecution\(\{ agent: exec\?\.agent \}\)/, 'execute gates on the switch and Auto takeover')
   assert.match(host, /execute the target operation directly/, 'the error tells the agent to execute directly')
