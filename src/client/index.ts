@@ -1,7 +1,7 @@
 import React from 'react'
 import { Button, Input } from '@deepseek-ai/dsh-client-ui-primitives'
 import { normalizeTimeoutAction, hasBreakerNote, REVIEWER_SYSTEM, assembleReviewerSystem } from '../auto/decision.js'
-import { THRESHOLD_DEFAULTS } from '../auto/constants.js'
+import { THRESHOLD_DEFAULTS, DEFAULT_ALLOW_TOOL_GROUPS } from '../auto/constants.js'
 import { parseRulesText } from '../auto/rules.js'
 import { installAutoPermissionIcon } from './auto-icon.js'
 import { zh, en } from './locale.js'
@@ -727,6 +727,9 @@ function SettingsSection() {
   const PAGE_SIZE = 10
   // Which exact-list textarea the segmented tabs currently show.
   const [listTab, setListTab] = React.useState<'allow' | 'deny' | 'human'>('allow')
+  // Whether the「默认放行工具」reference list is expanded under the exact-list
+  // field (pure display of the policy's unconditional-allow catalog).
+  const [showDefaultAllow, setShowDefaultAllow] = React.useState(false)
   // Recent-tool chips: raw stats from the host route + the edited-list-derived
   // candidate chips for the ACTIVE tab. Fetched lazily once on first render of
   // the security card (chips are advisory — the list stays the source of truth).
@@ -1571,8 +1574,30 @@ function SettingsSection() {
                   : React.createElement('p', { className: 'dsa-chipDesc' }, t('settings.rules.chipsEmpty')),
               )
             : React.createElement('p', { className: 'dsa-chipDesc' }, t('settings.rules.chipsLoading')),
+        React.createElement('small', { className: 'dsa-desc', style: { display: 'block' } }, t('settings.rules.listsHint')),
+        // Reference: which tools the policy allows unconditionally (pure
+        // display of the constants catalog — these never need to be listed).
+        React.createElement('div', { className: 'dsa-chipRow', style: { marginTop: 2 } },
+          React.createElement('button', {
+            type: 'button',
+            className: showDefaultAllow ? 'dsa-segBtn dsa-segBtnActive' : 'dsa-segBtn',
+            onClick: () => setShowDefaultAllow((v) => !v),
+          }, showDefaultAllow ? t('settings.rules.defaultAllowHide') : t('settings.rules.defaultAllowShow')),
+        ),
+        showDefaultAllow
+          ? React.createElement('div', { className: 'dsa-defaultAllow' },
+              React.createElement('p', { className: 'dsa-chipDesc' }, t('settings.rules.defaultAllowDesc')),
+              ...DEFAULT_ALLOW_TOOL_GROUPS.map((group) =>
+                React.createElement('div', { key: group.label, className: 'dsa-defaultAllowGroup' },
+                  React.createElement('div', { className: 'dsa-defaultAllowGroupLabel' }, t(`settings.rules.allowGroup.${group.label}`)),
+                  React.createElement('div', { className: 'dsa-defaultAllowTools' },
+                    ...group.tools.map((tool) => React.createElement('code', { key: tool, className: 'dsa-defaultAllowTool' }, tool)),
+                  ),
+                ),
+              ),
+            )
+          : null,
       ),
-      t('settings.rules.listsHint'),
     ),
     field(t('settings.rules.rulesText'), React.createElement('textarea', {
       value: draft.rulesText,
@@ -2446,6 +2471,11 @@ function installSettingsCardStyles(): () => void {
 .dsa-chip:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}
 .dsa-chipClass{border-style:dashed;color:var(--dsw-alias-brand-primary)}
 .dsa-chipMore{border-color:transparent;color:var(--dsw-alias-label-tertiary);background:transparent}
+.dsa-defaultAllow{border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-layer-1);padding:8px 10px;display:grid;gap:8px}
+.dsa-defaultAllowGroup{display:grid;gap:4px}
+.dsa-defaultAllowGroupLabel{color:var(--dsw-alias-label-secondary);font-size:12px;font-weight:500}
+.dsa-defaultAllowTools{display:flex;flex-wrap:wrap;gap:4px}
+.dsa-defaultAllowTool{font-family:var(--ds-font-family-code,monospace);font-size:11px;color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l1);border-radius:6px;padding:1px 6px;white-space:nowrap}
 .dsa-inlineTag{white-space:nowrap;color:var(--dsw-alias-label-tertiary);font-size:12px}
 .dsa-recordClamp{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}
 .dsa-closeBtn{appearance:none;display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:none;border-radius:6px;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer}

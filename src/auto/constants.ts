@@ -19,6 +19,60 @@ export const MODEL_REASON_MAX_CHARS = 1_000
  */
 export const DIRECT_HUMAN_TOOL = 'dsa_request_user'
 
+/**
+ * Tools that the policy layer statically allows WITHOUT inspecting arguments
+ * (the unconditional-allow plane of assessTool): session/control tools,
+ * read-only Harness services, owner-scoped lifecycle control, AgentTeams
+ * coordination, read-only external lookups and orchestration calls. These are
+ * shown in the settings「默认放行工具」list. Conditionally-allowed tools
+ * (read/write/bash/web_fetch on sensitive paths etc.) are intentionally NOT
+ * here — their allow depends on path/argument inspection. This is the single
+ * source of truth for both the policy allow plane and the settings-card
+ * display, so the shown list can never drift from what the policy actually
+ * allows.
+ */
+export const DEFAULT_ALLOW_TOOL_GROUPS: ReadonlyArray<{ label: string; tools: readonly string[] }> = [
+  {
+    label: 'Session & control',
+    tools: ['ask_user_question', 'todo_write', 'get_goal', 'create_goal', 'update_goal', 'exit_plan_mode', 'skill'],
+  },
+  {
+    label: 'Read-only Harness',
+    tools: [
+      'job_output', 'job_list', 'schedule_list',
+      'session_search', 'session_event_search', 'session_trace', 'session_event_trace', 'session_event_read',
+      'terminal_read', 'terminal_list',
+      'cordis_inspect_list', 'cordis_inspect_query', 'cordis_inspect_self',
+    ],
+  },
+  {
+    label: 'Owner lifecycle control',
+    tools: ['job_kill', 'terminal_signal', 'terminal_close'],
+  },
+  {
+    label: 'AgentTeams coordination',
+    tools: [
+      'agent_teams_create', 'agent_teams_add_member', 'agent_teams_remove_member',
+      'agent_teams_create_task', 'agent_teams_claim_task', 'agent_teams_update_task',
+      'agent_teams_send_message', 'agent_teams_status', 'agent_teams_delete',
+    ],
+  },
+  {
+    label: 'Read-only external lookup',
+    tools: ['web_search', 'web_fetch', 'time', 'weather'],
+  },
+  {
+    label: 'Orchestration',
+    tools: ['subagent', 'workflow', 'ralph', 'spawn_agent', 'send_message', 'wait_agent', 'list_agents', 'interrupt_agent', 'read_thread', 'wait_threads'],
+  },
+]
+
+/** Flat, de-duplicated tool names of every {@link DEFAULT_ALLOW_TOOL_GROUPS}. */
+export const DEFAULT_ALLOW_TOOLS: readonly string[] = [
+  ...new Set(DEFAULT_ALLOW_TOOL_GROUPS.flatMap((g) => [...g.tools])),
+]
+
+
 
 /**
  * Single source of truth for numeric threshold defaults. The host Config
