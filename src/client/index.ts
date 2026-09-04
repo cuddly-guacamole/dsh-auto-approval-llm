@@ -8,12 +8,14 @@ import { zh, en } from './locale.js'
 import { computeTextNodeRewrites, createBreakerGuard, formatCountdownSuffix, isLinkDown, parseCountdown } from './approvals/shared.js'
 import type { CountdownInfo } from './approvals/shared.js'
 import { watchRemoteApprovals } from './approvals/remote.js'
+import { buildToolChips, applyChipToList, type ToolChip, type ToolStatsPayload, type ToolStatsEntry } from './tool-chips.js'
 
 export const name = 'dsh-auto-approval-llm'
 export const inject = ['slots', 'sessions']
 
 const SETTINGS_ROUTE = '/_dsh/auto-approval-llm/settings'
 const HISTORY_ROUTE = '/_dsh/auto-approval-llm/history'
+const TOOL_STATS_ROUTE = '/_dsh/auto-approval-llm/tool-stats'
 const TEST_ROUTE = '/_dsh/auto-approval-llm/test'
 const REVIEWER_CREDENTIAL_ROUTE = '/_dsh/auto-approval-llm/reviewer-credential'
 const LEARNING_STORE_ROUTE = '/_dsh/auto-approval-llm/learning-store'
@@ -720,6 +722,15 @@ function SettingsSection() {
   const PAGE_SIZE = 10
   // Which exact-list textarea the segmented tabs currently show.
   const [listTab, setListTab] = React.useState<'allow' | 'deny' | 'human'>('allow')
+  // Recent-tool chips: raw stats from the host route + the edited-list-derived
+  // candidate chips for the ACTIVE tab. Fetched lazily once on first render of
+  // the security card (chips are advisory — the list stays the source of truth).
+  const [toolStats, setToolStats] = React.useState<ToolStatsPayload | null>(null)
+  const [toolStatsError, setToolStatsError] = React.useState('')
+  // How many chips are shown for each tab before the "[…]" revealer (paged
+  // 10 at a time). Reset whenever the active tab changes.
+  const [chipLimit, setChipLimit] = React.useState(10)
+  const CHIP_PAGE = 10
 
   React.useEffect(() => {
     let disposed = false
@@ -752,6 +763,25 @@ function SettingsSection() {
       })
     return () => { disposed = true }
   }, [openHistory])
+
+  // Recent-tool chips data: fetched once the security card is first expanded
+  // (the body is lazy). No settings write happens here — the route is read-only.
+  React.useEffect(() => {
+    if (!openSecurity) return
+    if (toolStats !== null) return
+    let disposed = false
+    setToolStatsError('')
+    ;(globalThis as any).fetch(TOOL_STATS_ROUTE, { credentials: 'same-origin' })
+      .then((r: any) => r.json())
+      .then((data: any) => {
+        if (disposed || !data?.ok) return
+        setToolStats(data.value?.stats ?? null)
+      })
+      .catch((e: any) => {
+        if (!disposed) setToolStatsError(String(e))
+      })
+    return () => { disposed = true }
+  }, [openSecurity, toolStats])
 
   const refreshCredential = React.useCallback(() => {
     let disposed = false
@@ -1193,8 +1223,59 @@ function SettingsSection() {
     React.createElement('button', {
       type: 'button',
       className: listTab === id ? 'dsa-segBtn dsa-segBtnActive' : 'dsa-segBtn',
-      onClick: () => setListTab(id),
+      onClick: () => { setListTab(id); setChipLimit(CHIP_PAGE) },
     }, label)
+
+  // Active-tab list draft read/write — the chips append into the SAME string
+  // the textarea edits, so a chip click is just another edit of the list.
+  const currentListText = (): string => {
+    if (listTab === 'allow') return draft.allowlist
+    if (listTab === 'deny') return draft.denyList
+    return draft.humanOnlyList
+  }
+  const setCurrentListText = (next: string) => {
+    if (listTab === 'allow') update({ allowlist: next })
+    else if (listTab === 'deny') update({ denyList: next })
+    else update({ humanOnlyList: next })
+  }
+  const currentListEntries = (): string[] =>
+    currentListText().split(/\r?\n/).map((s) => s.trim()).filter(Boolean)
+
+  // Candidate chips for the active tab (pure; re-derives whenever the draft or
+  // the fetched stats change — the rendered list below stays in sync).
+  const activeStats = (): ToolStatsEntry[] => {
+    if (!toolStats) return []
+    return toolStats[listTab] ?? []
+  }
+  const chipsForActiveTab: ToolChip[] = toolStats
+    ? buildToolChips(activeStats(), toolStats.humanDenied ?? [], currentListEntries())
+    : []
+
+  const handleChipClick = (chip: ToolChip) => {
+    setCurrentListText(applyChipToList(currentListText(), chip))
+  }
+
+  const moreChips = () => setChipLimit((n) => n + CHIP_PAGE)
+
+  const chipNodes = (): React.ReactNode[] => {
+    const visible = chipsForActiveTab.slice(0, chipLimit)
+    const hidden = chipsForActiveTab.length - visible.length
+    const nodes = visible.map((chip) => React.createElement('button', {
+      key: chip.value,
+      type: 'button',
+      className: chip.collapsed ? 'dsa-chip dsa-chipClass' : 'dsa-chip',
+      onClick: () => handleChipClick(chip),
+    }, chip.value))
+    if (hidden > 0) {
+      nodes.push(React.createElement('button', {
+        key: '__more',
+        type: 'button',
+        className: 'dsa-chip dsa-chipMore',
+        onClick: moreChips,
+      }, t('settings.rules.chipsMore')))
+    }
+    return nodes
+  }
 
   // ── cards ────────────────────────────────────────────────────────────────
   // Four sub-cards inside the plugin card, each with its own save/discard
@@ -1438,6 +1519,21 @@ function SettingsSection() {
           rows: 4,
           className: 'dsa-textarea',
         }),
+        // Recent-tool chips (advisory candidates for the active list): fetched
+        // from the host once the card opens; clicking one edits the textarea
+        // above through the normal draft path (保存 still applies it).
+        toolStatsError
+          ? React.createElement('p', { className: 'dsa-chipDesc', style: { color: 'var(--dsw-alias-state-error-primary)' } }, t('settings.rules.chipsError'))
+          : toolStats
+            ? React.createElement(React.Fragment, null,
+                chipsForActiveTab.length > 0
+                  ? React.createElement(React.Fragment, null,
+                      React.createElement('p', { className: 'dsa-chipDesc' }, t(`settings.rules.chipsHint.${listTab}`)),
+                      React.createElement('div', { className: 'dsa-chipRow' }, ...chipNodes()),
+                    )
+                  : React.createElement('p', { className: 'dsa-chipDesc' }, t('settings.rules.chipsEmpty')),
+              )
+            : React.createElement('p', { className: 'dsa-chipDesc' }, t('settings.rules.chipsLoading')),
       ),
       t('settings.rules.listsHint'),
     ),
@@ -2308,6 +2404,13 @@ function installSettingsCardStyles(): () => void {
 .dsa-segBtn:hover{color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-label-dimmed)}
 .dsa-segBtn:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}
 .dsa-segBtnActive,.dsa-segBtnActive:hover{background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-label-dimmed)}
+.dsa-chipDesc{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.5;margin:0}
+.dsa-chipRow{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.dsa-chip{appearance:none;font:inherit;cursor:pointer;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:2px 10px;font-size:12px;line-height:1.6;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font-family:var(--ds-font-family-code,monospace)}
+.dsa-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-label-dimmed);background:var(--dsw-alias-interactive-bg-hover)}
+.dsa-chip:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}
+.dsa-chipClass{border-style:dashed;color:var(--dsw-alias-brand-primary)}
+.dsa-chipMore{border-color:transparent;color:var(--dsw-alias-label-tertiary);background:transparent}
 .dsa-inlineTag{white-space:nowrap;color:var(--dsw-alias-label-tertiary);font-size:12px}
 .dsa-recordClamp{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}
 .dsa-closeBtn{appearance:none;display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:none;border-radius:6px;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer}
