@@ -29,7 +29,7 @@ import { AGGRESSIVE_BUILTIN, applyCategoryDirective, CATEGORY_KEYS, categoryDire
 import { sanitizeClassifierArguments, sanitizeClassifierText, sanitizeReviewReason } from './auto/classifier.js'
 import { DIRECT_HUMAN_TOOL, THRESHOLD_DEFAULTS } from './auto/constants.js'
 import { createDshClassifier } from './auto/dsh-classifier.js'
-import { type RaceHumanHandle, type ReviewResult, type StaticRisk, REVIEW_TIMEOUT_NOTICE, applyBreaker, approvalSource, assembleReviewerSystem, breakerNote, breakerTripped, countdownNote, createKeyedMutex, extractToolPath, followResolution, formatDenyFeedback, frameReviewerInput, lowRiskReviewOutcome, parseReview, preserveHostKeys, raceHumanDecision, reviewSuggestionNote, reviewerAutoAllowBlocked, riskFromAssessment, staticListDecision, type ContextSummary } from './auto/decision.js'
+import { type RaceHumanHandle, type ReviewResult, type StaticRisk, REVIEW_TIMEOUT_NOTICE, applyBreaker, approvalSource, assembleReviewerSystem, breakerNote, breakerTripped, countdownNote, createKeyedMutex, extractToolPath, followResolution, formatDenyFeedback, frameReviewerInput, lowRiskReviewOutcome, parseReview, unattendedMustFailClosed, preserveHostKeys, raceHumanDecision, reviewSuggestionNote, reviewerAutoAllowBlocked, riskFromAssessment, staticListDecision, type ContextSummary } from './auto/decision.js'
 import { loadLatencySamples, pushLatencySample, summarizeLatency, type LatencySample } from './auto/latency.js'
 import { buildAskReason, buildEditDiff, buildEditDiffText, EDIT_DIFF_ARGS_MAX_CHARS, EDIT_DIFF_TOOLS } from './auto/editdiff.js'
 import {
@@ -426,7 +426,7 @@ export function resolveConfig(raw: Config): Config {
 // The action the host countdown takes when nobody responds, per risk tier and
 // the configured timeoutAction ('reject' | 'allow' | 'low-risk-allow'). Only
 // LOW is auto-approved by 'low-risk-allow'; MEDIUM/HIGH stay fail-closed.
-function riskTimedOutAction(risk: 'LOW' | 'MEDIUM' | 'HIGH', action: string, unattended: boolean): 'allow' | 'reject' {
+export function riskTimedOutAction(risk: 'LOW' | 'MEDIUM' | 'HIGH', action: string, unattended: boolean): 'allow' | 'reject' {
   if (unattended) return risk === 'HIGH' ? 'reject' : 'allow'
   if (action === 'allow') return 'allow'
   if (action === 'low-risk-allow') return risk === 'LOW' ? 'allow' : 'reject'
@@ -3872,6 +3872,26 @@ export function apply(ctx: Context, rawConfig: Config): void {
           // deny CRITICAL); it must NOT take over and auto-allow — surface to a
           // human instead. DENY stays decisive.
           const blockedAllow = reviewerAutoAllowBlocked(review as any)
+          if (autoUnattended && unattendedMustFailClosed(review)) {
+            // Unattended fail-closed (LOW parity): a reviewer failure or a
+            // CRITICAL-blocked ALLOW settles as rejected right away instead
+            // of riding the countdown into riskTimedOutAction('MEDIUM', …,
+            // unattended) = allow. The registered verdict keeps the
+            // resolution labeled 'llm-failed' so the breaker is not fed.
+            recordDecisionFeedback(req.callId, formatDenyFeedback('timeout'))
+            mediumHandle.claim('rejected')
+            reviewStates.set(req.callId, {
+              risk: staticRisk,
+              phase: 'follow',
+              action: 'reject',
+              seconds: 0,
+              note,
+              source: 'llm',
+            })
+            followExpiry.set(req.callId, Date.now() + FOLLOW_STATE_TTL_MS)
+            debugLog({ ev: 'follow', callId: req.callId, decision: review.decision, tookMs: Date.now() - reviewStart, unattendedFailClosed: true })
+            return
+          }
           if ((llmTakeover || autoUnattended) && !blockedAllow && (review.decision === 'ALLOW' || review.decision === 'DENY')) {
             if (review.decision === 'DENY') {
               recordDecisionFeedback(req.callId, formatDenyFeedback('llm', { toolName, reason: review.reason }))

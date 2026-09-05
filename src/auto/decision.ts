@@ -247,6 +247,24 @@ export function lowRiskReviewOutcome(review: {
 }
 
 /**
+ * Whether an UNATTENDED session must settle a MEDIUM ask as rejected
+ * immediately instead of letting the countdown expire into
+ * riskTimedOutAction('MEDIUM', …, unattended) = allow. Two verdicts must
+ * never ride that timeout: a reviewer failure (automation broke — mirrors
+ * the LOW branch, which fails closed on failure in every mode) and a
+ * CRITICAL-flagged ALLOW the auto-allow guard blocked (the reviewer
+ * contradicted itself). A genuine ESCALATE without failure is a deliberate
+ * hand-off to the timeout semantics and is out of scope.
+ */
+export function unattendedMustFailClosed(review: {
+  decision: string
+  failure?: string
+  riskLevel?: string
+}): boolean {
+  return review.failure !== undefined || reviewerAutoAllowBlocked(review)
+}
+
+/**
  * Fields that are configured host-side (via patch/YAML) and never edited by
  * the browser settings card. A card save must keep whatever the current
  * stored value holds for these — both when the submission omits them (the
