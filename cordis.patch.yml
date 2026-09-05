@@ -23,6 +23,14 @@
         sandbox: danger-full-access
         approval: never
 
+# Premise: the host base patch (dsh-base cordis.patch.yml) pins the approval
+# service policy to 'never' when DSH_PERMISSION_MODE=danger-full-access, and
+# the preset derive falls back to that base policy — cold sessions then derive
+# as danger-full-access, never as auto, so this plugin stays inactive (the
+# runtime autoSwitchPolicyToAsk guard cannot help: it only flips sessions that
+# already derived as auto). Keep the base policy at its default 'ask' wherever
+# auto approval is expected.
+#
 # Config values are pinned against the z.object defaults in src/index.ts.
 # The plugin's loader ENTRY is created by this insert row — the profile
 # bundles array only supplies patch layers, it does not create entries.

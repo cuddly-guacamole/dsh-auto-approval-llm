@@ -2259,6 +2259,15 @@ function autoPermissionAuthority(exec: any, parentAgent: any, permissionPresets:
 export function apply(ctx: Context, rawConfig: Config): void {
   const anyCtx = ctx as any
   const approval = anyCtx.get('approval')
+  // Premise made explicit (F2-03): the host derives a cold session's approval
+  // from the BASE approval policy, which the dsh base patch pins to 'never'
+  // when DSH_PERMISSION_MODE=danger-full-access. In that environment a cold
+  // session derives as danger-full-access, never as Auto, so this plugin
+  // stays inactive for it — fail-closed direction, but totally silent. Warn
+  // once at boot so the premise is on the record.
+  if ((approval as any)?.config?.policy === 'never') {
+    console.warn('[dsh-auto-approval-llm] base approval policy is never (DSH_PERMISSION_MODE=danger-full-access?): cold sessions will not be detected as Auto, so auto approval stays inactive until the base policy is ask.')
+  }
   const permissionPresets = anyCtx.get('permissionPresets')
   const tools = anyCtx.get('tools')
   const llm = anyCtx.get('llm')
