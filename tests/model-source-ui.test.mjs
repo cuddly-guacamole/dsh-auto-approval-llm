@@ -143,3 +143,15 @@ test('client bundle: reasoning-effort and output-budget controls are wired', () 
     assert.ok(client.includes(`value: "${v}"`), `reasoning preset ${v} is offered`)
   }
 })
+
+test('client bundle: reasoning picker fetches adapter-declared efforts per preset lane', () => {
+  // 2026-09-06 (dynamic picker): the card fetches /reasoning-efforts for the
+  // lane's CURRENT preset pair and narrows the picker to that model's declared
+  // efforts; a stale response for a pair the user switched away from is
+  // dropped; no catalog → the full vocabulary fallback stays available.
+  assert.ok(client.includes('laneEfforts'), 'per-lane effort catalog state is bundled')
+  assert.ok(client.includes('latestEffortPair'), 'the stale-response guard ref is bundled')
+  assert.ok(client.includes('REASONING_EFFORTS_ROUTE}?provider=') || client.includes('REASONING_EFFORTS_ROUTE}?provider=${encodeURIComponent'), 'the client fetches the host reasoning-efforts route with the lane pair')
+  assert.ok(client.includes('draft.reviewerSource === "preset"') || client.includes('draft.reviewerSource === \'preset\''), 'reviewer efforts load only on a preset source')
+  assert.ok(client.includes('options.some((o) => o.value === current)'), 'a stored effort outside the catalog is kept visible')
+})

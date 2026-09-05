@@ -806,6 +806,20 @@ function SettingsSection() {
   // built-in options — never a blocking banner.
   const [llmProviders, setLlmProviders] = React.useState<{ id: string; name: string }[] | null>(null)
   const [llmPresetModels, setLlmPresetModels] = React.useState<{ provider: string; id: string; name: string }[] | null>(null)
+  // Reasoning-effort catalog for each preset lane, fetched from the host
+  // resolveModelInfo route for the lane's CURRENT provider/model pair (2026-09-06,
+  // dynamic picker). null = not loaded / no preset pair; [] = the model has no
+  // declared efforts (default-only picker). The stale guard below discards any
+  // response for a pair the user already switched away from, so the cached
+  // catalog always belongs to the current pair once the latest fetch lands.
+  const [laneEfforts, setLaneEfforts] = React.useState<{
+    classifier: { pair: string; efforts: { id: string; name: string }[] } | null
+    reviewer: { pair: string; efforts: { id: string; name: string }[] } | null
+  }>({ classifier: null, reviewer: null })
+  // Latest requested pair per lane, so a slow effort response for a pair the
+  // user already switched away from is discarded instead of mislabeling the
+  // current model's options (stale-catalog guard, 2026-09-06).
+  const latestEffortPair = React.useRef<{ classifier: string; reviewer: string }>({ classifier: '', reviewer: '' })
   // In-card feedback: the most recent ok/error text for each sub-card, shown
   // inside that card's footer (not piled at the bottom of the plugin body).
   const [cardStatus, setCardStatus] = React.useState<{ id: string; kind: 'ok' | 'err'; text: string } | null>(null)
@@ -950,6 +964,36 @@ function SettingsSection() {
     void loadPresets()
     return () => { disposed = true }
   }, [openReview])
+
+  // Dynamic reasoning-effort catalog (2026-09-06): while the review card is
+  // open, refetch each preset lane's adapter-declared efforts whenever its
+  // provider/model pair changes (choosePreset / manual input). A lane that is
+  // not on a concrete preset pair keeps null → the picker falls back to the
+  // full vocabulary; a model without declared efforts yields [] → the picker
+  // offers the default entry only. latestEffortPair drops a response for a
+  // pair the user already switched away from.
+  React.useEffect(() => {
+    if (!openReview || !draft) return
+    const fetchEfforts = async (lane: 'classifier' | 'reviewer', provider: string, model: string) => {
+      const pair = `${provider}/${model}`
+      latestEffortPair.current[lane] = pair
+      try {
+        const r = await (globalThis as any).fetch(`${REASONING_EFFORTS_ROUTE}?provider=${encodeURIComponent(provider)}&model=${encodeURIComponent(model)}`, { credentials: 'same-origin' })
+        const data = await r.json()
+        if (latestEffortPair.current[lane] !== pair) return
+        setLaneEfforts((prev) => ({ ...prev, [lane]: { pair, efforts: data?.ok ? (data.value?.efforts ?? []) : [] } }))
+      } catch {
+        if (latestEffortPair.current[lane] !== pair) return
+        setLaneEfforts((prev) => ({ ...prev, [lane]: { pair, efforts: [] } }))
+      }
+    }
+    if (draft.reviewerSource === 'preset' && draft.reviewerProvider && draft.reviewerModel) {
+      void fetchEfforts('reviewer', draft.reviewerProvider, draft.reviewerModel)
+    }
+    if (draft.classifierSource === 'preset' && draft.classifierProvider && draft.classifierModel) {
+      void fetchEfforts('classifier', draft.classifierProvider, draft.classifierModel)
+    }
+  }, [openReview, draft?.reviewerSource, draft?.reviewerProvider, draft?.reviewerModel, draft?.classifierSource, draft?.classifierProvider, draft?.classifierModel])
 
   React.useEffect(() => {
     if (!openLearning) return
@@ -1758,6 +1802,28 @@ function SettingsSection() {
     )
   }
 
+  // Reasoning-effort options for one lane. With a concrete preset pair whose
+  // adapter-declared catalog is loaded, the picker offers exactly that model's
+  // efforts (plus the '' default); the stored value is kept visible even when
+  // it is not in the catalog, so a configured-but-unsupported effort is never
+  // silently hidden. Without a catalog (session/endpoint source, empty pair,
+  // load failure) the full vocabulary is offered — the host accepts every
+  // value and an unsupported one fails that call loudly, never silently.
+  const laneReasoningOptions = (lane: 'classifier' | 'reviewer'): CapsuleOption[] => {
+    const current = lane === 'classifier' ? (draft.classifierReasoning ?? '') : (draft.reviewerReasoning ?? '')
+    const loaded = laneEfforts[lane]
+    if (!loaded || loaded.efforts.length === 0) return reasoningOptions()
+    const options: CapsuleOption[] = [{ value: '', label: t('option.reasoning.default') }]
+    for (const e of loaded.efforts) {
+      if (e.id === '') continue
+      options.push({ value: e.id, label: e.name || e.id })
+    }
+    if (current !== '' && !options.some((o) => o.value === current)) {
+      options.push({ value: current, label: current })
+    }
+    return options
+  }
+
   const buildReviewBody = () => React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 10 } },
     React.createElement('p', { className: 'dsa-hint', style: { margin: 0 } }, t('settings.reviewer.description')),
     sourceSection('classifier'),
@@ -1769,12 +1835,12 @@ function SettingsSection() {
       React.createElement('p', { className: 'dsa-hint', style: { margin: '4px 0 8px' } }, t('settings.reviewer.paramsHint')),
       row(t('settings.reviewer.reviewerReasoning'), React.createElement(CapsuleSelect, {
         value: draft.reviewerReasoning ?? '',
-        options: reasoningOptions(),
+        options: laneReasoningOptions('reviewer'),
         onChange: (v: string) => update({ reviewerReasoning: v }),
       }), t('settings.reviewer.reasoningHint')),
       row(t('settings.reviewer.classifierReasoning'), React.createElement(CapsuleSelect, {
         value: draft.classifierReasoning ?? '',
-        options: reasoningOptions(),
+        options: laneReasoningOptions('classifier'),
         onChange: (v: string) => update({ classifierReasoning: v }),
       }), t('settings.reviewer.reasoningHint')),
       row(t('settings.reviewer.reviewerMaxTokens'), React.createElement('input', {
