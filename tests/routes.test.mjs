@@ -14,7 +14,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import {
-  installHistoryRoute, installReviewStatusRoute, installSessionModeRoute, installSettingsRoute,
+  installHistoryRoute, installLlmCatalogRoutes, installReviewStatusRoute, installSessionModeRoute, installSettingsRoute,
 } from '../lib/index.js'
 
 const LOOPBACK = { method: 'GET', headers: { host: 'localhost:3080' }, socket: { remoteAddress: '127.0.0.1' } }
@@ -138,6 +138,50 @@ test('history registers exactly one route; the models and export routes stay del
   const compiled = readFileSync(fileURLToPath(new URL('../lib/index.js', import.meta.url)), 'utf8')
   assert.ok(!compiled.includes('auto-approval-llm/models'), 'the retired models route is gone')
   assert.ok(!compiled.includes('auto-approval-llm/history/export'), 'the retired history export route is gone')
+})
+
+// ── llm catalog routes (Issue #5 model-source pickers) ────────────────────
+
+function fakeLlm({ providers = [], modelsByProvider = {} } = {}) {
+  return {
+    listProviders: () => providers.map((p) => ({ id: p.id, name: p.name ?? p.id })),
+    listModels: async (provider) => (modelsByProvider[provider] ?? []).map((m) => ({ provider, id: m.id, name: m.name ?? m.id })),
+  }
+}
+
+test('llm catalog: providers GET returns the registered adapter routes on the loopback plane', async () => {
+  const llm = fakeLlm({ providers: [{ id: 'deepseek', name: 'DeepSeek' }, { id: 'anthropic', name: 'Anthropic' }] })
+  const { registrations: regs } = capture(installLlmCatalogRoutes, llm)
+  assert.equal(regs.length, 2, 'providers + llm-models routes register')
+  const handler = handlerOf(regs, 'providers')
+  const res = await callJson(handler, LOOPBACK)
+  assert.equal(res.status, 200)
+  assert.deepEqual(res.body.value.providers, [{ id: 'deepseek', name: 'DeepSeek' }, { id: 'anthropic', name: 'Anthropic' }])
+})
+
+test('llm catalog: llm-models GET lists the provider models; foreign Host 403', async () => {
+  const llm = fakeLlm({ modelsByProvider: { deepseek: [{ id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash' }] } })
+  const { registrations: regs } = capture(installLlmCatalogRoutes, llm)
+  const handler = handlerOf(regs, 'llm-models')
+  const ok = await callJson(handler, { ...LOOPBACK, url: '/_dsh/auto-approval-llm/llm-models?provider=deepseek' })
+  assert.equal(ok.status, 200)
+  assert.deepEqual(ok.body.value.models, [{ provider: 'deepseek', id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash' }])
+  const denied = await callJson(handler, { ...LOOPBACK, url: '/_dsh/auto-approval-llm/llm-models?provider=deepseek', headers: { host: 'evil.example' }, socket: { remoteAddress: '10.0.0.7' } })
+  assert.equal(denied.status, 403)
+})
+
+test('llm catalog: llm-models without a provider or for an unknown provider returns 400', async () => {
+  const { registrations: regs } = capture(installLlmCatalogRoutes, fakeLlm())
+  const handler = handlerOf(regs, 'llm-models')
+  const missing = await callJson(handler, { ...LOOPBACK, url: '/_dsh/auto-approval-llm/llm-models' })
+  assert.equal(missing.status, 400)
+  assert.equal(missing.body.error, 'provider is required')
+  const throwing = fakeLlm({})
+  throwing.listModels = async () => { throw new Error('NO_ADAPTER') }
+  const { registrations: regs2 } = capture(installLlmCatalogRoutes, throwing)
+  const handler2 = handlerOf(regs2, 'llm-models')
+  const bad = await callJson(handler2, { ...LOOPBACK, url: '/_dsh/auto-approval-llm/llm-models?provider=nope' })
+  assert.equal(bad.status, 400)
 })
 
 test('review-status GET: never 404 — unknown callId returns ok:false at 200', async () => {

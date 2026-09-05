@@ -3597,13 +3597,16 @@ test('currentPreset: rc.1 current() receives the session object directly', () =>
   assert.equal(currentPreset(permissionPresets, null), undefined)
 })
 
-test('reviewer route gate: the two-source disjunction stays pinned at both pipeline sites (baseUrl / session fallback)', () => {
+test('reviewer route gate: the three-source disjunction stays pinned at both pipeline sites (baseUrl / session fallback / custom host pair)', () => {
   // The production judgment is an inline expression inside apply(): once for
   // the confirmation-learning gate, once for the main risk pipeline that owns
   // the LOW no-route direct-allow branch. Pin its compiled shape so retiring
-  // any of the three sources fails here instead of silently flipping behavior.
+  // any of the three sources fails here instead of silently flipping behavior
+  // (2026-09-05: the custom host pair joined the disjunction for Issue #5 —
+  // without it a custom reviewer model would never gate on and LOW would
+  // direct-allow silently).
   const host = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
-  const matches = host.match(/\!\!\(config\.reviewerBaseUrl \|\| sessionModelRoute\(req\.agent\.session\)\)/g) ?? []
+  const matches = host.match(/\!\!\(config\.reviewerBaseUrl \|\| sessionModelRoute\(req\.agent\.session\) \|\| \(config\.reviewerModelSource === 'custom' && config\.reviewerHostProvider\.length > 0 && config\.reviewerHostModel\.length > 0\)\)/g) ?? []
   assert.equal(matches.length, 2, 'route-availability expression must gate both the learning path and the main review pipeline')
 })
 

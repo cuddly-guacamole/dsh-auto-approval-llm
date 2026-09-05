@@ -102,6 +102,16 @@ export interface Config {
   tempRoots?: string[]
   classifierTimeoutMs?: number
   classifierMaxOutputTokens?: number
+  /** Fast-decision lane model source: follow the session model (default) or use an explicit provider/model pair. */
+  classifierModelSource: 'session' | 'custom'
+  /** Custom fast-decision provider/model; honored only while classifierModelSource==='custom' (normalized to '' otherwise). */
+  classifierProvider: string
+  classifierModel: string
+  /** Deep-review lane model source (offline lane): session fallback (default) or explicit host provider/model. Orthogonal to the online endpoint trio. */
+  reviewerModelSource: 'session' | 'custom'
+  /** Custom deep-review host provider/model; honored only while reviewerModelSource==='custom' and no online baseUrl. */
+  reviewerHostProvider: string
+  reviewerHostModel: string
   /** Extra LLM review attempts after the first (0 = single-shot, 1 = default). */
   reviewMaxRetries?: number
   /** Seconds one reviewer attempt may wait (per-attempt timeout). */
@@ -185,6 +195,18 @@ export const Config: z<Config> = z.object({
   tempRoots: z.array(z.string()).default([]),
   classifierTimeoutMs: z.number().default(8_000).min(100).max(60_000),
   classifierMaxOutputTokens: z.number().default(1_024).min(64).max(4_096),
+  // Model-source switches default to 'session' so behavior stays byte-identical
+  // unless the operator opts into a custom provider/model pair. Keys carry
+  // .default('') (never a bare optional) so a hand-written settings/patch file
+  // with one side only cannot reach the classifier constructor half-wired —
+  // resolveConfig normalizes anyway, this is the schema-level backstop
+  // (2026-08-26 half-configuration bootstrap crash precedent).
+  classifierModelSource: z.union(['session', 'custom'] as const).default('session'),
+  classifierProvider: z.string().default(''),
+  classifierModel: z.string().default(''),
+  reviewerModelSource: z.union(['session', 'custom'] as const).default('session'),
+  reviewerHostProvider: z.string().default(''),
+  reviewerHostModel: z.string().default(''),
   // Extra LLM review attempts after the first (0 = off, matching the old
   // single-shot behavior). Calibrated against measured review latency (p95 ≈
   // 3.06s): the rolling budget keeps 1 retry affordable on every risk path.
@@ -402,8 +424,32 @@ export function resolveConfig(raw: Config): Config {
   if (String(raw.reviewerBaseUrl ?? '').trim().length > 0 && String(raw.reviewerModel ?? '').trim().length === 0) {
     console.warn('[dsh-auto-approval-llm] reviewerBaseUrl set without reviewerModel: direct review needs base URL + model name + API key, so this combination counts as unconfigured and review follows the session model')
   }
+  // Model-source normalization (2026-09-05, Issue #5): the custom provider/model
+  // pair is honored only while its lane's source switch says 'custom' AND the
+  // pair is complete. Any other combination (source='session' with leftovers,
+  // source='custom' half-configured, empty strings) is normalized to a clean
+  // session lane — warn and never throw, so a hand-written settings file can
+  // never crash bootstrap (2026-08-26 half-configuration precedent).
+  const classifierCustom = raw.classifierModelSource === 'custom'
+    && String(raw.classifierProvider ?? '').trim().length > 0
+    && String(raw.classifierModel ?? '').trim().length > 0
+  if (raw.classifierModelSource === 'custom' && !classifierCustom) {
+    console.warn('[dsh-auto-approval-llm] classifierModelSource=custom without a complete provider/model pair — ignoring the custom lane, following the session model')
+  }
+  const reviewerCustom = raw.reviewerModelSource === 'custom'
+    && String(raw.reviewerHostProvider ?? '').trim().length > 0
+    && String(raw.reviewerHostModel ?? '').trim().length > 0
+  if (raw.reviewerModelSource === 'custom' && !reviewerCustom) {
+    console.warn('[dsh-auto-approval-llm] reviewerModelSource=custom without a complete provider/model pair — ignoring the custom lane, following the session model')
+  }
   return {
     ...raw,
+    classifierModelSource: classifierCustom ? 'custom' : 'session',
+    classifierProvider: classifierCustom ? String(raw.classifierProvider).trim() : '',
+    classifierModel: classifierCustom ? String(raw.classifierModel).trim() : '',
+    reviewerModelSource: reviewerCustom ? 'custom' : 'session',
+    reviewerHostProvider: reviewerCustom ? String(raw.reviewerHostProvider).trim() : '',
+    reviewerHostModel: reviewerCustom ? String(raw.reviewerHostModel).trim() : '',
     timeoutAction,
     categoryPolicy,
     categoryMode: raw.categoryMode === 'aggressive' ? 'aggressive' : 'standard',
@@ -639,7 +685,24 @@ export async function buildReviewSnapshot(
     debugLog({ ev: 'reviewer-incomplete', callId: req.callId, baseUrl: validated.baseUrl, missing })
   }
 
-  const route = sessionModelRoute(session)
+  // Offline lane route selection (Issue #5): when no online endpoint is
+  // configured, the deep review rides the host LLM through a provider/model
+  // route. The default 'session' source follows the session model exactly as
+  // before; an explicit 'custom' source (complete pair, normalized by
+  // resolveConfig) fixes a provider/model of the operator's choice. A custom
+  // source that somehow reaches here half-wired fails loudly instead of
+  // silently degrading to the session model — the operator asked for a
+  // specific model, and a silent fallback would hide a misconfiguration.
+  let route: { provider: string; model: string } | undefined
+  if (config.reviewerModelSource === 'custom') {
+    if (config.reviewerHostProvider.length > 0 && config.reviewerHostModel.length > 0) {
+      route = { provider: config.reviewerHostProvider, model: config.reviewerHostModel }
+    } else {
+      return { failure: 'reviewer custom source needs provider and model' }
+    }
+  } else {
+    route = sessionModelRoute(session)
+  }
   if (!route) return { failure: 'no reviewer route' }
   return { online: false, payload, system, route }
 }
@@ -1399,6 +1462,12 @@ const TEST_ROUTE = '/_dsh/auto-approval-llm/test'
 const SESSION_MODE_ROUTE = '/_dsh/auto-approval-llm/session-mode'
 const REVIEW_STATUS_ROUTE = '/_dsh/auto-approval-llm/review-status'
 const STATS_ROUTE = '/_dsh/auto-approval-llm/stats'
+// Provider/model catalog feeds the Issue #5 model-source pickers in the
+// settings card. Named llm-models (not /models) so the retired /models route
+// — whose anti-resurrection anchor pins the exact string in the compiled host —
+// stays gone; these are new live consumers for a new UI, not a resurrection.
+const PROVIDERS_ROUTE = '/_dsh/auto-approval-llm/providers'
+const LLM_MODELS_ROUTE = '/_dsh/auto-approval-llm/llm-models'
 const LEARNING_STORE_ROUTE = '/_dsh/auto-approval-llm/learning-store'
 const SETTINGS_NS = 'auto-approval-llm' as any
 
@@ -2115,6 +2184,74 @@ function installTestRoute(ctx: any, llm: any): void {
   }), 'dsh-auto-approval-llm: test route')
 }
 
+// Provider/model catalog for the Issue #5 model-source pickers. Read-only
+// display metadata (adapter route ids + discovered models), no credentials and
+// no adapter internals cross the wire (dsh-llm already detaches these). Sits
+// on the same loopback-only plane as the settings card that consumes it.
+export function installLlmCatalogRoutes(ctx: any, llm: any): void {
+  const webServer = ctx.get('webServer')
+  if (!webServer) return
+  ctx.effect(() => webServer.register({
+    kind: 'exact',
+    path: PROVIDERS_ROUTE,
+    handler: async (req: any, res: any) => {
+      if (!isTrustedRequest(req, [])) {
+        responseJson(res, 403, { ok: false, error: 'forbidden' })
+        return
+      }
+      if (req.method !== 'GET') {
+        res.setHeader('Allow', 'GET')
+        responseJson(res, 405, { ok: false, error: 'method-not-allowed' })
+        return
+      }
+      try {
+        const providers = (llm?.listProviders?.() ?? []).map((p: any) => ({ id: p.id, name: p.name ?? p.id }))
+        responseJson(res, 200, { ok: true, value: { providers } })
+      } catch (error) {
+        responseJson(res, 400, {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      }
+    },
+  }), 'dsh-auto-approval-llm: providers route')
+  ctx.effect(() => webServer.register({
+    kind: 'exact',
+    path: LLM_MODELS_ROUTE,
+    handler: async (req: any, res: any) => {
+      if (!isTrustedRequest(req, [])) {
+        responseJson(res, 403, { ok: false, error: 'forbidden' })
+        return
+      }
+      if (req.method !== 'GET') {
+        res.setHeader('Allow', 'GET')
+        responseJson(res, 405, { ok: false, error: 'method-not-allowed' })
+        return
+      }
+      const url = new URL(req.url ?? '/', 'http://x')
+      const provider = url.searchParams.get('provider') ?? ''
+      if (!provider) {
+        responseJson(res, 400, { ok: false, error: 'provider is required' })
+        return
+      }
+      try {
+        const models = await llm.listModels(provider)
+        responseJson(res, 200, {
+          ok: true,
+          value: { models: models.map((m: any) => ({ provider: m.provider, id: m.id, name: m.name ?? m.id })) },
+        })
+      } catch (error) {
+        // Unregistered provider surfaces as NO_ADAPTER — a 400 with the
+        // adapter's message beats a bare stack in the picker.
+        responseJson(res, 400, {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      }
+    },
+  }), 'dsh-auto-approval-llm: llm-models route')
+}
+
 export function installSessionModeRoute(ctx: any): void {
   const webServer = ctx.get('webServer')
   if (!webServer) return
@@ -2319,17 +2456,29 @@ export function apply(ctx: Context, rawConfig: Config): void {
   // would throw inside the classifier once-during construction and take the
   // whole plugin down at boot (seen 2026-08-26: half-configured reviewer
   // settings crashed dsh). Single-sided values are ignored defensively.
-  // The classifier always follows the session model: the provider override
-  // pair was retired (2026-08-26) — it only ever produced half-configuration
-  // crashes and no deployment used an independent classifier model.
+  // The classifier follows the session model unless the operator opted into a
+  // custom lane: classifierModelSource==='custom' with a complete pair (already
+  // normalized by resolveConfig) forwards that pair into createDshClassifier,
+  // whose existing override branch (config.provider/model) then wins over the
+  // per-call session route. Default 'session' forwards nothing and behavior is
+  // byte-identical to the retired-pair era. The override is derived inside
+  // rebuildClassifier so a live settings change is picked up on rebuild.
+  const classifierOverrideFor = (cfg: Config) =>
+    cfg.classifierModelSource === 'custom'
+      && cfg.classifierProvider.length > 0
+      && cfg.classifierModel.length > 0
+      ? { provider: cfg.classifierProvider, model: cfg.classifierModel }
+      : {}
   let classifier = createDshClassifier(llm, {
     timeoutMs: config.classifierTimeoutMs ?? THRESHOLD_DEFAULTS.classifierTimeoutMs,
     maxOutputTokens: config.classifierMaxOutputTokens ?? THRESHOLD_DEFAULTS.classifierMaxOutputTokens,
+    ...classifierOverrideFor(config),
   })
   const rebuildClassifier = () => {
     classifier = createDshClassifier(llm, {
       timeoutMs: config.classifierTimeoutMs ?? THRESHOLD_DEFAULTS.classifierTimeoutMs,
       maxOutputTokens: config.classifierMaxOutputTokens ?? THRESHOLD_DEFAULTS.classifierMaxOutputTokens,
+      ...classifierOverrideFor(config),
     })
   }
 
@@ -2914,6 +3063,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       return done
     }))
   installTestRoute(anyCtx, llm)
+  installLlmCatalogRoutes(anyCtx, llm)
   installSessionModeRoute(anyCtx)
   installStatsRoute(anyCtx)
 
@@ -3372,7 +3522,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       if (!config.learningEnabled) return undefined
       const capUsed = sessionLearnedAllows.get(sessionKey) ?? 0
       const capMax = THRESHOLD_DEFAULTS.learningSessionAllowCap
-      const routeAvailable = !!(config.reviewerBaseUrl || sessionModelRoute(req.agent.session))
+      const routeAvailable = !!(config.reviewerBaseUrl || sessionModelRoute(req.agent.session) || (config.reviewerModelSource === 'custom' && config.reviewerHostProvider.length > 0 && config.reviewerHostModel.length > 0))
       if (!routeAvailable) return undefined
       const learnable = learnableContextFor(req, args, classified, 'learn-attempt-query')
       if (learnable === undefined) return undefined
@@ -3771,7 +3921,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
     // falls through to the ordinary LOW/MEDIUM/HIGH pipeline unchanged.
     const learnedAllow = await learnAttempt(req, args, classified, sessionKey, reviewOpts)
     if (learnedAllow !== undefined) return learnedAllow
-    const llmRouteAvailable = !!(config.reviewerBaseUrl || sessionModelRoute(req.agent.session))
+    const llmRouteAvailable = !!(config.reviewerBaseUrl || sessionModelRoute(req.agent.session) || (config.reviewerModelSource === 'custom' && config.reviewerHostProvider.length > 0 && config.reviewerHostModel.length > 0))
     const llmReviews = llmRouteAvailable && riskReviewed(staticRisk, config.llmReviewScope)
     const llmTakeover = llmReviews && riskTakenOver(staticRisk, config.llmTakeoverScope)
     const seconds = riskSeconds(staticRisk)
