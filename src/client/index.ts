@@ -20,6 +20,8 @@ const TEST_ROUTE = '/_dsh/auto-approval-llm/test'
 const REVIEWER_CREDENTIAL_ROUTE = '/_dsh/auto-approval-llm/reviewer-credential'
 const LEARNING_STORE_ROUTE = '/_dsh/auto-approval-llm/learning-store'
 const SESSION_MODE_ROUTE = '/_dsh/auto-approval-llm/session-mode'
+const PROVIDERS_ROUTE = '/_dsh/auto-approval-llm/providers'
+const LLM_MODELS_ROUTE = '/_dsh/auto-approval-llm/llm-models'
 let sessionsRef: any
 let breakerAntiHijackMs = THRESHOLD_DEFAULTS.breakerAntiHijackMs
 let aiButtonPosition: 'header' | 'floating' = 'header'
@@ -333,6 +335,12 @@ interface Draft {
   reviewerModel: string
   reviewerProtocol: string
   reviewerBaseUrl: string
+  classifierModelSource: 'session' | 'custom'
+  classifierProvider: string
+  classifierModel: string
+  reviewerModelSource: 'session' | 'custom'
+  reviewerHostProvider: string
+  reviewerHostModel: string
   allowlist: string
   denyList: string
   humanOnlyList: string
@@ -375,6 +383,12 @@ function draftOf(value: any): Draft {
     reviewerModel: value?.reviewerModel ?? '',
     reviewerProtocol: ['openai', 'anthropic'].includes(value?.reviewerProtocol) ? value.reviewerProtocol : 'openai',
     reviewerBaseUrl: value?.reviewerBaseUrl ?? '',
+    classifierModelSource: value?.classifierModelSource === 'custom' ? 'custom' : 'session',
+    classifierProvider: value?.classifierProvider ?? '',
+    classifierModel: value?.classifierModel ?? '',
+    reviewerModelSource: value?.reviewerModelSource === 'custom' ? 'custom' : 'session',
+    reviewerHostProvider: value?.reviewerHostProvider ?? '',
+    reviewerHostModel: value?.reviewerHostModel ?? '',
     allowlist: (value?.allowlist ?? []).join('\n'),
     denyList: (value?.denyList ?? []).join('\n'),
     humanOnlyList: (value?.humanOnlyList ?? []).join('\n'),
@@ -450,6 +464,17 @@ function valueOf(draft: Draft): any {
   if (draft.reviewerModel.trim()) value.reviewerModel = draft.reviewerModel.trim()
   if (draft.reviewerProtocol === 'openai' || draft.reviewerProtocol === 'anthropic') value.reviewerProtocol = draft.reviewerProtocol
   if (draft.reviewerBaseUrl.trim()) value.reviewerBaseUrl = draft.reviewerBaseUrl.trim()
+  // Issue #5 model sources: the source switch always persists (schema default
+  // 'session'); the custom provider/model pair persists only while non-empty,
+  // mirroring the reviewer-trio convention. resolveConfig normalizes any
+  // leftover pair away when the source is 'session', so stale custom values
+  // cannot silently reactivate.
+  value.classifierModelSource = draft.classifierModelSource === 'custom' ? 'custom' : 'session'
+  if (draft.classifierProvider.trim()) value.classifierProvider = draft.classifierProvider.trim()
+  if (draft.classifierModel.trim()) value.classifierModel = draft.classifierModel.trim()
+  value.reviewerModelSource = draft.reviewerModelSource === 'custom' ? 'custom' : 'session'
+  if (draft.reviewerHostProvider.trim()) value.reviewerHostProvider = draft.reviewerHostProvider.trim()
+  if (draft.reviewerHostModel.trim()) value.reviewerHostModel = draft.reviewerHostModel.trim()
   return value
 }
 
@@ -496,6 +521,8 @@ const INVALID_CONFIG_TYPES: Record<string, string> = {
   maxArgsChars: 'number', classifierTimeoutMs: 'number', classifierMaxOutputTokens: 'number',
   workspaceRoot: 'string', dshHome: 'string', safetyPrompt: 'string', rulesText: 'string',
   reviewerModel: 'string', reviewerBaseUrl: 'string', timeoutAction: 'string',
+  classifierProvider: 'string', classifierModel: 'string',
+  reviewerHostProvider: 'string', reviewerHostModel: 'string',
   allowlist: 'array', denyList: 'array', humanOnlyList: 'array', tempRoots: 'array',
   categoryPolicy: 'object', categoryMode: 'string', trustedDirs: 'array',
 }
@@ -508,6 +535,8 @@ const INVALID_CONFIG_ENUMS: Record<string, string[]> = {
   aiButtonPosition: ['header', 'floating'],
   reviewerProtocol: ['openai', 'anthropic'],
   categoryMode: ['standard', 'aggressive'],
+  classifierModelSource: ['session', 'custom'],
+  reviewerModelSource: ['session', 'custom'],
 }
 const INVALID_CONFIG_RANGES: Record<string, [number, number]> = {
   lowRiskSeconds: [1, Infinity], mediumRiskSeconds: [1, Infinity], highRiskSeconds: [1, Infinity],
@@ -643,7 +672,7 @@ function CapsuleSelect(props: { value: string; options: CapsuleOption[]; onChang
     }
   }, [open])
   const current = props.options.find((o) => o.value === props.value)
-  const label = current?.label ?? props.options[0]?.label ?? ''
+  const label = current?.label ?? (props.value && props.value !== '' ? props.value : props.options[0]?.label ?? '')
   return React.createElement('span', { ref: rootRef, className: 'dsa-capsuleRoot' },
     React.createElement('button', {
       type: 'button',
@@ -720,6 +749,15 @@ function SettingsSection() {
   const [openUtility, setOpenUtility] = React.useState(false)
   const [learningEntries, setLearningEntries] = React.useState<any[]>([])
   const [learningEntriesError, setLearningEntriesError] = React.useState('')
+  // Issue #5 model-source pickers: the registered providers and the full
+  // preset-model list (every provider's discovered models, flattened as
+  // `provider/model` entries), fetched from the host catalog routes once the
+  // review card opens. The source menu offers 跟随会话 / 自定义 / each preset;
+  // picking a preset fills the pair directly (no input row), picking 自定义
+  // reveals the provider/model inputs. Catalog failures degrade to the two
+  // built-in options — never a blocking banner.
+  const [llmProviders, setLlmProviders] = React.useState<{ id: string; name: string }[] | null>(null)
+  const [llmPresetModels, setLlmPresetModels] = React.useState<{ provider: string; id: string; name: string }[] | null>(null)
   // In-card feedback: the most recent ok/error text for each sub-card, shown
   // inside that card's footer (not piled at the bottom of the plugin body).
   const [cardStatus, setCardStatus] = React.useState<{ id: string; kind: 'ok' | 'err'; text: string } | null>(null)
@@ -829,6 +867,40 @@ function SettingsSection() {
     return refreshCredential()
   }, [openReview, refreshCredential])
 
+  // Issue #5: fetch the host provider/model catalog once when the review card
+  // opens. listProviders is sync-host-side; listModels is fetched separately
+  // when a custom provider is actually selected (see loadModelsFor). Catalog
+  // failures degrade to free text, never a blocking banner.
+  React.useEffect(() => {
+    if (!openReview) return
+    let disposed = false
+    const loadPresets = async () => {
+      try {
+        const r = await (globalThis as any).fetch(PROVIDERS_ROUTE, { credentials: 'same-origin' })
+        const data = await r.json()
+        if (disposed || !data?.ok) return
+        const providers: { id: string; name: string }[] = data.value?.providers ?? []
+        setLlmProviders(providers)
+        // Flatten every provider's discovered models into one preset list.
+        const all: { provider: string; id: string; name: string }[] = []
+        await Promise.all(providers.map(async (p) => {
+          try {
+            const mr = await (globalThis as any).fetch(`${LLM_MODELS_ROUTE}?provider=${encodeURIComponent(p.id)}`, { credentials: 'same-origin' })
+            const md = await mr.json()
+            if (md?.ok) {
+              for (const m of md.value?.models ?? []) {
+                all.push({ provider: p.id, id: m.id, name: m.name ?? m.id })
+              }
+            }
+          } catch { /* skip this provider's models */ }
+        }))
+        if (!disposed) setLlmPresetModels(all)
+      } catch { /* degrade to built-in options */ }
+    }
+    void loadPresets()
+    return () => { disposed = true }
+  }, [openReview])
+
   React.useEffect(() => {
     if (!openLearning) return
     let disposed = false
@@ -853,12 +925,81 @@ function SettingsSection() {
     setDraft({ ...draft, ...patch })
   }
 
+  // Issue #5 source picker model. The menu value space is:
+  //   'session'                          -> follow the session model
+  //   'custom'                           -> show the provider/model inputs
+  //   'preset:<provider>/<model>'        -> a discovered preset model (fills
+  //                                          source=custom + the pair, no inputs)
+  // Draft round-trips through source/provider/model; the menu value is derived
+  // from the draft for highlighting (an operator who already typed a pair that
+  // matches a preset sees the preset highlighted; an out-of-catalog pair falls
+  // back to showing 'custom' with the inputs).
+  const laneDraft = (lane: 'classifier' | 'reviewer') => {
+    if (lane === 'classifier') {
+      return { source: draft.classifierModelSource, provider: draft.classifierProvider, model: draft.classifierModel }
+    }
+    return { source: draft.reviewerModelSource, provider: draft.reviewerHostProvider, model: draft.reviewerHostModel }
+  }
+  const laneUpdate = (lane: 'classifier' | 'reviewer', next: { source?: 'session' | 'custom'; provider?: string; model?: string }) => {
+    if (lane === 'classifier') {
+      const patch: Partial<Draft> = {}
+      if (next.source !== undefined) patch.classifierModelSource = next.source
+      if (next.provider !== undefined) patch.classifierProvider = next.provider
+      if (next.model !== undefined) patch.classifierModel = next.model
+      update(patch)
+    } else {
+      const patch: Partial<Draft> = {}
+      if (next.source !== undefined) patch.reviewerModelSource = next.source
+      if (next.provider !== undefined) patch.reviewerHostProvider = next.provider
+      if (next.model !== undefined) patch.reviewerHostModel = next.model
+      update(patch)
+    }
+  }
+  const presetLabel = (m: { provider: string; id: string }) => `${m.provider}/${m.id}`
+  const currentMenuValue = (lane: 'classifier' | 'reviewer'): string => {
+    const { source, provider, model } = laneDraft(lane)
+    if (source === 'custom') {
+      if (!provider.trim() || !model.trim()) return 'custom'
+      const key = `${provider.trim()}/${model.trim()}`
+      const preset = (llmPresetModels ?? []).some((m) => presetLabel(m) === key)
+      return preset ? `preset:${key}` : 'custom'
+    }
+    return 'session'
+  }
+  const applyMenuValue = (lane: 'classifier' | 'reviewer', menuValue: string) => {
+    if (menuValue === 'session') {
+      laneUpdate(lane, { source: 'session', provider: '', model: '' })
+      return
+    }
+    if (menuValue === 'custom') {
+      // Choosing 自定义 means starting from a blank pair — keep whatever the
+      // operator already typed so a preset can be tweaked, but force the
+      // inputs visible by clearing to custom-with-empty-pair only when the
+      // current selection was a preset (the derived menu value would otherwise
+      // snap back to the preset highlight).
+      const cur = currentMenuValue(lane)
+      if (cur.startsWith('preset:')) {
+        laneUpdate(lane, { source: 'custom', provider: '', model: '' })
+      } else {
+        laneUpdate(lane, { source: 'custom' })
+      }
+      return
+    }
+    if (menuValue.startsWith('preset:')) {
+      const pair = menuValue.slice('preset:'.length)
+      const slash = pair.indexOf('/')
+      if (slash > 0) {
+        laneUpdate(lane, { source: 'custom', provider: pair.slice(0, slash), model: pair.slice(slash + 1) })
+      }
+    }
+  }
+
   // Per-card ownership: saving a card only persists the fields it owns,
   // overlaid on the last-saved baseline; other cards' unsaved edits are left
   // in the local draft and never accidentally persisted by another card.
   const TOP_KEYS = ['enabled', 'autoSwitchPolicyToAsk', 'timeoutAction', 'llmReviewScope', 'llmTakeoverScope', 'defaultReviewMode', 'showSessionPanel', 'aiButtonPosition', 'autoModeNoticeEnabled']
   const TIMER_KEYS = ['breakerAntiHijackMs', 'lowRiskSeconds', 'mediumRiskSeconds', 'highRiskSeconds', 'maxConsecutiveDenials', 'maxTotalDenials', 'reviewWaitSeconds', 'directHumanEnabled']
-  const REVIEW_KEYS = ['reviewerProtocol', 'reviewerBaseUrl', 'reviewerModel', 'reviewMaxRetries']
+  const REVIEW_KEYS = ['reviewerProtocol', 'reviewerBaseUrl', 'reviewerModel', 'reviewMaxRetries', 'classifierModelSource', 'classifierProvider', 'classifierModel', 'reviewerModelSource', 'reviewerHostProvider', 'reviewerHostModel']
   const SECURITY_KEYS = ['safetyPrompt', 'allowlist', 'denyList', 'humanOnlyList', 'rulesText', 'rulesDryRun']
   const UTILITY_KEYS = ['onboardingMessageEnabled', 'redactResults', 'editDiffPreview', 'rejectGuidance']
   const LEARNING_KEYS = ['learningEnabled', 'learningThreshold']
@@ -1094,6 +1235,21 @@ function SettingsSection() {
     return missing.length > 0 ? missing : null
   }
 
+  // Issue #5: a lane whose source switch says 'custom' must carry a complete
+  // provider/model pair, or saving would persist a half-configuration the host
+  // normalizes away (silently following the session model). Surface the missing
+  // pieces instead of letting the save pretend the custom lane is live.
+  const sourceMissing = (lane: 'classifier' | 'reviewer'): string[] | null => {
+    const source = lane === 'classifier' ? draft.classifierModelSource : draft.reviewerModelSource
+    if (source !== 'custom') return null
+    const missing: string[] = []
+    const provider = lane === 'classifier' ? draft.classifierProvider : draft.reviewerHostProvider
+    const model = lane === 'classifier' ? draft.classifierModel : draft.reviewerHostModel
+    if (!provider.trim()) missing.push(t('settings.reviewer.source.provider'))
+    if (!model.trim()) missing.push(t('settings.reviewer.source.model'))
+    return missing.length > 0 ? missing : null
+  }
+
   const testOnline = async () => {
     const incomplete = reviewerDirectMissing()
     if (incomplete) {
@@ -1172,6 +1328,16 @@ function SettingsSection() {
     if (incomplete) {
       setCardStatus({ id: 'review', kind: 'err', text: t('settings.reviewer.incompleteDirect', { missing: incomplete.join(', ') }) })
       return
+    }
+    // A 'custom' lane with an incomplete provider/model pair would persist a
+    // half-configuration the host silently normalizes to session-following;
+    // tell the user instead of saving a lie.
+    for (const lane of ['classifier', 'reviewer'] as const) {
+      const missing = sourceMissing(lane)
+      if (missing) {
+        setCardStatus({ id: 'review', kind: 'err', text: t('settings.reviewer.source.incompleteSource', { missing: missing.join(', ') }) })
+        return
+      }
     }
     await saveCard(REVIEW_KEYS, 'review')
     if (reviewerApiKey.trim()) await saveReviewerCredential()
@@ -1520,9 +1686,64 @@ function SettingsSection() {
     return React.createElement('span', { style: { color: 'var(--dsw-alias-label-secondary)', fontSize: 12 } }, r.text)
   }
 
+  // One model-source section for a lane (快速判断/深度评审). The source menu
+  // lists 跟随会话 / 自定义 / every discovered preset model (`provider/model`);
+  // choosing a preset fills the pair directly (no input row), choosing 自定义
+  // reveals the provider/model inputs, following the session hides both.
+  const sourceSection = (lane: 'classifier' | 'reviewer') => {
+    const title = lane === 'classifier'
+      ? t('settings.reviewer.source.classifier')
+      : t('settings.reviewer.source.reviewer')
+    const hint = lane === 'classifier'
+      ? t('settings.reviewer.source.classifierHint')
+      : t('settings.reviewer.source.reviewerHint')
+    const { source, provider, model } = laneDraft(lane)
+    const menuValue = currentMenuValue(lane)
+    const menuOptions: CapsuleOption[] = [
+      { value: 'session', label: t('option.modelSource.session') },
+      { value: 'custom', label: t('option.modelSource.custom') },
+    ]
+    for (const m of llmPresetModels ?? []) {
+      menuOptions.push({ value: `preset:${presetLabel(m)}`, label: presetLabel(m) })
+    }
+    const showCustomInputs = source === 'custom' && !currentMenuValue(lane).startsWith('preset:')
+    return React.createElement('div', { className: 'dsa-subSection', style: { borderTop: '1px solid var(--dsw-alias-border-l1, rgba(128,128,128,.25))', paddingTop: 10 } },
+      React.createElement('div', { className: 'dsa-titleRow' },
+        React.createElement('span', { className: 'dsa-title' }, title),
+      ),
+      React.createElement('p', { className: 'dsa-hint', style: { margin: '4px 0 8px' } }, hint),
+      row(t('settings.reviewer.source.label'), React.createElement(CapsuleSelect, {
+        value: menuValue,
+        options: menuOptions,
+        onChange: (v: string) => applyMenuValue(lane, v),
+      })),
+      showCustomInputs ? React.createElement('div', { style: { display: 'grid', gap: 6 } },
+        row(t('settings.reviewer.source.provider'), React.createElement(Input, {
+          value: provider,
+          onChange: (e: any) => laneUpdate(lane, { provider: e.target.value }),
+          placeholder: t('settings.reviewer.source.providerPlaceholder'),
+          className: 'dsa-input',
+        })),
+        row(t('settings.reviewer.source.model'), React.createElement(Input, {
+          value: model,
+          onChange: (e: any) => laneUpdate(lane, { model: e.target.value }),
+          placeholder: t('settings.reviewer.source.modelPlaceholder'),
+          className: 'dsa-input',
+        })),
+      ) : null,
+      React.createElement('p', { className: 'dsa-hint', style: { margin: '8px 0 0' } }, t('settings.reviewer.source.hint')),
+    )
+  }
+
   const buildReviewBody = () => React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 10 } },
     React.createElement('p', { className: 'dsa-hint', style: { margin: 0 } }, t('settings.reviewer.description')),
-    React.createElement('p', { className: 'dsa-hint', style: { margin: 0 } }, t('settings.reviewer.fallbackHint')),
+    sourceSection('classifier'),
+    sourceSection('reviewer'),
+    React.createElement('div', { style: { borderTop: '1px solid var(--dsw-alias-border-l1, rgba(128,128,128,.25))', paddingTop: 10 } },
+    React.createElement('div', { className: 'dsa-titleRow' },
+      React.createElement('span', { className: 'dsa-title' }, t('settings.reviewer.endpointTitle')),
+    ),
+    React.createElement('p', { className: 'dsa-hint', style: { margin: '4px 0 8px' } }, t('settings.reviewer.endpointHint')),
     row(t('settings.reviewer.protocol'), React.createElement(CapsuleSelect, {
       value: draft.reviewerProtocol,
       options: protocolOptions(),
@@ -1570,6 +1791,7 @@ function SettingsSection() {
         ? React.createElement(Button, { variant: 'outline', size: 'sm', disabled: saving, onClick: clearReviewerCredential }, t('settings.reviewer.clearKey'))
         : null,
       testResult ? renderTestResult(testResult) : null,
+    ),
     ),
   )
 
@@ -2559,7 +2781,7 @@ function installSettingsCardStyles(): () => void {
 .dsa-capsule:disabled{cursor:default}
 .dsa-capsuleLabel{white-space:nowrap}
 .dsa-capsuleChevron{flex:none}
-.dsa-menu{box-sizing:border-box;padding:4px;display:flex;flex-direction:column;gap:0;border:1px solid var(--dsw-alias-border-inverted);border-radius:12px;background:var(--dsw-specific-menu);box-shadow:var(--dsw-shadow-lv3);position:absolute;top:calc(100% + 4px);left:auto;right:0;z-index:100;min-width:218px;max-width:360px}
+.dsa-menu{box-sizing:border-box;padding:4px;display:flex;flex-direction:column;gap:0;border:1px solid var(--dsw-alias-border-inverted);border-radius:12px;background:var(--dsw-specific-menu);box-shadow:var(--dsw-shadow-lv3);position:absolute;top:calc(100% + 4px);left:auto;right:0;z-index:100;min-width:218px;max-width:360px;max-height:min(56vh,360px);overflow-y:auto}
 .dsa-menuItem{appearance:none;display:flex;align-items:center;gap:8px;width:100%;min-height:40px;padding:8px 10px;border:none;border-radius:10px;background:transparent;cursor:pointer;font-size:14px;line-height:22px;color:var(--dsw-alias-label-primary);text-align:left;font:inherit}
 .dsa-menuItem:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}
 .dsa-menuItem:disabled{cursor:default;color:var(--dsw-alias-label-dimmed)}
