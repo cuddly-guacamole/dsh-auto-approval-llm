@@ -15,7 +15,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { unattendedMustFailClosed, reviewerAutoAllowBlocked } from '../lib/auto/decision.js'
-import { riskTimedOutAction } from '../lib/index.js'
+import { riskTimedOutAction, autoPermissionAuthority } from '../lib/index.js'
 
 test('unattendedMustFailClosed: reviewer failure and CRITICAL-blocked ALLOW must fail closed', () => {
   assert.equal(unattendedMustFailClosed({ decision: 'ESCALATE', failure: 'TIMEOUT' }), true)
@@ -64,8 +64,37 @@ test('auto-switch guard: the never->ask flip leaves a debug trail', () => {
   // operator must be able to see why a session stopped auto-answering.
   // Structural anchor on the compiled lib (the flip is a host closure).
   const lib = readFileSync(fileURLToPath(new URL('../lib/index.js', import.meta.url)), 'utf8')
-  const setPolicyAt = lib.indexOf("approval.setPolicy(agent, 'ask')")
+  const setPolicyAt = lib.indexOf("approval.setPolicy(flip, 'ask')")
   assert.ok(setPolicyAt > 0, 'the ensureAsk flip is wired')
   const scope = lib.slice(setPolicyAt, setPolicyAt + 400)
   assert.ok(scope.includes("ev: 'auto-switch-never-to-ask'"), 'the flip must emit the debug event')
+})
+
+test('auto-switch guard: mid-flight preset and override events re-arm the checkpoint', () => {
+  // agent/created and the boot sweep only see a session at its birth; a live
+  // session switched into Auto (permission/preset) or handed a never override
+  // (approval/policy) must re-run the guard from the session/event listener.
+  const lib = readFileSync(fileURLToPath(new URL('../lib/index.js', import.meta.url)), 'utf8')
+  assert.ok(lib.includes('event.data?.preset === AUTO_PRESET'), 'the preset-switch checkpoint is wired')
+  assert.ok(lib.includes("event.data?.policy === 'never'"), 'the override checkpoint is wired')
+})
+
+test('auto-switch guard: the authority chain governs a subagent session', () => {
+  // A subagent session whose own preset is not auto must still be judged on
+  // the parent it inherits from — the same chain the answerer gate reads.
+  const parentAgent = (id) => {
+    if (id !== 'parent-1') return undefined
+    if (parentAgent.cached === undefined) parentAgent.cached = { session: { id: 'parent-1' } }
+    return parentAgent.cached
+  }
+  const parent = parentAgent('parent-1')
+  const child = { session: { id: 'child-1', header: { origin: 'subagent', parentSession: 'parent-1' } } }
+  const parentAuto = { current: (session) => (session?.id === 'parent-1' ? 'auto' : 'manual') }
+  assert.equal(autoPermissionAuthority({ agent: child }, parentAgent, parentAuto), parent)
+  // A plain session stands on its own preset; a subagent of a non-auto parent
+  // has no authority at all.
+  const plain = { session: { id: 'solo' } }
+  const allAuto = { current: () => 'auto' }
+  assert.equal(autoPermissionAuthority({ agent: plain }, parentAgent, allAuto), plain)
+  assert.equal(autoPermissionAuthority({ agent: child }, parentAgent, { current: () => 'manual' }), undefined)
 })

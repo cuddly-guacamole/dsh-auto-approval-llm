@@ -2181,7 +2181,7 @@ function isAutoPermissionExecution(exec: any, permissionPresets: any, presetName
   return currentPreset(permissionPresets, session) === presetName
 }
 
-function autoPermissionAuthority(exec: any, parentAgent: any, permissionPresets: any, presetName = AUTO_PRESET) {
+export function autoPermissionAuthority(exec: any, parentAgent: any, permissionPresets: any, presetName = AUTO_PRESET) {
   if (isAutoPermissionExecution(exec, permissionPresets, presetName)) return exec.agent
   let session = exec.agent?.session
   const visited = new Set<string>()
@@ -2948,17 +2948,26 @@ export function apply(ctx: Context, rawConfig: Config): void {
   const ensureAsk = (agent: any) => {
     if (!config.autoSwitchPolicyToAsk || !agent?.session) return
     if (!permissionPresets) return
-    const preset = currentPreset(permissionPresets, agent.session)
-    if (preset !== AUTO_PRESET) return
-    if (approval?.overrideOf?.(agent.session) !== 'never') return
+    // Judge on the authority chain exactly like the answerer gate: a subagent
+    // session is governed by the Auto parent it inherits from, and the never
+    // override may live on that authority session rather than on the child.
+    const authority = autoPermissionAuthority({ agent }, parentAgent, permissionPresets, AUTO_PRESET)
+    if (authority === undefined) return
+    // Whichever plane holds the never override gets flipped: the authority
+    // session's, or (for a subagent carrying its own) the agent's own.
+    let flip = authority
+    if (approval?.overrideOf?.(authority.session) !== 'never') {
+      if (approval?.overrideOf?.(agent.session) !== 'never') return
+      flip = agent
+    }
     const timer = setTimeout(() => {
       switchTimers.delete(timer)
       try {
-        approval.setPolicy(agent, 'ask')
+        approval.setPolicy(flip, 'ask')
         // The flip silently rewrites the session's effective policy — leave
         // one debug trail so an operator can see why an Auto session stopped
         // auto-answering (auditability for the guard's second line).
-        debugLog({ ev: 'auto-switch-never-to-ask', callId: null, sessionId: agent.session.id })
+        debugLog({ ev: 'auto-switch-never-to-ask', callId: null, sessionId: flip.session.id })
       } catch (error) {
         console.error('[dsh-auto-approval-llm] setPolicy failed:', error)
       }
@@ -2970,9 +2979,25 @@ export function apply(ctx: Context, rawConfig: Config): void {
     ensureAsk(payload?.agent)
   })
 
+  const agents = anyCtx.get('agents')
+
+  // Mid-flight checkpoints: the boot sweep and agent/created only observe a
+  // session at its birth, so a session switched into Auto (or handed a never
+  // override) while already running escaped the guard until now. The host
+  // appends `permission/preset` on every actual preset change and
+  // `approval/policy` on every override change; both ride session/event, which
+  // reaches this context. The payload only decides WHEN to re-check — the
+  // guard's own conditions still decide WHETHER to flip.
+  anyCtx.on('session/event', (session: any, event: any) => {
+    const enteredAuto = event?.type === 'permission/preset' && event.data?.preset === AUTO_PRESET
+    const overrideSet = event?.type === 'approval/policy' && event.data?.policy === 'never'
+    if (!enteredAuto && !overrideSet) return
+    const agent = agents?.get?.(session?.id)
+    if (agent !== undefined) ensureAsk(agent)
+  })
+
   // Sweep already-live agents on startup so existing auto-preset sessions that
   // were left with a `never` override also get switched to `ask`.
-  const agents = anyCtx.get('agents')
   if (agents && typeof agents.list === 'function') {
     for (const agent of agents.list()) ensureAsk(agent)
   }
