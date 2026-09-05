@@ -35,7 +35,7 @@ import { redactSecrets } from './redact.js'
 import { decomposeCommandLine } from './shell.js'
 
 /** Bump when the template grammar changes; stale entries can never match. */
-export const LEARNING_SIG_VERSION = 1
+export const LEARNING_SIG_VERSION = 2
 
 export type LearningKind = 'shell-bash' | 'shell-pwsh' | 'tool'
 
@@ -140,6 +140,30 @@ interface SkeletonSegment {
  * parameter, or when the head sits on the uncovered write-vector table. All
  * words participate (not just the head), so a poisoned operand cannot hide.
  */
+/**
+ * Second-word subcommands that are identity, not data (`git push` vs
+ * `git pull`, `npm install` vs `npm publish`). Any other second word — a
+ * filename, a hostname, a make target — folds into its operand slot so the
+ * stored skeleton stays value-free (`cp secret-config.yaml <path>` used to
+ * keep the file name verbatim in learning.json and the settings card).
+ */
+const LEARNABLE_SUBCOMMANDS = new Set([
+  'git:status', 'git:diff', 'git:log', 'git:show', 'git:add', 'git:commit', 'git:push', 'git:pull', 'git:fetch', 'git:merge', 'git:rebase', 'git:checkout', 'git:switch', 'git:restore', 'git:stash', 'git:tag', 'git:branch', 'git:clone', 'git:init', 'git:remote', 'git:clean', 'git:reset', 'git:rm', 'git:mv', 'git:apply', 'git:revert', 'git:cherry-pick',
+  'npm:install', 'npm:ci', 'npm:run', 'npm:test', 'npm:exec', 'npm:publish', 'npm:pack', 'npm:link', 'npm:audit', 'npm:outdated', 'npm:update', 'npm:init', 'npm:create',
+  'npx:install', 'npx:run',
+  'pnpm:install', 'pnpm:add', 'pnpm:remove', 'pnpm:run', 'pnpm:test', 'pnpm:exec', 'pnpm:publish', 'pnpm:update',
+  'yarn:install', 'yarn:add', 'yarn:remove', 'yarn:run', 'yarn:test', 'yarn:publish', 'yarn:upgrade',
+  'bun:install', 'bun:add', 'bun:remove', 'bun:run', 'bun:test', 'bun:publish',
+  'pip:install', 'pip:uninstall', 'pip:freeze', 'pip:list', 'pip:show',
+  'pip3:install', 'pip3:uninstall', 'pip3:freeze', 'pip3:list', 'pip3:show',
+  'cargo:build', 'cargo:test', 'cargo:run', 'cargo:check', 'cargo:publish', 'cargo:install', 'cargo:update', 'cargo:doc', 'cargo:new', 'cargo:init',
+  'go:build', 'go:test', 'go:run', 'go:get', 'go:install', 'go:vet', 'go:mod',
+  'docker:build', 'docker:pull', 'docker:push', 'docker:run', 'docker:exec', 'docker:compose', 'docker:images', 'docker:ps', 'docker:logs', 'docker:rm', 'docker:rmi', 'docker:stop', 'docker:start', 'docker:restart', 'docker:network', 'docker:volume',
+  'kubectl:get', 'kubectl:apply', 'kubectl:delete', 'kubectl:describe', 'kubectl:logs', 'kubectl:rollout', 'kubectl:edit', 'kubectl:scale', 'kubectl:expose',
+  'dotnet:build', 'dotnet:test', 'dotnet:run', 'dotnet:publish', 'dotnet:restore',
+  'make:clean', 'make:build', 'make:test', 'make:install',
+])
+
 function segmentTemplate(segment: SkeletonSegment): string | undefined {
   const all = [...segment.words, ...segment.writeTargets, ...segment.readTargets]
   for (const word of all) {
@@ -155,7 +179,8 @@ function segmentTemplate(segment: SkeletonSegment): string | undefined {
   const parts: string[] = [head]
   let index = 1
   if (rest.length > 1 && !rest[1].text.startsWith('-')) {
-    parts.push(rest[1].text.toLowerCase())
+    const second = rest[1].text.toLowerCase()
+    parts.push(LEARNABLE_SUBCOMMANDS.has(`${head}:${second}`) ? second : slotOf(rest[1].text))
     index = 2
   }
   const flags: string[] = []

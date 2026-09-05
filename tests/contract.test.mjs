@@ -2910,6 +2910,21 @@ test('signatureFor: flag values fold into the flag name and env prefixes are tra
   assert.equal(sig('FOO=1 git status'), sig('git status'), 'VAR=value prefix never enters the template')
 })
 
+test('signatureFor: non-subcommand second words fold — skeletons stay value-free', () => {
+  // The second word used to be kept verbatim, so `cp secret-config.yaml
+  // D:/ext/` stored the file name in learning.json and the settings card
+  // while the skeleton promised to be value-free. Only whitelisted
+  // subcommands keep identity now; everything else folds into its slot.
+  const sig = (command) => signatureFor({ kind: 'shell-bash', command })?.signature
+  assert.equal(sig('cp secret-config.yaml D:/ext/'), 'cp <literal> <path>')
+  assert.equal(sig('ssh myhost.example.com'), 'ssh <literal>')
+  // Whitelisted subcommands keep their identity.
+  assert.notEqual(sig('git push'), sig('git pull'), 'subcommands stay distinct')
+  assert.match(sig('npm publish pkg') ?? '', /^npm publish/)
+  // Grammar change: stored v1 entries can never match the new templates.
+  assert.equal(LEARNING_SIG_VERSION, 2)
+})
+
 test('signatureFor: dynamic / glob / quoted words prune the whole line', () => {
   const bash = (command) => signatureFor({ kind: 'shell-bash', command })
   assert.equal(bash('echo "$HOME/x"'), undefined, 'quoted word prunes')
