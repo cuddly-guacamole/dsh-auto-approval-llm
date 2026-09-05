@@ -176,3 +176,12 @@ test('host wiring: LLM-adjudicated history records carry the wall-clock millisec
   assert.ok(HOST_SRC.includes("source.startsWith('llm')"), 'the deep-review takeover derives its ms from the llm source')
   assert.ok(HOST_SRC.includes('llmTookMs'), 'the field is emitted into history records')
 })
+
+test('host wiring: reasoning effort and output budget reach the LLM calls', () => {
+  // 2026-09-05: deep-review output budget (reviewerMaxTokens, default 2048)
+  // is frozen into the snapshot; a non-default reasoning effort is forwarded
+  // to the host prepareCall, and the classifier lane forwards its own effort.
+  assert.ok(HOST_SRC.includes('reviewerMaxTokens'), 'the output budget key is wired')
+  assert.ok(HOST_SRC.includes('reasoningEffort'), 'the reasoning-effort control is forwarded')
+  assert.ok(HOST_SRC.includes("snapshot.reasoningEffort"), 'the reviewer snapshot carries the frozen effort')
+})

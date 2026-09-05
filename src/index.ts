@@ -111,6 +111,18 @@ export interface Config {
   /** Deep-review preset provider (name revived from the retired pair era). */
   reviewerProvider: string
   reviewerModel: string
+  /** Deep-review output budget in tokens. The historical 256 assumed a plain
+   * chat model; reasoning models spend most of it thinking, so the budget is
+   * configurable (default 2048) to let the final JSON answer through. */
+  reviewerMaxTokens: number
+  /** Deep-review reasoning effort for host-route models. '' = follow the
+   * adapter default; explicit values (off/minimal/low/medium/high/xhigh/max)
+   * are passed as the dsh reasoningEffort — a model that does not support the
+   * chosen value fails the review loudly (UNSUPPORTED_REASONING_EFFORT), never
+   * silently. */
+  reviewerReasoning: '' | 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+  /** Fast-decision reasoning effort (same semantics as reviewerReasoning). */
+  classifierReasoning: '' | 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
   /** Shared custom-endpoint config (lane-agnostic; both lanes' endpoint source references it). */
   endpointUrl: string
   endpointModel: string
@@ -210,6 +222,14 @@ export const Config: z<Config> = z.object({
   // revived from the retired pair era — 2026-09-05 user ruling).
   reviewerProvider: z.string().default(''),
   reviewerModel: z.string().default(''),
+  // Deep-review output budget (reasoning models spend most of it thinking —
+  // 256 starved the final JSON answer on mimo-v2.5-free, 2026-09-05).
+  reviewerMaxTokens: z.number().default(THRESHOLD_DEFAULTS.reviewerMaxTokens).min(256).max(16_384),
+  // Reasoning effort: '' follows the adapter default (byte-identical to the
+  // pre-switch era); an explicit value is forwarded to the dsh reasoningEffort
+  // and a model that does not support it fails loudly, never silently.
+  reviewerReasoning: z.union(['', 'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const).default(''),
+  classifierReasoning: z.union(['', 'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const).default(''),
   // Shared custom-endpoint config (lane-agnostic): both lanes' endpoint source
   // reference the same endpointUrl/endpointModel + the shared API key.
   endpointUrl: z.string().default(''),
@@ -597,6 +617,10 @@ interface ReviewSnapshot {
   model?: string
   protocol?: 'openai' | 'anthropic'
   apiKey?: string
+  /** Output budget + reasoning effort, frozen with the rest so a settings
+   * change mid-review cannot steer retry N>1 to a different budget/effort. */
+  maxTokens?: number
+  reasoningEffort?: string
 }
 
 /**
@@ -750,9 +774,17 @@ export async function buildReviewSnapshot(
       model: transport.model,
       protocol: transport.protocol,
       apiKey,
+      maxTokens: config.reviewerMaxTokens ?? 2_048,
     }
   }
-  return { transport: 'host', payload, system, route: { provider: transport.provider, model: transport.model } }
+  return {
+    transport: 'host',
+    payload,
+    system,
+    route: { provider: transport.provider, model: transport.model },
+    maxTokens: config.reviewerMaxTokens ?? 2_048,
+    reasoningEffort: config.reviewerReasoning ?? '',
+  }
 }
 
 /** Map a non-2xx HTTP status to a stable review failure code. */
@@ -778,7 +810,14 @@ async function runReviewAttempt(
 ): Promise<ReviewResult> {
   if (snapshot.transport === 'host') {
     const route = snapshot.route!
-    const prepared = await llm.prepareCall({ provider: route.provider, model: route.model, maxTokens: 256 }, signal)
+    const callConfig: any = { provider: route.provider, model: route.model, maxTokens: snapshot.maxTokens ?? 2_048 }
+    // Reasoning effort: '' follows the adapter default; an explicit value is
+    // forwarded to the dsh reasoningEffort. A model that does not support it
+    // throws UNSUPPORTED_REASONING_EFFORT → the review fails loudly (never
+    // silently). The stream spreads prepared.config, so the effort lands on
+    // the wire only when the adapter accepted it.
+    if (snapshot.reasoningEffort && snapshot.reasoningEffort !== '') callConfig.reasoningEffort = snapshot.reasoningEffort
+    const prepared = await llm.prepareCall(callConfig, signal)
     const messages = [createUserMessage({
       content: [{ type: 'text', text: snapshot.payload }],
       source: { kind: 'plugin', plugin: 'dsh-auto-approval-llm' },
@@ -816,7 +855,7 @@ async function runReviewAttempt(
     apiKey: snapshot.apiKey,
     system: snapshot.system,
     messages: [snapshot.payload],
-    maxTokens: 256,
+    maxTokens: snapshot.maxTokens ?? 2_048,
     signal,
   })
   if (!result.ok) {
@@ -1481,6 +1520,7 @@ const STATS_ROUTE = '/_dsh/auto-approval-llm/stats'
 // stays gone; these are new live consumers for a new UI, not a resurrection.
 const PROVIDERS_ROUTE = '/_dsh/auto-approval-llm/providers'
 const LLM_MODELS_ROUTE = '/_dsh/auto-approval-llm/llm-models'
+const REASONING_EFFORTS_ROUTE = '/_dsh/auto-approval-llm/reasoning-efforts'
 const LEARNING_STORE_ROUTE = '/_dsh/auto-approval-llm/learning-store'
 const SETTINGS_NS = 'auto-approval-llm' as any
 
@@ -2274,6 +2314,46 @@ export function installLlmCatalogRoutes(ctx: any, llm: any): void {
       }
     },
   }), 'dsh-auto-approval-llm: llm-models route')
+  ctx.effect(() => webServer.register({
+    kind: 'exact',
+    path: REASONING_EFFORTS_ROUTE,
+    handler: async (req: any, res: any) => {
+      if (!isTrustedRequest(req, [])) {
+        responseJson(res, 403, { ok: false, error: 'forbidden' })
+        return
+      }
+      if (req.method !== 'GET') {
+        res.setHeader('Allow', 'GET')
+        responseJson(res, 405, { ok: false, error: 'method-not-allowed' })
+        return
+      }
+      const url = new URL(req.url ?? '/', 'http://x')
+      const provider = url.searchParams.get('provider') ?? ''
+      const model = url.searchParams.get('model') ?? ''
+      if (!provider || !model) {
+        responseJson(res, 400, { ok: false, error: 'provider and model are required' })
+        return
+      }
+      try {
+        // Resolve the exact model's metadata from its owning adapter — the
+        // adapter's own declared reasoning efforts drive the picker, so the
+        // plugin never maintains a per-provider effort table (2026-09-05).
+        const info = await llm.resolveModelInfo(provider, model)
+        const reasoning = info?.reasoning
+        const efforts = Array.isArray(reasoning?.efforts)
+          ? reasoning.efforts.map((e: any) => ({ id: e.id, name: e.name ?? e.id }))
+          : []
+        responseJson(res, 200, {
+          ok: true,
+          value: { efforts, defaultEffort: reasoning?.defaultEffort ?? null },
+        })
+      } catch (error) {
+        // Unknown provider/model or an adapter without resolveModel support —
+        // an empty effort list (default-only picker) beats a hard error here.
+        responseJson(res, 200, { ok: true, value: { efforts: [], defaultEffort: null } })
+      }
+    },
+  }), 'dsh-auto-approval-llm: reasoning-efforts route')
 }
 
 export function installSessionModeRoute(ctx: any): void {
@@ -2497,6 +2577,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
   let classifier = createDshClassifier(llm, {
     timeoutMs: config.classifierTimeoutMs ?? THRESHOLD_DEFAULTS.classifierTimeoutMs,
     maxOutputTokens: config.classifierMaxOutputTokens ?? THRESHOLD_DEFAULTS.classifierMaxOutputTokens,
+    reasoningEffort: config.classifierReasoning ?? '',
     ...classifierOverrideFor(config),
   })
   // Endpoint-source classifier: synchronous raw call, endpoint config resolved
@@ -2505,11 +2586,13 @@ export function apply(ctx: Context, rawConfig: Config): void {
   const endpointClassifier = createEndpointClassifier({
     timeoutMs: config.classifierTimeoutMs ?? THRESHOLD_DEFAULTS.classifierTimeoutMs,
     maxOutputTokens: config.classifierMaxOutputTokens ?? THRESHOLD_DEFAULTS.classifierMaxOutputTokens,
+    reasoningEffort: config.classifierReasoning ?? '',
   })
   const rebuildClassifier = () => {
     classifier = createDshClassifier(llm, {
       timeoutMs: config.classifierTimeoutMs ?? THRESHOLD_DEFAULTS.classifierTimeoutMs,
       maxOutputTokens: config.classifierMaxOutputTokens ?? THRESHOLD_DEFAULTS.classifierMaxOutputTokens,
+      reasoningEffort: config.classifierReasoning ?? '',
       ...classifierOverrideFor(config),
     })
   }

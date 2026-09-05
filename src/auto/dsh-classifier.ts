@@ -91,6 +91,10 @@ export function createDshClassifier(runtime, config) {
                 temperature: 0,
                 maxTokens: config.maxOutputTokens ?? 1_024,
                 signal: combined,
+                // Reasoning effort: '' follows the adapter default; an explicit
+                // value (off/minimal/low/medium/high/xhigh/max) is forwarded —
+                // a model that does not support it fails loudly, never silently.
+                ...(config.reasoningEffort && config.reasoningEffort !== '' ? { reasoningEffort: config.reasoningEffort } : {}),
             };
             const response = await collectResponse(runtime, options);
             return parseClassifierDecision(JSON.parse(jsonText(response)));
@@ -123,6 +127,7 @@ export function createEndpointClassifier(config) {
                 system: classifierSystemPrompt(input.mode === 'aggressive' && input.aggressiveAuto === true && input.riskTier !== 'HIGH' ? 'aggressive' : 'standard'),
                 messages: [classifierPayload(input)],
                 maxTokens: config.maxOutputTokens ?? 1_024,
+                reasoningEffort: config.reasoningEffort ?? '',
                 signal: combined,
             });
             if (!result.ok) {

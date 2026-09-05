@@ -142,17 +142,22 @@ test('history registers exactly one route; the models and export routes stay del
 
 // ── llm catalog routes (Issue #5 model-source pickers) ────────────────────
 
-function fakeLlm({ providers = [], modelsByProvider = {} } = {}) {
+function fakeLlm({ providers = [], modelsByProvider = {}, modelInfoByRoute = {} } = {}) {
   return {
     listProviders: () => providers.map((p) => ({ id: p.id, name: p.name ?? p.id })),
     listModels: async (provider) => (modelsByProvider[provider] ?? []).map((m) => ({ provider, id: m.id, name: m.name ?? m.id })),
+    resolveModelInfo: async (provider, model) => {
+      const hit = modelInfoByRoute[`${provider}/${model}`]
+      if (!hit) throw new Error('no such route')
+      return hit
+    },
   }
 }
 
 test('llm catalog: providers GET returns the registered adapter routes on the loopback plane', async () => {
   const llm = fakeLlm({ providers: [{ id: 'deepseek', name: 'DeepSeek' }, { id: 'anthropic', name: 'Anthropic' }] })
   const { registrations: regs } = capture(installLlmCatalogRoutes, llm)
-  assert.equal(regs.length, 2, 'providers + llm-models routes register')
+  assert.equal(regs.length, 3, 'providers + llm-models + reasoning-efforts routes register')
   const handler = handlerOf(regs, 'providers')
   const res = await callJson(handler, LOOPBACK)
   assert.equal(res.status, 200)
@@ -182,6 +187,28 @@ test('llm catalog: llm-models without a provider or for an unknown provider retu
   const handler2 = handlerOf(regs2, 'llm-models')
   const bad = await callJson(handler2, { ...LOOPBACK, url: '/_dsh/auto-approval-llm/llm-models?provider=nope' })
   assert.equal(bad.status, 400)
+})
+
+test('llm catalog: reasoning-efforts GET returns the adapter-declared efforts for one route', async () => {
+  const llm = fakeLlm({ modelInfoByRoute: { 'goat/deepseek-v4-flash': { provider: 'goat', id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', reasoning: { efforts: [{ id: 'low', name: 'low' }, { id: 'high', name: 'high' }], defaultEffort: 'high' } } } })
+  const { registrations: regs } = capture(installLlmCatalogRoutes, llm)
+  const handler = handlerOf(regs, 'reasoning-efforts')
+  const ok = await callJson(handler, { ...LOOPBACK, url: '/_dsh/auto-approval-llm/reasoning-efforts?provider=goat&model=deepseek-v4-flash' })
+  assert.equal(ok.status, 200)
+  assert.deepEqual(ok.body.value.efforts, [{ id: 'low', name: 'low' }, { id: 'high', name: 'high' }])
+  assert.equal(ok.body.value.defaultEffort, 'high')
+  const denied = await callJson(handler, { ...LOOPBACK, url: '/_dsh/auto-approval-llm/reasoning-efforts?provider=goat&model=deepseek-v4-flash', headers: { host: 'evil.example' }, socket: { remoteAddress: '10.0.0.7' } })
+  assert.equal(denied.status, 403)
+})
+
+test('llm catalog: reasoning-efforts for an unresolvable model degrades to an empty list', async () => {
+  const { registrations: regs } = capture(installLlmCatalogRoutes, fakeLlm())
+  const handler = handlerOf(regs, 'reasoning-efforts')
+  const missing = await callJson(handler, { ...LOOPBACK, url: '/_dsh/auto-approval-llm/reasoning-efforts' })
+  assert.equal(missing.status, 400, 'missing params stay a 400')
+  const unresolvable = await callJson(handler, { ...LOOPBACK, url: '/_dsh/auto-approval-llm/reasoning-efforts?provider=nope&model=none' })
+  assert.equal(unresolvable.status, 200)
+  assert.deepEqual(unresolvable.body.value.efforts, [], 'an adapter without the route degrades to default-only')
 })
 
 test('review-status GET: never 404 — unknown callId returns ok:false at 200', async () => {

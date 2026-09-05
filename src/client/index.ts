@@ -22,6 +22,7 @@ const LEARNING_STORE_ROUTE = '/_dsh/auto-approval-llm/learning-store'
 const SESSION_MODE_ROUTE = '/_dsh/auto-approval-llm/session-mode'
 const PROVIDERS_ROUTE = '/_dsh/auto-approval-llm/providers'
 const LLM_MODELS_ROUTE = '/_dsh/auto-approval-llm/llm-models'
+const REASONING_EFFORTS_ROUTE = '/_dsh/auto-approval-llm/reasoning-efforts'
 let sessionsRef: any
 let breakerAntiHijackMs = THRESHOLD_DEFAULTS.breakerAntiHijackMs
 let aiButtonPosition: 'header' | 'floating' = 'header'
@@ -338,6 +339,9 @@ interface Draft {
   reviewerSource: 'session' | 'preset' | 'endpoint'
   reviewerProvider: string
   reviewerModel: string
+  reviewerMaxTokens: string
+  reviewerReasoning: string
+  classifierReasoning: string
   endpointUrl: string
   endpointModel: string
   endpointProtocol: 'openai' | 'anthropic'
@@ -381,6 +385,9 @@ function draftOf(value: any): Draft {
     reviewWaitSeconds: String(value?.reviewWaitSeconds ?? THRESHOLD_DEFAULTS.reviewWaitSeconds),
     safetyPrompt: value?.safetyPrompt ?? '',
     reviewerModel: value?.reviewerModel ?? '',
+    reviewerMaxTokens: String(value?.reviewerMaxTokens ?? 2048),
+    reviewerReasoning: String(value?.reviewerReasoning ?? ''),
+    classifierReasoning: String(value?.classifierReasoning ?? ''),
     classifierSource: ['session', 'preset', 'endpoint'].includes(value?.classifierSource) ? value.classifierSource : 'session',
     classifierProvider: value?.classifierProvider ?? '',
     classifierModel: value?.classifierModel ?? '',
@@ -472,6 +479,10 @@ function valueOf(draft: Draft): any {
   value.reviewerSource = ['session', 'preset', 'endpoint'].includes(draft.reviewerSource) ? draft.reviewerSource : 'session'
   if (draft.reviewerProvider.trim()) value.reviewerProvider = draft.reviewerProvider.trim()
   if (draft.reviewerModel.trim()) value.reviewerModel = draft.reviewerModel.trim()
+  value.reviewerMaxTokens = Math.max(256, Math.min(16384, Math.round(Number(draft.reviewerMaxTokens) || 2048)))
+  const REASONING_VALUES = ['', 'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+  value.reviewerReasoning = REASONING_VALUES.includes(draft.reviewerReasoning) ? draft.reviewerReasoning : ''
+  value.classifierReasoning = REASONING_VALUES.includes(draft.classifierReasoning) ? draft.classifierReasoning : ''
   if (draft.endpointUrl.trim()) value.endpointUrl = draft.endpointUrl.trim()
   if (draft.endpointModel.trim()) value.endpointModel = draft.endpointModel.trim()
   if (draft.endpointProtocol === 'openai' || draft.endpointProtocol === 'anthropic') value.endpointProtocol = draft.endpointProtocol
@@ -528,12 +539,15 @@ const INVALID_CONFIG_TYPES: Record<string, string> = {
   maxArgsChars: 'number', classifierTimeoutMs: 'number', classifierMaxOutputTokens: 'number',
   workspaceRoot: 'string', dshHome: 'string', safetyPrompt: 'string', rulesText: 'string',
   reviewerModel: 'string', timeoutAction: 'string',
+  reviewerReasoning: 'string', classifierReasoning: 'string',
+  reviewerMaxTokens: 'number',
   classifierProvider: 'string', classifierModel: 'string',
   reviewerProvider: 'string',
   endpointUrl: 'string', endpointModel: 'string',
   allowlist: 'array', denyList: 'array', humanOnlyList: 'array', tempRoots: 'array',
   categoryPolicy: 'object', categoryMode: 'string', trustedDirs: 'array',
 }
+const REASONING_OPTIONS = ['', 'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 const INVALID_CONFIG_ENUMS: Record<string, string[]> = {
   timeoutAction: ['reject', 'allow', 'low-risk-allow'],
   llmReviewScope: ['low-or-above', 'medium-or-above', 'high'],
@@ -545,12 +559,15 @@ const INVALID_CONFIG_ENUMS: Record<string, string[]> = {
   categoryMode: ['standard', 'aggressive'],
   classifierSource: ['session', 'preset', 'endpoint'],
   reviewerSource: ['session', 'preset', 'endpoint'],
+  reviewerReasoning: REASONING_OPTIONS,
+  classifierReasoning: REASONING_OPTIONS,
 }
 const INVALID_CONFIG_RANGES: Record<string, [number, number]> = {
   lowRiskSeconds: [1, Infinity], mediumRiskSeconds: [1, Infinity], highRiskSeconds: [1, Infinity],
   maxConsecutiveDenials: [0, Infinity], maxTotalDenials: [0, Infinity], breakerAntiHijackMs: [0, Infinity],
   reviewMaxRetries: [0, 2],
   maxArgsChars: [1, Infinity], classifierTimeoutMs: [100, 60000], classifierMaxOutputTokens: [64, 4096],
+  reviewerMaxTokens: [256, 16384],
 }
 
 function findInvalidConfigKeys(value: any): string[] {
@@ -639,6 +656,23 @@ function protocolOptions(): CapsuleOption[] {
   return [
     { value: 'openai', label: t('option.protocol.openai') },
     { value: 'anthropic', label: t('option.protocol.anthropic') },
+  ]
+}
+
+// Reasoning-effort choices for both LLM lanes. '' = follow the model's default
+// (byte-identical to pre-switch); the rest map to the dsh reasoningEffort /
+// endpoint reasoning_effort values — a model that does not support a value
+// fails that call loudly, never silently.
+function reasoningOptions(): CapsuleOption[] {
+  return [
+    { value: '', label: t('option.reasoning.default') },
+    { value: 'off', label: 'off' },
+    { value: 'minimal', label: 'minimal' },
+    { value: 'low', label: 'low' },
+    { value: 'medium', label: 'medium' },
+    { value: 'high', label: 'high' },
+    { value: 'xhigh', label: 'xhigh' },
+    { value: 'max', label: 'max' },
   ]
 }
 
@@ -991,7 +1025,7 @@ function SettingsSection() {
   // in the local draft and never accidentally persisted by another card.
   const TOP_KEYS = ['enabled', 'autoSwitchPolicyToAsk', 'timeoutAction', 'llmReviewScope', 'llmTakeoverScope', 'defaultReviewMode', 'showSessionPanel', 'aiButtonPosition', 'autoModeNoticeEnabled']
   const TIMER_KEYS = ['breakerAntiHijackMs', 'lowRiskSeconds', 'mediumRiskSeconds', 'highRiskSeconds', 'maxConsecutiveDenials', 'maxTotalDenials', 'reviewWaitSeconds', 'directHumanEnabled']
-  const REVIEW_KEYS = ['classifierSource', 'classifierProvider', 'classifierModel', 'reviewerSource', 'reviewerProvider', 'reviewerModel', 'endpointUrl', 'endpointModel', 'endpointProtocol', 'reviewMaxRetries']
+  const REVIEW_KEYS = ['classifierSource', 'classifierProvider', 'classifierModel', 'reviewerSource', 'reviewerProvider', 'reviewerModel', 'reviewerMaxTokens', 'reviewerReasoning', 'classifierReasoning', 'endpointUrl', 'endpointModel', 'endpointProtocol', 'reviewMaxRetries']
   const SECURITY_KEYS = ['safetyPrompt', 'allowlist', 'denyList', 'humanOnlyList', 'rulesText', 'rulesDryRun']
   const UTILITY_KEYS = ['onboardingMessageEnabled', 'redactResults', 'editDiffPreview', 'rejectGuidance']
   const LEARNING_KEYS = ['learningEnabled', 'learningThreshold']
@@ -1156,6 +1190,7 @@ function SettingsSection() {
     const reset: Partial<Draft> = {
       classifierSource: 'session', classifierProvider: '', classifierModel: '',
       reviewerSource: 'session', reviewerProvider: '', reviewerModel: '',
+      reviewerMaxTokens: '2048', reviewerReasoning: '', classifierReasoning: '',
       endpointUrl: '', endpointModel: '', endpointProtocol: 'openai',
     }
     const merged = { ...draftOf(snapshot.value), ...reset }
@@ -1727,6 +1762,32 @@ function SettingsSection() {
     React.createElement('p', { className: 'dsa-hint', style: { margin: 0 } }, t('settings.reviewer.description')),
     sourceSection('classifier'),
     sourceSection('reviewer'),
+    React.createElement('div', { className: 'dsa-subSection', style: { borderTop: '1px solid var(--dsw-alias-border-l1, rgba(128,128,128,.25))', paddingTop: 10 } },
+      React.createElement('div', { className: 'dsa-titleRow' },
+        React.createElement('span', { className: 'dsa-title' }, t('settings.reviewer.paramsTitle')),
+      ),
+      React.createElement('p', { className: 'dsa-hint', style: { margin: '4px 0 8px' } }, t('settings.reviewer.paramsHint')),
+      row(t('settings.reviewer.reviewerReasoning'), React.createElement(CapsuleSelect, {
+        value: draft.reviewerReasoning ?? '',
+        options: reasoningOptions(),
+        onChange: (v: string) => update({ reviewerReasoning: v }),
+      }), t('settings.reviewer.reasoningHint')),
+      row(t('settings.reviewer.classifierReasoning'), React.createElement(CapsuleSelect, {
+        value: draft.classifierReasoning ?? '',
+        options: reasoningOptions(),
+        onChange: (v: string) => update({ classifierReasoning: v }),
+      }), t('settings.reviewer.reasoningHint')),
+      row(t('settings.reviewer.reviewerMaxTokens'), React.createElement('input', {
+        type: 'number',
+        min: 256,
+        max: 16384,
+        step: 256,
+        value: draft.reviewerMaxTokens,
+        onChange: (e: any) => update({ reviewerMaxTokens: e.target.value }),
+        className: 'dsa-input',
+        style: { width: 110 },
+      }), t('settings.reviewer.maxTokensHint')),
+    ),
     React.createElement('div', { style: { borderTop: '1px solid var(--dsw-alias-border-l1, rgba(128,128,128,.25))', paddingTop: 10 } },
     React.createElement('div', { className: 'dsa-titleRow' },
       React.createElement('span', { className: 'dsa-title' }, t('settings.reviewer.endpointTitle')),

@@ -27,6 +27,11 @@ export interface EndpointCallInput {
   /** User message(s) text. */
   messages: string[]
   maxTokens?: number
+  /** Reasoning-effort control forwarded verbatim to OpenAI-compatible bodies
+   * (`reasoning_effort`) when set. ''/absent = no field (provider default).
+   * A provider that does not understand the value answers or errors on its
+   * own terms — this layer never guesses. */
+  reasoningEffort?: string
   signal?: AbortSignal
 }
 
@@ -113,7 +118,12 @@ export async function callEndpointText(input: EndpointCallInput): Promise<Endpoi
     headers,
     signal: input.signal,
     redirect: 'error',
-    body: JSON.stringify({ model: input.model || undefined, max_tokens: maxTokens, messages: openaiMessages }),
+    body: JSON.stringify({
+      model: input.model || undefined,
+      max_tokens: maxTokens,
+      messages: openaiMessages,
+      ...(input.reasoningEffort && input.reasoningEffort !== '' ? { reasoning_effort: input.reasoningEffort } : {}),
+    }),
   })
   if (!res.ok) {
     const body = await res.text().catch(() => '')

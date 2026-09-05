@@ -96,6 +96,9 @@ export const THRESHOLD_DEFAULTS = {
   reviewMaxRetries: 1,
   /** Per-attempt wait for one reviewer response, in seconds. */
   reviewWaitSeconds: 5,
+  /** Deep-review output budget in tokens (reasoning models need headroom for
+   * thinking + the final answer — 256 starved the JSON answer, 2026-09-05). */
+  reviewerMaxTokens: 2_048,
   /** Cap for rule text injected into the reviewer system prompt. */
   rulesSummaryMaxChars: 2_000,
   /** Human confirmations (default) before a same-signature call may auto-allow. */

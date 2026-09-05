@@ -130,3 +130,16 @@ test('client bundle: history rows show the LLM decision wall-clock when present'
   assert.ok(client.includes('llmTookMs ? ` · LLM ${formatTookMs(r.llmTookMs)}`'), 'history lines append the LLM wall-clock')
   assert.ok(client.includes('ms < 1000 ? `${ms}ms`') || client.includes('ms < 1e3 ? `${ms}ms`'), 'sub-second values stay in milliseconds')
 })
+
+test('client bundle: reasoning-effort and output-budget controls are wired', () => {
+  // 2026-09-05: per-lane reasoning effort (default + off..max presets) and the
+  // deep-review output budget joined the model card.
+  assert.ok(client.includes('reasoningOptions'), 'the reasoning option builder is bundled')
+  assert.ok(client.includes('option.reasoning.default'), 'the default option label is localized')
+  assert.ok(client.includes('settings.reviewer.reviewerReasoning'), 'reviewer reasoning control key is referenced')
+  assert.ok(client.includes('settings.reviewer.classifierReasoning'), 'classifier reasoning control key is referenced')
+  assert.ok(client.includes('settings.reviewer.reviewerMaxTokens'), 'the output-budget control key is referenced')
+  for (const v of ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']) {
+    assert.ok(client.includes(`value: "${v}"`), `reasoning preset ${v} is offered`)
+  }
+})
