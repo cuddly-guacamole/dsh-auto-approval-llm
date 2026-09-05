@@ -2206,6 +2206,27 @@ test('summarizeLatency: empty window yields null stats and zero counts', () => {
   assert.equal(out.windowStartAt, null)
 })
 
+test('summarizeLatency: channel filter keeps each lane separate; legacy samples count as reviewer', () => {
+  const samples = [
+    { ...sample(1, 100), channel: 'classifier' },
+    { ...sample(2, 5000, false), channel: 'classifier' }, // classifier timeout
+    { ...sample(3, 3000), channel: 'reviewer' },
+    { ...sample(4, 800), channel: 'reviewer' },
+    { ...sample(5, 2500) }, // legacy: no channel → reviewer
+  ]
+  const classifier = summarizeLatency(samples, 100, 'classifier')
+  assert.equal(classifier.count, 1)
+  assert.equal(classifier.minMs, 100)
+  assert.equal(classifier.abortedCount, 1)
+  const reviewer = summarizeLatency(samples, 100, 'reviewer')
+  assert.equal(reviewer.count, 3)
+  assert.equal(reviewer.avgMs, Math.round((3000 + 800 + 2500) / 3))
+  assert.equal(reviewer.abortedCount, 0)
+  const all = summarizeLatency(samples, 100)
+  assert.equal(all.count, 4)
+  assert.equal(all.abortedCount, 1)
+})
+
 test('summarizeLatency: window takes the trailing 100 samples in order', () => {
   const many = Array.from({ length: 150 }, (_, i) => sample(i, 1000 + i))
   const out = summarizeLatency(many, 100)

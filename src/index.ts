@@ -30,7 +30,7 @@ import { sanitizeClassifierArguments, sanitizeClassifierText, sanitizeReviewReas
 import { DIRECT_HUMAN_TOOL, THRESHOLD_DEFAULTS } from './auto/constants.js'
 import { createDshClassifier, createEndpointClassifier } from './auto/dsh-classifier.js'
 import { type RaceHumanHandle, type ReviewResult, type StaticRisk, REVIEW_TIMEOUT_NOTICE, applyBreaker, approvalSource, assembleReviewerSystem, breakerNote, breakerTripped, countdownNote, createKeyedMutex, extractToolPath, followResolution, formatDenyFeedback, frameReviewerInput, lowRiskReviewOutcome, parseReview, unattendedMustFailClosed, preserveHostKeys, raceHumanDecision, reviewSuggestionNote, reviewerAutoAllowBlocked, riskFromAssessment, staticListDecision, type ContextSummary } from './auto/decision.js'
-import { loadLatencySamples, pushLatencySample, summarizeLatency, type LatencySample } from './auto/latency.js'
+import { LATENCY_SUMMARY_WINDOW, loadLatencySamples, pushLatencySample, summarizeLatency, type LatencySample } from './auto/latency.js'
 import { buildAskReason, buildEditDiff, buildEditDiffText, EDIT_DIFF_ARGS_MAX_CHARS, EDIT_DIFF_TOOLS } from './auto/editdiff.js'
 import {
   clampLearningThreshold,
@@ -1932,7 +1932,18 @@ export function installHistoryRoute(ctx: any): void {
         return
       }
       if (req.method === 'GET') {
-        responseJson(res, 200, { ok: true, value: { records: [...approvalHistory].reverse(), llmLatency: summarizeLatency(llmLatency) } })
+        // Latency split by lane: `llmLatency` stays the reviewer summary
+        // (backward compatible); `llmLatencyClassifier` is the fast-decision
+        // lane; `llmLatencyAll` merges both for an at-a-glance view.
+        responseJson(res, 200, {
+          ok: true,
+          value: {
+            records: [...approvalHistory].reverse(),
+            llmLatency: summarizeLatency(llmLatency, LATENCY_SUMMARY_WINDOW, 'reviewer'),
+            llmLatencyClassifier: summarizeLatency(llmLatency, LATENCY_SUMMARY_WINDOW, 'classifier'),
+            llmLatencyAll: summarizeLatency(llmLatency, LATENCY_SUMMARY_WINDOW),
+          },
+        })
         return
       }
       if (req.method === 'DELETE') {
@@ -3026,25 +3037,34 @@ export function apply(ctx: Context, rawConfig: Config): void {
         presetModel: config.classifierModel,
       })
       let decision: { decision: 'allow' | 'ask' | 'deny'; reason: string }
-      if (classifierLane.source === 'endpoint') {
-        // Endpoint source: synchronous raw call, endpoint config + key resolved
-        // fresh per classify (never construction-frozen).
-        if (!config.endpointUrl || !config.endpointModel) {
-          throw new Error('endpoint source needs a URL and model for classification')
+      const classifierStart = Date.now()
+      try {
+        if (classifierLane.source === 'endpoint') {
+          // Endpoint source: synchronous raw call, endpoint config + key resolved
+          // fresh per classify (never construction-frozen).
+          if (!config.endpointUrl || !config.endpointModel) {
+            throw new Error('endpoint source needs a URL and model for classification')
+          }
+          const endpointApiKey = await resolveReviewerApiKey(getCredentials())
+          decision = await endpointClassifier.classify(classifierInput, exec.signal, {
+            url: config.endpointUrl,
+            model: config.endpointModel,
+            protocol: config.endpointProtocol,
+            apiKey: endpointApiKey,
+          })
+        } else {
+          if (classifierLane.error) {
+            throw new Error(classifierLane.error)
+          }
+          decision = await classifier.classify(classifierInput, exec.signal)
         }
-        const endpointApiKey = await resolveReviewerApiKey(getCredentials())
-        decision = await endpointClassifier.classify(classifierInput, exec.signal, {
-          url: config.endpointUrl,
-          model: config.endpointModel,
-          protocol: config.endpointProtocol,
-          apiKey: endpointApiKey,
-        })
-      } else {
-        if (classifierLane.error) {
-          throw new Error(classifierLane.error)
-        }
-        decision = await classifier.classify(classifierInput, exec.signal)
+      } catch (error) {
+        // The fast-decision lane's own latency is telemetry too: a failed or
+        // timed-out classification still cost wall-clock time (2026-09-05).
+        pushLatencySample(llmLatency, { at: Date.now(), tookMs: Date.now() - classifierStart, settled: false, channel: 'classifier' })
+        throw error
       }
+      pushLatencySample(llmLatency, { at: Date.now(), tookMs: Date.now() - classifierStart, settled: true, channel: 'classifier' })
       debugLog({ ev: 'classifier-decision', callId: exec.callId ?? null, toolName: exec.name, category, directive, mode: config.categoryMode, aggressiveAuto, riskTier, decision: decision.decision, reason: sanitizeReviewReason(decision.reason) })
       // This fast path answers without ever entering the `approval/request`
       // answerer, where every other pushHistory site lives — so an allow or a
@@ -3589,7 +3609,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
         budgetMs: seconds * 1000,
         asyncPath: false,
       })
-      pushLatencySample(llmLatency, { at: Date.now(), tookMs: Date.now() - start, settled: review.failure === undefined, attempts: Math.max(1, attempts.length) })
+      pushLatencySample(llmLatency, { at: Date.now(), tookMs: Date.now() - start, settled: review.failure === undefined, attempts: Math.max(1, attempts.length), channel: 'reviewer' })
       debugLog({ ev: 'learned-review', callId: req.callId ?? null, decision: review.decision, risk: review.riskLevel ?? null, tookMs: Date.now() - start })
       // Anything but a clean ALLOW (DENY / ESCALATE / failure / CRITICAL-flagged
       // contradiction) is treated as a miss and slides back into the ordinary
@@ -4032,7 +4052,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
           debugLog({ ev: 'review', callId: req.callId, decision: review.decision, risk: review.riskLevel ?? null, startAt: lowReviewStart, tookMs: Date.now() - lowReviewStart, scope: 'low', attempts: attempts.length })
           // Latency telemetry is sampled for every attempt, settled or not;
           // only `failure` marks an aborted call (timeout/network/parse).
-          pushLatencySample(llmLatency, { at: Date.now(), tookMs: Date.now() - lowReviewStart, settled: review.failure === undefined, attempts: Math.max(1, attempts.length) })
+          pushLatencySample(llmLatency, { at: Date.now(), tookMs: Date.now() - lowReviewStart, settled: review.failure === undefined, attempts: Math.max(1, attempts.length), channel: 'reviewer' })
           // Late response that already lost the countdown race is discarded.
           if (!req.callId || reviewStates.get(req.callId)?.phase !== 'countdown') return
           const verdict = lowRiskReviewOutcome(review)
@@ -4110,7 +4130,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
           // left as an unhandledRejection that could crash the host process.
           // The countdown keeps running, so a healthy human answer is unaffected.
           debugLog({ ev: 'review-error', callId: req.callId, scope: 'low', error: error instanceof Error ? error.message : String(error) })
-          pushLatencySample(llmLatency, { at: Date.now(), tookMs: Date.now() - lowReviewStart, settled: false })
+          pushLatencySample(llmLatency, { at: Date.now(), tookMs: Date.now() - lowReviewStart, settled: false, channel: 'reviewer' })
         })
       return lowAskPromise
     }
@@ -4148,7 +4168,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
           // Sample before the phase guard: a late response that lost the
           // countdown race is still a real latency observation (and the most
           // diagnostic one — the reviewer was slow).
-          pushLatencySample(llmLatency, { at: Date.now(), tookMs: Date.now() - reviewStart, settled: review.failure === undefined, attempts: Math.max(1, attempts.length) })
+          pushLatencySample(llmLatency, { at: Date.now(), tookMs: Date.now() - reviewStart, settled: review.failure === undefined, attempts: Math.max(1, attempts.length), channel: 'reviewer' })
           if (!req.callId || reviewStates.get(req.callId)?.phase !== 'countdown') return
           const note = reviewSuggestionNote(review)
           // Remember the verdict for history whether or not it takes over.
@@ -4213,7 +4233,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
           debugLog({ ev: 'review-error', callId: req.callId, scope: 'medium', error: error instanceof Error ? error.message : String(error) })
           // An unexpected rejection is still an aborted attempt: sample it so
           // the latency window never silently drops failures.
-          pushLatencySample(llmLatency, { at: Date.now(), tookMs: Date.now() - reviewStart, settled: false })
+          pushLatencySample(llmLatency, { at: Date.now(), tookMs: Date.now() - reviewStart, settled: false, channel: 'reviewer' })
         })
       return await askPromise
     }
@@ -4239,7 +4259,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
           debugLog({ ev: 'review', callId: req.callId, decision: review.decision, risk: review.riskLevel ?? null, startAt: reviewStart, tookMs: Date.now() - reviewStart, scope: 'high', attempts: attempts.length })
           // Sample before the phase guard (see MEDIUM: late responses are the
           // most diagnostic latency observations and must not be dropped).
-          pushLatencySample(llmLatency, { at: Date.now(), tookMs: Date.now() - reviewStart, settled: review.failure === undefined, attempts: Math.max(1, attempts.length) })
+          pushLatencySample(llmLatency, { at: Date.now(), tookMs: Date.now() - reviewStart, settled: review.failure === undefined, attempts: Math.max(1, attempts.length), channel: 'reviewer' })
           if (!req.callId || reviewStates.get(req.callId)?.phase !== 'countdown') return
           const note = reviewSuggestionNote(review)
           reviewVerdicts.set(req.callId, { ...review, attempts })
@@ -4254,7 +4274,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
           debugLog({ ev: 'review-error', callId: req.callId, scope: 'high', error: error instanceof Error ? error.message : String(error) })
           // Unexpected rejection = aborted attempt; sample so failures stay
           // visible in the latency window (see MEDIUM).
-          pushLatencySample(llmLatency, { at: Date.now(), tookMs: Date.now() - reviewStart, settled: false })
+          pushLatencySample(llmLatency, { at: Date.now(), tookMs: Date.now() - reviewStart, settled: false, channel: 'reviewer' })
         })
     }
     return await askPromise

@@ -113,3 +113,12 @@ test('client bundle: the 3-source menu drives the lanes directly', () => {
   assert.ok(!client.includes('dsa-provider-suggest') && !client.includes('dsa-model-suggest'),
     'the double-click datalist suggestions are gone')
 })
+
+test('client bundle: history latency renders per-lane lines for reviewer and classifier', () => {
+  // The fast-decision lane joined latency telemetry (2026-09-05): the recent
+  // approvals card shows one line per lane with a lane label.
+  assert.ok(client.includes('latencyLine'), 'the shared latency-line renderer is bundled')
+  assert.ok(client.includes('settings.history.llmLatencyReviewer'), 'reviewer lane label key is referenced')
+  assert.ok(client.includes('settings.history.llmLatencyClassifier'), 'classifier lane label key is referenced')
+  assert.ok(client.includes('llmLatencyClassifier'), 'the classifier summary state is fetched')
+})

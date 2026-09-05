@@ -29,6 +29,10 @@ export interface LatencySample {
   settled: boolean
   /** Total attempts (1 = single call); present once retries are in play. */
   attempts?: number
+  /** Which LLM lane produced the sample: 'reviewer' (deep review, the
+   * original telemetry) or 'classifier' (fast-decision lane, added 2026-09-05).
+   * Absent = legacy reviewer-era sample. */
+  channel?: 'classifier' | 'reviewer'
 }
 
 export interface LatencySummary {
@@ -55,10 +59,11 @@ const LATENCY_FILE = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '
  * Aggregate the trailing `window` samples (by array order, which callers keep
  * chronological). Only settled samples contribute to min/avg/max — aborted
  * attempts are counted separately so a burst of timeouts cannot masquerade as
- * healthy response times.
+ * healthy response times. `channel` narrows the window to one lane (absent =
+ * all lanes); legacy samples without a channel count as reviewer.
  */
-export function summarizeLatency(samples: readonly LatencySample[], window = LATENCY_SUMMARY_WINDOW): LatencySummary {
-  const windowed = samples.slice(-window)
+export function summarizeLatency(samples: readonly LatencySample[], window = LATENCY_SUMMARY_WINDOW, channel?: 'classifier' | 'reviewer'): LatencySummary {
+  const windowed = samples.filter((s) => channel === undefined || (s.channel ?? 'reviewer') === channel).slice(-window)
   const settledMs: number[] = []
   let abortedCount = 0
   for (const sample of windowed) {
@@ -88,7 +93,9 @@ export function loadLatencySamples(): LatencySample[] {
       try {
         const parsed = JSON.parse(line) as Partial<LatencySample>
         if (parsed && typeof parsed.at === 'number' && typeof parsed.tookMs === 'number' && typeof parsed.settled === 'boolean') {
-          samples.push({ at: parsed.at, tookMs: parsed.tookMs, settled: parsed.settled })
+          const sample: LatencySample = { at: parsed.at, tookMs: parsed.tookMs, settled: parsed.settled }
+          if (parsed.channel === 'classifier' || parsed.channel === 'reviewer') sample.channel = parsed.channel
+          samples.push(sample)
         }
       } catch {
         // Corrupt or partial lines are non-fatal; keep the readable tail.

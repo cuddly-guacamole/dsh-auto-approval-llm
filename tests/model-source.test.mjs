@@ -159,3 +159,11 @@ test('host wiring: the classifier construction derives its override from classif
   assert.ok(block.includes('classifierOverrideFor(config)'), 'the construction spreads the derived override')
   assert.ok(!block.includes('classifierPair'), 'no retired classifierPair marker may resurface')
 })
+
+test('host wiring: the fast-decision lane records its own latency samples', () => {
+  // The classifier lane joined latency telemetry (2026-09-05): every fast
+  // decision (settled or failed) pushes a sample tagged channel:classifier.
+  const sites = HOST_SRC.match(/channel: 'classifier'/g) ?? []
+  assert.ok(sites.length >= 2, 'classifier latency pushes both the settled and the failed path')
+  assert.ok(HOST_SRC.includes('classifierStart'), 'the classifier call is timed')
+})

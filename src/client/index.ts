@@ -731,6 +731,10 @@ function SettingsSection() {
   }
   const [history, setHistory] = React.useState<any[]>([])
   const [llmLatency, setLlmLatency] = React.useState<any>(null)
+  // Latency split by lane (2026-09-05): reviewer (deep review) and classifier
+  // (fast decision) summaries arrive alongside the merged view.
+  const [llmLatencyClassifier, setLlmLatencyClassifier] = React.useState<any>(null)
+  const [llmLatencyAll, setLlmLatencyAll] = React.useState<any>(null)
   const [historyError, setHistoryError] = React.useState('')
   const [testResult, setTestResult] = React.useState<{ kind: 'ok' | 'err' | 'info'; text: string } | null>(null)
   const [credentialConfigured, setCredentialConfigured] = React.useState(false)
@@ -826,6 +830,8 @@ function SettingsSection() {
         if (disposed || !data?.ok) return
         setHistory(data.value.records ?? [])
         setLlmLatency(data.value.llmLatency ?? null)
+        setLlmLatencyClassifier(data.value.llmLatencyClassifier ?? null)
+        setLlmLatencyAll(data.value.llmLatencyAll ?? null)
       })
       .catch((e: any) => {
         if (!disposed) setHistoryError(String(e))
@@ -2035,21 +2041,36 @@ function SettingsSection() {
           ),
   )
 
+  // One latency summary line for a lane. Empty lanes render their localized
+  // hint (still counted when both lanes are empty, e.g. pre-first-call).
+  const latencyLine = (label: string, stat: any) => {
+    if (stat === null || stat === undefined) return null
+    if ((stat.count ?? 0) === 0 && (stat.abortedCount ?? 0) === 0) return null
+    if ((stat.count ?? 0) === 0) {
+      return React.createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center', fontSize: 12, color: 'var(--dsw-alias-label-tertiary)', padding: '2px 0' } },
+        React.createElement('span', null, label),
+        React.createElement('span', null, t('settings.history.llmLatencyEmpty')),
+      )
+    }
+    return React.createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center', fontSize: 12, color: 'var(--dsw-alias-label-tertiary)', padding: '2px 0', flexWrap: 'wrap' } },
+      React.createElement('span', null, label),
+      React.createElement('span', null, t('settings.history.llmLatency', {
+        count: String(stat.count),
+        min: formatLatencySeconds(stat.minMs),
+        avg: formatLatencySeconds(stat.avgMs),
+        max: formatLatencySeconds(stat.maxMs),
+        aborted: String(stat.abortedCount ?? 0),
+      })),
+    )
+  }
+
   const buildHistoryBody = () => React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 8 } },
     historyError ? React.createElement('p', { style: { color: 'var(--dsw-alias-state-error-primary)', fontSize: 12, margin: 0 } }, historyError) : null,
-    llmLatency === null || (llmLatency.count ?? 0) === 0
-      ? React.createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center', fontSize: 12, color: 'var(--dsw-alias-label-tertiary)', padding: '2px 0' } },
-          React.createElement('span', null, t('settings.history.llmLatencyEmpty')),
-        )
-      : React.createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center', fontSize: 12, color: 'var(--dsw-alias-label-tertiary)', padding: '2px 0', flexWrap: 'wrap' } },
-          React.createElement('span', null, t('settings.history.llmLatency', {
-            count: String(llmLatency.count),
-            min: formatLatencySeconds(llmLatency.minMs),
-            avg: formatLatencySeconds(llmLatency.avgMs),
-            max: formatLatencySeconds(llmLatency.maxMs),
-            aborted: String(llmLatency.abortedCount ?? 0),
-          })),
-        ),
+    // Latency lines by lane: deep review (llmLatency, backward compatible) and
+    // fast decision (llmLatencyClassifier). A lane with no samples shows its
+    // empty hint instead of a blank row.
+    latencyLine(t('settings.history.llmLatencyReviewer'), llmLatency),
+    latencyLine(t('settings.history.llmLatencyClassifier'), llmLatencyClassifier),
     React.createElement('input', {
       placeholder: t('settings.history.searchPlaceholder'),
       value: search,
