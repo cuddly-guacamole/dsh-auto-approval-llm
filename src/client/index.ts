@@ -332,15 +332,15 @@ interface Draft {
   highRiskSeconds: string
   reviewWaitSeconds: string
   safetyPrompt: string
-  reviewerModel: string
-  reviewerProtocol: string
-  reviewerBaseUrl: string
-  classifierModelSource: 'session' | 'custom'
+  classifierSource: 'session' | 'preset' | 'endpoint'
   classifierProvider: string
   classifierModel: string
-  reviewerModelSource: 'session' | 'custom'
-  reviewerHostProvider: string
-  reviewerHostModel: string
+  reviewerSource: 'session' | 'preset' | 'endpoint'
+  reviewerProvider: string
+  reviewerModel: string
+  endpointUrl: string
+  endpointModel: string
+  endpointProtocol: 'openai' | 'anthropic'
   allowlist: string
   denyList: string
   humanOnlyList: string
@@ -381,14 +381,14 @@ function draftOf(value: any): Draft {
     reviewWaitSeconds: String(value?.reviewWaitSeconds ?? THRESHOLD_DEFAULTS.reviewWaitSeconds),
     safetyPrompt: value?.safetyPrompt ?? '',
     reviewerModel: value?.reviewerModel ?? '',
-    reviewerProtocol: ['openai', 'anthropic'].includes(value?.reviewerProtocol) ? value.reviewerProtocol : 'openai',
-    reviewerBaseUrl: value?.reviewerBaseUrl ?? '',
-    classifierModelSource: value?.classifierModelSource === 'custom' ? 'custom' : 'session',
+    classifierSource: ['session', 'preset', 'endpoint'].includes(value?.classifierSource) ? value.classifierSource : 'session',
     classifierProvider: value?.classifierProvider ?? '',
     classifierModel: value?.classifierModel ?? '',
-    reviewerModelSource: value?.reviewerModelSource === 'custom' ? 'custom' : 'session',
-    reviewerHostProvider: value?.reviewerHostProvider ?? '',
-    reviewerHostModel: value?.reviewerHostModel ?? '',
+    reviewerSource: ['session', 'preset', 'endpoint'].includes(value?.reviewerSource) ? value.reviewerSource : 'session',
+    reviewerProvider: value?.reviewerProvider ?? '',
+    endpointUrl: value?.endpointUrl ?? '',
+    endpointModel: value?.endpointModel ?? '',
+    endpointProtocol: ['openai', 'anthropic'].includes(value?.endpointProtocol) ? value.endpointProtocol : 'openai',
     allowlist: (value?.allowlist ?? []).join('\n'),
     denyList: (value?.denyList ?? []).join('\n'),
     humanOnlyList: (value?.humanOnlyList ?? []).join('\n'),
@@ -461,20 +461,20 @@ function valueOf(draft: Draft): any {
     learningEnabled: draft.learningEnabled === 'on',
     learningThreshold: Math.max(2, Math.min(10, intOr(draft.learningThreshold, THRESHOLD_DEFAULTS.learningThreshold))),
   }
-  if (draft.reviewerModel.trim()) value.reviewerModel = draft.reviewerModel.trim()
-  if (draft.reviewerProtocol === 'openai' || draft.reviewerProtocol === 'anthropic') value.reviewerProtocol = draft.reviewerProtocol
-  if (draft.reviewerBaseUrl.trim()) value.reviewerBaseUrl = draft.reviewerBaseUrl.trim()
-  // Issue #5 model sources: the source switch always persists (schema default
-  // 'session'); the custom provider/model pair persists only while non-empty,
-  // mirroring the reviewer-trio convention. resolveConfig normalizes any
-  // leftover pair away when the source is 'session', so stale custom values
-  // cannot silently reactivate.
-  value.classifierModelSource = draft.classifierModelSource === 'custom' ? 'custom' : 'session'
+  // Model sources (2026-09-05 llm-channel-unify): the source switches always
+  // persist (schema default 'session'); preset pairs and the shared endpoint
+  // config persist only while non-empty. resolveConfig normalizes leftover
+  // values away when a source is 'session', so stale values cannot silently
+  // reactivate.
+  value.classifierSource = ['session', 'preset', 'endpoint'].includes(draft.classifierSource) ? draft.classifierSource : 'session'
   if (draft.classifierProvider.trim()) value.classifierProvider = draft.classifierProvider.trim()
   if (draft.classifierModel.trim()) value.classifierModel = draft.classifierModel.trim()
-  value.reviewerModelSource = draft.reviewerModelSource === 'custom' ? 'custom' : 'session'
-  if (draft.reviewerHostProvider.trim()) value.reviewerHostProvider = draft.reviewerHostProvider.trim()
-  if (draft.reviewerHostModel.trim()) value.reviewerHostModel = draft.reviewerHostModel.trim()
+  value.reviewerSource = ['session', 'preset', 'endpoint'].includes(draft.reviewerSource) ? draft.reviewerSource : 'session'
+  if (draft.reviewerProvider.trim()) value.reviewerProvider = draft.reviewerProvider.trim()
+  if (draft.reviewerModel.trim()) value.reviewerModel = draft.reviewerModel.trim()
+  if (draft.endpointUrl.trim()) value.endpointUrl = draft.endpointUrl.trim()
+  if (draft.endpointModel.trim()) value.endpointModel = draft.endpointModel.trim()
+  if (draft.endpointProtocol === 'openai' || draft.endpointProtocol === 'anthropic') value.endpointProtocol = draft.endpointProtocol
   return value
 }
 
@@ -520,9 +520,10 @@ const INVALID_CONFIG_TYPES: Record<string, string> = {
   maxConsecutiveDenials: 'number', maxTotalDenials: 'number', breakerAntiHijackMs: 'number', reviewMaxRetries: 'number',
   maxArgsChars: 'number', classifierTimeoutMs: 'number', classifierMaxOutputTokens: 'number',
   workspaceRoot: 'string', dshHome: 'string', safetyPrompt: 'string', rulesText: 'string',
-  reviewerModel: 'string', reviewerBaseUrl: 'string', timeoutAction: 'string',
+  reviewerModel: 'string', timeoutAction: 'string',
   classifierProvider: 'string', classifierModel: 'string',
-  reviewerHostProvider: 'string', reviewerHostModel: 'string',
+  reviewerProvider: 'string',
+  endpointUrl: 'string', endpointModel: 'string',
   allowlist: 'array', denyList: 'array', humanOnlyList: 'array', tempRoots: 'array',
   categoryPolicy: 'object', categoryMode: 'string', trustedDirs: 'array',
 }
@@ -533,10 +534,10 @@ const INVALID_CONFIG_ENUMS: Record<string, string[]> = {
   defaultReviewMode: ['manual', 'smart', 'unattended'],
   showSessionPanel: ['on', 'auto', 'off'],
   aiButtonPosition: ['header', 'floating'],
-  reviewerProtocol: ['openai', 'anthropic'],
+  endpointProtocol: ['openai', 'anthropic'],
   categoryMode: ['standard', 'aggressive'],
-  classifierModelSource: ['session', 'custom'],
-  reviewerModelSource: ['session', 'custom'],
+  classifierSource: ['session', 'preset', 'endpoint'],
+  reviewerSource: ['session', 'preset', 'endpoint'],
 }
 const INVALID_CONFIG_RANGES: Record<string, [number, number]> = {
   lowRiskSeconds: [1, Infinity], mediumRiskSeconds: [1, Infinity], highRiskSeconds: [1, Infinity],
@@ -927,72 +928,48 @@ function SettingsSection() {
     setDraft({ ...draft, ...patch })
   }
 
-  // Issue #5 source picker model. The menu value space is:
-  //   'session'                          -> follow the session model
-  //   'custom'                           -> show the provider/model inputs
-  //   'preset:<provider>/<model>'        -> a discovered preset model (fills
-  //                                          source=custom + the pair, no inputs)
-  // Draft round-trips through source/provider/model; the menu value is derived
-  // from the draft for highlighting (an operator who already typed a pair that
-  // matches a preset sees the preset highlighted; an out-of-catalog pair falls
-  // back to showing 'custom' with the inputs).
+  // Model-source picker model (2026-09-05 llm-channel-unify): each lane has a
+  // direct 3-value source switch — 'session' (follow the session model),
+  // 'preset' (host DSH model from the catalog, pair filled from the menu) and
+  // 'endpoint' (shared custom endpoint config, marked legacy). The preset
+  // catalog menu fills the lane's provider/model; choosing session clears the
+  // lane pair. The shared endpoint config is edited once below both lanes.
   const laneDraft = (lane: 'classifier' | 'reviewer') => {
     if (lane === 'classifier') {
-      return { source: draft.classifierModelSource, provider: draft.classifierProvider, model: draft.classifierModel }
+      return { source: draft.classifierSource, provider: draft.classifierProvider, model: draft.classifierModel }
     }
-    return { source: draft.reviewerModelSource, provider: draft.reviewerHostProvider, model: draft.reviewerHostModel }
+    return { source: draft.reviewerSource, provider: draft.reviewerProvider, model: draft.reviewerModel }
   }
-  const laneUpdate = (lane: 'classifier' | 'reviewer', next: { source?: 'session' | 'custom'; provider?: string; model?: string }) => {
+  const laneUpdate = (lane: 'classifier' | 'reviewer', next: { source?: 'session' | 'preset' | 'endpoint'; provider?: string; model?: string }) => {
     if (lane === 'classifier') {
       const patch: Partial<Draft> = {}
-      if (next.source !== undefined) patch.classifierModelSource = next.source
+      if (next.source !== undefined) patch.classifierSource = next.source
       if (next.provider !== undefined) patch.classifierProvider = next.provider
       if (next.model !== undefined) patch.classifierModel = next.model
       update(patch)
     } else {
       const patch: Partial<Draft> = {}
-      if (next.source !== undefined) patch.reviewerModelSource = next.source
-      if (next.provider !== undefined) patch.reviewerHostProvider = next.provider
-      if (next.model !== undefined) patch.reviewerHostModel = next.model
+      if (next.source !== undefined) patch.reviewerSource = next.source
+      if (next.provider !== undefined) patch.reviewerProvider = next.provider
+      if (next.model !== undefined) patch.reviewerModel = next.model
       update(patch)
     }
   }
   const presetLabel = (m: { provider: string; id: string }) => `${m.provider}/${m.id}`
-  const currentMenuValue = (lane: 'classifier' | 'reviewer'): string => {
-    const { source, provider, model } = laneDraft(lane)
-    if (source === 'custom') {
-      if (!provider.trim() || !model.trim()) return 'custom'
-      const key = `${provider.trim()}/${model.trim()}`
-      const preset = (llmPresetModels ?? []).some((m) => presetLabel(m) === key)
-      return preset ? `preset:${key}` : 'custom'
-    }
-    return 'session'
+  // Choosing a preset catalog entry fills the lane pair and sets source=preset.
+  const choosePreset = (lane: 'classifier' | 'reviewer', pair: string) => {
+    const slash = pair.indexOf('/')
+    if (slash <= 0) return
+    laneUpdate(lane, { source: 'preset', provider: pair.slice(0, slash), model: pair.slice(slash + 1) })
   }
-  const applyMenuValue = (lane: 'classifier' | 'reviewer', menuValue: string) => {
-    if (menuValue === 'session') {
+  const setLaneSource = (lane: 'classifier' | 'reviewer', source: 'session' | 'preset' | 'endpoint') => {
+    if (source === 'session') {
+      // Leaving the preset lane clears the pair so a later return starts blank.
       laneUpdate(lane, { source: 'session', provider: '', model: '' })
-      return
-    }
-    if (menuValue === 'custom') {
-      // Choosing 自定义 means starting from a blank pair — keep whatever the
-      // operator already typed so a preset can be tweaked, but force the
-      // inputs visible by clearing to custom-with-empty-pair only when the
-      // current selection was a preset (the derived menu value would otherwise
-      // snap back to the preset highlight).
-      const cur = currentMenuValue(lane)
-      if (cur.startsWith('preset:')) {
-        laneUpdate(lane, { source: 'custom', provider: '', model: '' })
-      } else {
-        laneUpdate(lane, { source: 'custom' })
-      }
-      return
-    }
-    if (menuValue.startsWith('preset:')) {
-      const pair = menuValue.slice('preset:'.length)
-      const slash = pair.indexOf('/')
-      if (slash > 0) {
-        laneUpdate(lane, { source: 'custom', provider: pair.slice(0, slash), model: pair.slice(slash + 1) })
-      }
+    } else if (source === 'preset') {
+      laneUpdate(lane, { source: 'preset' })
+    } else {
+      laneUpdate(lane, { source: 'endpoint' })
     }
   }
 
@@ -1001,7 +978,7 @@ function SettingsSection() {
   // in the local draft and never accidentally persisted by another card.
   const TOP_KEYS = ['enabled', 'autoSwitchPolicyToAsk', 'timeoutAction', 'llmReviewScope', 'llmTakeoverScope', 'defaultReviewMode', 'showSessionPanel', 'aiButtonPosition', 'autoModeNoticeEnabled']
   const TIMER_KEYS = ['breakerAntiHijackMs', 'lowRiskSeconds', 'mediumRiskSeconds', 'highRiskSeconds', 'maxConsecutiveDenials', 'maxTotalDenials', 'reviewWaitSeconds', 'directHumanEnabled']
-  const REVIEW_KEYS = ['reviewerProtocol', 'reviewerBaseUrl', 'reviewerModel', 'reviewMaxRetries', 'classifierModelSource', 'classifierProvider', 'classifierModel', 'reviewerModelSource', 'reviewerHostProvider', 'reviewerHostModel']
+  const REVIEW_KEYS = ['classifierSource', 'classifierProvider', 'classifierModel', 'reviewerSource', 'reviewerProvider', 'reviewerModel', 'endpointUrl', 'endpointModel', 'endpointProtocol', 'reviewMaxRetries']
   const SECURITY_KEYS = ['safetyPrompt', 'allowlist', 'denyList', 'humanOnlyList', 'rulesText', 'rulesDryRun']
   const UTILITY_KEYS = ['onboardingMessageEnabled', 'redactResults', 'editDiffPreview', 'rejectGuidance']
   const LEARNING_KEYS = ['learningEnabled', 'learningThreshold']
@@ -1159,11 +1136,17 @@ function SettingsSection() {
   }
 
   const resetReviewerCard = async () => {
-    // One-tap factory reset of the online-reviewer card: default the three
-    // config keys, persist them, and clear the reviewer API key (credential
-    // store + file fallback) so no secret survives the reset.
-    const merged = { ...draftOf(snapshot.value), reviewerProtocol: 'openai', reviewerBaseUrl: '', reviewerModel: '' }
-    setDraft({ ...draft, reviewerProtocol: 'openai', reviewerBaseUrl: '', reviewerModel: '' })
+    // One-tap factory reset of the model card: default both lanes back to the
+    // session source and clear the shared endpoint config, persist, and clear
+    // the endpoint API key (credential store + file fallback) so no secret
+    // survives the reset.
+    const reset: Partial<Draft> = {
+      classifierSource: 'session', classifierProvider: '', classifierModel: '',
+      reviewerSource: 'session', reviewerProvider: '', reviewerModel: '',
+      endpointUrl: '', endpointModel: '', endpointProtocol: 'openai',
+    }
+    const merged = { ...draftOf(snapshot.value), ...reset }
+    setDraft({ ...draft, ...reset })
     setSaving(true); setError(''); setMessage('')
     setCardStatus(null)
     try {
@@ -1225,41 +1208,28 @@ function SettingsSection() {
   }
 
   // Direct-channel completeness precheck, mirroring the host-side snapshot
-  // rule: a base URL only enables the online reviewer together with a model
-  // name and an API key (already configured in the store, or freshly typed
-  // into the key field — saving persists it). Returns the localized missing
-  // pieces for the banner, or null when the channel is complete/unused.
-  const reviewerDirectMissing = (): string[] | null => {
-    if (!draft.reviewerBaseUrl.trim()) return null
-    const missing: string[] = []
-    if (!draft.reviewerModel.trim()) missing.push(t('settings.reviewer.missingModel'))
-    if (!credentialConfigured && !reviewerApiKey.trim()) missing.push(t('settings.reviewer.missingKey'))
-    return missing.length > 0 ? missing : null
-  }
-
-  // Issue #5: a lane whose source switch says 'custom' must carry a complete
-  // provider/model pair, or saving would persist a half-configuration the host
-  // normalizes away (silently following the session model). Surface the missing
-  // pieces instead of letting the save pretend the custom lane is live.
+  // A lane whose source is 'preset' must carry a complete provider/model pair;
+  // an 'endpoint' source needs the shared endpoint URL + model. Surface the
+  // missing pieces instead of letting the save persist a half-configuration
+  // (the host fails such lanes loudly at review time).
   const sourceMissing = (lane: 'classifier' | 'reviewer'): string[] | null => {
-    const source = lane === 'classifier' ? draft.classifierModelSource : draft.reviewerModelSource
-    if (source !== 'custom') return null
+    const { source, provider, model } = laneDraft(lane)
+    if (source !== 'preset' && source !== 'endpoint') return null
+    if (source === 'preset') {
+      const missing: string[] = []
+      if (!provider.trim()) missing.push(t('settings.reviewer.source.provider'))
+      if (!model.trim()) missing.push(t('settings.reviewer.source.model'))
+      return missing.length > 0 ? missing : null
+    }
     const missing: string[] = []
-    const provider = lane === 'classifier' ? draft.classifierProvider : draft.reviewerHostProvider
-    const model = lane === 'classifier' ? draft.classifierModel : draft.reviewerHostModel
-    if (!provider.trim()) missing.push(t('settings.reviewer.source.provider'))
-    if (!model.trim()) missing.push(t('settings.reviewer.source.model'))
+    if (!draft.endpointUrl.trim()) missing.push(t('settings.reviewer.baseUrl'))
+    if (!draft.endpointModel.trim()) missing.push(t('settings.reviewer.modelName'))
     return missing.length > 0 ? missing : null
   }
 
   const testOnline = async () => {
-    const incomplete = reviewerDirectMissing()
-    if (incomplete) {
-      setTestResult({ kind: 'info', text: t('settings.reviewer.incompleteDirect', { missing: incomplete.join(', ') }) })
-      return
-    }
-    const baseUrl = draft.reviewerBaseUrl.trim()
-    const model = draft.reviewerModel.trim()
+    const baseUrl = draft.endpointUrl.trim()
+    const model = draft.endpointModel.trim()
     if (!baseUrl || !model) {
       setTestResult({ kind: 'info', text: t('test.enterProviderModel') })
       return
@@ -1271,7 +1241,7 @@ function SettingsSection() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           online: true,
-          protocol: draft.reviewerProtocol,
+          protocol: draft.endpointProtocol,
           baseUrl,
           model,
           apiKey: reviewerApiKey.trim(),
@@ -1323,17 +1293,9 @@ function SettingsSection() {
   }
 
   const saveReviewCard = async () => {
-    // Block the whole save when the direct trio is incomplete: persisting a
-    // half-configured base URL would only demote reviews to the session model
-    // host-side, so the user gets the missing pieces listed instead.
-    const incomplete = reviewerDirectMissing()
-    if (incomplete) {
-      setCardStatus({ id: 'review', kind: 'err', text: t('settings.reviewer.incompleteDirect', { missing: incomplete.join(', ') }) })
-      return
-    }
-    // A 'custom' lane with an incomplete provider/model pair would persist a
-    // half-configuration the host silently normalizes to session-following;
-    // tell the user instead of saving a lie.
+    // A 'preset'/'endpoint' lane with an incomplete configuration would persist
+    // a half-configuration the host fails loudly on at review time; tell the
+    // user instead of saving a lie.
     for (const lane of ['classifier', 'reviewer'] as const) {
       const missing = sourceMissing(lane)
       if (missing) {
@@ -1689,9 +1651,10 @@ function SettingsSection() {
   }
 
   // One model-source section for a lane (快速判断/深度评审). The source menu
-  // lists 跟随会话 / 自定义 / every discovered preset model (`provider/model`);
-  // choosing a preset fills the pair directly (no input row), choosing 自定义
-  // reveals the provider/model inputs, following the session hides both.
+  // lists the three sources directly (session / preset / endpoint): session
+  // follows the conversation, preset rides a host DSH model (catalog choices
+  // fill the pair, free text allowed), endpoint marks the legacy shared custom
+  // endpoint (configured once below both lanes).
   const sourceSection = (lane: 'classifier' | 'reviewer') => {
     const title = lane === 'classifier'
       ? t('settings.reviewer.source.classifier')
@@ -1700,40 +1663,50 @@ function SettingsSection() {
       ? t('settings.reviewer.source.classifierHint')
       : t('settings.reviewer.source.reviewerHint')
     const { source, provider, model } = laneDraft(lane)
-    const menuValue = currentMenuValue(lane)
     const menuOptions: CapsuleOption[] = [
       { value: 'session', label: t('option.modelSource.session') },
-      { value: 'custom', label: t('option.modelSource.custom') },
+      { value: 'preset', label: t('option.modelSource.preset') },
+      { value: 'endpoint', label: t('option.modelSource.endpoint') },
     ]
-    for (const m of llmPresetModels ?? []) {
-      menuOptions.push({ value: `preset:${presetLabel(m)}`, label: presetLabel(m) })
-    }
-    const showCustomInputs = source === 'custom' && !currentMenuValue(lane).startsWith('preset:')
     return React.createElement('div', { className: 'dsa-subSection', style: { borderTop: '1px solid var(--dsw-alias-border-l1, rgba(128,128,128,.25))', paddingTop: 10 } },
       React.createElement('div', { className: 'dsa-titleRow' },
         React.createElement('span', { className: 'dsa-title' }, title),
       ),
       React.createElement('p', { className: 'dsa-hint', style: { margin: '4px 0 8px' } }, hint),
       row(t('settings.reviewer.source.label'), React.createElement(CapsuleSelect, {
-        value: menuValue,
+        value: source,
         options: menuOptions,
-        onChange: (v: string) => applyMenuValue(lane, v),
+        onChange: (v: string) => setLaneSource(lane, v as 'session' | 'preset' | 'endpoint'),
       })),
-      showCustomInputs ? React.createElement('div', { style: { display: 'grid', gap: 6 } },
-        row(t('settings.reviewer.source.provider'), React.createElement(Input, {
-          value: provider,
-          onChange: (e: any) => laneUpdate(lane, { provider: e.target.value }),
-          placeholder: t('settings.reviewer.source.providerPlaceholder'),
-          className: 'dsa-input',
-        })),
-        row(t('settings.reviewer.source.model'), React.createElement(Input, {
-          value: model,
-          onChange: (e: any) => laneUpdate(lane, { model: e.target.value }),
-          placeholder: t('settings.reviewer.source.modelPlaceholder'),
-          className: 'dsa-input',
-        })),
-      ) : null,
-      React.createElement('p', { className: 'dsa-hint', style: { margin: '8px 0 0' } }, t('settings.reviewer.source.hint')),
+      source === 'preset'
+        ? React.createElement('div', { style: { display: 'grid', gap: 6 } },
+            row(t('settings.reviewer.source.provider'), React.createElement(Input, {
+              value: provider,
+              onChange: (e: any) => laneUpdate(lane, { provider: e.target.value }),
+              placeholder: t('settings.reviewer.source.providerPlaceholder'),
+              className: 'dsa-input',
+            })),
+            row(t('settings.reviewer.source.model'), React.createElement(Input, {
+              value: model,
+              onChange: (e: any) => laneUpdate(lane, { model: e.target.value }),
+              placeholder: t('settings.reviewer.source.modelPlaceholder'),
+              className: 'dsa-input',
+            })),
+            llmPresetModels && llmPresetModels.length > 0
+              ? React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6 } },
+                  llmPresetModels.slice(0, 30).map((m: any) => React.createElement('button', {
+                    key: presetLabel(m),
+                    type: 'button',
+                    className: provider === m.provider && model === m.id ? 'dsa-chip dsa-chipActive' : 'dsa-chip',
+                    onClick: () => choosePreset(lane, presetLabel(m)),
+                  }, presetLabel(m))),
+                )
+              : null,
+          )
+        : null,
+      source === 'endpoint'
+        ? React.createElement('p', { className: 'dsa-hint', style: { margin: '8px 0 0' } }, t('settings.reviewer.source.endpointSharedHint'))
+        : React.createElement('p', { className: 'dsa-hint', style: { margin: '8px 0 0' } }, t('settings.reviewer.source.hint')),
     )
   }
 
@@ -1744,22 +1717,23 @@ function SettingsSection() {
     React.createElement('div', { style: { borderTop: '1px solid var(--dsw-alias-border-l1, rgba(128,128,128,.25))', paddingTop: 10 } },
     React.createElement('div', { className: 'dsa-titleRow' },
       React.createElement('span', { className: 'dsa-title' }, t('settings.reviewer.endpointTitle')),
+      React.createElement('span', { className: 'dsa-titleBadge', style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } }, t('settings.reviewer.endpointLegacy')),
     ),
     React.createElement('p', { className: 'dsa-hint', style: { margin: '4px 0 8px' } }, t('settings.reviewer.endpointHint')),
     row(t('settings.reviewer.protocol'), React.createElement(CapsuleSelect, {
-      value: draft.reviewerProtocol,
+      value: draft.endpointProtocol,
       options: protocolOptions(),
-      onChange: (v: string) => update({ reviewerProtocol: v }),
+      onChange: (v: string) => update({ endpointProtocol: v as 'openai' | 'anthropic' }),
     })),
     row(t('settings.reviewer.baseUrl'), React.createElement(Input, {
-      value: draft.reviewerBaseUrl,
-      onChange: (e: any) => update({ reviewerBaseUrl: e.target.value }),
+      value: draft.endpointUrl,
+      onChange: (e: any) => update({ endpointUrl: e.target.value }),
       placeholder: t('settings.reviewer.baseUrlPlaceholder'),
       className: 'dsa-input',
     })),
     row(t('settings.reviewer.modelName'), React.createElement(Input, {
-      value: draft.reviewerModel,
-      onChange: (e: any) => update({ reviewerModel: e.target.value }),
+      value: draft.endpointModel,
+      onChange: (e: any) => update({ endpointModel: e.target.value }),
       placeholder: t('settings.reviewer.modelNamePlaceholder'),
       className: 'dsa-input',
     })),
