@@ -4110,15 +4110,30 @@ export function apply(ctx: Context, rawConfig: Config): void {
     }), 'dsh-auto-approval-llm: stats route')
   }
 
-  // ── /approval reset ────────────────────────────────────────────────────
+  // ── /approval reset + /approval-reset-all ─────────────────────────────
   // Escape hatch: reset breaker counters and in-flight review status without
   // touching persisted policy. Registered only when the commands service is
-  // present (it is active in the web profile).
+  // present (it is active in the web profile). The GUI command palette runs a
+  // picked command immediately and offers no argument entry, so the global
+  // variant is its own zero-argument command — otherwise `reset all` would be
+  // unreachable from the web UI.
   const commands = anyCtx.get('commands')
+  const resetAllSessions = () => {
+    denials.clear()
+    totalDenials.clear()
+    denialLog.clear()
+    clearApprovalState()
+    return { kind: 'success', text: 'Breaker counters and in-flight approval state reset for ALL sessions.' }
+  }
   if (commands) {
     ctx.effect(() => commands.register({
+      name: 'approval-reset-all',
+      description: '/approval-reset-all — reset breaker counters and in-flight approval state for ALL sessions (global escape hatch)',
+      handler: () => resetAllSessions(),
+    }), 'dsh-auto-approval-llm: /approval-reset-all command')
+    ctx.effect(() => commands.register({
       name: 'approval',
-      description: '/approval reset — reset this session breaker counters; /approval reset all — every session + in-flight approval state',
+      description: '/approval reset — reset this session breaker counters (global variant: /approval-reset-all)',
       handler: (invocation: any) => {
         // User decision (2026-09-05): a bare reset is session-scoped — one
         // session's escape hatch must not silently clear a concurrent
@@ -4128,13 +4143,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
         // lived (follow TTL 120s, resolvedCallIds 30s); scoping it would need
         // a session index for little gain, so only `all` clears it.
         const arg = String(invocation?.rawInput ?? '').trim().toLowerCase()
-        if (arg === 'all') {
-          denials.clear()
-          totalDenials.clear()
-          denialLog.clear()
-          clearApprovalState()
-          return { kind: 'success', text: 'Breaker counters and in-flight approval state reset for ALL sessions.' }
-        }
+        if (arg === 'all') return resetAllSessions()
         if (arg !== '') {
           return { kind: 'error', text: 'Unknown argument (expected: /approval reset or /approval reset all).' }
         }

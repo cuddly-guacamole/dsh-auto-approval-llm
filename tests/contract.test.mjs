@@ -2948,19 +2948,25 @@ test('/approval reset: bare form is session-scoped, all keeps the global hatch',
   // `reset all` keeps the global clearing including in-flight approval state.
   // Structural anchors on the compiled lib (the handler is a host closure).
   const lib = readFileSync(fileURLToPath(new URL('../lib/index.js', import.meta.url)), 'utf8')
-  // anchor on the registration description (unique to the command; the string
-  // '/approval reset' also appears in an unrelated registry comment)
+  // anchor on the shared helper (the string '/approval reset' also appears in
+  // an unrelated registry comment)
+  const helperAt = lib.indexOf('const resetAllSessions = () =>')
+  assert.ok(helperAt > 0, 'the shared reset-all helper is defined')
+  const helperScope = lib.slice(helperAt, helperAt + 500)
+  assert.ok(helperScope.includes('denials.clear()'), 'the helper keeps the global clear')
+  assert.ok(helperScope.includes('clearApprovalState()'), 'the helper clears the approval registry')
+  // The GUI palette runs a picked command immediately with no argument entry,
+  // so the global hatch is its own zero-argument command.
+  const allCmdAt = lib.indexOf("name: 'approval-reset-all'")
+  assert.ok(allCmdAt > helperAt, 'the /approval-reset-all command is registered (GUI-reachable global hatch)')
+  assert.ok(lib.slice(allCmdAt, allCmdAt + 300).includes('resetAllSessions()'), 'the global command delegates to the shared helper')
   const handlerAt = lib.indexOf("'/approval reset — reset this session breaker counters")
-  assert.ok(handlerAt > 0, 'the reset command is registered')
-  const scope = lib.slice(handlerAt, handlerAt + 3500)
-  assert.ok(scope.includes("arg === 'all'"), 'the all escape hatch exists')
-  assert.ok(scope.includes('denials.delete('), 'the scoped form deletes only the session key')
-  assert.ok(scope.includes('denials.clear()'), 'the all form keeps the global clear')
-  // Branch order in the compiled handler: the `all` branch (global clears +
-  // registry clear) precedes the scoped deletes.
-  assert.ok(scope.indexOf("arg === 'all'") < scope.indexOf('clearApprovalState()'), 'the registry clear sits in the all branch')
-  assert.ok(scope.indexOf('clearApprovalState()') < scope.indexOf('denials.delete('), 'the scoped deletes come after the all branch')
-  assert.equal(scope.split('clearApprovalState()').length - 1, 1, 'the approval registry is cleared only in the all branch')
+  assert.ok(handlerAt > allCmdAt, 'the session-scoped command is registered after the global one')
+  const scope = lib.slice(handlerAt, handlerAt + 2000)
+  assert.ok(scope.includes("arg === 'all'"), "the 'all' argument stays accepted for surfaces that can pass arguments")
+  assert.ok(scope.includes('return resetAllSessions()'), "the 'all' branch delegates to the shared helper")
+  assert.ok(scope.includes('denials.delete('), 'the bare form deletes only the session key')
+  assert.ok(!scope.includes('clearApprovalState()'), 'the bare form never touches the approval registry')
 })
 test('review-mode persistence: failures are surfaced, not swallowed', () => {
   // Best-effort persistence is by design (the mode still applies in-process),
