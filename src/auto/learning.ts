@@ -430,6 +430,32 @@ export function persistLearning(path: string, store: LearningStore): void {
   }
 }
 
+export interface LearningFileFingerprint {
+  size: number
+  hash: string
+}
+
+/**
+ * Content fingerprint of the on-disk learning store, or undefined when the
+ * file is absent (fresh domain). Deliberately NOT mtime-based: an external
+ * rewrite can preserve or jitter mtimes, but the in-memory store wins on the
+ * next persist anyway — this exists purely to leave a forensic trail.
+ */
+export function learningFileFingerprint(path: string): LearningFileFingerprint | undefined {
+  try {
+    const buf = readFileSync(path)
+    return { size: buf.length, hash: createHash('sha256').update(buf).digest('hex') }
+  } catch {
+    return undefined
+  }
+}
+
+/** Whether two fingerprints describe the same on-disk content. */
+export function sameLearningFingerprint(a: LearningFileFingerprint | undefined, b: LearningFileFingerprint | undefined): boolean {
+  if (a === undefined || b === undefined) return a === b
+  return a.size === b.size && a.hash === b.hash
+}
+
 /**
  * Count one more human confirmation for the key. Mutates the store in place
  * (callers hold it under a keyed mutex with a synchronous critical section)

@@ -828,8 +828,10 @@ test('T148: learning bookkeeping is adjacent to pushHistory at the single conver
   const confirmIdx = body.indexOf('confirmActionFor(source)')
   const historyIdx = body.lastIndexOf('pushHistory({')
   const mutexIdx = body.indexOf('learningMutex.run(')
-  const persistIdx = body.indexOf('persistLearning(')
-  for (const [name, idx] of [['source', sourceIdx], ['confirmActionFor', confirmIdx], ['pushHistory', historyIdx], ['learningMutex.run', mutexIdx], ['persistLearning', persistIdx]]) {
+  // The persist call is the guarded wrapper (fingerprint tripwire inside);
+  // it still sits in the same keyed critical section.
+  const persistIdx = body.indexOf('persistLearningGuarded(')
+  for (const [name, idx] of [['source', sourceIdx], ['confirmActionFor', confirmIdx], ['pushHistory', historyIdx], ['learningMutex.run', mutexIdx], ['persistLearningGuarded', persistIdx]]) {
     assert.ok(idx !== -1, `askHuman convergence contains ${name}`)
   }
   assert.ok(confirmIdx > sourceIdx, 'the recording consumes the resolved source, nothing earlier')

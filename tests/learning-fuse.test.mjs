@@ -12,7 +12,10 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { learningFuseDecision } from '../lib/auto/learning.js'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { learningFuseDecision, learningFileFingerprint, sameLearningFingerprint } from '../lib/auto/learning.js'
 
 const roots = {
   workspace: 'C:/ws',
@@ -59,4 +62,25 @@ test('fuse: structured tools are judged on the same key surface as policy', () =
 test('fuse: unknown tools without path arguments are not fused', () => {
   assert.equal(fuse('some_future_plugin_tool', '{"answer":42}'), false)
   assert.equal(fuse('some_future_plugin_tool', undefined), false)
+})
+
+test('fingerprint: content-based, distinct per content, absent file reads as undefined', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsa-lfp-'))
+  try {
+    const path = join(dir, 'learning.json')
+    assert.equal(learningFileFingerprint(path), undefined, 'a missing store has no fingerprint')
+    writeFileSync(path, '{"entries":{}}')
+    const first = learningFileFingerprint(path)
+    assert.ok(first !== undefined)
+    assert.equal(sameLearningFingerprint(first, learningFileFingerprint(path)), true, 'same content, same fingerprint')
+    // Same size, different bytes: a content hash must still tell them apart —
+    // an mtime/size-only guard would miss an equal-length in-place rewrite.
+    writeFileSync(path, '{"entries":zz}')
+    const second = learningFileFingerprint(path)
+    assert.equal(second.size, first.size)
+    assert.equal(sameLearningFingerprint(first, second), false, 'an equal-size rewrite is a divergence')
+    assert.equal(sameLearningFingerprint(first, undefined), false, 'a vanished file is a divergence, not a match')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })

@@ -37,6 +37,7 @@ import {
   confirmActionFor,
   LEARNING_SIG_VERSION,
   learningCapState,
+  learningFileFingerprint,
   learningFuseDecision,
   learningKey,
   learnDecision,
@@ -46,6 +47,7 @@ import {
   recordConfirm,
   resetConfirmation,
   revokeLearning,
+  sameLearningFingerprint,
   signatureFor,
   type LearningKind,
   type LearningStore,
@@ -1366,6 +1368,23 @@ const llmLatency: LatencySample[] = loadLatencySamples()
 const LEARNING_FILE = join(dirname(fileURLToPath(import.meta.url)), '..', 'learning.json')
 const learningStore: LearningStore = loadLearning(LEARNING_FILE)
 
+// Out-of-process tamper tripwire. The store is overwritten wholesale on the
+// next persist, so a runtime divergence between the in-memory copy and the
+// file would otherwise vanish without a trace. Decisions never read the
+// on-disk file after boot and validation still rejects poisoned entries on
+// the next load — this is observational only: one audit line + one warning
+// per divergence, never a decision change.
+let learningDiskFingerprint = learningFileFingerprint(LEARNING_FILE)
+const persistLearningGuarded = (): void => {
+  const current = learningFileFingerprint(LEARNING_FILE)
+  if (!sameLearningFingerprint(current, learningDiskFingerprint)) {
+    console.warn('[dsh-auto-approval-llm] learning.json changed outside the plugin process; the in-memory store overwrites it on this persist (audit trail: learning-tamper).')
+    appendAuditLine(JSON.stringify({ type: 'learning-tamper', at: Date.now(), seen: current ?? null, expected: learningDiskFingerprint ?? null }))
+  }
+  persistLearning(LEARNING_FILE, learningStore)
+  learningDiskFingerprint = learningFileFingerprint(LEARNING_FILE)
+}
+
 // ── same-origin feedback route ────────────────────────────────────────────
 // The browser client cannot use `host.call` here (this is a static bundle, not
 // a dynamic Cordis Package). Instead it POSTs the timeout marker to this route
@@ -1922,7 +1941,7 @@ function installLearningStoreRoute(ctx: any, revoke: (key: string) => Promise<bo
           responseJson(res, 404, { ok: false, error: 'learning entry not found' })
           return
         }
-        persistLearning(LEARNING_FILE, learningStore)
+        persistLearningGuarded()
         // Revoking a learned entry changes future decisions — leave a
         // recoverable audit trail (mirrors recordAuditClear's discipline).
         appendAuditLine(JSON.stringify({ type: 'learning-revoked', at: Date.now(), key: body.key }))
@@ -2870,7 +2889,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
     // Serialize revoke + persist under the same per-key mutex the learning
     // writers use, so a concurrent recordConfirm cannot interleave.
     learningMutex.run(key, () => revokeLearning(learningStore, key)).then((done) => {
-      if (done) persistLearning(LEARNING_FILE, learningStore)
+      if (done) persistLearningGuarded()
       return done
     }))
   installTestRoute(anyCtx, llm)
@@ -3291,7 +3310,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
             } else {
               recordConfirm(learningStore, learnable.key, { workspace: learnable.workspace, kind: learnable.kind, skeleton: learnable.skeleton }, Date.now())
             }
-            persistLearning(LEARNING_FILE, learningStore)
+            persistLearningGuarded()
           })
           debugLog({ ev: 'learn-record', callId: req.callId ?? null, source, action })
         } catch (error) {
@@ -3591,7 +3610,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
             } else {
               resetConfirmation(learningStore, targetLearnable.key, Date.now())
             }
-            persistLearning(LEARNING_FILE, learningStore)
+            persistLearningGuarded()
           })
           debugLog({ ev: 'learn-record', callId: req.callId ?? null, source: 'direct-human', action: directOutcome === 'allowed-once' ? 'increment' : 'reset' })
         } catch (error) {
