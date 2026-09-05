@@ -1,6 +1,6 @@
 {
   "name": "@quill507/dsh-auto-approval-llm",
-  "version": "0.0.17",
+  "version": "0.0.18",
   "description": "LLM-assisted auto approval with timeout fallback for DeepSeek Harness",
   "private": false,
   "publishConfig": {
