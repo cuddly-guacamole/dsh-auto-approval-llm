@@ -277,7 +277,16 @@ export function assessTool(exec: ExecLike, roots: Roots, artifacts: unknown): To
             || (!isWithin(roots.workspace, normalized) && sensitiveBasenameAt(normalized, roots))) {
             return { decision: 'ask', reason: `mutation of external or protected path requires specific user authorization: ${normalized}`, classifierEligible: true };
         }
-        return { decision: 'allow', reason: 'routine project-local file edit', classifierEligible: false };
+        // A write to a not-yet-existing workspace path is a session artifact in
+        // the making: recording it lets settlement-time promotion feed the
+        // rm fast path and the classifier's recent-creates context. (edit
+        // cannot create files, so it never plans.)
+        return {
+            decision: 'allow',
+            reason: 'routine project-local file edit',
+            classifierEligible: false,
+            ...(exec.name === 'write' ? { plannedCreates: [normalized] } : {}),
+        };
     }
     // apply_patch nests its targets under `patches[].file_path`; the flat path
     // lookup used by write/edit would miss them and silently classify a
@@ -298,10 +307,12 @@ export function assessTool(exec: ExecLike, roots: Roots, artifacts: unknown): To
         }
         const allRoutine = normalized.every((n) => isEffectiveRoutine(n, roots) && !isProtectedProjectPath(n, roots)
             && !(!isWithin(roots.workspace, n) && sensitiveBasenameAt(n, roots)));
+        // Add-File hunks are creations; plan() keeps only the not-yet-existing
+        // targets, so recording the full target list is enough.
         if (allRoutine) {
-            return { decision: 'allow', reason: 'routine project-local file edit', classifierEligible: false };
+            return { decision: 'allow', reason: 'routine project-local file edit', classifierEligible: false, plannedCreates: [...normalized] };
         }
-        return { decision: 'ask', reason: `apply_patch touches external or protected paths and requires specific user authorization`, classifierEligible: true };
+        return { decision: 'ask', reason: `apply_patch touches external or protected paths and requires specific user authorization`, classifierEligible: true, plannedCreates: [...normalized] };
     }
     if (exec.name === 'str_replace_editor') {
         const command = args?.command;
@@ -327,11 +338,27 @@ export function assessTool(exec: ExecLike, roots: Roots, artifacts: unknown): To
                 return { decision: 'ask', reason: `reading a sensitive path outside the workspace requires semantic review: ${normalized}`, classifierEligible: true };
             return { decision: 'allow', reason: 'read-only project inspection', classifierEligible: false };
         }
+        // The create command is a file creation in progress: recording the
+        // target lets settlement-time promotion feed the rm fast path and the
+        // classifier's recent-creates context, same as write. The host's
+        // create result is a plain string, so the plan/settle channel is the
+        // only structured way to observe it (never parse the prose).
+        const creates = command === 'create' ? [normalized] : undefined;
         if (!isEffectiveRoutine(normalized, roots) || isProtectedProjectPath(normalized, roots)
             || (!isWithin(roots.workspace, normalized) && sensitiveBasenameAt(normalized, roots))) {
-            return { decision: 'ask', reason: `mutation of external or protected path requires specific user authorization: ${normalized}`, classifierEligible: true };
+            return {
+                decision: 'ask',
+                reason: `mutation of external or protected path requires specific user authorization: ${normalized}`,
+                classifierEligible: true,
+                ...(creates !== undefined ? { plannedCreates: creates } : {}),
+            };
         }
-        return { decision: 'allow', reason: 'routine project-local file edit', classifierEligible: false };
+        return {
+            decision: 'allow',
+            reason: 'routine project-local file edit',
+            classifierEligible: false,
+            ...(creates !== undefined ? { plannedCreates: creates } : {}),
+        };
     }
     if (SESSION_STATE_TOOLS.has(exec.name)) {
         return { decision: 'allow', reason: 'trusted Harness session-state operation', classifierEligible: false };

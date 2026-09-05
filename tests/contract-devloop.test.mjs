@@ -387,3 +387,62 @@ test('H1 OS autostart persistence locations are critical paths', () => {
   const startupWrite = assessTool({ name: 'write', arguments: { file_path: 'C:/Users/u/AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup/evil.cmd' } }, plainRoots, { has: () => false })
   assert.equal(startupWrite.decision, 'deny')
 })
+
+// ── I: session-artifact provenance (plannedCreates on create-capable tools)
+test('assessTool: create-capable allows and asks carry their targets as plannedCreates', () => {
+  // normalizePath emits the platform-native spelling, so basenames are the
+  // portable assertion surface here.
+  const plans = (a) => (a.plannedCreates ?? []).map((p) => p.replace(/\\/g, '/').toLowerCase())
+  const artifacts = { has: () => false }
+  const write = assessTool({ name: 'write', arguments: { file_path: 'C:/ws/new.txt', content: 'x' } }, plainRoots, artifacts)
+  assert.equal(write.decision, 'allow')
+  assert.deepEqual(plans(write), ['c:/ws/new.txt'], 'a routine write plans its target')
+  const edit = assessTool({ name: 'edit', arguments: { file_path: 'C:/ws/src.ts', old_str: 'a', new_str: 'b' } }, plainRoots, artifacts)
+  assert.equal(edit.decision, 'allow')
+  assert.equal(edit.plannedCreates, undefined, 'edit cannot create files, so it never plans')
+  const sreCreate = assessTool({ name: 'str_replace_editor', arguments: { command: 'create', path: 'C:/ws/new.ts', file_text: 'x' } }, plainRoots, artifacts)
+  assert.equal(sreCreate.decision, 'allow')
+  assert.deepEqual(plans(sreCreate), ['c:/ws/new.ts'], 'str_replace_editor create plans its target')
+  const sreEdit = assessTool({ name: 'str_replace_editor', arguments: { command: 'str_replace', path: 'C:/ws/src.ts', old_str: 'a', new_str: 'b' } }, plainRoots, artifacts)
+  assert.equal(sreEdit.plannedCreates, undefined, 'in-place replacements plan nothing')
+  // An ask that a human approves must still feed the provenance chain, so the
+  // create variant plans even on the ask path (plan() drops out-of-area paths).
+  const sreAsk = assessTool({ name: 'str_replace_editor', arguments: { command: 'create', path: 'C:/ws/.env', file_text: 'x' } }, plainRoots, artifacts)
+  assert.equal(sreAsk.decision, 'ask')
+  assert.deepEqual(plans(sreAsk), ['c:/ws/.env'])
+  const patch = assessTool({ name: 'apply_patch', arguments: { patches: [{ file_path: 'C:/ws/add.ts', kind: 'add', content: 'x' }] } }, plainRoots, artifacts)
+  assert.equal(patch.decision, 'allow')
+  assert.deepEqual(plans(patch), ['c:/ws/add.ts'])
+})
+
+test('plan → settle → rm fast path: deleting a session-created artifact statically allows', async () => {
+  const { mkdtempSync, mkdirSync, rmSync, writeFileSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { ArtifactRegistry } = await import('../lib/auto/artifacts.js')
+  const root = mkdtempSync(join(tmpdir(), 'dsa-artifact-'))
+  try {
+    const workspace = join(root, 'ws')
+    mkdirSync(workspace)
+    const roots = { workspace, home: workspace, dshHome: join(workspace, '.dsh'), tempRoots: [], allowedDshSubpaths: [] }
+    const registry = new ArtifactRegistry()
+    const owner = { id: 's1' }
+    const target = join(workspace, 'scratch.txt')
+    const create = assessTool({ name: 'str_replace_editor', arguments: { command: 'create', path: target, file_text: 'x' } }, roots, registry)
+    assert.equal(create.decision, 'allow')
+    const exec = { name: 'str_replace_editor', token: 't1', agent: { session: owner } }
+    registry.plan(exec, create.plannedCreates, roots)
+    registry.settle(exec, { isError: false, value: `New file created successfully at: ${target}` }, roots)
+    // The provenance chain must flip rm from a semantic ask to the static
+    // artifact allow — the exact behavior the dead plannedCreates chain hid.
+    const r = assessShell('rm scratch.txt', 'bash', roots, registry, owner)
+    assert.equal(r.decision, 'allow', `rm of a session-created artifact must statically allow, got: ${r.decision} (${r.reason})`)
+    // Reverse: a file the session never created stays on the ask boundary.
+    writeFileSync(join(workspace, 'pre-existing.txt'), 'x')
+    const other = assessShell('rm pre-existing.txt', 'bash', roots, registry, owner)
+    assert.equal(other.decision, 'ask', `rm of an unobserved file must still ask, got: ${other.decision}`)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+

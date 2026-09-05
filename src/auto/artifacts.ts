@@ -40,9 +40,15 @@ export class ArtifactRegistry {
         if (owner === undefined || result.isError)
             return;
         const value = result.value;
-        const shellSucceeded = typeof value === 'object' && value !== null
-            && 'exitCode' in value && value.exitCode === 0;
-        if (pending !== undefined && pending.owner === owner && shellSucceeded) {
+        // Shell results carry an exit code and only a zero exit actually
+        // produced the planned paths. Structured write-family results have no
+        // exit code; their non-error envelope is the success signal (the
+        // host's create command even fails on an existing target, so a
+        // non-error result of a planned create is the creation itself).
+        const shellValue = typeof value === 'object' && value !== null
+            && 'exitCode' in value;
+        const succeeded = !shellValue || value.exitCode === 0;
+        if (pending !== undefined && pending.owner === owner && succeeded) {
             for (const path of pending.paths)
                 this.add(owner, path, roots);
         }

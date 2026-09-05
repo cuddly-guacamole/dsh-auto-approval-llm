@@ -159,3 +159,61 @@ test('list: capped at 8 with re-creates bumping recency', () => {
     f.cleanup()
   }
 })
+
+// ── plan → settle → has chain (session-created artifact provenance) ───────
+test('settle: a planned create promotes on a non-error string result (str_replace_editor create)', () => {
+  const f = fixture()
+  try {
+    const registry = new ArtifactRegistry()
+    const owner = { id: 's1' }
+    const roots = { workspace: f.workspace, home: f.workspace, tempRoots: [] }
+    const target = join(f.workspace, 'fresh.txt')
+    const exec = { name: 'str_replace_editor', token: 't1', agent: { session: owner } }
+    registry.plan(exec, [target], roots)
+    assert.equal(registry.has(owner, target, roots), false, 'nothing is proven before settlement')
+    registry.settle(exec, { isError: false, value: `New file created successfully at: ${target}` }, roots)
+    assert.equal(registry.has(owner, target, roots), true, 'the planned create is proven after a non-error result')
+  } finally {
+    f.cleanup()
+  }
+})
+
+test('settle: a failed shell exit and error results never promote planned creates', () => {
+  const f = fixture()
+  try {
+    const registry = new ArtifactRegistry()
+    const owner = { id: 's1' }
+    const roots = { workspace: f.workspace, home: f.workspace, tempRoots: [] }
+    const okExec = { name: 'bash', token: 't1', agent: { session: owner } }
+    const failExec = { name: 'bash', token: 't2', agent: { session: owner } }
+    const errExec = { name: 'bash', token: 't3', agent: { session: owner } }
+    const target = join(f.workspace, 'made-by-shell.txt')
+    registry.plan(okExec, [target], roots)
+    registry.plan(failExec, [target], roots)
+    registry.plan(errExec, [target], roots)
+    registry.settle(failExec, { isError: false, value: { exitCode: 1 } }, roots)
+    registry.settle(errExec, { isError: true, value: undefined }, roots)
+    registry.settle(okExec, { isError: false, value: { exitCode: 0 } }, roots)
+    assert.equal(registry.has(owner, target, roots), true, 'only the zero-exit execution promotes')
+  } finally {
+    f.cleanup()
+  }
+})
+
+test('settle: the host write result carries the create contract directly', () => {
+  const f = fixture()
+  try {
+    const registry = new ArtifactRegistry()
+    const owner = { id: 's1' }
+    const roots = { workspace: f.workspace, home: f.workspace, tempRoots: [] }
+    const created = join(f.workspace, 'via-write.txt')
+    const updated = join(f.workspace, 'via-overwrite.txt')
+    const exec = { name: 'write', token: 't1', agent: { session: owner } }
+    registry.settle(exec, { isError: false, value: { path: created, operation: 'create', before: null, after: 'x' } }, roots)
+    registry.settle(exec, { isError: false, value: { path: updated, operation: 'update', before: 'x', after: 'y' } }, roots)
+    assert.equal(registry.has(owner, created, roots), true, 'a create outcome proves the artifact')
+    assert.equal(registry.has(owner, updated, roots), false, 'an overwrite is not a session creation')
+  } finally {
+    f.cleanup()
+  }
+})
