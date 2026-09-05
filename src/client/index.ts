@@ -344,6 +344,7 @@ interface Draft {
   onboardingMessageEnabled: 'on' | 'off'
   autoModeNoticeEnabled: 'on' | 'off'
   breakerAntiHijackMs: string
+  reviewMaxRetries: string
   aiButtonPosition: 'header' | 'floating'
   directHumanEnabled: 'on' | 'off'
   debug: 'on' | 'off'
@@ -385,6 +386,7 @@ function draftOf(value: any): Draft {
     onboardingMessageEnabled: value?.onboardingMessageEnabled === false ? 'off' : 'on',
     autoModeNoticeEnabled: value?.autoModeNoticeEnabled === false ? 'off' : 'on',
     breakerAntiHijackMs: String(value?.breakerAntiHijackMs ?? THRESHOLD_DEFAULTS.breakerAntiHijackMs),
+    reviewMaxRetries: String(value?.reviewMaxRetries ?? THRESHOLD_DEFAULTS.reviewMaxRetries),
     aiButtonPosition: value?.aiButtonPosition === 'floating' ? 'floating' : 'header',
     directHumanEnabled: value?.directHumanEnabled === true ? 'on' : 'off',
     debug: value?.debug === true ? 'on' : 'off',
@@ -431,6 +433,7 @@ function valueOf(draft: Draft): any {
     onboardingMessageEnabled: draft.onboardingMessageEnabled === 'off' ? false : true,
     autoModeNoticeEnabled: draft.autoModeNoticeEnabled === 'off' ? false : true,
     breakerAntiHijackMs: Math.max(0, Number(draft.breakerAntiHijackMs) || 0),
+    reviewMaxRetries: Math.max(0, Math.min(2, Number(draft.reviewMaxRetries) || 0)),
     aiButtonPosition: draft.aiButtonPosition,
     directHumanEnabled: draft.directHumanEnabled === 'on',
     debug: draft.debug === 'on',
@@ -489,7 +492,7 @@ function formatLatencySeconds(ms: number | null): string {
 const INVALID_CONFIG_TYPES: Record<string, string> = {
   enabled: 'boolean', autoSwitchPolicyToAsk: 'boolean', rulesDryRun: 'boolean', notifyUser: 'boolean', debug: 'boolean', redactResults: 'boolean', editDiffPreview: 'boolean', rejectGuidance: 'boolean', learningEnabled: 'boolean',
   lowRiskSeconds: 'number', mediumRiskSeconds: 'number', highRiskSeconds: 'number', learningThreshold: 'number',
-  maxConsecutiveDenials: 'number', maxTotalDenials: 'number', breakerAntiHijackMs: 'number',
+  maxConsecutiveDenials: 'number', maxTotalDenials: 'number', breakerAntiHijackMs: 'number', reviewMaxRetries: 'number',
   maxArgsChars: 'number', classifierTimeoutMs: 'number', classifierMaxOutputTokens: 'number',
   workspaceRoot: 'string', dshHome: 'string', safetyPrompt: 'string', rulesText: 'string',
   reviewerModel: 'string', reviewerBaseUrl: 'string', timeoutAction: 'string',
@@ -509,6 +512,7 @@ const INVALID_CONFIG_ENUMS: Record<string, string[]> = {
 const INVALID_CONFIG_RANGES: Record<string, [number, number]> = {
   lowRiskSeconds: [1, Infinity], mediumRiskSeconds: [1, Infinity], highRiskSeconds: [1, Infinity],
   maxConsecutiveDenials: [0, Infinity], maxTotalDenials: [0, Infinity], breakerAntiHijackMs: [0, Infinity],
+  reviewMaxRetries: [0, 2],
   maxArgsChars: [1, Infinity], classifierTimeoutMs: [100, 60000], classifierMaxOutputTokens: [64, 4096],
 }
 
@@ -854,7 +858,7 @@ function SettingsSection() {
   // in the local draft and never accidentally persisted by another card.
   const TOP_KEYS = ['enabled', 'autoSwitchPolicyToAsk', 'timeoutAction', 'llmReviewScope', 'llmTakeoverScope', 'defaultReviewMode', 'showSessionPanel', 'aiButtonPosition', 'autoModeNoticeEnabled']
   const TIMER_KEYS = ['breakerAntiHijackMs', 'lowRiskSeconds', 'mediumRiskSeconds', 'highRiskSeconds', 'maxConsecutiveDenials', 'maxTotalDenials', 'reviewWaitSeconds', 'directHumanEnabled']
-  const REVIEW_KEYS = ['reviewerProtocol', 'reviewerBaseUrl', 'reviewerModel']
+  const REVIEW_KEYS = ['reviewerProtocol', 'reviewerBaseUrl', 'reviewerModel', 'reviewMaxRetries']
   const SECURITY_KEYS = ['safetyPrompt', 'allowlist', 'denyList', 'humanOnlyList', 'rulesText', 'rulesDryRun']
   const UTILITY_KEYS = ['onboardingMessageEnabled', 'redactResults', 'editDiffPreview', 'rejectGuidance']
   const LEARNING_KEYS = ['learningEnabled', 'learningThreshold']
@@ -1397,6 +1401,16 @@ function SettingsSection() {
       options: reviewModeOptions(),
       onChange: (v: string) => { void instantSaveKey('defaultReviewMode', v as any) },
     }), t('settings.defaultReviewModeHint')),
+    row(t('settings.autoSwitchPolicy'), React.createElement(CapsuleSelect, {
+      value: draft.autoSwitchPolicyToAsk,
+      options: onOffOptions(),
+      onChange: (v: string) => { void instantSaveKey('autoSwitchPolicyToAsk', v as 'on' | 'off') },
+    }), t('settings.autoSwitchPolicyHint')),
+    row(t('settings.autoModeNotice'), React.createElement(CapsuleSelect, {
+      value: draft.autoModeNoticeEnabled,
+      options: onOffOptions(),
+      onChange: (v: string) => { void instantSaveKey('autoModeNoticeEnabled', v as 'on' | 'off') },
+    }), t('settings.autoModeNoticeHint')),
     row(t('settings.showSessionPanel'), React.createElement(CapsuleSelect, {
       value: draft.showSessionPanel,
       options: showPanelOptions(),
@@ -1471,6 +1485,14 @@ function SettingsSection() {
         style: { width: 80 },
       }),
     ), t('settings.denialBreakerHint')),
+    row(t('settings.breakerAntiHijack'), React.createElement('input', {
+      type: 'number',
+      min: 0,
+      value: draft.breakerAntiHijackMs,
+      onChange: (e: any) => update({ breakerAntiHijackMs: e.target.value }),
+      className: 'dsa-input',
+      style: { width: 110 },
+    }), t('settings.breakerAntiHijackHint')),
     row(t('settings.directHuman.title'), React.createElement(CapsuleSelect, {
       value: draft.directHumanEnabled,
       options: onOffOptions(),
@@ -1533,6 +1555,15 @@ function SettingsSection() {
       React.createElement('span', { className: credentialConfigured ? 'dsa-badgeOk' : 'dsa-badgeMuted' },
         credentialConfigured ? t('settings.reviewer.credentialConfigured') : t('settings.reviewer.credentialMissing')),
     ),
+    row(t('settings.reviewer.maxRetries'), React.createElement('input', {
+      type: 'number',
+      min: 0,
+      max: 2,
+      value: draft.reviewMaxRetries,
+      onChange: (e: any) => update({ reviewMaxRetries: e.target.value }),
+      className: 'dsa-input',
+      style: { width: 80 },
+    }), t('settings.reviewer.maxRetriesHint')),
     React.createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
       React.createElement(Button, { variant: 'outline', size: 'sm', disabled: saving, onClick: testOnline }, t('settings.reviewer.test')),
       credentialConfigured && credentialWritable
@@ -1638,6 +1669,11 @@ function SettingsSection() {
       placeholder: '# Claude 式声明规则（每行一条）\nbash,git(^git\\s+push\\b) | deny | arguments\n(?i)rm\\s+(-[a-z]+\\s+)*/ | human | arguments\nwrite,edit\\(.*://.*\\) | deny | arguments',
       className: 'dsa-textarea dsa-code',
     }), t('settings.rules.rulesTextHint')),
+    row(t('settings.rulesDryRun'), React.createElement(CapsuleSelect, {
+      value: draft.rulesDryRun,
+      options: onOffOptions(),
+      onChange: (v: string) => update({ rulesDryRun: v as 'on' | 'off' }),
+    }), t('settings.rulesDryRunHint')),
     ...(parseRulesText(draft.rulesText).errors.map((er) => React.createElement('p', {
       key: er.line,
       style: { color: 'var(--dsw-alias-state-error-primary)', fontSize: 12, margin: '2px 0 0' },
