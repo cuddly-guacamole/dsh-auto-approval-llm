@@ -324,13 +324,26 @@ test('applyCategoryDirective: hard DENY is a non-configurable floor', () => {
   assert.equal(applyCategoryDirective('DENY', 'ask', { decision: 'ask', classifierEligible: true }), 'DENY')
 })
 
-test('applyCategoryDirective: deny > ask > auto > inherit ladder', () => {
+test('applyCategoryDirective: deny > auto > inherit ladder; ask is enforced by the wiring, not the tier', () => {
   const eligible = { decision: 'ask', classifierEligible: true }
   assert.equal(applyCategoryDirective('MEDIUM', 'deny', eligible), 'DENY')
-  assert.equal(applyCategoryDirective('MEDIUM', 'ask', eligible), 'ask-human')
+  assert.equal(applyCategoryDirective('MEDIUM', 'ask', eligible), 'MEDIUM', 'an ask directive leaves the tier alone — the wiring points read the directive')
   assert.equal(applyCategoryDirective('MEDIUM', 'auto', eligible), 'LOW')
   assert.equal(applyCategoryDirective('MEDIUM', 'inherit', eligible), 'MEDIUM')
   assert.equal(applyCategoryDirective('LOW', 'auto', eligible), 'LOW')
+})
+
+test('categoryDirectiveFor: an explicit auto directive judges the real assessment', () => {
+  // A static-allow call under an explicit auto directive is NOT ask-classified,
+  // so the directive degrades to inherit instead of riding the ask assumption.
+  const cfg = { categoryPolicy: { fileEdit: 'auto' }, categoryMode: 'standard' }
+  const roots = { workspace: 'C:/ws', home: 'C:/Users/u', dshHome: 'C:/Users/u/.dsh', tempRoots: [], trustedDirs: [], allowedDshSubpaths: [] }
+  const exec = { name: 'write', arguments: { file_path: 'C:/ws/a.txt', content: 'x' } }
+  const lenient = categoryDirectiveFor(exec, roots, cfg)
+  assert.equal(lenient.directive, 'auto', 'the legacy ask+eligible default keeps the permissive reading')
+  const real = categoryDirectiveFor(exec, roots, cfg, { decision: 'allow', classifierEligible: false })
+  assert.equal(real.directive, 'inherit', 'a real static-allow assessment never holds an auto directive')
+  assert.equal(real.category, lenient.category, 'the category label is identical either way')
 })
 
 test('applyCategoryDirective: auto never drops HIGH and never touches manual/opaque', () => {

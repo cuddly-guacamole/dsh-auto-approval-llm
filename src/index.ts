@@ -2388,10 +2388,10 @@ export function apply(ctx: Context, rawConfig: Config): void {
     // crosses over from pre-execute). auto ≡ LOW tier, and only for an
     // ask-classified, classifier-eligible call; HIGH and DENY stay put.
     // directive + category come from the same classification (no re-derivation).
-    const { directive, category } = categoryDirectiveFor(exec, roots, config)
+    const { directive, category } = categoryDirectiveFor(exec, roots, config, assessment)
     let risk = riskFromAssessment(assessment, req.toolName)
     const applied = applyCategoryDirective(risk, directive, assessment)
-    if (applied !== 'DENY' && applied !== 'ask-human') risk = applied
+    if (applied !== 'DENY') risk = applied
     debugLog({ ev: 'category', callId: req.callId ?? null, toolName: req.toolName, category, decision: directive, mode: config.categoryMode })
     // Carry the policy reason out for the policy-deny feedback; the
     // public riskFromAssessment / StaticRisk contract stays untouched.
@@ -2740,7 +2740,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
     // performs the full rejection dialogue (feedback + history) itself; ask
     // returns immediately so the LLM classifier fast path can never answer a
     // category ask — a category ask is an explicit human decision.
-    const { directive, category } = categoryDirectiveFor(exec, roots, config)
+    const { directive, category } = categoryDirectiveFor(exec, roots, config, assessment)
     if (directive === 'deny') {
       recordDecisionFeedback(exec.callId, formatDenyFeedback('category', { toolName: exec.name }))
       pushHistory({

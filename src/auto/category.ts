@@ -708,25 +708,34 @@ export interface CategoryDirectiveForResult {
  * Wire-point helper: recompute directive + category label for one tool
  * execution from scratch (no state crosses between the pre-execute and
  * answerer points). Both values come from the same classification so the
- * wiring points never re-derive the label separately.
+ * wiring points never re-derive the label separately. Pass the execution's
+ * real assessment so an explicit `auto` directive is judged against what the
+ * call actually is; the legacy default (ask + eligible) keeps the historic
+ * "directive under the most permissive assumption" reading for bare calls.
  */
-export function categoryDirectiveFor(exec: CategoryExec, roots: CategoryRoots, config: CategoryConfig): CategoryDirectiveForResult {
+export function categoryDirectiveFor(
+  exec: CategoryExec,
+  roots: CategoryRoots,
+  config: CategoryConfig,
+  assessment: { decision?: string; classifierEligible?: boolean } = { decision: 'ask', classifierEligible: true },
+): CategoryDirectiveForResult {
   const category = categorizeTool(exec, roots)
   return {
     category,
-    directive: categoryDirective(config, category, { decision: 'ask', classifierEligible: true }),
+    directive: categoryDirective(config, category, assessment),
   }
 }
 
-export type AppliedRisk = 'DENY' | 'ask-human' | 'LOW' | 'MEDIUM' | 'HIGH'
+export type AppliedRisk = 'DENY' | 'LOW' | 'MEDIUM' | 'HIGH'
 
 /**
  * Lower the risk tier by one directive (answerer-side injection):
  * - DENY stays terminal (the hard-deny floor is not configurable)
- * - deny → terminal deny; ask → human ask; auto → LOW but never for a HIGH
- *   tier, and never when the assessment is not an ask-classified,
- *   classifier-eligible call (manual/opaque stay put)
- * - inherit → unchanged
+ * - deny → terminal deny
+ * - auto → LOW but never for a HIGH tier, and never when the assessment is
+ *   not an ask-classified, classifier-eligible call (manual/opaque stay put)
+ * - ask/inherit → unchanged: an ask is enforced by the wiring points
+ *   themselves, which read the directive — the tier has no say
  */
 export function applyCategoryDirective(
   risk: 'LOW' | 'MEDIUM' | 'HIGH' | 'DENY',
@@ -735,7 +744,6 @@ export function applyCategoryDirective(
 ): AppliedRisk {
   if (risk === 'DENY') return 'DENY'
   if (directive === 'deny') return 'DENY'
-  if (directive === 'ask') return 'ask-human'
   if (directive === 'auto') {
     if (assessment.decision === 'ask' && assessment.classifierEligible === true && risk !== 'HIGH') return 'LOW'
     return risk
