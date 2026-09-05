@@ -40,6 +40,16 @@ export const CATEGORY_KEYS: readonly CategoryKey[] = [
 export const LOCKED_CATEGORIES: readonly CategoryKey[] = ['delete', 'protected', 'privilege', 'disk']
 
 /**
+ * The subset of LOCKED categories that no name-based channel may pre-authorize
+ * — not the allowlist, not the pre-execute mirror. delete and disk are the two
+ * whose damage is irreversible at scale, so an operator listing a tool by name
+ * still gets the hard-reject countdown instead of a silent allow; protected
+ * and privilege keep the explicit operator override (privilege additionally
+ * has its own privilegeAutoReview unlock).
+ */
+export const HARD_LOCKED_CATEGORIES: readonly CategoryKey[] = ['delete', 'disk']
+
+/**
  * Global category merge order for compound commands: the first (highest)
  * category by this order wins. LOCKED classes sit at the top so a compound
  * line can never be dragged down to a lower tier by a trailing segment.

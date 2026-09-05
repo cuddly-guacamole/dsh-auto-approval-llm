@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
-  CATEGORY_KEYS, LOCKED_CATEGORIES, CATEGORY_PRECEDENCE,
+  CATEGORY_KEYS, LOCKED_CATEGORIES, HARD_LOCKED_CATEGORIES, CATEGORY_PRECEDENCE,
   categorizeTool, categorizeCommand, mergeCommandDecisions,
   categoryDirective, categoryDirectiveFor, applyCategoryDirective,
   isEffectiveRoutine, sensitiveBasenameAt, realpathCriticalReason,
@@ -443,6 +443,8 @@ test('CATEGORY_PRECEDENCE ordering is the documented ladder', () => {
     assert.ok(CATEGORY_PRECEDENCE[ordered[i - 1]] > CATEGORY_PRECEDENCE[ordered[i]], ordered[i - 1])
   }
   assert.deepEqual([...LOCKED_CATEGORIES].sort(), ['delete', 'disk', 'privilege', 'protected'])
+  assert.deepEqual([...HARD_LOCKED_CATEGORIES].sort(), ['delete', 'disk'], 'delete/disk are the name-unauthorizable subset')
+  for (const hard of HARD_LOCKED_CATEGORIES) assert.ok(LOCKED_CATEGORIES.includes(hard), `${hard} must be LOCKED too`)
   assert.equal(CATEGORY_KEYS.length, 11)
 })
 
@@ -756,12 +758,14 @@ test('LP3: exactly the four countdown hooks construct a learnable context', () =
   const preHitGlobal = answererStart + preHits[0].index
   assert.ok(preHitGlobal > HOST_SRC.indexOf('direct-human-approval channel'), 'the sole pre-slot construction belongs to the direct-human channel')
   assert.equal([...postSlot.matchAll(/, learnableContextFor\(/g)].length, 4, 'all four live in the countdown ask sites')
-  // 12 askHuman call sites: the four learnable countdown hooks, the LOCKED
+  // 13 askHuman call sites: the four learnable countdown hooks, the LOCKED
   // hard-reject countdown (added 2026-08-27, intentionally learnable-less),
-  // the six status-less asks (rules human / humanOnly / category-ask non-
-  // locked / manual / breaker / status-less fallbacks), and the direct-human
-  // channel ask (2026-09-04, learns the target explicitly after resolution).
-  assert.equal([...HOST_SRC.matchAll(/askHuman\(/g)].length, 12, 'closed ask-site enum: 5 countdown + 6 status-less + 1 direct-human')
+  // the hard-locked allowlist gate countdown (2026-09-05 user decision, also
+  // learnable-less), the six status-less asks (rules human / humanOnly /
+  // category-ask non-locked / manual / breaker / status-less fallbacks), and
+  // the direct-human channel ask (2026-09-04, learns the target explicitly
+  // after resolution).
+  assert.equal([...HOST_SRC.matchAll(/askHuman\(/g)].length, 13, 'closed ask-site enum: 6 countdown + 6 status-less + 1 direct-human')
   const hookIndexes = [...postSlot.matchAll(/, learnableContextFor\(/g)].map((m) => m.index)
   const highAnchor = postSlot.indexOf('// HIGH')
   assert.ok(highAnchor !== -1, 'the HIGH branch marker survives compilation')

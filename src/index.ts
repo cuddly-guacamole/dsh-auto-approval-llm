@@ -25,7 +25,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { ArtifactRegistry } from './auto/artifacts.js'
 import { appendAuditLine, recordAuditClear } from './auto/audit.js'
-import { AGGRESSIVE_BUILTIN, applyCategoryDirective, CATEGORY_KEYS, categoryDirectiveFor, type CategoryKey, LOCKED_CATEGORIES, realpathCriticalReason, sensitiveBasenameAt } from './auto/category.js'
+import { AGGRESSIVE_BUILTIN, applyCategoryDirective, CATEGORY_KEYS, categoryDirectiveFor, type CategoryKey, HARD_LOCKED_CATEGORIES, LOCKED_CATEGORIES, realpathCriticalReason, sensitiveBasenameAt } from './auto/category.js'
 import { sanitizeClassifierArguments, sanitizeClassifierText, sanitizeReviewReason } from './auto/classifier.js'
 import { DIRECT_HUMAN_TOOL, THRESHOLD_DEFAULTS } from './auto/constants.js'
 import { createDshClassifier } from './auto/dsh-classifier.js'
@@ -2693,9 +2693,9 @@ export function apply(ctx: Context, rawConfig: Config): void {
     // humanOnlyList:['write']). Evaluate the same user policy HERE, before
     // any fast-path allow, so an explicit operator terminal holds on every
     // Auto-session call — matching the answerer's precedence (rules →
-    // denyList → humanOnly). allowlist is deliberately NOT mirrored: its job
-    // is answering asks, and a statically-allowed call proceeds identically
-    // either way. Rules evaluated here cannot see the approval reason
+    // denyList → humanOnly). The allowlist is mirrored too (below, after the
+    // category gates, with the hard-locked categories exempted). Rules
+    // evaluated here cannot see the approval reason
     // (reason-field rules still bind ask-path calls in the answerer; a
     // reason-rule deny on a static-allow call is the one remaining gap,
     // inherent to the pre-execute plane).
@@ -2788,9 +2788,17 @@ export function apply(ctx: Context, rawConfig: Config): void {
     // approval/request, so a classifier deny could override a user's explicit
     // allowlist entry. A listed tool is the operator's declared intent — let
     // it through BEFORE the LLM classifier, exactly as the answerer already
-    // lets it beat human-only. Category deny/ask above still wins (LOCKED /
-    // protected categories cannot be pre-authorized by a name).
+    // lets it beat human-only. Category deny/ask above still wins, and the
+    // hard-locked categories (delete / disk) are exempt from the mirror
+    // entirely: no name-based channel pre-authorizes them (protected /
+    // privilege remain overridable — the operator's list is explicit intent).
     if (listDecision.kind === 'allow') {
+      // Hard-locked categories (delete / disk) cannot be pre-authorized by a
+      // name: the mirror skips them and hands an explicit ask to the
+      // answerer, which pins the call to the hard-reject countdown.
+      if (HARD_LOCKED_CATEGORIES.includes(category as never)) {
+        return { kind: 'ask', reason: `[auto-mode hard-locked category] ${exec.name}` }
+      }
       const audited = pushHistory({
         sessionId: authorityKeyFor(exec),
         toolName: exec.name,
@@ -3608,11 +3616,11 @@ export function apply(ctx: Context, rawConfig: Config): void {
       maybeInjectRejectGuidance(req.agent, req.callId, config, buildRejectGuidanceText('denyList'))
       return 'rejected'
     }
-    // Category layer (Q2 order: denyList → category-deny → allowlist →
-    // humanOnly → category-ask → manual → breaker → risk application). The
-    // directive is recomputed here from scratch (same pure function as
-    // pre-execute, no state crosses between the wiring points); the auto→LOW
-    // injection already happened inside classifyStaticRisk.
+    // Category layer (Q2 order: denyList → category-deny → hard-locked gate →
+    // allowlist → humanOnly → category-ask → manual → breaker → risk
+    // application). The directive is recomputed here from scratch (same pure
+    // function as pre-execute, no state crosses between the wiring points);
+    // the auto→LOW injection already happened inside classifyStaticRisk.
     const classified = classifyStaticRisk(req, args)
     const staticRisk = classified.risk
     const policyReason = classified.reason
@@ -3631,6 +3639,20 @@ export function apply(ctx: Context, rawConfig: Config): void {
       })
       maybeInjectRejectGuidance(req.agent, req.callId, config, buildRejectGuidanceText('category', classified.category))
       return 'rejected'
+    }
+    if (staticDecision.kind === 'allow' && HARD_LOCKED_CATEGORIES.includes(classified.category as never)) {
+      // Hard-locked categories (delete / disk) cannot be pre-authorized by a
+      // name — the allowlist does not beat them in either plane. The call
+      // falls to the same hard-reject countdown as the locked ask branch
+      // below: pinned to reject, no LLM takeover, no learning,
+      // highRiskSeconds to respond.
+      const lockedStatus: ReviewStatus = {
+        risk: 'HIGH',
+        phase: 'countdown',
+        action: 'reject',
+        seconds: Math.max(1, Math.round(config.highRiskSeconds)),
+      }
+      return askHuman(req, undefined, next, false, lockedStatus)
     }
     if (staticDecision.kind === 'allow') {
       // Static-policy allow: the approval trail must not be silent about a

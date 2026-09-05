@@ -15,8 +15,10 @@
  * override a user's explicit allowlist entry (memory_* under allowlist was
  * still reviewable/rejectable by the LLM). A listed tool is the operator's
  * declared intent, so it now lets through on the pre-execute plane BEFORE
- * the classifier — still after category deny/ask, which LOCKED/protected
- * categories must always win.
+ * the classifier — still after category deny/ask, and with the hard-locked
+ * categories (delete / disk, 2026-09-05 user decision) exempt entirely: no
+ * name-based channel pre-authorizes them, they fall to the hard-reject
+ * countdown instead (protected/privilege stay overridable).
  *
  * Run: node --test tests/audit-preexecute-lists.test.mjs
  */
@@ -97,4 +99,21 @@ test('pre-execute: matched user rules short-circuit exactly like the answerer (n
   assert.ok(pre.includes('return { kind: \'deny\', reason: `[auto-mode denyList]'), 'denyList deny returns a terminal denial')
   assert.ok(pre.includes('return { kind: \'ask\', reason: `[auto-mode human-only]'), 'humanOnly converts the call into an official ask')
   assert.ok(pre.includes('return next()'), 'the rule-allow branch hands over to execution')
+})
+
+test('hard-locked categories: no name-based channel pre-authorizes delete/disk', () => {
+  // User decision (Q2 order, 2026-09-05): allowlist hits on delete/disk must
+  // NOT settle as allowed-once. The pre-execute mirror hands an explicit ask,
+  // and the answerer routes the call into the hard-reject countdown (same
+  // shape as the locked ask branch) before its allowlist allow.
+  const gatePre = HOST_SRC.indexOf('[auto-mode hard-locked category]')
+  assert.ok(gatePre > 0, 'the pre-execute mirror must exempt hard-locked categories')
+  const firstAllow = HOST_SRC.indexOf("source: 'allowlist-allow'")
+  assert.ok(gatePre < firstAllow, 'the pre-execute hard-locked gate must precede the allowlist allow')
+  // Answerer plane: the gate rides the allow condition, before the static allow settles.
+  const gateAnswerer = HOST_SRC.indexOf('HARD_LOCKED_CATEGORIES.includes(classified.category')
+  assert.ok(gateAnswerer > gatePre, 'the answerer hard-locked gate exists')
+  const answererAllow = HOST_SRC.indexOf('source: staticDecision.source', gateAnswerer)
+  assert.ok(answererAllow > gateAnswerer, 'the answerer hard-locked gate must precede the allowlist allow settle')
+  assert.ok(HOST_SRC.includes("risk: 'HIGH'"), 'the countdown shape is reused')
 })
