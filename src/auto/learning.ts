@@ -29,10 +29,13 @@
 import { createHash } from 'node:crypto'
 import { readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { basename } from 'node:path'
-import { LOCKED_CATEGORIES } from './category.js'
+import { extractToolPath } from './decision.js'
+import { CategoryConfig, CategoryRoots, categorizeCommandSegments, CommandSegmentDecision, sensitiveBasenameAt, LOCKED_CATEGORIES } from './category.js'
+import { isProtectedProjectPath, normalizePath } from './paths.js'
 import { THRESHOLD_DEFAULTS } from './constants.js'
 import { redactSecrets } from './redact.js'
 import { decomposeCommandLine } from './shell.js'
+import { RISK_NAME_PATTERN } from './risk-tokens.js'
 
 /** Bump when the template grammar changes; stale entries can never match. */
 export const LEARNING_SIG_VERSION = 2
@@ -302,6 +305,57 @@ export function learnGateEligible(input: {
   if (category === '' || NON_LEARNABLE_CATEGORIES.includes(category)) return false
   if (input.fuseHit === true) return false
   return true
+}
+
+/**
+ * Sensitive-area fuse for the learning domain: true = this call must never be
+ * learned even when its risk tier and category look ordinary.
+ *
+ * Three detectors, in order:
+ * - a risky tool-name token (delete/credential/push/…) — shared single source
+ *   with the HIGH escalator (risk-tokens.ts);
+ * - a shell command whose segments classify as `protected` — the same
+ *   segment classifier the category layer runs, so a sensitive target hidden
+ *   in command text (write/read operands, redirections) is fused even though
+ *   the tool name itself carries no risk token;
+ * - a path argument under the same key surface the policy layer reads
+ *   (file_path/path/cwd/workdir top-level, plus apply_patch's nested
+ *   patches[].file_path) spelling a sensitive basename or protected path.
+ */
+export function learningFuseDecision(input: {
+  toolName: unknown
+  args: unknown
+  roots: CategoryRoots
+  config: CategoryConfig
+}): boolean {
+  if (RISK_NAME_PATTERN.test(String(input.toolName ?? ''))) return true
+  const toolName = String(input.toolName ?? '')
+  let parsed: unknown = input.args
+  if (typeof input.args === 'string') {
+    try {
+      parsed = JSON.parse(input.args)
+    } catch {
+      parsed = undefined
+    }
+  }
+  if (toolName === 'bash' || toolName === 'pwsh') {
+    const command = (parsed as Record<string, unknown> | null)?.command
+    if (typeof command !== 'string' || command.trim() === '') return false
+    try {
+      // An unreadable decomposition must not widen the learning domain.
+      return categorizeCommandSegments(command, toolName, input.roots, input.config)
+        .some((segment: CommandSegmentDecision) => segment.category === 'protected')
+    } catch {
+      return true
+    }
+  }
+  const rawPathArgs = typeof parsed === 'string' || parsed === undefined
+    ? (typeof input.args === 'string' ? input.args : undefined)
+    : JSON.stringify(parsed)
+  const target = rawPathArgs === undefined ? undefined : extractToolPath(rawPathArgs)
+  if (target === undefined) return false
+  const normalized = normalizePath(target, input.roots.workspace, input.roots.home)
+  return sensitiveBasenameAt(normalized, input.roots) || isProtectedProjectPath(normalized, input.roots)
 }
 
 /** Structural + monotonicity validation; returns a clean entry or undefined. */

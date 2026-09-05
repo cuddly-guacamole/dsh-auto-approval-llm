@@ -437,6 +437,16 @@ export function extractToolPath(raw: string | undefined | null): string | undefi
   for (const key of ['file_path', 'path', 'cwd', 'workdir']) {
     if (typeof obj[key] === 'string') return obj[key]
   }
+  // apply_patch nests its targets under patches[].file_path — the same shape
+  // the policy layer's target resolution handles; a flat probe would miss
+  // them and let a nested sensitive path into the learning domain.
+  if (Array.isArray(obj.patches)) {
+    for (const patch of obj.patches) {
+      if (patch !== null && typeof patch === 'object' && typeof patch.file_path === 'string' && patch.file_path !== '') {
+        return patch.file_path
+      }
+    }
+  }
   return undefined
 }
 

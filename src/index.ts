@@ -37,6 +37,7 @@ import {
   confirmActionFor,
   LEARNING_SIG_VERSION,
   learningCapState,
+  learningFuseDecision,
   learningKey,
   learnDecision,
   learnGateEligible,
@@ -49,11 +50,10 @@ import {
   type LearningKind,
   type LearningStore,
 } from './auto/learning.js'
-import { isWithin, isCriticalPath, normalizePath, resolveRoots, isProtectedProjectPath } from './auto/paths.js'
+import { isWithin, isCriticalPath, normalizePath, resolveRoots } from './auto/paths.js'
 import { assessTool, hardDenyReason } from './auto/policy.js'
 import { resolveDeepest, symlinkEscapeReason } from './auto/symlink.js'
 import { probeTargetFacts } from './auto/probe.js'
-import { RISK_NAME_PATTERN, RISK_REASON_PATTERN } from './auto/risk-tokens.js'
 import { redactResultValue } from './auto/redact.js'
 import { agentKind, evaluateRules, parseRulesText } from './auto/rules.js'
 import { isReviewRetryable, retryAfterMs, retryReviewLoop, toLlmFailure, type RetryAttempt, type ReviewFailure } from './auto/retry.js'
@@ -2405,26 +2405,12 @@ export function apply(ctx: Context, rawConfig: Config): void {
   // never from anywhere else. The gate (risk tier × category × sensitive fuse)
   // is evaluated here for the record-time snapshot and re-evaluated live at
   // the query point; failing either side means "never learned".
-  const learningFuseHit = (req: any, args: any, policyReason: string | undefined): boolean => {
-    if (RISK_NAME_PATTERN.test(String(req.toolName ?? ''))) return true
-    if (policyReason !== undefined && RISK_REASON_PATTERN.test(policyReason)) return true
-    let parsed: unknown = args
-    if (typeof args === 'string') {
-      try {
-        parsed = JSON.parse(args)
-      } catch {
-        parsed = undefined
-      }
-    }
-    const rawPathArgs = typeof parsed === 'string' || parsed === undefined
-      ? (typeof args === 'string' ? args : undefined)
-      : JSON.stringify(parsed)
-    const target = rawPathArgs === undefined ? undefined : extractToolPath(rawPathArgs)
-    if (target === undefined) return false
-    const roots = rootsFor({ agent: req.agent })
-    const normalized = normalizePath(target, roots.workspace, roots.home)
-    return sensitiveBasenameAt(normalized, roots) || isProtectedProjectPath(normalized, roots)
-  }
+  const learningFuseHit = (req: any, args: any): boolean => learningFuseDecision({
+    toolName: req.toolName,
+    args,
+    roots: rootsFor({ agent: req.agent }),
+    config,
+  })
 
   interface LearnableContext {
     key: string
@@ -2444,7 +2430,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
         enabled: config.learningEnabled,
         staticRisk: classified.risk,
         category: classified.category,
-        fuseHit: learningFuseHit(req, args, undefined),
+        fuseHit: learningFuseHit(req, args),
       })) return undefined
       const toolName = String(req.toolName ?? '')
       let input: { kind: LearningKind; command?: string; toolName?: string; args?: unknown }
