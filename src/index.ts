@@ -147,6 +147,10 @@ export const Config: z<Config> = z.object({
   reviewerBaseUrl: z.string().default(''),
   timeoutAction: z.string().default('reject'),
   llmReviewScope: z.union(['low-or-above', 'medium-or-above', 'high'] as const).default('low-or-above'),
+  // 'high-or-below' is accepted for stored-config compatibility but is
+  // behaviorally identical to 'medium-or-below': the HIGH branch never hands
+  // control to the LLM by design (HIGH always lands on a human). Do not pick
+  // it expecting HIGH automation.
   llmTakeoverScope: z.union(['low', 'medium-or-below', 'high-or-below'] as const).default('medium-or-below'),
   defaultReviewMode: z.union(['manual', 'smart', 'unattended'] as const).default('smart'),
   lowRiskSeconds: z.number().default(THRESHOLD_DEFAULTS.lowRiskSeconds).min(1),
