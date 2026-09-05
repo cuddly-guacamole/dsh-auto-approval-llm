@@ -4,6 +4,7 @@
 // Retained per the MIT License: this is a substantial portion of the original.
 import { randomUUID } from 'node:crypto';
 import { classifierSystemPrompt, parseClassifierDecision } from './classifier.js';
+import { callEndpointText } from './endpoint-call.js';
 function classifierPayload(input) {
     return JSON.stringify({
         toolName: input.toolName,
@@ -93,6 +94,43 @@ export function createDshClassifier(runtime, config) {
             };
             const response = await collectResponse(runtime, options);
             return parseClassifierDecision(JSON.parse(jsonText(response)));
+        },
+    };
+}
+
+/**
+ * Endpoint-source classifier: a synchronous raw-endpoint call (the 'endpoint'
+ * model source, marked legacy). The endpoint config is passed per classify()
+ * — never captured at construction — so a settings change cannot silently
+ * steer a later call at a stale URL/model (2026-09-05 ruling). The payload and
+ * system prompt are identical to the host path; only the transport differs.
+ */
+export function createEndpointClassifier(config) {
+    return {
+        async classify(input, signal, endpoint) {
+            const url = String(endpoint?.url ?? '').trim();
+            const model = String(endpoint?.model ?? '').trim();
+            if (url === '' || model === '') {
+                throw new Error('endpoint source needs a URL and model for classification');
+            }
+            const timeout = AbortSignal.timeout(config.timeoutMs ?? 8_000);
+            const combined = AbortSignal.any([signal, timeout]);
+            const result = await callEndpointText({
+                baseUrl: url,
+                model,
+                protocol: endpoint?.protocol === 'anthropic' ? 'anthropic' : 'openai',
+                apiKey: endpoint?.apiKey,
+                system: classifierSystemPrompt(input.mode === 'aggressive' && input.aggressiveAuto === true && input.riskTier !== 'HIGH' ? 'aggressive' : 'standard'),
+                messages: [classifierPayload(input)],
+                maxTokens: config.maxOutputTokens ?? 1_024,
+                signal: combined,
+            });
+            if (!result.ok) {
+                const err = new Error(`endpoint classifier HTTP ${result.status ?? 'error'}: ${result.message}`);
+                err.status = result.status;
+                throw err;
+            }
+            return parseClassifierDecision(JSON.parse(jsonText(result.text)));
         },
     };
 }

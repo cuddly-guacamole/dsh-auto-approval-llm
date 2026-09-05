@@ -190,12 +190,17 @@ test('host wiring: pre-execute passes mode/aggressiveAuto/riskTier into the clas
   const start = HOST_SRC.indexOf("'tools/pre-execute'")
   const end = HOST_SRC.indexOf("'tools/result'", start)
   const pre = HOST_SRC.slice(start, end > start ? end : start + 20000)
-  const classifyAt = pre.indexOf('classifier.classify(')
-  assert.ok(classifyAt !== -1, 'classifier call site is inside pre-execute')
-  const classifyBlock = pre.slice(classifyAt, classifyAt + 1200)
-  assert.ok(classifyBlock.includes('mode: config.categoryMode'), 'mode is read live from config at the call site')
-  assert.ok(classifyBlock.includes('aggressiveAuto: aggressiveAuto'), 'aggressiveAuto is computed at the call site')
-  assert.ok(classifyBlock.includes('riskTier: riskTier'), 'riskTier is derived from the assessment at the call site')
+  const inputAt = pre.indexOf('const classifierInput = {')
+  assert.ok(inputAt !== -1, 'classifier payload is assembled inside pre-execute')
+  const payloadBlock = pre.slice(inputAt, inputAt + 900)
+  assert.ok(payloadBlock.includes('mode: config.categoryMode'), 'mode is read live from config at the call site')
+  assert.ok(payloadBlock.includes('aggressiveAuto: aggressiveAuto'), 'aggressiveAuto is computed at the call site')
+  assert.ok(payloadBlock.includes('riskTier: riskTier'), 'riskTier is derived from the assessment at the call site')
+  // The assembled payload is what reaches the classifier (host or endpoint).
+  const classifyAt = pre.indexOf('classifier.classify(classifierInput')
+  assert.ok(classifyAt !== -1, 'the assembled payload feeds the host classifier call')
+  const endpointAt = pre.indexOf('endpointClassifier.classify(classifierInput')
+  assert.ok(endpointAt !== -1, 'the assembled payload feeds the endpoint classifier call too')
 })
 
 test('host wiring: the classifier construction stays free of per-call mode caps', () => {

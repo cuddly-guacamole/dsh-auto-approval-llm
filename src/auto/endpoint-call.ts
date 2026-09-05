@@ -32,7 +32,14 @@ export interface EndpointCallInput {
 
 export type EndpointCallResult =
   | { ok: true; text: string }
-  | { ok: false; status?: number; message: string }
+  | { ok: false; status?: number; message: string; retryAfterMs?: number }
+
+function retryAfterMs(value: string | null | undefined): number | undefined {
+  if (!value) return undefined
+  const seconds = Number(value)
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000
+  return undefined
+}
 
 /** Extract the text from a protocol response body (openai/anthropic shapes). */
 export function extractEndpointText(protocol: 'openai' | 'anthropic', json: any): string {
@@ -93,7 +100,7 @@ export async function callEndpointText(input: EndpointCallInput): Promise<Endpoi
     })
     if (!res.ok) {
       const body = await res.text().catch(() => '')
-      return { ok: false, status: res.status, message: endpointErrorSummary(res.status, body) }
+      return { ok: false, status: res.status, message: endpointErrorSummary(res.status, body), retryAfterMs: retryAfterMs(res.headers?.get?.("retry-after") ?? null) }
     }
     const json: any = await res.json()
     return { ok: true, text: extractEndpointText('anthropic', json) }
@@ -110,7 +117,7 @@ export async function callEndpointText(input: EndpointCallInput): Promise<Endpoi
   })
   if (!res.ok) {
     const body = await res.text().catch(() => '')
-    return { ok: false, status: res.status, message: endpointErrorSummary(res.status, body) }
+    return { ok: false, status: res.status, message: endpointErrorSummary(res.status, body), retryAfterMs: retryAfterMs(res.headers?.get?.("retry-after") ?? null) }
   }
   const json: any = await res.json()
   return { ok: true, text: extractEndpointText('openai', json) }

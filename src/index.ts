@@ -28,7 +28,7 @@ import { appendAuditLine, recordAuditClear } from './auto/audit.js'
 import { AGGRESSIVE_BUILTIN, applyCategoryDirective, CATEGORY_KEYS, categoryDirectiveFor, type CategoryKey, HARD_LOCKED_CATEGORIES, LOCKED_CATEGORIES, realpathCriticalReason, sensitiveBasenameAt } from './auto/category.js'
 import { sanitizeClassifierArguments, sanitizeClassifierText, sanitizeReviewReason } from './auto/classifier.js'
 import { DIRECT_HUMAN_TOOL, THRESHOLD_DEFAULTS } from './auto/constants.js'
-import { createDshClassifier } from './auto/dsh-classifier.js'
+import { createDshClassifier, createEndpointClassifier } from './auto/dsh-classifier.js'
 import { type RaceHumanHandle, type ReviewResult, type StaticRisk, REVIEW_TIMEOUT_NOTICE, applyBreaker, approvalSource, assembleReviewerSystem, breakerNote, breakerTripped, countdownNote, createKeyedMutex, extractToolPath, followResolution, formatDenyFeedback, frameReviewerInput, lowRiskReviewOutcome, parseReview, unattendedMustFailClosed, preserveHostKeys, raceHumanDecision, reviewSuggestionNote, reviewerAutoAllowBlocked, riskFromAssessment, staticListDecision, type ContextSummary } from './auto/decision.js'
 import { loadLatencySamples, pushLatencySample, summarizeLatency, type LatencySample } from './auto/latency.js'
 import { buildAskReason, buildEditDiff, buildEditDiffText, EDIT_DIFF_ARGS_MAX_CHARS, EDIT_DIFF_TOOLS } from './auto/editdiff.js'
@@ -63,6 +63,8 @@ import { type ReviewMode, loadReviewModes, normalizeReviewMode, persistReviewMod
 import { runtimeStateReadHits } from './auto/shell.js'
 import { isLoopbackHostname, isTrustedRequest, resolvePublicReviewerTarget, reviewerProbeTargetAllowed, validateReviewerBaseUrl } from './auto/trust.js'
 import { aggregateToolStats } from './auto/tool-stats.js'
+import { normalizeLane, normalizeSharedEndpoint, resolveTransport } from './auto/model-channel.js'
+import { callEndpointText } from './auto/endpoint-call.js'
 
 export const name = 'dsh-auto-approval-llm'
 export const inject = ['approval', 'permissionPresets', 'tools', 'llm', 'agents', 'webServer', 'settings', 'commands']
@@ -70,9 +72,6 @@ export const inject = ['approval', 'permissionPresets', 'tools', 'llm', 'agents'
 export interface Config {
   enabled: boolean
   autoSwitchPolicyToAsk: boolean
-  reviewerModel?: string
-  reviewerProtocol: 'openai' | 'anthropic'
-  reviewerBaseUrl: string
   timeoutAction: string
   llmReviewScope: 'low-or-above' | 'medium-or-above' | 'high'
   llmTakeoverScope: 'low' | 'medium-or-below' | 'high-or-below'
@@ -102,16 +101,20 @@ export interface Config {
   tempRoots?: string[]
   classifierTimeoutMs?: number
   classifierMaxOutputTokens?: number
-  /** Fast-decision lane model source: follow the session model (default) or use an explicit provider/model pair. */
-  classifierModelSource: 'session' | 'custom'
-  /** Custom fast-decision provider/model; honored only while classifierModelSource==='custom' (normalized to '' otherwise). */
+  /** Fast-decision lane model source: session / preset (host DSH model) / endpoint (custom, marked legacy). */
+  classifierSource: 'session' | 'preset' | 'endpoint'
+  /** Fast-decision preset pair; honored only while classifierSource==='preset'. */
   classifierProvider: string
   classifierModel: string
-  /** Deep-review lane model source (offline lane): session fallback (default) or explicit host provider/model. Orthogonal to the online endpoint trio. */
-  reviewerModelSource: 'session' | 'custom'
-  /** Custom deep-review host provider/model; honored only while reviewerModelSource==='custom' and no online baseUrl. */
-  reviewerHostProvider: string
-  reviewerHostModel: string
+  /** Deep-review lane model source: session / preset / endpoint. */
+  reviewerSource: 'session' | 'preset' | 'endpoint'
+  /** Deep-review preset provider (name revived from the retired pair era). */
+  reviewerProvider: string
+  reviewerModel: string
+  /** Shared custom-endpoint config (lane-agnostic; both lanes' endpoint source references it). */
+  endpointUrl: string
+  endpointModel: string
+  endpointProtocol: 'openai' | 'anthropic'
   /** Extra LLM review attempts after the first (0 = single-shot, 1 = default). */
   reviewMaxRetries?: number
   /** Seconds one reviewer attempt may wait (per-attempt timeout). */
@@ -154,9 +157,6 @@ export const Config: z<Config> = z.object({
   enabled: z.boolean().default(true),
   autoSwitchPolicyToAsk: z.boolean().default(false),
   debug: z.boolean().default(false),
-  reviewerModel: z.string().default(''),
-  reviewerProtocol: z.union(['openai', 'anthropic'] as const).default('openai'),
-  reviewerBaseUrl: z.string().default(''),
   timeoutAction: z.string().default('reject'),
   llmReviewScope: z.union(['low-or-above', 'medium-or-above', 'high'] as const).default('low-or-above'),
   // 'high-or-below' is accepted for stored-config compatibility but is
@@ -196,17 +196,25 @@ export const Config: z<Config> = z.object({
   classifierTimeoutMs: z.number().default(8_000).min(100).max(60_000),
   classifierMaxOutputTokens: z.number().default(1_024).min(64).max(4_096),
   // Model-source switches default to 'session' so behavior stays byte-identical
-  // unless the operator opts into a custom provider/model pair. Keys carry
-  // .default('') (never a bare optional) so a hand-written settings/patch file
-  // with one side only cannot reach the classifier constructor half-wired —
-  // resolveConfig normalizes anyway, this is the schema-level backstop
-  // (2026-08-26 half-configuration bootstrap crash precedent).
-  classifierModelSource: z.union(['session', 'custom'] as const).default('session'),
+  // unless the operator opts into a preset (host DSH model) or endpoint
+  // (custom, marked legacy) source. Keys carry .default('') / a default enum
+  // (never a bare optional) so a hand-written settings/patch file with one side
+  // only cannot reach the classifier constructor half-wired — resolveConfig
+  // normalizes anyway, this is the schema-level backstop (2026-08-26
+  // half-configuration bootstrap crash precedent).
+  classifierSource: z.union(['session', 'preset', 'endpoint'] as const).default('session'),
   classifierProvider: z.string().default(''),
   classifierModel: z.string().default(''),
-  reviewerModelSource: z.union(['session', 'custom'] as const).default('session'),
-  reviewerHostProvider: z.string().default(''),
-  reviewerHostModel: z.string().default(''),
+  reviewerSource: z.union(['session', 'preset', 'endpoint'] as const).default('session'),
+  // reviewerProvider: preset-pair provider for the deep-review lane (name
+  // revived from the retired pair era — 2026-09-05 user ruling).
+  reviewerProvider: z.string().default(''),
+  reviewerModel: z.string().default(''),
+  // Shared custom-endpoint config (lane-agnostic): both lanes' endpoint source
+  // reference the same endpointUrl/endpointModel + the shared API key.
+  endpointUrl: z.string().default(''),
+  endpointModel: z.string().default(''),
+  endpointProtocol: z.union(['openai', 'anthropic'] as const).default('openai'),
   // Extra LLM review attempts after the first (0 = off, matching the old
   // single-shot behavior). Calibrated against measured review latency (p95 ≈
   // 3.06s): the rolling budget keeps 1 retry affordable on every risk path.
@@ -417,39 +425,46 @@ export function resolveConfig(raw: Config): Config {
   ) {
     console.warn(`[dsh-auto-approval-llm] clamping learningThreshold ${String(raw.learningThreshold)} to ${learningThreshold} (valid range: integer 2..10)`)
   }
-  // Half-configured direct endpoint advisory: reviewerBaseUrl without
-  // reviewerModel no longer produces a doomed online attempt — the snapshot
-  // treats the incomplete trio as unconfigured and review follows the session
-  // model. Warn at resolve time; the stored values themselves stay untouched.
-  if (String(raw.reviewerBaseUrl ?? '').trim().length > 0 && String(raw.reviewerModel ?? '').trim().length === 0) {
-    console.warn('[dsh-auto-approval-llm] reviewerBaseUrl set without reviewerModel: direct review needs base URL + model name + API key, so this combination counts as unconfigured and review follows the session model')
+  // Model-source normalization (2026-09-05, llm-channel-unify): each lane
+  // resolves through the shared channel layer. An explicit preset/endpoint
+  // choice that is half-configured is surfaced via the lane's `error` (consumers
+  // fail loudly); it is never silently downgraded to the session model. A
+  // `session` source carrying leftover preset values is silently cleaned, and a
+  // stale 'custom' enum from the retired 2-source era normalizes to session —
+  // warn and never throw, so a hand-written settings file can never crash
+  // bootstrap (2026-08-26 half-configuration precedent).
+  const classifierLane = normalizeLane({
+    source: (raw as any).classifierSource,
+    presetProvider: (raw as any).classifierProvider,
+    presetModel: (raw as any).classifierModel,
+  })
+  if (classifierLane.error) {
+    console.warn(`[dsh-auto-approval-llm] classifierSource=${String((raw as any).classifierSource)} without a complete provider/model pair — ${classifierLane.error}`)
   }
-  // Model-source normalization (2026-09-05, Issue #5): the custom provider/model
-  // pair is honored only while its lane's source switch says 'custom' AND the
-  // pair is complete. Any other combination (source='session' with leftovers,
-  // source='custom' half-configured, empty strings) is normalized to a clean
-  // session lane — warn and never throw, so a hand-written settings file can
-  // never crash bootstrap (2026-08-26 half-configuration precedent).
-  const classifierCustom = raw.classifierModelSource === 'custom'
-    && String(raw.classifierProvider ?? '').trim().length > 0
-    && String(raw.classifierModel ?? '').trim().length > 0
-  if (raw.classifierModelSource === 'custom' && !classifierCustom) {
-    console.warn('[dsh-auto-approval-llm] classifierModelSource=custom without a complete provider/model pair — ignoring the custom lane, following the session model')
+  const reviewerLane = normalizeLane({
+    source: (raw as any).reviewerSource,
+    presetProvider: (raw as any).reviewerProvider,
+    presetModel: (raw as any).reviewerModel,
+  })
+  if (reviewerLane.error) {
+    console.warn(`[dsh-auto-approval-llm] reviewerSource=${String((raw as any).reviewerSource)} without a complete provider/model pair — ${reviewerLane.error}`)
   }
-  const reviewerCustom = raw.reviewerModelSource === 'custom'
-    && String(raw.reviewerHostProvider ?? '').trim().length > 0
-    && String(raw.reviewerHostModel ?? '').trim().length > 0
-  if (raw.reviewerModelSource === 'custom' && !reviewerCustom) {
-    console.warn('[dsh-auto-approval-llm] reviewerModelSource=custom without a complete provider/model pair — ignoring the custom lane, following the session model')
-  }
+  const sharedEndpoint = normalizeSharedEndpoint({
+    url: (raw as any).endpointUrl,
+    model: (raw as any).endpointModel,
+    protocol: (raw as any).endpointProtocol,
+  })
   return {
     ...raw,
-    classifierModelSource: classifierCustom ? 'custom' : 'session',
-    classifierProvider: classifierCustom ? String(raw.classifierProvider).trim() : '',
-    classifierModel: classifierCustom ? String(raw.classifierModel).trim() : '',
-    reviewerModelSource: reviewerCustom ? 'custom' : 'session',
-    reviewerHostProvider: reviewerCustom ? String(raw.reviewerHostProvider).trim() : '',
-    reviewerHostModel: reviewerCustom ? String(raw.reviewerHostModel).trim() : '',
+    classifierSource: classifierLane.source,
+    classifierProvider: classifierLane.presetProvider,
+    classifierModel: classifierLane.presetModel,
+    reviewerSource: reviewerLane.source,
+    reviewerProvider: reviewerLane.presetProvider,
+    reviewerModel: reviewerLane.presetModel,
+    endpointUrl: sharedEndpoint.url,
+    endpointModel: sharedEndpoint.model,
+    endpointProtocol: sharedEndpoint.protocol,
     timeoutAction,
     categoryPolicy,
     categoryMode: raw.categoryMode === 'aggressive' ? 'aggressive' : 'standard',
@@ -572,15 +587,61 @@ const REVIEW_RETRY_GUARD_MS = 1_500
  * steer a retry toward a different endpoint or key.
  */
 interface ReviewSnapshot {
-  online: boolean
+  /** host = DSH LLM route (session/preset); raw = shared endpoint config. */
+  transport: 'host' | 'raw'
   payload: string
   system: string
   route?: { provider: string; model: string }
   baseUrl?: string
-  /** Reviewer model fixed at snapshot time (online attempts re-read it otherwise). */
+  /** Reviewer model fixed at snapshot time (raw attempts re-read it otherwise). */
   model?: string
   protocol?: 'openai' | 'anthropic'
   apiKey?: string
+}
+
+/**
+ * Resolve the shared endpoint API key once from the credentials service, with
+ * the shared-credential-file fallback. Disable the file read with
+ * DSH_AUTO_APPROVAL_READ_CRED_FILE=0 (keeps contract tests isolated from the
+ * host machine's credential file).
+ */
+async function resolveReviewerApiKey(credentials: any): Promise<string | undefined> {
+  let apiKey: string | undefined
+  try {
+    const resolved = await credentials?.resolve?.(REVIEWER_CREDENTIAL_REF)
+    apiKey = resolved?.value
+  } catch {
+    apiKey = undefined
+  }
+  if (!apiKey && process.env.DSH_AUTO_APPROVAL_READ_CRED_FILE !== '0') {
+    apiKey = reviewerKeyFromCredentialFile()
+  }
+  return apiKey
+}
+
+/**
+ * Optimistic route-availability predicate for the deep-review lane, consumed
+ * by both the confirmation-learning gate and the main risk pipeline. Mirrors
+ * the exact snapshot-time resolution but without the async key lookup: a
+ * session/preset source with a resolvable host route or an endpoint source
+ * with a configured URL+model counts as available. The snapshot re-checks
+ * precisely and fails loudly on any half-configuration — the gate is an
+ * optimistic pre-check only (misjudgment worst case is ESCALATE/ask, never an
+ * auto-allow).
+ */
+export function reviewerRouteAvailable(config: Config, session: any): boolean {
+  const lane = normalizeLane({
+    source: config.reviewerSource,
+    presetProvider: config.reviewerProvider,
+    presetModel: config.reviewerModel,
+  })
+  const endpoint = normalizeSharedEndpoint({
+    url: config.endpointUrl,
+    model: config.endpointModel,
+    protocol: config.endpointProtocol,
+  })
+  const transport = resolveTransport(lane.source, lane, endpoint, sessionModelRoute(session))
+  return transport.transport !== 'none'
 }
 
 export async function buildReviewSnapshot(
@@ -636,75 +697,62 @@ export async function buildReviewSnapshot(
   // summary (rules are constraints only; they can never authorize).
   const system = assembleReviewerSystem(config.safetyPrompt, config.rulesText)
 
-  // Online reviewer: a direct HTTP call to the configured OpenAI-compatible
-  // (chat/completions) or Anthropic (messages) endpoint. The API key and the
-  // model name are resolved once into the snapshot (never cached beyond one
-  // review), so a settings change mid-review cannot steer a retry toward a
-  // different endpoint or model.
-  if (String(config.reviewerBaseUrl ?? '').trim().length > 0) {
-    const validated = validateReviewerBaseUrl(config.reviewerBaseUrl ?? '')
+  // Channel-driven transport (2026-09-05, llm-channel-unify): the reviewer
+  // source switch decides how this review travels — session/preset ride the
+  // host LLM through a provider/model route; endpoint rides raw fetch to the
+  // shared custom endpoint config. The API key (endpoint) resolves once into
+  // the snapshot (never cached beyond one review), so a settings change
+  // mid-review cannot steer a retry toward a different endpoint or key.
+  const reviewerLane = normalizeLane({
+    source: config.reviewerSource,
+    presetProvider: config.reviewerProvider,
+    presetModel: config.reviewerModel,
+  })
+  if (reviewerLane.error) {
+    // The operator explicitly chose a source and misconfigured it — fail
+    // loudly, never silently follow the session model (2026-09-05 ruling).
+    return { failure: reviewerLane.error }
+  }
+  const endpoint = normalizeSharedEndpoint({
+    url: config.endpointUrl,
+    model: config.endpointModel,
+    protocol: config.endpointProtocol,
+  })
+  const transport = resolveTransport(
+    reviewerLane.source,
+    reviewerLane,
+    endpoint,
+    sessionModelRoute(session),
+  )
+  if (transport.transport === 'none') {
+    if (reviewerLane.source === 'session') return { failure: 'no reviewer route' }
+    return { failure: transport.reason }
+  }
+  if (transport.transport === 'raw') {
+    const validated = validateReviewerBaseUrl(transport.baseUrl)
     if (!validated.ok) {
       console.warn(`[dsh-auto-approval-llm] ${validated.reason}`)
       return { failure: validated.reason }
     }
-    let apiKey: string | undefined
-    try {
-      const resolved = await credentials?.resolve?.(REVIEWER_CREDENTIAL_REF)
-      apiKey = resolved?.value
-    } catch {
-      apiKey = undefined
+    const apiKey = await resolveReviewerApiKey(credentials)
+    // A configured endpoint without a resolved key is treated as unconfigured:
+    // log what is missing and fail — an endpoint review without a key can only
+    // produce AUTH.
+    if (!apiKey) {
+      debugLog({ ev: 'reviewer-incomplete', callId: req.callId, baseUrl: validated.baseUrl, missing: ['key'] })
+      return { failure: 'endpoint source needs a resolved API key' }
     }
-    // Fallback when the reviewer key did not resolve from the credentials
-    // service (service unreachable, scope-filtered, or ref simply unset):
-    // read the shared DSH credential file. Disable with
-    // DSH_AUTO_APPROVAL_READ_CRED_FILE=0 (keeps contract tests isolated from
-    // the host machine's credential file).
-    if (!apiKey && process.env.DSH_AUTO_APPROVAL_READ_CRED_FILE !== '0') {
-      apiKey = reviewerKeyFromCredentialFile()
+    return {
+      transport: 'raw',
+      payload,
+      system,
+      baseUrl: validated.baseUrl,
+      model: transport.model,
+      protocol: transport.protocol,
+      apiKey,
     }
-    // The direct channel exists only when all three pieces are configured:
-    // base URL + model name + a resolved API key. A half-configured endpoint
-    // can only produce a doomed request (empty model → INVALID_REQUEST, no
-    // key → AUTH), so an incomplete trio is treated as unconfigured: log what
-    // is missing and fall through to session-model review below. A malformed
-    // URL above is different — that is wrong configuration, not half of one.
-    const missing: string[] = []
-    if (String(config.reviewerModel ?? '').trim().length === 0) missing.push('model')
-    if (!apiKey) missing.push('key')
-    if (missing.length === 0) {
-      return {
-        online: true,
-        payload,
-        system,
-        baseUrl: validated.baseUrl,
-        model: String(config.reviewerModel ?? '').trim(),
-        protocol: config.reviewerProtocol === 'anthropic' ? 'anthropic' : 'openai',
-        apiKey,
-      }
-    }
-    debugLog({ ev: 'reviewer-incomplete', callId: req.callId, baseUrl: validated.baseUrl, missing })
   }
-
-  // Offline lane route selection (Issue #5): when no online endpoint is
-  // configured, the deep review rides the host LLM through a provider/model
-  // route. The default 'session' source follows the session model exactly as
-  // before; an explicit 'custom' source (complete pair, normalized by
-  // resolveConfig) fixes a provider/model of the operator's choice. A custom
-  // source that somehow reaches here half-wired fails loudly instead of
-  // silently degrading to the session model — the operator asked for a
-  // specific model, and a silent fallback would hide a misconfiguration.
-  let route: { provider: string; model: string } | undefined
-  if (config.reviewerModelSource === 'custom') {
-    if (config.reviewerHostProvider.length > 0 && config.reviewerHostModel.length > 0) {
-      route = { provider: config.reviewerHostProvider, model: config.reviewerHostModel }
-    } else {
-      return { failure: 'reviewer custom source needs provider and model' }
-    }
-  } else {
-    route = sessionModelRoute(session)
-  }
-  if (!route) return { failure: 'no reviewer route' }
-  return { online: false, payload, system, route }
+  return { transport: 'host', payload, system, route: { provider: transport.provider, model: transport.model } }
 }
 
 /** Map a non-2xx HTTP status to a stable review failure code. */
@@ -728,7 +776,7 @@ function httpStatusFailure(status: number, message: string, response: any): Revi
 async function runReviewAttempt(
   snapshot: ReviewSnapshot, llm: any, session: any, req: any, config: Config, signal: AbortSignal,
 ): Promise<ReviewResult> {
-  if (!snapshot.online) {
+  if (snapshot.transport === 'host') {
     const route = snapshot.route!
     const prepared = await llm.prepareCall({ provider: route.provider, model: route.model, maxTokens: 256 }, signal)
     const messages = [createUserMessage({
@@ -759,64 +807,24 @@ async function runReviewAttempt(
     return parseReviewTextOrThrow(text)
   }
 
-  // Online (custom endpoint): raw fetch with redirect:'error' keeping the
-  // loopback fence honest — a 302 must not steer this request (and its
-  // credential headers) toward some other host. Public-address enforcement
-  // (SSRF hardening, mirrors the official dsh-web-fetch-http provider):
-  // non-loopback targets resolve once and are refused unless every answer is
-  // public unicast, so a configured FQDN that (re)binds to a private or
-  // metadata address can never be piped through the reviewer endpoint with
-  // the API key. Loopback stays exempt — a local review endpoint (mock
-  // reviewer, Ollama, LM Studio) is a legitimate admin configuration, and
-  // cleartext http is already loopback-fenced by validateReviewerBaseUrl.
-  const reviewTargetHost = new URL(String(snapshot.baseUrl)).hostname
-  if (!isLoopbackHostname(reviewTargetHost)) {
-    const resolved = await resolvePublicReviewerTarget(reviewTargetHost)
-    if (!resolved.ok) throw new TypeError(resolved.reason)
+  // Raw endpoint transport: the shared endpoint call owns the SSRF/redirect
+  // fence and protocol routing; HTTP failures map to the review failure codes.
+  const result = await callEndpointText({
+    baseUrl: snapshot.baseUrl!,
+    model: snapshot.model!,
+    protocol: snapshot.protocol!,
+    apiKey: snapshot.apiKey,
+    system: snapshot.system,
+    messages: [snapshot.payload],
+    maxTokens: 256,
+    signal,
+  })
+  if (!result.ok) {
+    const failure: ReviewFailure = httpStatusFailure(result.status ?? 0, result.message, { headers: { get: () => null } })
+    if (result.retryAfterMs !== undefined) failure.providerRetryAfterMs = result.retryAfterMs
+    throw failure
   }
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  let text = ''
-  if (snapshot.protocol === 'anthropic') {
-    if (snapshot.apiKey) headers['x-api-key'] = snapshot.apiKey
-    const res = await fetch(`${snapshot.baseUrl}/messages`, {
-      method: 'POST',
-      headers,
-      signal,
-      redirect: 'error',
-      body: JSON.stringify({
-        model: snapshot.model || undefined,
-        max_tokens: 256,
-        system: snapshot.system,
-        messages: [{ role: 'user', content: snapshot.payload }],
-      }),
-    })
-    if (!res.ok) throw httpStatusFailure(res.status, `HTTP ${res.status}`, res)
-    const json: any = await res.json()
-    const content = json?.content
-    text = Array.isArray(content)
-      ? content.map((block: any) => (block?.type === 'text' ? block.text ?? '' : '')).join('')
-      : ''
-  } else {
-    if (snapshot.apiKey) headers.Authorization = `Bearer ${snapshot.apiKey}`
-    const res = await fetch(`${snapshot.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers,
-      signal,
-      redirect: 'error',
-      body: JSON.stringify({
-        model: snapshot.model || undefined,
-        max_tokens: 256,
-        messages: [
-          { role: 'system', content: snapshot.system },
-          { role: 'user', content: snapshot.payload },
-        ],
-      }),
-    })
-    if (!res.ok) throw httpStatusFailure(res.status, `HTTP ${res.status}`, res)
-    const json: any = await res.json()
-    text = json?.choices?.[0]?.message?.content ?? ''
-  }
-  return parseReviewTextOrThrow(text)
+  return parseReviewTextOrThrow(result.text)
 }
 
 /** Parse review JSON; empty output = EMPTY_RESPONSE, malformed = BAD_RESPONSE (not retried). */
@@ -2452,19 +2460,20 @@ export function apply(ctx: Context, rawConfig: Config): void {
   // time, so the classifier must be rebuilt whenever (live) settings change;
   // Reviewer and classifier knobs are read at construction time, so the
   // classifier must be rebuilt whenever (live) settings change.
-  // The override pair must be complete: a lone reviewerModel (or provider)
-  // would throw inside the classifier once-during construction and take the
-  // whole plugin down at boot (seen 2026-08-26: half-configured reviewer
-  // settings crashed dsh). Single-sided values are ignored defensively.
+  // The override pair must be complete: a lone provider (or model) would throw
+  // inside the classifier once-during construction and take the whole plugin
+  // down at boot (seen 2026-08-26: half-configured reviewer settings crashed
+  // dsh). Single-sided values are ignored defensively.
   // The classifier follows the session model unless the operator opted into a
-  // custom lane: classifierModelSource==='custom' with a complete pair (already
+  // preset lane: classifierSource==='preset' with a complete pair (already
   // normalized by resolveConfig) forwards that pair into createDshClassifier,
   // whose existing override branch (config.provider/model) then wins over the
-  // per-call session route. Default 'session' forwards nothing and behavior is
-  // byte-identical to the retired-pair era. The override is derived inside
-  // rebuildClassifier so a live settings change is picked up on rebuild.
+  // per-call session route. The 'endpoint' source is NOT handled here — it
+  // dispatches through the shared raw-endpoint call at classify time (the
+  // construction-time override only serves host-LLM routes). Default 'session'
+  // forwards nothing and behavior is byte-identical to the retired-pair era.
   const classifierOverrideFor = (cfg: Config) =>
-    cfg.classifierModelSource === 'custom'
+    cfg.classifierSource === 'preset'
       && cfg.classifierProvider.length > 0
       && cfg.classifierModel.length > 0
       ? { provider: cfg.classifierProvider, model: cfg.classifierModel }
@@ -2473,6 +2482,13 @@ export function apply(ctx: Context, rawConfig: Config): void {
     timeoutMs: config.classifierTimeoutMs ?? THRESHOLD_DEFAULTS.classifierTimeoutMs,
     maxOutputTokens: config.classifierMaxOutputTokens ?? THRESHOLD_DEFAULTS.classifierMaxOutputTokens,
     ...classifierOverrideFor(config),
+  })
+  // Endpoint-source classifier: synchronous raw call, endpoint config resolved
+  // fresh per classify() (never construction-frozen). Shares the payload and
+  // system prompt with the host path; only the transport differs.
+  const endpointClassifier = createEndpointClassifier({
+    timeoutMs: config.classifierTimeoutMs ?? THRESHOLD_DEFAULTS.classifierTimeoutMs,
+    maxOutputTokens: config.classifierMaxOutputTokens ?? THRESHOLD_DEFAULTS.classifierMaxOutputTokens,
   })
   const rebuildClassifier = () => {
     classifier = createDshClassifier(llm, {
@@ -2990,7 +3006,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       const route = resolveModelRoute(exec.agent) ?? resolveModelRoute(authority)
       const aggressiveAuto = config.categoryMode === 'aggressive' && 'auto' === directive && AGGRESSIVE_BUILTIN.includes(category as CategoryKey)
       const riskTier = riskFromAssessment(assessment, exec.name)
-      const decision = await classifier.classify({
+      const classifierInput = {
         toolName: exec.name,
         arguments: sanitizeClassifierArguments(exec.arguments),
         workspaceRoot: roots.workspace,
@@ -3003,7 +3019,32 @@ export function apply(ctx: Context, rawConfig: Config): void {
         aggressiveAuto: aggressiveAuto,
         riskTier: riskTier,
         ...(route === undefined ? {} : { route }),
-      }, exec.signal)
+      }
+      const classifierLane = normalizeLane({
+        source: config.classifierSource,
+        presetProvider: config.classifierProvider,
+        presetModel: config.classifierModel,
+      })
+      let decision: { decision: 'allow' | 'ask' | 'deny'; reason: string }
+      if (classifierLane.source === 'endpoint') {
+        // Endpoint source: synchronous raw call, endpoint config + key resolved
+        // fresh per classify (never construction-frozen).
+        if (!config.endpointUrl || !config.endpointModel) {
+          throw new Error('endpoint source needs a URL and model for classification')
+        }
+        const endpointApiKey = await resolveReviewerApiKey(getCredentials())
+        decision = await endpointClassifier.classify(classifierInput, exec.signal, {
+          url: config.endpointUrl,
+          model: config.endpointModel,
+          protocol: config.endpointProtocol,
+          apiKey: endpointApiKey,
+        })
+      } else {
+        if (classifierLane.error) {
+          throw new Error(classifierLane.error)
+        }
+        decision = await classifier.classify(classifierInput, exec.signal)
+      }
       debugLog({ ev: 'classifier-decision', callId: exec.callId ?? null, toolName: exec.name, category, directive, mode: config.categoryMode, aggressiveAuto, riskTier, decision: decision.decision, reason: sanitizeReviewReason(decision.reason) })
       // This fast path answers without ever entering the `approval/request`
       // answerer, where every other pushHistory site lives — so an allow or a
@@ -3522,7 +3563,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       if (!config.learningEnabled) return undefined
       const capUsed = sessionLearnedAllows.get(sessionKey) ?? 0
       const capMax = THRESHOLD_DEFAULTS.learningSessionAllowCap
-      const routeAvailable = !!(config.reviewerBaseUrl || sessionModelRoute(req.agent.session) || (config.reviewerModelSource === 'custom' && config.reviewerHostProvider.length > 0 && config.reviewerHostModel.length > 0))
+      const routeAvailable = reviewerRouteAvailable(config, req.agent.session)
       if (!routeAvailable) return undefined
       const learnable = learnableContextFor(req, args, classified, 'learn-attempt-query')
       if (learnable === undefined) return undefined
@@ -3921,7 +3962,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
     // falls through to the ordinary LOW/MEDIUM/HIGH pipeline unchanged.
     const learnedAllow = await learnAttempt(req, args, classified, sessionKey, reviewOpts)
     if (learnedAllow !== undefined) return learnedAllow
-    const llmRouteAvailable = !!(config.reviewerBaseUrl || sessionModelRoute(req.agent.session) || (config.reviewerModelSource === 'custom' && config.reviewerHostProvider.length > 0 && config.reviewerHostModel.length > 0))
+    const llmRouteAvailable = reviewerRouteAvailable(config, req.agent.session)
     const llmReviews = llmRouteAvailable && riskReviewed(staticRisk, config.llmReviewScope)
     const llmTakeover = llmReviews && riskTakenOver(staticRisk, config.llmTakeoverScope)
     const seconds = riskSeconds(staticRisk)

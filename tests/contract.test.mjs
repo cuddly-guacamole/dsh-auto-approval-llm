@@ -3597,20 +3597,19 @@ test('currentPreset: rc.1 current() receives the session object directly', () =>
   assert.equal(currentPreset(permissionPresets, null), undefined)
 })
 
-test('reviewer route gate: the three-source disjunction stays pinned at both pipeline sites (baseUrl / session fallback / custom host pair)', () => {
-  // The production judgment is an inline expression inside apply(): once for
-  // the confirmation-learning gate, once for the main risk pipeline that owns
-  // the LOW no-route direct-allow branch. Pin its compiled shape so retiring
-  // any of the three sources fails here instead of silently flipping behavior
-  // (2026-09-05: the custom host pair joined the disjunction for Issue #5 —
-  // without it a custom reviewer model would never gate on and LOW would
-  // direct-allow silently).
+test('reviewer route gate: the shared availability predicate gates both pipeline sites', () => {
+  // The production judgment is one shared predicate (reviewerRouteAvailable)
+  // called at exactly two sites: the confirmation-learning gate and the main
+  // risk pipeline that owns the LOW no-route direct-allow branch. Pin the
+  // compiled shape so splitting the two sites into divergent expressions fails
+  // here instead of silently flipping behavior (2026-09-05 llm-channel-unify:
+  // the gate must cover session / preset / endpoint sources alike).
   const host = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
-  const matches = host.match(/\!\!\(config\.reviewerBaseUrl \|\| sessionModelRoute\(req\.agent\.session\) \|\| \(config\.reviewerModelSource === 'custom' && config\.reviewerHostProvider\.length > 0 && config\.reviewerHostModel\.length > 0\)\)/g) ?? []
-  assert.equal(matches.length, 2, 'route-availability expression must gate both the learning path and the main review pipeline')
+  const calls = host.match(/reviewerRouteAvailable\(config, req\.agent\.session\)/g) ?? []
+  assert.equal(calls.length, 2, 'route-availability predicate must gate both the learning path and the main review pipeline')
 })
 
-// ── direct-review snapshot completeness: base URL + model + key, or fall through ──
+// ── direct-review snapshot completeness: channel transport + key resolution ──
 
 const snapshotSession = { snapshotEvents: () => [{ type: 'request/header', data: { header: { config: { provider: 'sess-provider', model: 'sess-model' } } } }] }
 const snapshotReq = { callId: 'call-snapshot', toolName: 'bash' }
@@ -3621,63 +3620,67 @@ const snapshotConfig = (over = {}) => ({
   reviewerContextFacts: false,
   safetyPrompt: '',
   rulesText: '',
-  reviewerProtocol: 'openai',
+  classifierSource: 'session',
+  classifierProvider: '',
+  classifierModel: '',
+  reviewerSource: 'session',
+  reviewerProvider: '',
   reviewerModel: '',
-  reviewerBaseUrl: '',
+  endpointUrl: '',
+  endpointModel: '',
+  endpointProtocol: 'openai',
   ...over,
 })
 const runSnapshot = (credentialValue, over = {}) =>
   buildReviewSnapshot(snapshotCredentials(credentialValue), snapshotTools, snapshotSession, snapshotReq, snapshotConfig(over), {})
 
-test('direct review snapshot: base URL and model without a stored key skip the doomed online attempt and follow the session model', async () => {
-  const snap = await runSnapshot(undefined, { reviewerBaseUrl: 'http://127.0.0.1:9999', reviewerModel: 'direct-model' })
-  assert.equal(snap.online, false)
-  assert.deepEqual(snap.route, { provider: 'sess-provider', model: 'sess-model' })
-  assert.equal('baseUrl' in snap, false)
-  assert.equal('apiKey' in snap, false)
+test('direct review snapshot: endpoint without a stored key fails loudly, never a doomed session fallback', async () => {
+  // An explicit endpoint choice without a resolved key can only produce AUTH —
+  // fail loudly instead of silently reviewing with the session model.
+  const snap = await runSnapshot(undefined, { reviewerSource: 'endpoint', endpointUrl: 'http://127.0.0.1:9999/v1', endpointModel: 'direct-model' })
+  assert.ok('failure' in snap, 'endpoint without a key must surface a failure')
 })
 
-test('direct review snapshot: base URL with a blank model name counts as unconfigured and follows the session model', async () => {
-  const snap = await runSnapshot('sk-test', { reviewerBaseUrl: 'http://127.0.0.1:9999', reviewerModel: '' })
-  assert.equal(snap.online, false)
-  assert.deepEqual(snap.route, { provider: 'sess-provider', model: 'sess-model' })
+test('direct review snapshot: endpoint with blank model is half-wired and fails loudly', async () => {
+  const snap = await runSnapshot('sk-test', { reviewerSource: 'endpoint', endpointUrl: 'http://127.0.0.1:9999/v1', endpointModel: '' })
+  assert.ok('failure' in snap, 'a blank endpoint model must surface a failure')
 })
 
-test('direct review snapshot: base URL + model name + stored key yield the online snapshot carrying baseUrl and apiKey', async () => {
-  const snap = await runSnapshot('sk-test', { reviewerBaseUrl: 'http://127.0.0.1:9999/', reviewerModel: 'direct-model' })
-  assert.equal(snap.online, true)
-  assert.equal(snap.baseUrl, 'http://127.0.0.1:9999')
+test('direct review snapshot: endpoint + model + stored key yield the raw snapshot carrying baseUrl and apiKey', async () => {
+  const snap = await runSnapshot('sk-test', { reviewerSource: 'endpoint', endpointUrl: 'http://127.0.0.1:9999/v1', endpointModel: 'direct-model' })
+  assert.equal(snap.transport, 'raw')
+  assert.equal(snap.baseUrl, 'http://127.0.0.1:9999/v1')
   assert.equal(snap.apiKey, 'sk-test')
   assert.equal(snap.protocol, 'openai')
+  assert.equal(snap.model, 'direct-model')
 })
 
-test('direct review snapshot: no base URL falls through to the session model route (offline)', async () => {
+test('direct review snapshot: default session config follows the session model route (host)', async () => {
   const snap = await runSnapshot(undefined)
-  assert.equal(snap.online, false)
+  assert.equal(snap.transport, 'host')
   assert.deepEqual(snap.route, { provider: 'sess-provider', model: 'sess-model' })
 })
 
-test('direct review snapshot: fully empty reviewer config follows the session model route', async () => {
-  const snap = await runSnapshot(undefined)
-  assert.equal(snap.online, false)
+test('direct review snapshot: session source ignores leftover endpoint config', async () => {
+  const snap = await runSnapshot(undefined, { endpointUrl: 'http://127.0.0.1:9999/v1', endpointModel: 'x' })
+  assert.equal(snap.transport, 'host')
   assert.deepEqual(snap.route, { provider: 'sess-provider', model: 'sess-model' })
 })
 
-test('resolveConfig: base URL without model name resolves usable config with the stored values intact and emits a warning instead of throwing', () => {
+test('resolveConfig: shared endpoint with a URL but no model normalizes cleanly without throwing', () => {
   const warnings = []
   const originalWarn = console.warn
   console.warn = (...parts) => { warnings.push(parts.map(String).join(' ')) }
   let resolved
   try {
-    resolved = resolveConfig({ timeoutAction: 'reject', reviewerBaseUrl: 'https://api.example.com/v1' })
+    resolved = resolveConfig({ timeoutAction: 'reject', endpointUrl: 'https://api.example.com/v1' })
   } finally {
     console.warn = originalWarn
   }
-  assert.equal(resolved.reviewerBaseUrl, 'https://api.example.com/v1')
+  assert.equal(resolved.endpointUrl, 'https://api.example.com/v1')
   assert.equal(resolved.timeoutAction, 'reject')
-  assert.equal(resolved.reviewerModel ?? '', '')
-  const hits = warnings.filter((line) => line.includes('reviewerBaseUrl') && line.includes('reviewerModel'))
-  assert.equal(hits.length, 1, `expected exactly one half-configured-direct warning, got: ${JSON.stringify(warnings)}`)
+  assert.equal(resolved.endpointModel, '')
+  assert.equal(resolved.reviewerSource, 'session', 'no source selected → session default')
 })
 
 // ── first-use onboarding: host notice semantics ───────────────────────────
@@ -3864,13 +3867,26 @@ test('onboarding locale: B-section copy exists host-side (i18n exemption)', () =
   assert.ok(hostSrc.includes('(Auto-approval) is active'))
 })
 
-test('classifier pair: half-configured reviewer settings must not crash bootstrap', () => {
-  // Regression anchor (2026-08-26): reviewerProvider was removed entirely.
-  // The classifier is built without any reviewer override, so no half-
-  // configuration pair can crash bootstrap and no override can diverge from
-  // the session model.
+test('model sources: no half-configured combination crashes resolveConfig, and no naked pair-validation survives', () => {
+  // Regression anchor (2026-08-26): a half-configured reviewer pair used to
+  // crash bootstrap via a naked "provider xor model" throw. The reviewerProvider
+  // name is revived (2026-09-05 user ruling) as the preset-pair provider, so
+  // the old "must be fully retired" string anchor is gone — replaced by the
+  // equivalent runtime guard: resolveConfig normalizes every half-configured
+  // combination without throwing (the channel layer surfaces an error that
+  // consumers fail loudly on, never a bootstrap crash).
+  const combos = [
+    { reviewerSource: 'preset', reviewerProvider: 'deepseek' },                     // preset missing model
+    { reviewerSource: 'preset', reviewerModel: 'deepseek-v4-flash' },               // preset missing provider
+    { classifierSource: 'preset', classifierProvider: 'deepseek' },                 // classifier preset missing model
+    { reviewerSource: 'endpoint', endpointUrl: 'http://127.0.0.1:1/v1' },           // endpoint missing model
+    { reviewerSource: 'session', reviewerProvider: 'deepseek', reviewerModel: 'x' }, // session with leftovers
+    { reviewerSource: 'custom' },                                                    // stale retired enum
+  ]
+  for (const combo of combos) {
+    assert.doesNotThrow(() => resolveConfig({ timeoutAction: 'reject', ...combo }), `resolveConfig must not throw for ${JSON.stringify(combo)}`)
+  }
   const hostSrc = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
-  assert.ok(!hostSrc.includes('reviewerProvider'), 'reviewerProvider must be fully retired')
   assert.ok(!hostSrc.includes('classifierPair'), 'no classifier override pair may survive')
 })
 
