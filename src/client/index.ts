@@ -1022,7 +1022,11 @@ function SettingsSection() {
 
   const restoreTopDefaults = async () => {
     const base = draftOf(snapshot.value)
-    const defaults: Partial<Draft> = { enabled: 'on', autoSwitchPolicyToAsk: 'on', timeoutAction: 'reject', llmReviewScope: 'low-or-above', llmTakeoverScope: 'medium-or-below', defaultReviewMode: 'smart', showSessionPanel: 'off', aiButtonPosition: 'header' }
+    // autoSwitchPolicyToAsk is deliberately NOT restored: it has no UI
+    // control, so "restore defaults" flipping it would silently change a
+    // guard the user cannot see or undo from this card (its value is a
+    // host-level fact — the patch pins it true at install time).
+    const defaults: Partial<Draft> = { enabled: 'on', timeoutAction: 'reject', llmReviewScope: 'low-or-above', llmTakeoverScope: 'medium-or-below', defaultReviewMode: 'smart', showSessionPanel: 'off', aiButtonPosition: 'header' }
     const merged = { ...base, ...defaults }
     setDraft({ ...draft, ...defaults })
     setSaving(true); setError(''); setMessage('')
