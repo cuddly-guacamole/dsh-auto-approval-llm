@@ -1380,6 +1380,30 @@ test('feedback route: loopback-same-origin request is accepted (200 ok:true)', a
   assert.equal(consumed.value, true, 'body must be read on the accepted path')
 })
 
+test('feedback route: a callId the plugin never issued is a 200 no-op, not a write', async () => {
+  // E2-F1: the old handler wrote a timeout-feedback entry for ANY string
+  // callId, poisoning the bounded feedback maps with entries nothing will
+  // ever read. The ACK stays 200 (idempotent from the client's view, and the
+  // route must not leak which callIds exist), but the write only happens for
+  // a callId present in one of the approval-state maps. Structural anchor:
+  // the maps are module-private, so the guard itself is pinned on the lib.
+  const handler = captureFeedbackHandler()
+  const { res, state } = feedbackFakeRes()
+  const consumed = { value: false }
+  const req = feedbackReq('localhost:8080', '127.0.0.1', { callId: 'contract-forged-callid', outcome: 'rejected', auto: true }, consumed)
+  await handler(req, res)
+  assert.equal(state.statusCode, 200, 'the ACK stays a 200 no-op')
+  assert.deepEqual(JSON.parse(state.body), { ok: true })
+  const lib = readFileSync(fileURLToPath(new URL('../lib/index.js', import.meta.url)), 'utf8')
+  const guardAt = lib.indexOf('const knownCallId =')
+  assert.ok(guardAt > 0, 'the known-callId guard exists in the feedback handler')
+  const scope = lib.slice(guardAt, guardAt + 700)
+  for (const map of ['timeoutFeedback', 'decisionFeedback', 'resolvedCallIds', 'reviewStates', 'followExpiry', 'reviewVerdicts']) {
+    assert.ok(scope.includes(`${map}.has(`), `the guard consults ${map}`)
+  }
+  assert.ok(scope.includes('knownCallId && !decisionFeedback.has'), 'the timeout write only fires for known callIds')
+})
+
 test('feedback route: LAN peer forging Host+callId is rejected 403 with no state writes', async () => {
   const handler = captureFeedbackHandler()
   const { res, state } = feedbackFakeRes()

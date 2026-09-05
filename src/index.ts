@@ -1640,7 +1640,16 @@ export function installFeedbackRoute(ctx: any): void {
         // the timeout label when the ask was already resolved by the host (the
         // ACK landed after askHuman finished — relabeling it "no response"
         // would be wrong for both a human answer and an LLM takeover).
-        if (!decisionFeedback.has(body.callId) && !resolvedCallIds.has(body.callId)) {
+        // A callId the plugin never issued (or one whose state is fully swept)
+        // is a no-op, not a write: every legitimate ACK arrives for a live
+        // ask, a resolved ask, or a verdict, and writing feedback for a
+        // foreign id would only poison the bounded feedback maps with entries
+        // nothing will ever read. Still 200 — from the client the ACK is
+        // idempotent, and the route must not leak which callIds exist.
+        const knownCallId = timeoutFeedback.has(body.callId) || decisionFeedback.has(body.callId) ||
+          resolvedCallIds.has(body.callId) || reviewStates.has(body.callId) ||
+          followExpiry.has(body.callId) || reviewVerdicts.has(body.callId)
+        if (knownCallId && !decisionFeedback.has(body.callId) && !resolvedCallIds.has(body.callId)) {
           recordTimeoutFeedback(body.callId, `[dsh-auto-approval-llm] no response: auto-${actionText}`)
         }
         // The client has seen the follow phase and is answering: release the
