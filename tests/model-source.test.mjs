@@ -167,3 +167,12 @@ test('host wiring: the fast-decision lane records its own latency samples', () =
   assert.ok(sites.length >= 2, 'classifier latency pushes both the settled and the failed path')
   assert.ok(HOST_SRC.includes('classifierStart'), 'the classifier call is timed')
 })
+
+test('host wiring: LLM-adjudicated history records carry the wall-clock milliseconds', () => {
+  // 2026-09-05: history rows for LLM decisions show how long the LLM took —
+  // the classifier fast path measures the classify call; a deep-review
+  // takeover measures from the approval request to the claim resolution.
+  assert.ok(HOST_SRC.includes('llmTookMs: Date.now() - classifierStart'), 'the classifier record carries its elapsed classify time')
+  assert.ok(HOST_SRC.includes("source.startsWith('llm')"), 'the deep-review takeover derives its ms from the llm source')
+  assert.ok(HOST_SRC.includes('llmTookMs'), 'the field is emitted into history records')
+})

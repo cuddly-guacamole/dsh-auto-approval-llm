@@ -1283,6 +1283,11 @@ export interface HistoryRecord {
   /** Free-text reason for decisions that are NOT LLM-adjudicated (e.g. the
    * pre-execute hard fuse) — same sanitization path as `llmReason`. */
   reason?: string
+  /** Wall-clock milliseconds the LLM took to produce this decision: the
+   * fast-decision lane measures the classify call; a deep-review takeover
+   * measures from the approval request to the LLM's claim resolution. Only
+   * present on LLM-adjudicated records (2026-09-05). */
+  llmTookMs?: number
   /** Per-attempt failure trail when the review was retried (1-based `n`). */
   attempts?: RetryAttempt[]
   breaker?: boolean
@@ -3086,6 +3091,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
           llmDecision: decision.decision,
           llmRisk: riskTier,
           llmReason: decision.reason,
+          llmTookMs: Date.now() - classifierStart,
         })
       }
       if (decision.decision === 'allow') {
@@ -3505,12 +3511,16 @@ export function apply(ctx: Context, rawConfig: Config): void {
     })
     const requestAt = requestAtByKey.get(key) ?? null
     debugLog({ ev: 'resolve', callId: req.callId ?? null, outcome, timedOut, source, seconds: status?.seconds ?? null, elapsedMs: Date.now() - t0, requestAt, requestToResolveMs: requestAt !== null ? Date.now() - requestAt : null, llmDecision: (follow as any)?.decision ?? null })
+    const llmTookMs = typeof source === 'string' && source.startsWith('llm') && requestAt !== null
+      ? Date.now() - requestAt
+      : undefined
     const audited = pushHistory({
       sessionId: key,
       toolName: req.toolName,
       outcome,
       source,
       ...llmMeta,
+      ...(llmTookMs !== undefined ? { llmTookMs } : {}),
       ...(breaker ? { breaker: true, breakerReasons } : {}),
     })
     if (!audited) {

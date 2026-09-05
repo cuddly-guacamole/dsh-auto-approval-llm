@@ -122,3 +122,11 @@ test('client bundle: history latency renders per-lane lines for reviewer and cla
   assert.ok(client.includes('settings.history.llmLatencyClassifier'), 'classifier lane label key is referenced')
   assert.ok(client.includes('llmLatencyClassifier'), 'the classifier summary state is fetched')
 })
+
+test('client bundle: history rows show the LLM decision wall-clock when present', () => {
+  // 2026-09-05: records with llmTookMs render a " · LLM 123ms" suffix through
+  // the shared formatter; the formatter keeps sub-second values in ms.
+  assert.ok(client.includes('formatTookMs'), 'the took-ms formatter is bundled')
+  assert.ok(client.includes('llmTookMs ? ` · LLM ${formatTookMs(r.llmTookMs)}`'), 'history lines append the LLM wall-clock')
+  assert.ok(client.includes('ms < 1000 ? `${ms}ms`') || client.includes('ms < 1e3 ? `${ms}ms`'), 'sub-second values stay in milliseconds')
+})

@@ -510,6 +510,13 @@ function formatLatencySeconds(ms: number | null): string {
   return ms === null ? '–' : `${(ms / 1000).toFixed(1)}s`
 }
 
+// One-decision LLM wall-clock for the history line: sub-second stays in
+// milliseconds, longer reads as seconds (one decimal).
+function formatTookMs(ms: number | null): string {
+  if (ms === null || ms === undefined) return ''
+  return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`
+}
+
 // ── invalid-config detection (mirrors the host Config schema) ──────────────
 // Flags stored values that are present but violate the schema (wrong type,
 // unknown enum, out-of-range number). The settings card shows a red banner and
@@ -2093,6 +2100,7 @@ function SettingsSection() {
             React.createElement('div', null,
               t('record.line', { time: formatShortDateTime(r.at), toolName: r.toolName, source: r.source, outcome: r.outcome }) +
               (((r.reason ?? r.llmReason) ? ` — ${r.reason ?? r.llmReason}` : '')) +
+              ((r.llmTookMs ? ` · LLM ${formatTookMs(r.llmTookMs)}` : '')) +
               (r.breaker ? ' ' + t('record.breaker') : ''),
             ),
             r.breakerReasons?.length ? React.createElement('div', { style: { marginTop: 4, color: 'var(--dsw-alias-state-warn-primary)', whiteSpace: 'pre-line' } },
@@ -2472,6 +2480,7 @@ function SessionApprovalPanel(props: any) {
             },
               t('record.line', { time: formatShortDateTime(r.at), toolName: r.toolName, source: r.source, outcome: r.outcome }) +
               (((r.reason ?? r.llmReason) ? ` — ${r.reason ?? r.llmReason}` : '')) +
+              ((r.llmTookMs ? ` · LLM ${formatTookMs(r.llmTookMs)}` : '')) +
               (r.breaker ? ' ' + t('record.breaker') : ''),
             )),
             total > MAX_PANEL_RECORDS
@@ -2604,6 +2613,7 @@ function installFloatingApprovalButton(ctx: any): () => void {
         d.style.cssText = 'padding:6px 8px;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-1);margin-top:4px'
         d.textContent = t('record.line', { time: formatShortDateTime(r.at), toolName: r.toolName, source: r.source, outcome: r.outcome }) +
           (((r.reason ?? r.llmReason) ? ` — ${r.reason ?? r.llmReason}` : '')) +
+          ((r.llmTookMs ? ` · LLM ${formatTookMs(r.llmTookMs)}` : '')) +
           (r.breaker ? ' ' + t('record.breaker') : '')
         popup.appendChild(d)
       }
