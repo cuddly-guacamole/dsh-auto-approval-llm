@@ -2941,32 +2941,29 @@ test('web_fetch static allow: the audit trail records the sanitized destination'
   assert.ok(useAt > helperAt, 'the static-allow history carries the target')
   assert.ok(lib.slice(useAt - 600, useAt).includes("source: 'static-allow'"), 'wired into the static-allow audit entry')
 })
-test('/approval reset: bare form is session-scoped, all keeps the global hatch', () => {
+test('/approval-reset command pair: session-scoped reset, zero-argument global hatch', () => {
   // User decision (2026-09-05): one session's escape hatch must not silently
-  // clear a concurrent session's denial breaker. The bare reset deletes only
-  // the calling session's counter keys (the invocation carries the agent);
-  // `reset all` keeps the global clearing including in-flight approval state.
-  // Structural anchors on the compiled lib (the handler is a host closure).
+  // clear a concurrent session's denial breaker, and the GUI palette runs a
+  // picked command immediately with no argument entry — so the pair is two
+  // zero-argument commands (/approval-reset and /approval-reset-all) sharing
+  // one helper, with no dead argument parsing in between.
   const lib = readFileSync(fileURLToPath(new URL('../lib/index.js', import.meta.url)), 'utf8')
-  // anchor on the shared helper (the string '/approval reset' also appears in
-  // an unrelated registry comment)
   const helperAt = lib.indexOf('const resetAllSessions = () =>')
   assert.ok(helperAt > 0, 'the shared reset-all helper is defined')
   const helperScope = lib.slice(helperAt, helperAt + 500)
   assert.ok(helperScope.includes('denials.clear()'), 'the helper keeps the global clear')
   assert.ok(helperScope.includes('clearApprovalState()'), 'the helper clears the approval registry')
-  // The GUI palette runs a picked command immediately with no argument entry,
-  // so the global hatch is its own zero-argument command.
   const allCmdAt = lib.indexOf("name: 'approval-reset-all'")
-  assert.ok(allCmdAt > helperAt, 'the /approval-reset-all command is registered (GUI-reachable global hatch)')
+  assert.ok(allCmdAt > helperAt, 'the /approval-reset-all command is registered (global hatch)')
   assert.ok(lib.slice(allCmdAt, allCmdAt + 300).includes('resetAllSessions()'), 'the global command delegates to the shared helper')
-  const handlerAt = lib.indexOf("'/approval reset — reset this session breaker counters")
+  const handlerAt = lib.indexOf("name: 'approval-reset'")
   assert.ok(handlerAt > allCmdAt, 'the session-scoped command is registered after the global one')
   const scope = lib.slice(handlerAt, handlerAt + 2000)
-  assert.ok(scope.includes("arg === 'all'"), "the 'all' argument stays accepted for surfaces that can pass arguments")
-  assert.ok(scope.includes('return resetAllSessions()'), "the 'all' branch delegates to the shared helper")
-  assert.ok(scope.includes('denials.delete('), 'the bare form deletes only the session key')
-  assert.ok(!scope.includes('clearApprovalState()'), 'the bare form never touches the approval registry')
+  assert.ok(scope.includes("denials.delete("), 'the bare form deletes only the session key')
+  assert.ok(scope.includes('Cannot resolve the calling session'), 'an unresolvable session gets pointed at the global command')
+  assert.ok(scope.includes('/approval-reset-all'), 'the usage text names the global variant')
+  assert.ok(!scope.includes('clearApprovalState()'), 'the session form never touches the approval registry')
+  assert.ok(!lib.includes("name: 'approval'"), 'the old argument-taking /approval command is gone')
 })
 test('review-mode persistence: failures are surfaced, not swallowed', () => {
   // Best-effort persistence is by design (the mode still applies in-process),
