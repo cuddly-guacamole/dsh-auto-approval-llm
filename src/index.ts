@@ -883,7 +883,11 @@ export function onboardingNoticeText(timeoutAction: string, lang: 'zh' | 'en' = 
 // (the call was rejected or cancelled, so "approved X" would be a lie).
 // The originating agent travels with the entry: it is the exact agent whose
 // turn the notice belongs to, and both flush points hold only the session.
-const pendingNotices = new Map<string, Map<string, { text: string; seen: boolean; agent: any }>>()
+// A callId carries a LIST of notices, not one: the first-auto-session
+// onboarding queues under the same callId the pre-execute decision may then
+// deny with reject-guidance — one-entry-per-callId let the guidance overwrite
+// the onboarding and it was never delivered.
+const pendingNotices = new Map<string, Map<string, Array<{ text: string; seen: boolean; agent: any }>>>()
 
 function queueNotice(agent: any, callId: string, text: string): void {
   const session = agent?.session
@@ -893,7 +897,9 @@ function queueNotice(agent: any, callId: string, text: string): void {
     byCall = new Map()
     pendingNotices.set(session.id, byCall)
   }
-  byCall.set(callId, { text, seen: false, agent })
+  const list = byCall.get(callId)
+  if (list) list.push({ text, seen: false, agent })
+  else byCall.set(callId, [{ text, seen: false, agent }])
 }
 
 // ── rejectGuidance: short whitelist-only guidance injected on rejection ──
@@ -1021,17 +1027,19 @@ export function maybeInjectRejectGuidance(agent: unknown, callId: unknown, confi
 function flushNotice(session: any, callId: string): void {
   const byCall = pendingNotices.get(session.id)
   if (!byCall) return
-  const entry = byCall.get(callId)
-  if (entry === undefined) return
+  const entries = byCall.get(callId)
+  if (entries === undefined) return
   byCall.delete(callId)
-  if (!entry.seen) {
-    // The tool never produced a result (rejected/cancelled): a notice about a
-    // call that never ran would only mislead the model, so it stays on the
-    // console and never reaches the conversation.
-    console.log(`[dsh-auto-approval-llm] (工具未执行，仅控制台通知) ${entry.text}`)
-    return
+  for (const entry of entries) {
+    if (!entry.seen) {
+      // The tool never produced a result (rejected/cancelled): a notice about
+      // a call that never ran would only mislead the model, so it stays on the
+      // console and never reaches the conversation.
+      console.log(`[dsh-auto-approval-llm] (工具未执行，仅控制台通知) ${entry.text}`)
+      continue
+    }
+    injectNotice(session, entry.agent, entry.text)
   }
-  injectNotice(session, entry.agent, entry.text)
 }
 
 function flushNotices(session: any): void {
@@ -1041,9 +1049,9 @@ function flushNotices(session: any): void {
     return
   }
   pendingNotices.delete(session.id)
-  const queued = [...byCall.values()]
+  const queued = [...byCall.values()].flat()
   debugLog({ ev: 'onboarding-flush', sessionId: session?.id ?? null, queued: queued.length, seen: queued.filter((e) => e.seen).length, dropped: queued.filter((e) => !e.seen).length })
-  for (const { text, seen, agent } of byCall.values()) {
+  for (const { text, seen, agent } of queued) {
     if (!seen) {
       // The tool never produced a result (rejected/cancelled): a notice about
       // a call that never ran would only mislead the model, so it stays on
@@ -1097,9 +1105,9 @@ function watchNotices(ctx: any, getConfig: () => Config): void {
     if (!session || !callId) return
     const byCall = pendingNotices.get(session.id)
     if (!byCall) return
-    const entry = byCall.get(callId)
-    if (entry) entry.seen = true
-    debugLog({ ev: 'onboarding-event', via: 'tools/result', sessionId: session.id, callId, found: !!entry, pending: byCall.size })
+    const entries = byCall.get(callId)
+    if (entries) for (const entry of entries) entry.seen = true
+    debugLog({ ev: 'onboarding-event', via: 'tools/result', sessionId: session.id, callId, found: !!entries, pending: byCall.size })
     flushNotice(session, callId)
   })
   ctx.on('session/event', (session: any, event: any) => {
@@ -1118,8 +1126,8 @@ function watchNotices(ctx: any, getConfig: () => Config): void {
     if (!pendingNotices.has(session?.id)) return
     if (event?.type === 'tool/result') {
       const callId = event.data?.message?.source?.callId
-      const entry = pendingNotices.get(session.id)?.get(callId)
-      if (entry) entry.seen = true
+      const entries = pendingNotices.get(session.id)?.get(callId)
+      if (entries) for (const entry of entries) entry.seen = true
       // Same parallel-safe dequeue as the tools/result branch: only this
       // result's notice leaves the queue; siblings wait for their own results.
       if (typeof callId === 'string') flushNotice(session, callId)

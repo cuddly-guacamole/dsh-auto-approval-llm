@@ -3535,6 +3535,21 @@ test('onboarding: first AUTO session queues once, repeats never re-queue', () =>
   assert.equal(markFirstAutoSessionNotice('sess-onb-a2'), false)
 })
 
+test('onboarding: a callId carries a notice list — reject-guidance must not overwrite the onboarding entry', () => {
+  // The first-auto-session onboarding queues under the same callId the
+  // pre-execute decision may then deny with reject-guidance; one entry per
+  // callId let the later queueNotice replace the onboarding and it was never
+  // delivered. queueNotice must append, and both flush paths must deliver
+  // every notice of the callId. Structural anchor on the compiled lib (the
+  // queue is module-private): the old single-entry overwrite shape must be
+  // gone, the append shape present.
+  const lib = readFileSync(fileURLToPath(new URL('../lib/index.js', import.meta.url)), 'utf8')
+  assert.ok(lib.includes('list.push({ text, seen: false, agent })'), 'queueNotice must append to the callId list')
+  assert.ok(!lib.includes('byCall.set(callId, { text, seen: false, agent })'), 'the single-entry overwrite form must be gone')
+  assert.ok(lib.split('entry.seen = true').length - 1 >= 2, 'seen-marking must cover every entry of the callId (both result paths)')
+  assert.ok(lib.includes('const queued = [...byCall.values()].flat()'), 'the step/end flush must flatten the per-callId lists')
+})
+
 test('onboarding: timeout label follows the live timeoutAction (zh/en)', () => {
   assert.equal(onboardingTimeoutLabel('reject'), '拒绝')
   assert.equal(onboardingTimeoutLabel('allow'), '自动放行')
