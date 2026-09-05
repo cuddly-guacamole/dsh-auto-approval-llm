@@ -46,3 +46,16 @@ test('timer card reset: breakerAntiHijackMs is not zeroed', () => {
   assert.ok(!/breakerAntiHijackMs\s*:/.test(body), 'resetTimerCard must not assign breakerAntiHijackMs')
   assert.ok(src.includes('breakerAntiHijackMs is deliberately NOT reset'), 'the why-comment guards against re-adding the key')
 })
+
+test('enabled setting: honest label + hint (it gates answering, not the plugin)', () => {
+  // "Enable plugin" promised a master switch while config.enabled only gates
+  // the answerer (pre-execute/guard keep running with it off). The label now
+  // says "answering" and the row carries a hint stating the real scope.
+  const src = readFileSync(new URL('../src/client/index.ts', import.meta.url), 'utf8')
+  assert.match(src, /row\(t\('settings\.enable'\),[\s\S]*?t\('settings\.enableHint'\)/, 'the enabled row must carry the hint')
+  const locale = readFileSync(new URL('../src/client/locale.ts', import.meta.url), 'utf8')
+  for (const needle of ["'settings.enable': '自动审批应答'", "'settings.enableHint': '仅控制是否自动应答审批询问", "'settings.enable': 'Auto-approval answering'", "'settings.enableHint': 'Only gates auto-answering"]) {
+    assert.ok(locale.includes(needle), `locale must carry: ${needle}`)
+  }
+  assert.ok(!locale.includes("'settings.enable': '启用插件'"), 'the master-switch label must be gone')
+})

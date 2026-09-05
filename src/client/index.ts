@@ -1377,7 +1377,7 @@ function SettingsSection() {
       value: draft.enabled,
       options: onOffOptions(),
       onChange: (v: string) => { void instantSaveKey('enabled', v as 'on' | 'off') },
-    })),
+    }), t('settings.enableHint')),
     row(t('settings.timeoutAction'), React.createElement(CapsuleSelect, {
       value: draft.timeoutAction,
       options: timeoutOptions(),
