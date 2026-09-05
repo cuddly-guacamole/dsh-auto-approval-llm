@@ -3778,6 +3778,38 @@ test('onboarding locale: budget — onboarding/group key family stays ≤ 8', ()
   assert.ok(count <= 8, `onboarding locale keys ${count} must be ≤ 8`)
 })
 
+test('locale: retired UI keys stay deleted from both dicts and the compiled bundle', () => {
+  // The provider-dropdown family, the old provider-probe flow, and the
+  // host-injected timeout strings lost their last UI consumer with the
+  // reviewerProvider retirement; each key was grepped against the client
+  // sources, the compiled bundle, and every dynamic t() template family
+  // before deletion. This pins them as gone.
+  const retiredKeys = [
+    'settings.reviewer.provider',
+    'settings.reviewer.providerPlaceholder',
+    'settings.reviewer.model',
+    'settings.reviewer.followSession',
+    'settings.reviewer.loadingModels',
+    'settings.reviewer.modelPlaceholder',
+    'settings.reviewer.hint',
+    'test.testing',
+    'test.success',
+    'test.modelNotFound',
+    'auto.timeout',
+    'auto.allow',
+    'auto.reject',
+  ]
+  const localeSrc = readFileSync(new URL('../src/client/locale.ts', import.meta.url), 'utf8')
+  const zhSection = localeSrc.split('export const en')[0] ?? ''
+  const enSection = localeSrc.split('export const en')[1] ?? ''
+  const bundle = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
+  for (const key of retiredKeys) {
+    assert.ok(!zhSection.includes(`'${key}':`), `zh dict must not carry the retired ${key}`)
+    assert.ok(!enSection.includes(`'${key}':`), `en dict must not carry the retired ${key}`)
+    assert.ok(!bundle.includes(`"${key}"`), `compiled bundle must not carry the retired ${key}`)
+  }
+})
+
 test('onboarding locale: B-section copy exists host-side (i18n exemption)', () => {
   // Host notices deliberately bypass locale.ts (page-compromise fence);
   // anchor the B-section copy in the compiled host instead.
