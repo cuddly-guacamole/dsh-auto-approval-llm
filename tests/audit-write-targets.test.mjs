@@ -50,3 +50,36 @@ test('assessShell: static write targets keep their static allow (no over-block)'
     assert.equal(shell(command).decision, 'allow', `${command} stays static`)
   }
 })
+
+// ── explicit operands ride the same destructive fuse as redirections ────────
+// The redirection branch hard-denies `echo x > ~/.ssh/authorized_keys`; the
+// operand branches (cp/mv/install/tee/sed -i/truncate/dd) previously only
+// fused runtime-state and DSH_HOME targets, so the same destination arrived
+// as an LLM-answerable ask instead of the unconditional deny.
+test('assessShell: explicit critical-path write operands hard-deny across write-vector heads', () => {
+  for (const command of [
+    'cp ./x ~/.ssh/authorized_keys',
+    'mv ./x ~/.ssh/authorized_keys',
+    'install ./x ~/.ssh/authorized_keys',
+    'tee ~/.ssh/authorized_keys ./x',
+    'sed -i s/a/b/ ~/.ssh/authorized_keys',
+    'truncate -s 0 ~/.ssh/authorized_keys',
+    'cp ./x ~/.bashrc',
+    'truncate -s 0 ~/.bashrc',
+  ]) {
+    const r = shell(command)
+    assert.equal(r.decision, 'deny', `${command} must hard-deny like the redirection form`)
+    assert.equal(r.classifierEligible, false, `${command} must never reach the classifier`)
+  }
+})
+
+// Boundary note (deliberate): workspace CONTENT writes stay routine while
+// PATH deletion is gated. Truncation is not special-cased into an ask because
+// the same destruction rides `tee file < /dev/null` or `cp /dev/null file` —
+// gating truncate alone would only move the operator, not close the class.
+test('assessShell: workspace content-write vs path deletion boundary stays explicit', () => {
+  assert.equal(shell('truncate -s 0 ./log.bin').decision, 'allow', 'emptying workspace content is a routine write')
+  assert.equal(shell('tee ./log.bin').decision, 'allow', 'the equivalent overwrite rides the same routine class')
+  const deletion = shell('rm ./log.bin')
+  assert.notEqual(deletion.decision, 'allow', 'path deletion of a pre-session file stays gated')
+})

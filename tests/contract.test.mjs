@@ -2046,7 +2046,7 @@ test('assessShell: write heads on ordinary workspace files ride the same flow as
   assert.equal(assessShell('tee out.txt', 'bash', roots, HO(), undefined).decision, bareRef.decision)
   assert.equal(assessShell('truncate -s 0 log.bin', 'bash', roots, HO(), undefined).decision, bareRef.decision)
 })
-test('assessShell: write heads onto sensitive targets take the protected path like cp', () => {
+test('assessShell: write heads split by target class — protected asks, critical hard-denies', () => {
   const roots = { workspace: 'C:/ws', home: 'C:/Users/u', dshHome: 'C:/Users/u/.dsh', tempRoots: [], allowedDshSubpaths: [] }
   const envRef = assessShell('cp k.txt .env', 'bash', roots, HO(), undefined)
   assert.equal(envRef.decision, 'ask')
@@ -2059,9 +2059,11 @@ test('assessShell: write heads onto sensitive targets take the protected path li
       cmd,
     )
   }
+  // A credential-critical destination is fused at the hard-deny plane — the
+  // same verdict the redirection form gets — not an answerable ask.
   const sshRef = assessShell('cp k.txt C:/Users/u/.ssh/config', 'bash', roots, HO(), undefined)
-  assert.equal(sshRef.decision, 'ask')
-  assert.equal(sshRef.classifierEligible, true)
+  assert.equal(sshRef.decision, 'deny')
+  assert.equal(sshRef.classifierEligible, false)
   for (const cmd of ['tee C:/Users/u/.ssh/config', 'dd if=k of=C:/Users/u/.ssh/config', 'install -m 644 k.txt C:/Users/u/.ssh/id_rsa']) {
     const verdict = assessShell(cmd, 'bash', roots, HO(), undefined)
     assert.deepEqual(

@@ -1027,6 +1027,12 @@ function segmentHardDenyReason(segment, shell, roots) {
                 const dshReason = shellWriteToDshHomeDenied(normalized, roots);
                 if (dshReason !== undefined)
                     return `${name} targets ${dshReason}`;
+                // Same destructive fuse the redirection and deletion branches
+                // apply: an operand spelling a credential-critical or system
+                // path must hard-deny, not decay into an answerable ask.
+                const reason = hardDestructiveTargetReason(normalized, roots);
+                if (reason !== undefined)
+                    return `${name} targets ${reason}`;
             }
         }
     }
@@ -1221,6 +1227,13 @@ function classifyEffectiveCommand(name, words, segment, shell, roots, artifacts,
             : allowed('create exact project-local artifacts', creation.paths);
     }
     if (shell === 'bash' && (['cp', 'mv'].includes(name) || writesThroughOperands(name, words))) {
+        // Boundary note (deliberate, do not "fix"): inside the routine roots a
+        // CONTENT write is routine — overwrite (tee/cp/redirect) and emptying
+        // (truncate -s 0) alike — while PATH deletion is gated. Truncating a
+        // pre-existing file therefore stays a static allow; gating truncate
+        // alone would be a sham boundary because the same destruction rides
+        // `tee file < /dev/null` or `cp /dev/null file`. Path deletion is the
+        // only irreversible-by-content-means operation and keeps its ask.
         // The write destinations must be statically readable before a static
         // allow: a dynamic/globbed destination (e.g. `cp ./x "$DEST"` or
         // `tee ./a "$FOO"`) cannot be proven inside the routine roots — and a
