@@ -59,3 +59,19 @@ test('enabled setting: honest label + hint (it gates answering, not the plugin)'
   }
   assert.ok(!locale.includes("'settings.enable': '启用插件'"), 'the master-switch label must be gone')
 })
+
+test('enabled gate: off means fall through to the official panel, nothing else', () => {
+  // Behavior anchor for the honest-label semantics: config.enabled gates ONLY
+  // the auto-answerer. The gate must be the first check inside the answerer
+  // handler and its whole body must be the fall-through to next() — the
+  // official approval UI — so a disabled plugin degrades to the host, never
+  // to a silent deny or a runaway auto-answer.
+  const host = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
+  const handlerAt = host.indexOf("anyCtx.on('approval/request'")
+  assert.ok(handlerAt !== -1, 'the answerer registration exists')
+  const scope = host.slice(handlerAt, handlerAt + 300)
+  const gateAt = scope.indexOf('if (!config.enabled)')
+  assert.ok(gateAt !== -1, 'the enabled gate is the answerer entry check')
+  const tail = scope.slice(gateAt, gateAt + 80)
+  assert.ok(/if \(!config\.enabled\)\s*\n\s*return next\(\);/.test(tail), 'the gate body is exactly the official-panel fall-through')
+})
