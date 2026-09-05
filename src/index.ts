@@ -3741,22 +3741,43 @@ export function apply(ctx: Context, rawConfig: Config): void {
 
     if (staticRisk === 'LOW') {
       if (!llmReviews) {
-        // An auto-directive LOW that reaches this branch without an LLM
-        // reviewer is a category-driven allow: label the history honestly
-        // (G6/G11) and never show a countdown.
-        const categoryAllow = classified.directive === 'auto'
-        const audited = pushHistory({
-          sessionId: sessionKey,
-          toolName,
-          outcome: 'allowed-once',
-          source: categoryAllow ? 'category-allow' : 'auto-allow',
-          ...(categoryAllow ? { category: classified.category, categoryDecision: 'auto', mode: classified.mode } : {}),
-        })
-        if (!audited) {
-          denyOnAuditFailure(req.callId)
-          return 'rejected'
+        // Two LOW shapes reach this branch without a reviewer, and only one
+        // of them may auto-allow (user decision, 2026-09-05):
+        // - a NATIVE allow assessment (decision:'allow'; those are always
+        //   classifierEligible:false) is the documented low-risk channel the
+        //   relaxed/strict presets and the onboarding text promise;
+        // - a COMPRESSED LOW is the only way an 'ask' assessment can sit at
+        //   LOW here (applyCategoryDirective compresses ask+eligible to LOW
+        //   under an auto directive). Pre-execute failed closed — the
+        //   classifier was unavailable or the category wanted a look — and
+        //   letting that silently allow would invert the fail-closed ask
+        //   whenever review is absent (route missing or scope excludes LOW).
+        //   It goes back to a human countdown with the LOW timeout action
+        //   instead. Learning still short-circuits above for confirmed
+        //   signatures, so the learned-allow channel is unchanged.
+        const compressed = classified.assessment?.decision === 'ask'
+        if (!compressed) {
+          const audited = pushHistory({
+            sessionId: sessionKey,
+            toolName,
+            outcome: 'allowed-once',
+            source: 'auto-allow',
+          })
+          if (!audited) {
+            denyOnAuditFailure(req.callId)
+            return 'rejected'
+          }
+          return 'allowed-once'
         }
-        return 'allowed-once'
+        const fallback = riskTimedOutAction('LOW', config.timeoutAction, autoUnattended)
+        const status: ReviewStatus = {
+          risk: staticRisk,
+          phase: 'countdown',
+          action: fallback,
+          seconds,
+          ...(fallback === 'reject' ? { feedback: REVIEW_TIMEOUT_NOTICE } : {}),
+        }
+        return askHuman(req, undefined, next, false, status, undefined, undefined, learnableContextFor(req, args, classified))
       }
       const lowHandle: RaceHumanHandle = { claim: () => {} }
       const lowStatus: ReviewStatus = {

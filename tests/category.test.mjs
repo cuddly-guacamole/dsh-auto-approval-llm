@@ -606,7 +606,7 @@ test('T74: the pre-execute category-ask branch precedes the classifier call', ()
   assert.ok(askIdx < classifyIdx, 'a category ask returns before the LLM classifier fast path')
 })
 
-test('T65: answerer decision order follows Q2 (denyList → category-deny → allowlist → humanOnly → manual → breaker → category-allow)', () => {
+test('T65: answerer decision order follows Q2 (denyList → category-deny → hard-locked gate → allowlist → humanOnly → manual → breaker → auto-allow)', () => {
   const answererStart = HOST_SRC.indexOf("ev: 'request'")
   assert.ok(answererStart !== -1)
   const answerer = HOST_SRC.slice(answererStart)
@@ -614,11 +614,13 @@ test('T65: answerer decision order follows Q2 (denyList → category-deny → al
   const chain = [
     "staticDecision.kind === 'reject'",
     "'category-deny'",
+    // the hard-locked gate rides the allow condition itself (same line), so
+    // its order is pinned by audit-preexecute-lists rather than here
     "staticDecision.kind === 'allow'",
     "staticDecision.kind === 'ask-human'",
     "reviewMode === 'manual'",
     'breakerTripped(',
-    "'category-allow'",
+    "'auto-allow'",
   ]
   let prev = -1
   for (const needle of chain) {
@@ -627,6 +629,24 @@ test('T65: answerer decision order follows Q2 (denyList → category-deny → al
     assert.ok(idx > prev, `order broken at ${needle}: ${idx} not after ${prev}`)
     prev = idx
   }
+})
+
+test('S1: a compressed LOW cannot auto-allow without a reviewer; a native allow still does', () => {
+  // User decision (2026-09-05): the only way an 'ask' assessment sits at LOW
+  // is the category-auto compression (ask + classifierEligible). With review
+  // absent (route missing or scope excludes LOW), pre-execute's fail-closed
+  // ask used to be inverted into a silent allowed-once; it now goes back to
+  // a countdown. A native allow assessment keeps the documented low-risk
+  // direct channel. Structural anchors on the compiled lib (the branch is a
+  // host closure): the discrimination reads the assessment decision, the
+  // compressed path builds a countdown, the native path keeps auto-allow.
+  const lowAt = HOST_SRC.indexOf("if (staticRisk === 'LOW')")
+  assert.ok(lowAt > 0, 'the LOW branch is wired')
+  const scope = HOST_SRC.slice(lowAt, HOST_SRC.indexOf("if (staticRisk === 'LOW'", lowAt + 10) === -1 ? HOST_SRC.indexOf("'MEDIUM'", lowAt) : HOST_SRC.indexOf("if (staticRisk === 'LOW'", lowAt + 10))
+  assert.ok(scope.includes("classified.assessment?.decision === 'ask'"), 'the branch must discriminate compressed from native LOW')
+  assert.ok(scope.includes("riskTimedOutAction('LOW'"), 'the compressed path falls to the LOW timeout action')
+  assert.ok(scope.includes("source: 'auto-allow'"), 'the native path keeps the auto-allow channel')
+  assert.ok(!HOST_SRC.includes("'category-allow'"), 'the conflated category-allow label is gone from the answerer')
 })
 
 test('T66: rootsFor reads category mode/trustedDirs from the live config', () => {
@@ -743,12 +763,14 @@ test('T146: the learning query sits between the terminal policy-deny and risk ap
 test('LP3: exactly the four countdown hooks construct a learnable context', () => {
   // 2026-09-04 contract extension (user-approved): the direct-human-approval
   // channel (dsa_request_user) builds ONE target learnable in the answerer
-  // before the learning query, so the total is 6 = four countdown hooks +
-  // one query-side gate inside learnAttempt + one direct-human target. The
-  // core invariant is unchanged: ordinary status-less asks never construct
-  // one, and the four qualified countdown hooks keep their positions.
+  // before the learning query. 2026-09-05 (user decision): the compressed-LOW
+  // countdown (S1 close-in) joins the qualified countdown hooks — a human
+  // allow on it learns exactly like the ordinary LOW countdown. The total is
+  // 7 = five countdown hooks + one query-side gate inside learnAttempt + one
+  // direct-human target. The core invariant is unchanged: ordinary status-
+  // less asks never construct one.
   const all = [...HOST_SRC.matchAll(/learnableContextFor\(/g)]
-  assert.equal(all.length, 6, 'four record-time hooks + one query-side gate inside learnAttempt + one direct-human target')
+  assert.equal(all.length, 7, 'five record-time hooks + one query-side gate inside learnAttempt + one direct-human target')
   const answererStart = HOST_SRC.indexOf("ev: 'request'")
   const slotY = HOST_SRC.indexOf('await learnAttempt(', answererStart)
   const preSlot = HOST_SRC.slice(answererStart, slotY)
@@ -757,19 +779,20 @@ test('LP3: exactly the four countdown hooks construct a learnable context', () =
   assert.equal(preHits.length, 1, 'only the direct-human target construction sits before the learning query')
   const preHitGlobal = answererStart + preHits[0].index
   assert.ok(preHitGlobal > HOST_SRC.indexOf('direct-human-approval channel'), 'the sole pre-slot construction belongs to the direct-human channel')
-  assert.equal([...postSlot.matchAll(/, learnableContextFor\(/g)].length, 4, 'all four live in the countdown ask sites')
-  // 13 askHuman call sites: the four learnable countdown hooks, the LOCKED
-  // hard-reject countdown (added 2026-08-27, intentionally learnable-less),
-  // the hard-locked allowlist gate countdown (2026-09-05 user decision, also
-  // learnable-less), the six status-less asks (rules human / humanOnly /
-  // category-ask non-locked / manual / breaker / status-less fallbacks), and
-  // the direct-human channel ask (2026-09-04, learns the target explicitly
-  // after resolution).
-  assert.equal([...HOST_SRC.matchAll(/askHuman\(/g)].length, 13, 'closed ask-site enum: 6 countdown + 6 status-less + 1 direct-human')
+  assert.equal([...postSlot.matchAll(/, learnableContextFor\(/g)].length, 5, 'all five live in the countdown ask sites')
+  // 14 askHuman call sites: the five learnable countdown hooks (LOW llm /
+  // compressed-LOW close-in / MEDIUM / HIGH + the 2026-09-05 additions below),
+  // the LOCKED hard-reject countdown (added 2026-08-27, intentionally
+  // learnable-less), the hard-locked allowlist gate countdown (2026-09-05
+  // user decision, also learnable-less), the six status-less asks (rules
+  // human / humanOnly / category-ask non-locked / manual / breaker /
+  // status-less fallbacks), and the direct-human channel ask (2026-09-04,
+  // learns the target explicitly after resolution).
+  assert.equal([...HOST_SRC.matchAll(/askHuman\(/g)].length, 14, 'closed ask-site enum: 7 countdown + 6 status-less + 1 direct-human')
   const hookIndexes = [...postSlot.matchAll(/, learnableContextFor\(/g)].map((m) => m.index)
   const highAnchor = postSlot.indexOf('// HIGH')
   assert.ok(highAnchor !== -1, 'the HIGH branch marker survives compilation')
-  assert.ok(hookIndexes[3] > highAnchor, 'the fourth qualified hook lives in the HIGH branch')
+  assert.ok(hookIndexes[4] > highAnchor, 'the fifth qualified hook lives in the HIGH branch')
 })
 
 test('LP12b: the host schema declares both learning keys with fail-closed defaults', () => {
