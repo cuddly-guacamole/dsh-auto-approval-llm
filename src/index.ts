@@ -227,9 +227,11 @@ export const Config: z<Config> = z.object({
   // instead of throwing, mirroring the categoryPolicy schema/decision split.
   learningEnabled: z.boolean().default(false),
   learningThreshold: z.number().default(THRESHOLD_DEFAULTS.learningThreshold),
-  // Direct-human-approval channel: fail-closed default (off). Behavior is
-  // gated live on this key — the tool stays registered but the answerer
-  // special case only routes when enabled, so no HMR/restart semantic flip.
+  // Direct-human-approval channel: fail-closed default (off). Two layers:
+  // the tool is REGISTERED only when the switch is on at boot (tool sets are
+  // not hot-swappable — enabling needs a restart), while the answerer and
+  // execute checks read the switch LIVE, so turning it off stops the channel
+  // at once and a boot-time-registered tool routes only while enabled.
   directHumanEnabled: z.boolean().default(false),
 })
 

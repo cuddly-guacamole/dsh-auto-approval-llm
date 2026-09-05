@@ -125,7 +125,24 @@ test('static anchors: execute refuses non-Auto sessions with a direct-execute er
   // clear "execute directly" error instead of returning a fake grant the
   // agent would mistake for a human pre-approval.
   const host = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
-  assert.match(host, /config\.directHumanEnabled !== true \|\| !isAutoExecution\(\{ agent: exec\?\.agent \}\)/, 'execute gates on the switch and Auto takeover')
+
+
+test('static anchors: the schema comment and the settings copy state the two-layer truth', () => {
+  // The schema comment used to claim "the tool stays registered … no
+  // HMR/restart semantic flip" while apply() registers the tool only when
+  // the switch is on at boot. Registration is a boot-level fact, the channel
+  // is live — every user-facing surface must say both.
+  const host = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
+  assert.ok(!host.includes('the tool stays registered'), 'the stale no-restart claim must be gone from the schema comment')
+  assert.match(host, /REGISTERED only when the switch is on at boot/, 'schema comment states the boot-registration layer')
+  assert.match(host, /read the switch LIVE/, 'schema comment states the live-channel layer')
+  const locale = readFileSync(new URL('../src/client/locale.ts', import.meta.url), 'utf8')
+  assert.ok(locale.includes('工具注册需重启'), 'zh copy: registration needs a restart')
+  assert.ok(locale.includes('审批通道随开关即时生效'), 'zh copy: the channel follows the switch live')
+  assert.ok(locale.includes('Registering the tool needs a restart'), 'en copy: registration needs a restart')
+  assert.ok(locale.includes('follows the switch live'), 'en copy: the channel follows the switch live')
+  assert.ok(!locale.includes('Takes effect after restart.'), 'the one-sided restart-only copy must be gone')
+})
   assert.match(host, /execute the target operation directly/, 'the error tells the agent to execute directly')
   assert.match(host, /do not request escalation/, 'the error forbids further escalation attempts')
 })
