@@ -17,6 +17,7 @@ import {
   categoryDirective, categoryDirectiveFor, applyCategoryDirective,
   isEffectiveRoutine, sensitiveBasenameAt, realpathCriticalReason,
 } from '../lib/auto/category.js'
+import { LEARNABLE_HOOK_SITES } from '../lib/index.js'
 import { isWithin, normalizePath, runtimeStateTargetInZone } from '../lib/auto/paths.js'
 import { assessShell, hardDenyShellReason, runtimeStateReadHits } from '../lib/auto/shell.js'
 import { assessTool } from '../lib/auto/policy.js'
@@ -773,17 +774,32 @@ test('T146: the learning query sits between the terminal policy-deny and risk ap
   assert.ok(learnedIdx < routeIdx, 'the learning query comes BEFORE the risk branches consume the decision')
 })
 
-test('LP3: exactly the four countdown hooks construct a learnable context', () => {
+test('LP3: exactly the registered learnable sites construct a learnable context', () => {
   // 2026-09-04 contract extension (user-approved): the direct-human-approval
   // channel (dsa_request_user) builds ONE target learnable in the answerer
   // before the learning query. 2026-09-05 (user decision): the compressed-LOW
   // countdown (S1 close-in) joins the qualified countdown hooks — a human
-  // allow on it learns exactly like the ordinary LOW countdown. The total is
-  // 7 = five countdown hooks + one query-side gate inside learnAttempt + one
-  // direct-human target. The core invariant is unchanged: ordinary status-
-  // less asks never construct one.
+  // allow on it learns exactly like the ordinary LOW countdown.
+  // The site table (LEARNABLE_HOOK_SITES) is the single source: every listed
+  // label must appear at exactly one learnableContextFor call site and the
+  // call-site count must equal the table, so a new hook registers in one
+  // place and an unregistered construction cannot slip through. The core
+  // invariant is unchanged: ordinary status-less asks never construct one.
   const all = [...HOST_SRC.matchAll(/learnableContextFor\(/g)]
-  assert.equal(all.length, 7, 'five record-time hooks + one query-side gate inside learnAttempt + one direct-human target')
+  assert.equal(all.length, LEARNABLE_HOOK_SITES.length,
+    `every construction site carries a registered label (table has ${LEARNABLE_HOOK_SITES.length})`)
+  for (const site of LEARNABLE_HOOK_SITES) {
+    const needle = `'${site}')`
+    const hits = [...HOST_SRC.matchAll(new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'))]
+    assert.equal(hits.length, 1, `the ${site} label is registered exactly once, at its call site`)
+  }
+  // Adjacency: each label terminates a learnableContextFor call (the call
+  // opener appears after the previous statement, not anywhere earlier).
+  for (const site of LEARNABLE_HOOK_SITES) {
+    const labelAt = HOST_SRC.indexOf(`'${site}')`)
+    const callAt = HOST_SRC.lastIndexOf('learnableContextFor(', labelAt)
+    assert.ok(callAt !== -1 && labelAt - callAt < 200, `the ${site} label sits inside its learnableContextFor call`)
+  }
   const answererStart = HOST_SRC.indexOf("ev: 'request'")
   const slotY = HOST_SRC.indexOf('await learnAttempt(', answererStart)
   const preSlot = HOST_SRC.slice(answererStart, slotY)
@@ -792,7 +808,9 @@ test('LP3: exactly the four countdown hooks construct a learnable context', () =
   assert.equal(preHits.length, 1, 'only the direct-human target construction sits before the learning query')
   const preHitGlobal = answererStart + preHits[0].index
   assert.ok(preHitGlobal > HOST_SRC.indexOf('direct-human-approval channel'), 'the sole pre-slot construction belongs to the direct-human channel')
-  assert.equal([...postSlot.matchAll(/, learnableContextFor\(/g)].length, 5, 'all five live in the countdown ask sites')
+  assert.ok(preSlot.includes("'direct-human-target'"), 'the pre-slot site is the registered direct-human target')
+  assert.equal([...postSlot.matchAll(/, learnableContextFor\(/g)].length,
+    LEARNABLE_HOOK_SITES.length - 2, 'the countdown ask sites carry every hook but the query gate and the direct-human target')
   // 14 askHuman call sites: the five learnable countdown hooks (LOW llm /
   // compressed-LOW close-in / MEDIUM / HIGH + the 2026-09-05 additions below),
   // the LOCKED hard-reject countdown (added 2026-08-27, intentionally
@@ -807,7 +825,7 @@ test('LP3: exactly the four countdown hooks construct a learnable context', () =
   // it), not by a comment that a reformatter or minifier could drop.
   const highAnchor = postSlot.indexOf("riskTimedOutAction('HIGH', config.timeoutAction, autoUnattended)")
   assert.ok(highAnchor !== -1, 'the HIGH branch timeout call survives compilation')
-  assert.ok(hookIndexes[4] > highAnchor, 'the fifth qualified hook lives in the HIGH branch')
+  assert.ok(postSlot.slice(highAnchor).includes("'high-countdown'"), 'the HIGH branch carries the registered high-countdown hook')
 })
 
 test('LP12b: the host schema declares both learning keys with fail-closed defaults', () => {

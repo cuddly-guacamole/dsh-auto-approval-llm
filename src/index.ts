@@ -2218,6 +2218,24 @@ export function autoPermissionAuthority(exec: any, parentAgent: any, permissionP
   return undefined
 }
 
+/**
+ * The enumerated ask sites that construct a learnable context. This table is
+ * the single source for the LP3 contract test: a new learnable hook means one
+ * call site carrying its label here plus one entry in this list — the test
+ * derives its counts from the table, so neither half can be forgotten.
+ * Ordinary status-less asks never construct a learnable context and must not
+ * appear here.
+ */
+export const LEARNABLE_HOOK_SITES: readonly string[] = Object.freeze([
+  'direct-human-target',
+  'learn-attempt-query',
+  'low-countdown',
+  'low-llm-countdown',
+  'medium-countdown',
+  'medium-llm-countdown',
+  'high-countdown',
+])
+
 export function apply(ctx: Context, rawConfig: Config): void {
   const anyCtx = ctx as any
   const approval = anyCtx.get('approval')
@@ -2442,6 +2460,9 @@ export function apply(ctx: Context, rawConfig: Config): void {
     req: any,
     args: any,
     classified: { risk: StaticRisk; category?: string },
+    // Site label from LEARNABLE_HOOK_SITES: contract metadata, never read —
+    // the LP3 test matches each label at its call site.
+    site?: string,
   ): LearnableContext | undefined => {
     try {
       if (!config.learningEnabled) return undefined
@@ -3353,7 +3374,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       const capMax = THRESHOLD_DEFAULTS.learningSessionAllowCap
       const routeAvailable = !!(config.reviewerBaseUrl || sessionModelRoute(req.agent.session))
       if (!routeAvailable) return undefined
-      const learnable = learnableContextFor(req, args, classified)
+      const learnable = learnableContextFor(req, args, classified, 'learn-attempt-query')
       if (learnable === undefined) return undefined
       const decision = learnDecision({
         enabled: config.learningEnabled,
@@ -3589,14 +3610,14 @@ export function apply(ctx: Context, rawConfig: Config): void {
       }
       // Build the target learnable (may be undefined when learning is off or
       // the target is non-learnable — the human ask still happens either way).
-      // The learnable is NOT handed to askHuman (that would add a fifth
-      // learnable-construction site beyond the four countdown hooks the LP3
-      // contract pins); instead the resolution below records the confirmation
-      // explicitly when the human grants it.
+      // The learnable is NOT handed to askHuman (that would add another
+      // learnable-construction site beyond the ones the LP3 contract pins);
+      // instead the resolution below records the confirmation explicitly when
+      // the human grants it.
       const targetLearnable = learnableContextFor(targetReq, targetArgsPayload, {
         risk: targetRisk,
         category: targetCategory,
-      })
+      }, 'direct-human-target')
       debugLog({ ev: 'direct-human', callId: req.callId ?? null, toolName, targetTool, targetRisk: targetRisk ?? null, learnable: targetLearnable !== undefined })
       // Status-less explicit human ask: no countdown, no LLM takeover, no
       // breaker interaction. The answer resolves as allowed-once (grant) or
@@ -3793,7 +3814,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
           seconds,
           ...(fallback === 'reject' ? { feedback: REVIEW_TIMEOUT_NOTICE } : {}),
         }
-        return askHuman(req, undefined, next, false, status, undefined, undefined, learnableContextFor(req, args, classified))
+        return askHuman(req, undefined, next, false, status, undefined, undefined, learnableContextFor(req, args, classified, 'low-countdown'))
       }
       const lowHandle: RaceHumanHandle = { claim: () => {} }
       const lowStatus: ReviewStatus = {
@@ -3809,7 +3830,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       // instead of silently escalating into the timeout action. A reviewer
       // failure still fails closed immediately (never auto-allows, never
       // waits for the countdown to allow via timeoutAction=allow).
-      const lowAskPromise = askHuman(req, undefined, next, false, lowStatus, lowHandle, true, learnableContextFor(req, args, classified))
+      const lowAskPromise = askHuman(req, undefined, next, false, lowStatus, lowHandle, true, learnableContextFor(req, args, classified, 'low-llm-countdown'))
       const lowReviewStart = Date.now()
       void reviewWithLLM(getCredentials(), llm, tools, req.agent.session, req, config, seconds * 1000, reviewOpts, {
         maxRetries: config.reviewMaxRetries ?? THRESHOLD_DEFAULTS.reviewMaxRetries,
@@ -3913,7 +3934,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
           seconds,
           ...(fallback === 'reject' ? { feedback: REVIEW_TIMEOUT_NOTICE } : {}),
         }
-        return askHuman(req, undefined, next, false, status, undefined, undefined, learnableContextFor(req, args, classified))
+        return askHuman(req, undefined, next, false, status, undefined, undefined, learnableContextFor(req, args, classified, 'medium-countdown'))
       }
       const fallbackAction = riskTimedOutAction('MEDIUM', config.timeoutAction, autoUnattended)
       const status: ReviewStatus = {
@@ -3924,7 +3945,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
         ...(fallbackAction === 'reject' ? { feedback: REVIEW_TIMEOUT_NOTICE } : {}),
       }
       const mediumHandle: RaceHumanHandle = { claim: () => {} }
-      const askPromise = askHuman(req, undefined, next, false, status, mediumHandle, true, learnableContextFor(req, args, classified))
+      const askPromise = askHuman(req, undefined, next, false, status, mediumHandle, true, learnableContextFor(req, args, classified, 'medium-llm-countdown'))
       const reviewStart = Date.now()
       void reviewWithLLM(getCredentials(), llm, tools, req.agent.session, req, config, seconds * 1000, reviewOpts, {
         maxRetries: config.reviewMaxRetries ?? THRESHOLD_DEFAULTS.reviewMaxRetries,
@@ -4015,7 +4036,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       seconds,
       ...(highAction === 'allow' ? {} : { feedback: REVIEW_TIMEOUT_NOTICE }),
     }
-    const askPromise = askHuman(req, undefined, next, false, status, undefined, undefined, learnableContextFor(req, args, classified))
+    const askPromise = askHuman(req, undefined, next, false, status, undefined, undefined, learnableContextFor(req, args, classified, 'high-countdown'))
     if (llmReviews) {
       const reviewStart = Date.now()
       void reviewWithLLM(getCredentials(), llm, tools, req.agent.session, req, config, seconds * 1000, reviewOpts, {
