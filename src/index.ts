@@ -3036,6 +3036,11 @@ export function apply(ctx: Context, rawConfig: Config): void {
     persistReviewModes(reviewModes)
   }
   const totalDenials = new Map<string, number>()
+  // Recent-denial log shown on the breaker-tripped panel. Capped by its own
+  // constant, NOT by maxConsecutiveDenials: with the consecutive breaker set
+  // to 0 (disabled) a shared cap would shift every entry out immediately and
+  // a panel tripped via maxTotalDenials would render with no reasons at all.
+  const DENIAL_LOG_CAP = 10
   const denialLog = new Map<string, Array<{ reason?: string; toolName: string }>>()
   // Learned allows per root authority session. This is the third, independent
   // brake on the learning layer: past the cap the whole layer sleeps for that
@@ -3271,7 +3276,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       if (transition.increment) {
         const log = denialLog.get(key) ?? []
         log.push({ reason: (follow as any)?.reason ? sanitizeReviewReason((follow as any).reason) : undefined, toolName: req.toolName })
-        if (log.length > config.maxConsecutiveDenials) log.shift()
+        if (log.length > DENIAL_LOG_CAP) log.shift()
         denialLog.set(key, log)
       }
     })

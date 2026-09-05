@@ -2972,6 +2972,18 @@ test('web_fetch static allow: the audit trail records the sanitized destination'
   assert.ok(useAt > helperAt, 'the static-allow history carries the target')
   assert.ok(lib.slice(useAt - 600, useAt).includes("source: 'static-allow'"), 'wired into the static-allow audit entry')
 })
+test('denial log: the recent-denial cap is independent of the breaker thresholds', () => {
+  // D2-F3: the log shift used maxConsecutiveDenials as its cap, so setting
+  // the consecutive breaker to 0 (disabled) shifted every entry out
+  // immediately — a panel tripped via maxTotalDenials rendered with no
+  // reasons at all. The cap is now a fixed display constant. Structural
+  // anchor on the compiled lib (the log lives in the answerer closure).
+  const lib = readFileSync(fileURLToPath(new URL('../lib/index.js', import.meta.url)), 'utf8')
+  assert.ok(lib.includes('const DENIAL_LOG_CAP = 10'), 'the independent display cap exists')
+  const shiftAt = lib.indexOf('if (log.length > DENIAL_LOG_CAP)')
+  assert.ok(shiftAt > 0, 'the shift uses the display cap')
+  assert.ok(!lib.slice(shiftAt - 300, shiftAt + 100).includes('maxConsecutiveDenials'), 'the threshold no longer caps the log')
+})
 test('/approval-reset command pair: session-scoped reset, zero-argument global hatch', () => {
   // User decision (2026-09-05): one session's escape hatch must not silently
   // clear a concurrent session's denial breaker, and the GUI palette runs a
