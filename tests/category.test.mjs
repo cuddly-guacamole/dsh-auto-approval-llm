@@ -153,6 +153,19 @@ test('categorizeCommand: delete class (rm family / find -delete)', () => {
   assert.equal(cat('find . -exec rm {} +'), 'delete')
 })
 
+test('categorizeCommand: find -exec nested interpreter bodies classify as privilege', () => {
+  // An -exec body handed to a shell/interpreter is arbitrary code; it must not
+  // ride the read-only category the bare `find` name would otherwise get.
+  assert.equal(cat("find . -exec bash -c 'echo hi' \\;"), 'privilege')
+  assert.equal(cat('find . -exec node -e "1" \\;'), 'privilege')
+  assert.equal(cat('find . -exec sh script.sh {} \\;'), 'privilege')
+  assert.equal(cat("find . -execdir bash -c 'echo hi' \\;"), 'privilege')
+  // Reverse: non-interpreter bodies keep readOnly, deletion keeps delete.
+  assert.equal(cat('find . -exec grep -l foo {} \\;'), 'readOnly')
+  assert.equal(cat('find . -exec sort x.txt {} \\;'), 'readOnly')
+  assert.equal(cat('find . -exec rm {} +'), 'delete')
+})
+
 test('categorizeCommand: protected class for git metadata / sensitive operands', () => {
   assert.equal(cat('cat .git/config'), 'protected')
   assert.equal(cat('cat C:/ws/.env'), 'protected')

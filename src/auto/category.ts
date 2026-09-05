@@ -402,6 +402,27 @@ function findHasDestructiveAction(words: SegmentWord[]): boolean {
   return false
 }
 
+/**
+ * Whether any find -exec body hands execution to a nested interpreter or
+ * shell (`find . -exec bash -c '…' \;`). Such bodies are arbitrary code —
+ * they classify as privilege instead of riding the read-only category the
+ * bare `find` name would otherwise get (mirrors the shell-side
+ * findActionsAreReadOnly gate, which already refuses the static allow).
+ */
+function findExecutesNestedInterpreter(words: SegmentWord[]): boolean {
+  for (let index = 1; index < words.length; index += 1) {
+    const token = words[index].text.toLowerCase()
+    if (!/^-(?:exec|execdir|ok|okdir)$/.test(token)) continue
+    const terminator = words.findIndex((word, nestedIndex) => nestedIndex > index && (word.text === ';' || word.text === '+'))
+    // An unterminated -exec body is an opaque boundary: treat it as executed.
+    if (terminator < 0) return true
+    const nested = words.slice(index + 1, terminator)
+    if (nestedExecution(commandName(nested[0]?.text ?? ''), nested) !== undefined) return true
+    index = terminator
+  }
+  return false
+}
+
 function versionProbe(name: string, words: SegmentWord[]): boolean {
   const tokens = words.map((word) => word.text)
   return (['node', 'python', 'python3', 'pip', 'pip3', 'pnpm', 'npm', 'yarn', 'bun', 'git', 'cargo', 'rustc'].includes(name)
@@ -513,6 +534,7 @@ function classifySegmentBase(segment: Segment, shell: string, roots: CategoryRoo
   if (isDeletion(name, shell)) return 'delete'
   if (name === 'find') {
     if (findHasDestructiveAction(unwrapped.words)) return 'delete'
+    if (findExecutesNestedInterpreter(unwrapped.words)) return 'privilege'
     return 'readOnly'
   }
   if (name === 'git') {

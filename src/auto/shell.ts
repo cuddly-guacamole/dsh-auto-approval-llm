@@ -523,6 +523,48 @@ export function nestedSourceWritesToDshHome(source, roots) {
     const WRITE_FN = /(?:writefilesync|writefile|createwritestream|appendfilesync|appendfile|copyfilesync|cpsync|copy\s*\(|open\s*\([^)]*['"][wa]['"]|io\.open|\.write\s*\(|os\.write|path\s*\(\s*['"]|file\s*\(\s*['"]\s*[,]\s*['"]w)|(?:shutil\.copy|shutil\.move|open\s*\([^)]*['"]w['"])/i;
     return WRITE_FN.test(source) && dshHomeExfil(source, roots) === true;
 }
+/** Redirect targets written inside a nested source: `>`, `>>`, `2>`, `&>`. */
+const NESTED_REDIRECT_TARGET = /(?:^|[\s;&|(])(?:\d*&?>{1,2})\s*([^\s;&|()<>]+)/g;
+/**
+ * Whether any redirect target inside a nested inline source is a hard-deny
+ * target (DSH_HOME / runtime-state / critical paths). Same static heuristic
+ * contract as nestedSourceWritesToDshHome: ordinary workspace targets stay
+ * with the classifier, denied targets never reach it.
+ */
+function nestedRedirectTargetsDenied(source, roots) {
+    if (typeof source !== 'string' || source.length === 0)
+        return false;
+    for (const match of source.matchAll(NESTED_REDIRECT_TARGET)) {
+        if (hardDestructiveTargetReason(match[1], roots) !== undefined)
+            return true;
+    }
+    return false;
+}
+/**
+ * Hard-deny reason when a find -exec body writes through a nested interpreter
+ * into a denied target (`find . -exec bash -c 'echo x >> ~/.dsh/…' \;`). The
+ * quoted `-c` source is one opaque word, so the per-segment redirect fuse never
+ * sees it and the body used to fall through to semantic review — an LLM
+ * answerable DSH_HOME write. The deletion counterpart lives in
+ * findHasDestructiveAction.
+ */
+function findNestedWriteDenyReason(words, roots) {
+    for (let index = 1; index < words.length; index += 1) {
+        const token = words[index].text.toLowerCase();
+        if (!FIND_NESTED_ACTION.test(token))
+            continue;
+        const terminator = words.findIndex((word, nestedIndex) => nestedIndex > index && (word.text === ';' || word.text === '+'));
+        if (terminator < 0)
+            return undefined;
+        const nested = words.slice(index + 1, terminator);
+        const nestedExec = nestedExecution(commandName(nested[0]?.text ?? ''), nested);
+        const source = typeof nestedExec?.source === 'string' ? nestedExec.source : undefined;
+        if (source !== undefined && (nestedSourceWritesToDshHome(source, roots) || nestedRedirectTargetsDenied(source, roots)))
+            return 'find executes a nested command writing to a protected location';
+        index = terminator;
+    }
+    return undefined;
+}
 /**
  * Bash expands `~name/…` (and `~name`) to another user's home directory — a
  * location no configured root can statically contain. Such operands must never
@@ -1003,6 +1045,11 @@ function segmentHardDenyReason(segment, shell, roots) {
             if (stateReason !== undefined)
                 return `destructive find operation targets ${stateReason}`;
         }
+    }
+    if (name === 'find') {
+        const nestedWriteReason = findNestedWriteDenyReason(unwrapped.words, roots);
+        if (nestedWriteReason !== undefined)
+            return nestedWriteReason;
     }
     const deletion = deletionSpec(name, unwrapped.words, shell);
     if (deletion === undefined)

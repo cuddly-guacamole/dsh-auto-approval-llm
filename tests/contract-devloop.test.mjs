@@ -353,6 +353,29 @@ test('G5 whitelist members: only their read-only spellings stay static', () => {
   assert.equal(shell('hostname').decision, 'allow')
 })
 
+test('G6 find: nested -exec bodies writing to denied targets are hard-denied, not LLM-answerable', () => {
+  // The quoted -c source is one opaque word, so the per-segment redirect fuse
+  // never sees it; the body used to fall through to semantic review — an LLM
+  // answerable DSH_HOME / critical-path write.
+  for (const command of [
+    "find . -exec bash -c 'echo x >> ~/.dsh/history.jsonl' \\;",
+    "find . -exec node -e 'require(\"fs\").writeFileSync(\"~/.dsh/x\", \"y\")' \\;",
+    "find . -exec sh -c 'cat {} > ~/.ssh/authorized_keys' \\;",
+    "find . -execdir bash -c 'echo x >> ~/.dsh/history.jsonl' \\;",
+  ]) {
+    const r = shell(command)
+    assert.equal(r.decision, 'deny', `${command} must hard-deny`)
+    assert.equal(r.classifierEligible, false, `${command} must never reach the classifier`)
+  }
+  // Reverse: interpreter bodies that do not write stay on the designed
+  // semantic-review boundary (G1), and read-only bodies keep the static allow.
+  assert.equal(shell("find . -exec bash -c 'echo hi' \\;").decision, 'ask')
+  assert.equal(shell("find . -exec bash -c 'echo hi' \\;").classifierEligible, true)
+  assert.equal(shell('find . -exec grep -l foo {} \\;').decision, 'allow')
+  // The find deletion fuse keeps its own targets.
+  assert.equal(shell('find ~/.dsh -exec rm {} +').decision, 'deny')
+})
+
 test('H1 OS autostart persistence locations are critical paths', () => {
   assert.equal(isCriticalPath('C:/Users/u/AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup/evil.cmd', plainRoots), true)
   assert.equal(isCriticalPath('C:/Users/u/.config/autostart/x.desktop', plainRoots), true)
