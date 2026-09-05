@@ -1375,9 +1375,7 @@ const FEEDBACK_ROUTE = '/_dsh/auto-approval-llm/feedback'
 const SETTINGS_ROUTE = '/_dsh/auto-approval-llm/settings'
 const REVIEWER_CREDENTIAL_ROUTE = '/_dsh/auto-approval-llm/reviewer-credential'
 const HISTORY_ROUTE = '/_dsh/auto-approval-llm/history'
-const HISTORY_EXPORT_ROUTE = '/_dsh/auto-approval-llm/history/export'
 const TOOL_STATS_ROUTE = '/_dsh/auto-approval-llm/tool-stats'
-const MODELS_ROUTE = '/_dsh/auto-approval-llm/models'
 const TEST_ROUTE = '/_dsh/auto-approval-llm/test'
 const SESSION_MODE_ROUTE = '/_dsh/auto-approval-llm/session-mode'
 const REVIEW_STATUS_ROUTE = '/_dsh/auto-approval-llm/review-status'
@@ -1858,23 +1856,6 @@ export function installHistoryRoute(ctx: any): void {
       responseJson(res, 405, { ok: false, error: 'method-not-allowed' })
     },
   }), 'dsh-auto-approval-llm: history route')
-  ctx.effect(() => webServer.register({
-    kind: 'exact',
-    path: HISTORY_EXPORT_ROUTE,
-    handler: async (req: any, res: any) => {
-      if (!isTrustedRequest(req, trustedHosts)) {
-        responseJson(res, 403, { ok: false, error: 'forbidden' })
-        return
-      }
-      const body = JSON.stringify([...approvalHistory].reverse(), null, 2)
-      const bytes = Buffer.from(body)
-      res.setHeader('Content-Type', 'application/json; charset=utf-8')
-      res.setHeader('Content-Disposition', 'attachment; filename="approval-history.json"')
-      res.setHeader('Content-Length', String(bytes.length))
-      res.writeHead(200)
-      res.end(bytes)
-    },
-  }), 'dsh-auto-approval-llm: history export route')
 }
 
 export function installToolStatsRoute(ctx: any): void {
@@ -1977,44 +1958,6 @@ export function installReviewStatusRoute(ctx: any): void {
       responseJson(res, 200, status ? { ok: true, value: status } : { ok: false, error: 'not-found' })
     },
   }), 'dsh-auto-approval-llm: review status route')
-}
-
-function installModelsRoute(ctx: any, llm: any): void {
-  const webServer = ctx.get('webServer')
-  if (!webServer || !llm?.listModels) return
-  ctx.effect(() => webServer.register({
-    kind: 'exact',
-    path: MODELS_ROUTE,
-    handler: async (req: any, res: any) => {
-      if (!isTrustedRequest(req, trustedHosts)) {
-        responseJson(res, 403, { ok: false, error: 'forbidden' })
-        return
-      }
-      if (req.method !== 'GET') {
-        res.setHeader('Allow', 'GET')
-        responseJson(res, 405, { ok: false, error: 'method-not-allowed' })
-        return
-      }
-      const url = new URL(req.url ?? '/', 'http://x')
-      const provider = url.searchParams.get('provider') ?? ''
-      if (!provider) {
-        responseJson(res, 400, { ok: false, error: 'provider is required' })
-        return
-      }
-      try {
-        const models = await llm.listModels(provider)
-        responseJson(res, 200, {
-          ok: true,
-          value: { models: models.map((m: any) => ({ id: m.id, name: m.name ?? m.id })) },
-        })
-      } catch (error) {
-        responseJson(res, 400, {
-          ok: false,
-          error: error instanceof Error ? error.message : String(error),
-        })
-      }
-    },
-  }), 'dsh-auto-approval-llm: models route')
 }
 
 function installTestRoute(ctx: any, llm: any): void {
@@ -2944,7 +2887,6 @@ export function apply(ctx: Context, rawConfig: Config): void {
       if (done) persistLearning(LEARNING_FILE, learningStore)
       return done
     }))
-  installModelsRoute(anyCtx, llm)
   installTestRoute(anyCtx, llm)
   installSessionModeRoute(anyCtx)
   installStatsRoute(anyCtx)

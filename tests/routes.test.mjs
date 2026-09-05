@@ -11,6 +11,8 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import {
   installHistoryRoute, installReviewStatusRoute, installSessionModeRoute, installSettingsRoute,
 } from '../lib/index.js'
@@ -125,6 +127,17 @@ test('history GET: loopback 200 with records + llmLatency; foreign Host 403', as
   assert.ok('llmLatency' in ok.body.value)
   const denied = await callJson(handler, { ...LOOPBACK, headers: { host: 'evil.example:3080' }, socket: { remoteAddress: '10.0.0.7' } })
   assert.equal(denied.status, 403)
+})
+
+test('history registers exactly one route; the models and export routes stay deleted', () => {
+  const { registrations: regs } = capture(installHistoryRoute)
+  assert.equal(regs.length, 1, 'the history installer registers a single route')
+  assert.ok(!regs.some((r) => r.path.includes('export')), 'no history/export download route')
+  // The retired /models and /history/export routes had no consumers anywhere
+  // (client, tests, scripts); their path constants must not resurface.
+  const compiled = readFileSync(fileURLToPath(new URL('../lib/index.js', import.meta.url)), 'utf8')
+  assert.ok(!compiled.includes('auto-approval-llm/models'), 'the retired models route is gone')
+  assert.ok(!compiled.includes('auto-approval-llm/history/export'), 'the retired history export route is gone')
 })
 
 test('review-status GET: never 404 — unknown callId returns ok:false at 200', async () => {
