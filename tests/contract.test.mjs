@@ -2906,8 +2906,17 @@ test('category ask on LOCKED categories: hard-reject countdown, never auto-allow
   assert.ok(src.includes('isLockedCategory'), 'isLockedCategory helper must exist in the compiled host')
   assert.ok(src.includes("const isLockedCategory = (category"), 'helper must be the LOCKED predicate')
   // Non-locked category asks keep the status-less shape (no countdown status).
-  assert.ok(src.includes('return askHuman(req, undefined, next, false, lockedStatus)'), 'locked ask must pass the countdown status')
-  assert.ok(src.includes('// Other category asks remain status-less'), 'non-locked category asks must stay status-less')
+  // Anchored structurally: right after the locked branch's countdown ask, the
+  // next category-ask return is the bare three-argument form — and it comes
+  // before the review-mode section that follows in the answerer.
+  const lockedAskAt = src.indexOf('return askHuman(req, undefined, next, false, lockedStatus)')
+  assert.ok(lockedAskAt !== -1, 'locked ask must pass the countdown status')
+  const afterLockedIf = src.indexOf('}', lockedAskAt)
+  assert.ok(afterLockedIf !== -1, 'the locked countdown branch must close')
+  const statuslessAt = src.indexOf('return askHuman(req, undefined, next)', afterLockedIf)
+  assert.ok(statuslessAt !== -1, 'non-locked category asks must stay status-less')
+  const reviewModeAt = src.indexOf('const reviewMode = reviewModes.get', statuslessAt)
+  assert.ok(reviewModeAt !== -1 && statuslessAt < reviewModeAt, 'the status-less ask is the category-ask exit, before review-mode handling')
 })
 
 // ── notice queue: parallel tool results must not drop sibling notices ──────

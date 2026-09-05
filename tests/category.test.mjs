@@ -803,8 +803,10 @@ test('LP3: exactly the four countdown hooks construct a learnable context', () =
   // learns the target explicitly after resolution).
   assert.equal([...HOST_SRC.matchAll(/askHuman\(/g)].length, 14, 'closed ask-site enum: 7 countdown + 6 status-less + 1 direct-human')
   const hookIndexes = [...postSlot.matchAll(/, learnableContextFor\(/g)].map((m) => m.index)
-  const highAnchor = postSlot.indexOf('// HIGH')
-  assert.ok(highAnchor !== -1, 'the HIGH branch marker survives compilation')
+  // Locate the HIGH branch by its code (the timeout-action call is unique to
+  // it), not by a comment that a reformatter or minifier could drop.
+  const highAnchor = postSlot.indexOf("riskTimedOutAction('HIGH', config.timeoutAction, autoUnattended)")
+  assert.ok(highAnchor !== -1, 'the HIGH branch timeout call survives compilation')
   assert.ok(hookIndexes[4] > highAnchor, 'the fifth qualified hook lives in the HIGH branch')
 })
 
