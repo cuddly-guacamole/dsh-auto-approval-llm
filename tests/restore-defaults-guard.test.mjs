@@ -34,3 +34,15 @@ test('restore defaults: the key still rides the top-card save (never dropped)', 
   const src = readFileSync(new URL('../src/client/index.ts', import.meta.url), 'utf8')
   assert.match(src, /TOP_KEYS = \['enabled', 'autoSwitchPolicyToAsk'/, 'TOP_KEYS membership preserved')
 })
+
+test('timer card reset: breakerAntiHijackMs is not zeroed', () => {
+  // The card default is 0 (guard no-op); resetting the card must not close an
+  // anti-hijack window configured only through YAML (no control exists to
+  // restore it). Same guard family as the restore-defaults omission above.
+  const src = readFileSync(new URL('../src/client/index.ts', import.meta.url), 'utf8')
+  const resetAt = src.indexOf('const resetTimerCard = () => {')
+  assert.ok(resetAt > 0, 'the timer reset handler is wired')
+  const body = src.slice(resetAt, src.indexOf('}', src.indexOf('directHumanEnabled', resetAt)))
+  assert.ok(!/breakerAntiHijackMs\s*:/.test(body), 'resetTimerCard must not assign breakerAntiHijackMs')
+  assert.ok(src.includes('breakerAntiHijackMs is deliberately NOT reset'), 'the why-comment guards against re-adding the key')
+})

@@ -1001,7 +1001,10 @@ function SettingsSection() {
       mediumRiskSeconds: String(THRESHOLD_DEFAULTS.mediumRiskSeconds),
       highRiskSeconds: String(THRESHOLD_DEFAULTS.highRiskSeconds),
       reviewWaitSeconds: String(THRESHOLD_DEFAULTS.reviewWaitSeconds),
-      breakerAntiHijackMs: String(THRESHOLD_DEFAULTS.breakerAntiHijackMs),
+      // breakerAntiHijackMs is deliberately NOT reset: the card default is 0
+      // (guard no-op), so resetting would silently close an anti-hijack
+      // window the user configured only through YAML — the key has no control
+      // on this card to set it back.
       maxConsecutiveDenials: String(THRESHOLD_DEFAULTS.maxConsecutiveDenials),
       maxTotalDenials: String(THRESHOLD_DEFAULTS.maxTotalDenials),
       directHumanEnabled: 'off',
