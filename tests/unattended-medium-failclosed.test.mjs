@@ -58,3 +58,14 @@ test('reviewerAutoAllowBlocked: only the contradictory CRITICAL ALLOW is blocked
   assert.equal(reviewerAutoAllowBlocked({ decision: 'ALLOW', riskLevel: 'HIGH' }), false)
   assert.equal(reviewerAutoAllowBlocked({ decision: 'DENY', riskLevel: 'CRITICAL' }), false)
 })
+
+test('auto-switch guard: the never->ask flip leaves a debug trail', () => {
+  // The guard silently rewrites an Auto session's effective policy; an
+  // operator must be able to see why a session stopped auto-answering.
+  // Structural anchor on the compiled lib (the flip is a host closure).
+  const lib = readFileSync(fileURLToPath(new URL('../lib/index.js', import.meta.url)), 'utf8')
+  const setPolicyAt = lib.indexOf("approval.setPolicy(agent, 'ask')")
+  assert.ok(setPolicyAt > 0, 'the ensureAsk flip is wired')
+  const scope = lib.slice(setPolicyAt, setPolicyAt + 400)
+  assert.ok(scope.includes("ev: 'auto-switch-never-to-ask'"), 'the flip must emit the debug event')
+})

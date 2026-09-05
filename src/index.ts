@@ -2966,6 +2966,10 @@ export function apply(ctx: Context, rawConfig: Config): void {
       switchTimers.delete(timer)
       try {
         approval.setPolicy(agent, 'ask')
+        // The flip silently rewrites the session's effective policy — leave
+        // one debug trail so an operator can see why an Auto session stopped
+        // auto-answering (auditability for the guard's second line).
+        debugLog({ ev: 'auto-switch-never-to-ask', callId: null, sessionId: agent.session.id })
       } catch (error) {
         console.error('[dsh-auto-approval-llm] setPolicy failed:', error)
       }
