@@ -596,7 +596,35 @@ test('normalizeReviewMode: unknown/pending collapse to smart, valid stays', () =
 test('extractRuleTarget: command text projected for anchored patterns', () => {
   assert.equal(extractRuleTarget('{"command":"git push -f origin main"}'), 'git push -f origin main')
   assert.ok(extractRuleTarget('{"command":"git push -f"}').startsWith('git push'))
-  assert.ok(extractRuleTarget('{"file_path":"a","content":"hello world"}').includes('hello world'))
+})
+
+test('extractRuleTarget: structured file tools project their path, never the payload', () => {
+  // The path outranks the payload body: a write rule anchors the target, and
+  // the file content must not leak into the match (a rule like `^rm ` once
+  // could hit a write whose content began with that text).
+  assert.equal(extractRuleTarget('{"file_path":"C:/ws/src/a.ts","content":"hello world"}'), 'C:/ws/src/a.ts')
+  assert.equal(extractRuleTarget('{"path":"C:/ws/log.bin"}'), 'C:/ws/log.bin')
+  assert.equal(extractRuleTarget('{"pattern":"x","path":"C:/ws/src"}'), 'C:/ws/src')
+  assert.equal(extractRuleTarget('{"modules":["x"],"cwd":"C:/ws"}'), 'C:/ws')
+  // Path keys beat content, but a command-like key still outranks both.
+  assert.equal(extractRuleTarget('{"command":"ls","path":"C:/ws"}'), 'ls')
+  // Without any path/command key the full envelope remains the projection.
+  assert.ok(extractRuleTarget('{"patches":[{"file_path":"a"}]}').includes('file_path'))
+  // A payload-only call still projects its body (legacy behavior for
+  // content-keyed command tools).
+  assert.equal(extractRuleTarget('{"content":"hello world"}'), 'hello world')
+})
+
+test('evaluateRules: a write path rule anchors file_path and ignores content', () => {
+  const { rules, errors } = parseRulesText('write(^C:/ws/src) | deny | arguments')
+  assert.equal(errors.length, 0)
+  const hit = evaluateRules(rules, { toolName: 'write', arguments: '{"file_path":"C:/ws/src/a.ts","content":"nothing to see"}' })
+  assert.equal(hit?.policy, 'deny', 'the anchored path rule matches the file_path projection')
+  assert.equal(
+    evaluateRules(rules, { toolName: 'write', arguments: '{"file_path":"C:/ws/docs/readme.md","content":"see C:/ws/src for details"}' }),
+    undefined,
+    'the file content must never satisfy a path rule',
+  )
 })
 
 test('evaluateRules: anchored git-push rule matches the bash command, not the JSON envelope', () => {

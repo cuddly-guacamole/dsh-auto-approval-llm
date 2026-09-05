@@ -281,18 +281,20 @@ export interface RuleSubject {
 
 /**
  * Field projection for rule matching: command-like tools expose their actual
- * command text under command/script/code/prompt/text/content keys. Matching
- * against the raw argument JSON envelope would defeat anchored patterns like
- * `^git push`. Extract the command/code text first; fall back to the full
- * serialized arguments when no text field exists.
+ * command text under command/script/code/prompt/text keys, and file tools
+ * expose their target under file_path/path/cwd/workdir keys. Matching against
+ * the raw argument JSON envelope would defeat anchored patterns like
+ * `^git push` or `^src/` — and for file tools the payload (content) must not
+ * masquerade as the action target, so the path projection outranks it. Only a
+ * call with none of those keys falls back to the full serialized arguments.
  */
 export function extractRuleTarget(args: unknown): string {
   if (typeof args === 'string') {
     try {
       const parsed = JSON.parse(args)
       if (parsed !== null && typeof parsed === 'object') {
-        const text = commandText(parsed)
-        if (text !== undefined) return text
+        const projected = commandText(parsed) ?? pathTarget(parsed) ?? payloadText(parsed)
+        if (projected !== undefined) return projected
       }
     } catch {
       // not JSON — fall through and use the raw string
@@ -300,8 +302,9 @@ export function extractRuleTarget(args: unknown): string {
     return args
   }
   if (args !== null && typeof args === 'object') {
-    const text = commandText(args as Record<string, unknown>)
-    if (text !== undefined) return text
+    const record = args as Record<string, unknown>
+    const projected = commandText(record) ?? pathTarget(record) ?? payloadText(record)
+    if (projected !== undefined) return projected
     try {
       return JSON.stringify(args)
     } catch {
@@ -312,11 +315,26 @@ export function extractRuleTarget(args: unknown): string {
 }
 
 function commandText(obj: Record<string, unknown>): string | undefined {
-  for (const key of ['command', 'script', 'code', 'prompt', 'text', 'content']) {
+  for (const key of ['command', 'script', 'code', 'prompt', 'text']) {
     const value = obj[key]
     if (typeof value === 'string' && value !== '') return value
   }
   return undefined
+}
+
+/** First path-shaped target of a structured tool call, whitelist order. */
+function pathTarget(obj: Record<string, unknown>): string | undefined {
+  for (const key of ['file_path', 'path', 'cwd', 'workdir']) {
+    const value = obj[key]
+    if (typeof value === 'string' && value !== '') return value
+  }
+  return undefined
+}
+
+/** Last textual resort before the full-JSON fallback: the payload body. */
+function payloadText(obj: Record<string, unknown>): string | undefined {
+  const value = obj['content']
+  return typeof value === 'string' && value !== '' ? value : undefined
 }
 
 function renderSubject(rule: DeclaredRule, subject: RuleSubject): string {
