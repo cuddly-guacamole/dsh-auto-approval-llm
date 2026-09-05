@@ -164,3 +164,81 @@ test('redactResultValue: benign values keep the exact original reference (fast p
   const deepBenign = { a: { b: { c: { d: { e: { f: { g: { note: 'plain deep text' } } } } } } } }
   assert.equal(redactResultValue(deepBenign), deepBenign)
 })
+
+// ── alias key-name extension ────────────────────────────────────────────────
+// The key=value / bare-colon / JSON rules only knew four core words, so
+// real-world alias keys (access_token, client_secret, x-auth-token, npm's
+// _authToken, camelCase) crossed to the classifier/reviewer boundary raw
+// whenever they appeared in the quoted JSON or space-separated shapes. All
+// key-name rules now derive from one SECRET_KEY_NAME source in redact.ts.
+test('redactSecrets: alias credential keys are redacted in every shape', () => {
+  for (const text of [
+    'access_token=abc123def456',
+    'client_secret=supersecret99',
+    'x-api-key=abc12345678',
+    '{"access_token": "abc123def456ghi789xyz"}',
+    '{"client_secret": "verysecret123"}',
+    '{"x-auth-token": "abc123def456ghi789xyz"}',
+    "{'accessToken': 'abc123def456ghi789xyz'}",
+    '"_authToken": "aaaa1111bbbb2222"',
+    'x-auth-token: abc123456789',
+    'refresh_token: zzz999888777',
+    'session-key: abcdef123456',
+    'x-custom-token: abc123456789',
+    'clientSecret: abcdef123456',
+    'cookie: sessionid=abcdef123456',
+    'signature: a1b2c3d4e5f6g7h8',
+    'npm config set //x:_authToken aaaa1111bbbb2222',
+  ]) {
+    const out = redactSecrets(text)
+    assert.notEqual(out, text, `must be redacted: ${text}`)
+    assert.ok(out.includes('[redacted'), `must carry a redaction marker: ${text} -> ${out}`)
+  }
+})
+
+test('redactSecrets: authorization headers are redacted without the length gate', () => {
+  // "Basic" is 5 chars, under the bare-colon 6-char gate; the dedicated
+  // authorization rule masks the scheme plus the credential run.
+  for (const text of ['authorization: Basic dXNlcjpwYXNz', 'authorization=Basic dXNlcjpwYXNz']) {
+    const out = redactSecrets(text)
+    assert.ok(!out.includes('dXNlcjpwYXNz'), text)
+  }
+})
+
+test('redactSecrets: alias extension does not over-mask (no mis-hit)', () => {
+  for (const text of [
+    'token: none',
+    'secret: no',
+    'password: 123',
+    'tokenless: abc12345',
+    'tokenizer: abc12345',
+    'subtoken: abc12345',
+    'the token count: 123456',
+    // bare "token" is deliberately absent from the space-separated rule
+    'the token was abcdef123456789',
+    'color = red',
+    'answer = 42',
+    'PATH=/usr/local/bin:/usr/bin',
+    '"tokens": ["a"]',
+    '"password_hint": "abc123456"',
+  ]) {
+    assert.equal(redactSecrets(text), text, text)
+  }
+})
+
+test('redactResultValue: alias field names are masked, near-miss names are not', () => {
+  const out = redactResultValue({
+    access_token: 'a',
+    clientSecret: 'b',
+    signature: 'c',
+    sessionKey: 'd',
+    sessionId: 'keep',
+    authToken: 'e',
+  })
+  assert.equal(out.access_token, '[redacted:field]')
+  assert.equal(out.clientSecret, '[redacted:field]')
+  assert.equal(out.signature, '[redacted:field]')
+  assert.equal(out.sessionKey, '[redacted:field]')
+  assert.equal(out.authToken, '[redacted:field]')
+  assert.equal(out.sessionId, 'keep', 'sessionId is not a credential field')
+})

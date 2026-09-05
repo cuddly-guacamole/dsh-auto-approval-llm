@@ -12,8 +12,64 @@
  * written for this project (not copied from any third-party code).
  */
 
-/** Field names that carry credential-shaped material (shared with the classifier). */
-export const SECRET_KEYS = /(?:api|auth|access|secret|private|credential|password|token|cookie|authorization).*?(?:key|value|token)?$/i
+/**
+ * Single source of truth for credential-shaped KEY NAMES, shared by the three
+ * replacement rules in redactSecrets below (`KEY=value`, bare `key: value`,
+ * and quoted JSON `"key": "value"`). Structure: an optional run of word
+ * characters ending in a separator (`access_`, `x-`, npm's leading `_`) plus a
+ * core credential word. The optional prefix is what lets real-world alias
+ * keys — `access_token`, `client_secret`, `x-auth-token`, `_authToken` — match
+ * in every form, while requiring the separator keeps unseparated prose
+ * ("tokenless", "tokenizer") from matching. Consumers must keep every group in
+ * this source non-capturing: the rules below rely on their own group indices.
+ */
+export const SECRET_KEY_NAME =
+  '(?:[a-z0-9]*[_-])*(?:api[_-]?key|api[_-]?secret|api[_-]?token|access[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|refresh[_-]?token|secret[_-]?key|session[_-]?key|signing[_-]?key|private[_-]?key|credentials?|passphrase|passwd|password|secret|token|cookie|authorization|signature)'
+
+/**
+ * `KEY=value` rule. Unanchored at the start on purpose (same as before the
+ * alias extension): a credential word followed directly by `=` is a strong
+ * enough signal (`access_token=x`, `_authToken=x`, `db_password=x`).
+ * Unknown keys (`FOO=…`) stay unmasked on purpose — masking every assignment
+ * would destroy the readability of env dumps and there is no key-name signal
+ * to key off; the alias table above is the documented boundary.
+ */
+const KEY_VALUE_RULE = new RegExp(`(${SECRET_KEY_NAME}\\s*=\\s*)[^&\\s]+`, 'gi')
+
+/**
+ * Quoted JSON colon rule (`{"token": "…"}`): the key must be the entire quoted
+ * content, so the prefix above matches alias keys without over-reaching into
+ * `password_hint` / `tokens` / `tokenless`.
+ */
+const KEY_JSON_RULE = new RegExp(`(["'])(${SECRET_KEY_NAME})\\1\\s*:\\s*(["'])[^"']+\\3`, 'gi')
+
+/** Bare colon rule: same 6-char value gate as before (keeps `token: none` readable). */
+const KEY_COLON_RULE = new RegExp(`\\b(${SECRET_KEY_NAME})\\s*:\\s*\\S{6,}`, 'gi')
+
+/**
+ * Authorization-header rule. The generic colon rule's 6-char value gate lets
+ * `authorization: Basic` through ("Basic" is 5 chars), leaking the base64
+ * credential after it — mask the scheme plus one value run with no gate.
+ */
+const AUTHORIZATION_RULE = /\b(authorization\s*[:=]\s*)\S+(?:\s+\S+)?/gi
+
+/**
+ * Space-separated compound-credential rule (`npm config set //x:_authToken
+ * TOKEN` — the standard npm auth shape, which has no `=`/`:` to key off).
+ * Deliberately narrow: only compound auth/access/refresh/api token/secret/key
+ * words (never the bare core words — prose like "the token was abcdef12345678"
+ * must not match), and the value needs 8+ chars. The lookahead keeps already
+ * redacted output from being re-consumed and reformatted.
+ */
+const KEY_SPACE_RULE = new RegExp(`\\b((?:[a-z0-9]*[_-])*(?:auth|access|refresh|api)[_-]?(?:token|secret|key))\\s+(?!\\[redacted)(\\S{8,})`, 'gi')
+
+/**
+ * Field names that carry credential-shaped material (shared with the
+ * classifier). Same vocabulary as SECRET_KEY_NAME in its field-name shape:
+ * a credential word, optional filler, optional key/value/token suffix at the
+ * end. Compound words stay exact (`sessionKey` yes, `sessionId` no).
+ */
+export const SECRET_KEYS = /(?:api|auth|access|secret|private|credential|password|passwd|passphrase|token|cookie|authorization|signature|session[_-]?key).*?(?:key|value|token)?$/i
 
 /**
  * Cheap feature pre-screen: a strict superset of every literal the
@@ -24,23 +80,28 @@ export const SECRET_KEYS = /(?:api|auth|access|secret|private|credential|passwor
  * — never which replacement applies — so a benign huge result (e.g. a file
  * read) skips the multi-pass scan without any false-negative gate.
  */
-const SECRET_FEATURES = /[=]|bearer|begin|akia|eyj|github_pat|\bsk[-_]|ghp[-_]|xox|:\/\/|:\s*["']|:\s*\S{6,}/i
+const SECRET_FEATURES = /[=]|bearer|basic|begin|akia|eyj|github_pat|\bsk[-_]|ghp[-_]|xox|authorization|:\/\/|:\s*["']|:\s*\S{6,}/i
 
 /** Redact likely secrets (key formats, bearer tokens, key=value pairs). */
 export function redactSecrets(value: string): string {
   if (!SECRET_FEATURES.test(value)) return value
   return value
+    // Authorization headers first, whole value in one marker: leaving them to
+    // the key rules below re-masks an already-Bearer-masked value into a
+    // doubled marker, and "Basic <b64>" slips the colon rule's 6-char gate.
+    .replace(AUTHORIZATION_RULE, '$1[redacted-secret]')
     .replace(/\b(?:sk|ghp|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{8,}\b/g, '[redacted-secret]')
     .replace(/\bBearer\s+[A-Za-z0-9._~+\/-]{8,}/gi, 'Bearer [redacted-secret]')
-    .replace(/((?:api[_-]?key|token|secret|password)\s*=\s*)[^&\s]+/gi, '$1[redacted-secret]')
+    .replace(KEY_VALUE_RULE, '$1[redacted-secret]')
     // JSON colon forms (`{"token": "…"}`, `'api_key': '…'`): keep the key and
     // the quoted structure, replace the value only (quotes preserved so the
     // text stays parseable after redaction).
-    .replace(/(["'])(api[_-]?key|token|secret|password|access_key|auth[_-]?token)\1\s*:\s*(["'])[^"']+["']/gi, '$1$2$1: $3[redacted-secret]$3')
+    .replace(KEY_JSON_RULE, '$1$2$1: $3[redacted-secret]$3')
     // Bare colon forms (`token: abc12345`): the value must be at least six
     // non-space characters so short values / negations (`token: none`,
     // `secret: no`) stay readable text.
-    .replace(/\b(api[_-]?key|token|secret|password)\s*:\s*\S{6,}/gi, '$1: [redacted-secret]')
+    .replace(KEY_COLON_RULE, '$1: [redacted-secret]')
+    .replace(KEY_SPACE_RULE, '$1 [redacted-secret]')
     // AWS access-key IDs (`AKIA...`) and AWS secret material (the
     // `aws_secret_access_key=`/`secret_access_key=` forms are NOT caught by
     // the `secret=` pattern above because `_access_key` sits between).

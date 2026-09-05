@@ -2467,7 +2467,9 @@ test('redactResultValue: arrays and deep objects redact while preserving structu
   assert.deepEqual(Object.keys(out[0]).sort(), ['name', 'password'])
   assert.equal(out[0].name, 'keep')
   assert.equal(out[0].password, '[redacted:field]')
-  assert.ok(out[1].command.includes('Bearer [redacted-secret]'))
+  // The authorization-header rule runs before the Bearer rule and masks the
+  // whole header value in one marker.
+  assert.ok(out[1].command.includes('Authorization: [redacted-secret]'))
   assert.ok(!JSON.stringify(out).includes('abcdefghij123456'))
 })
 
