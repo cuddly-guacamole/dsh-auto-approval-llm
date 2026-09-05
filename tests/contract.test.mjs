@@ -2925,6 +2925,27 @@ test('signatureFor: non-subcommand second words fold — skeletons stay value-fr
   assert.equal(LEARNING_SIG_VERSION, 2)
 })
 
+test('/approval reset: bare form is session-scoped, all keeps the global hatch', () => {
+  // User decision (2026-09-05): one session's escape hatch must not silently
+  // clear a concurrent session's denial breaker. The bare reset deletes only
+  // the calling session's counter keys (the invocation carries the agent);
+  // `reset all` keeps the global clearing including in-flight approval state.
+  // Structural anchors on the compiled lib (the handler is a host closure).
+  const lib = readFileSync(fileURLToPath(new URL('../lib/index.js', import.meta.url)), 'utf8')
+  // anchor on the registration description (unique to the command; the string
+  // '/approval reset' also appears in an unrelated registry comment)
+  const handlerAt = lib.indexOf("'/approval reset — reset this session breaker counters")
+  assert.ok(handlerAt > 0, 'the reset command is registered')
+  const scope = lib.slice(handlerAt, handlerAt + 3500)
+  assert.ok(scope.includes("arg === 'all'"), 'the all escape hatch exists')
+  assert.ok(scope.includes('denials.delete('), 'the scoped form deletes only the session key')
+  assert.ok(scope.includes('denials.clear()'), 'the all form keeps the global clear')
+  // Branch order in the compiled handler: the `all` branch (global clears +
+  // registry clear) precedes the scoped deletes.
+  assert.ok(scope.indexOf("arg === 'all'") < scope.indexOf('clearApprovalState()'), 'the registry clear sits in the all branch')
+  assert.ok(scope.indexOf('clearApprovalState()') < scope.indexOf('denials.delete('), 'the scoped deletes come after the all branch')
+  assert.equal(scope.split('clearApprovalState()').length - 1, 1, 'the approval registry is cleared only in the all branch')
+})
 test('review-mode persistence: failures are surfaced, not swallowed', () => {
   // Best-effort persistence is by design (the mode still applies in-process),
   // but the silent catch meant a read-only DSH_HOME dropped every session's

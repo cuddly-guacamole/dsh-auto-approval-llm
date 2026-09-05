@@ -4101,13 +4101,34 @@ export function apply(ctx: Context, rawConfig: Config): void {
   if (commands) {
     ctx.effect(() => commands.register({
       name: 'approval',
-      description: '/approval reset — reset breaker counters and in-flight approval state',
-      handler: (_invocation: any) => {
-        denials.clear()
-        totalDenials.clear()
-        denialLog.clear()
-        clearApprovalState()
-        return { kind: 'success', text: 'Breaker counters and approval state reset.' }
+      description: '/approval reset — reset this session breaker counters; /approval reset all — every session + in-flight approval state',
+      handler: (invocation: any) => {
+        // User decision (2026-09-05): a bare reset is session-scoped — one
+        // session's escape hatch must not silently clear a concurrent
+        // session's denial breaker (the counters are authority-session keyed,
+        // so the scoped variant is a plain key delete). `reset all` keeps the
+        // global hatch. In-flight approval state is callId-keyed and short-
+        // lived (follow TTL 120s, resolvedCallIds 30s); scoping it would need
+        // a session index for little gain, so only `all` clears it.
+        const arg = String(invocation?.rawInput ?? '').trim().toLowerCase()
+        if (arg === 'all') {
+          denials.clear()
+          totalDenials.clear()
+          denialLog.clear()
+          clearApprovalState()
+          return { kind: 'success', text: 'Breaker counters and in-flight approval state reset for ALL sessions.' }
+        }
+        if (arg !== '') {
+          return { kind: 'error', text: 'Unknown argument (expected: /approval reset or /approval reset all).' }
+        }
+        const key = authorityKeyFor({ agent: invocation?.agent })
+        if (!key) {
+          return { kind: 'error', text: 'Cannot resolve the calling session for a scoped reset; use /approval reset all.' }
+        }
+        denials.delete(key)
+        totalDenials.delete(key)
+        denialLog.delete(key)
+        return { kind: 'success', text: 'Breaker counters reset for this session. Use /approval reset all to clear every session (and in-flight approval state).' }
       },
     }), 'dsh-auto-approval-llm: /approval command')
     ctx.effect(() => commands.register({
