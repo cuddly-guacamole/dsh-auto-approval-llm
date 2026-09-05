@@ -8,9 +8,11 @@
 | `enabled` | true | 总开关 |
 | `autoSwitchPolicyToAsk` | false | 仅 auto+override=never 时自动翻 ask（bundle 覆盖为 true）；设置卡已撤下，仅 YAML 配置 |
 | `debug` | false | 写 approval-debug.jsonl + [debug] 日志 |
-| `reviewerProvider / reviewerModel` | '' | 显式在线模型名（必须成对） |
-| `reviewerProtocol` | openai | openai(chat/completions) · anthropic(messages) |
-| `reviewerBaseUrl` | '' | 在线端点；空=跟随会话模型 |
+| `classifierSource` | session | 快速判断通道模型来源：session · preset(DSH 模型) · endpoint(共享端点) |
+| `classifierProvider / classifierModel` | '' | preset 档成对必填 |
+| `reviewerSource` | session | 深度评审通道模型来源：session · preset(DSH 模型) · endpoint(共享端点) |
+| `reviewerProvider / reviewerModel` | '' | preset 档成对必填 |
+| `endpointUrl / endpointModel / endpointProtocol` | ''/''/openai | 共享自定义端点（两通道 endpoint 源共用）；openai · anthropic |
 | `timeoutAction` | reject | reject · allow · low-risk-allow |
 | `llmReviewScope` | low-or-above | 哪些档送审 |
 | `llmTakeoverScope` | medium-or-below | 哪些档可接管 |
@@ -63,11 +65,11 @@
 :::
 
 ::: warning 容易误解的六件事
-1. **直连评审三件齐备才成立，缺任一自动跟随会话模型**。`reviewerBaseUrl` 非空只是入口——还需 `reviewerModel` 非空且凭据存储已配置 API 密钥，三件齐备快照层才返回在线通道；缺任一件按未配置处理（debug 记 `reviewer-incomplete`），评审直接走会话模型路由，不再发出注定失败的请求吃 AUTH 后转人工（<span class="lnum">index.ts:L429-461</span>；URL 形状非法仍按原校验失败语义处理）。评审路由可用性门仍是三源析取：显式 `reviewerProvider+reviewerModel` ∥ `reviewerBaseUrl` ∥ 会话模型兜底（<span class="lnum">index.ts:L2589</span>）；三源全空时 LOW 档不送审、按类别/自动直接放行。
+1. **模型来源是每通道 3 档显式开关，半配 fail-closed**。`classifierSource` / `reviewerSource` 各自决定该通道走哪条：`session`（跟随会话模型）、`preset`（DSH 已配置模型，`*Provider`+`*Model` 成对）、`endpoint`（共享端点配置）。显式选了 `preset`/`endpoint` 却配置不全 → 快照层 fail-loud（`{failure}`），**绝不静默回落会话模型**（用户以为用了指定模型实际没有 = 被契约测试钉死的反模式）；仅 `session` 源携带残留垃圾值才静默清洗。端点缺密钥同样 fail-closed（debug 记 `reviewer-incomplete`）。评审路由可用性门是单一 `reviewerRouteAvailable` 谓词（覆盖三源），learning 门与主管线共用（<span class="lnum">index.ts:reviewerRouteAvailable</span>）。
 2. **`timeoutAction` 的 legacy 枚举迁移分支不可删**（`llm-low-risk-only` → `reject`，<span class="lnum">index.ts:L184-193</span>）：resolveConfig 是全有全无闸门——删掉映射后旧值走 throw，启动路径整库回落 patch 默认（<span class="lnum">index.ts:L1563-1568</span>；热更新路径则保留旧 config），不是只重置这一个键。
 3. **移除顶层配置键后，旧 settings.yaml 的残留键被静默忽略**：残留键不会被剥离，而是随解析结果原样透传进运行时配置、只是再没有任何代码读取它——无警告无报错（`{...raw}` 透传 <span class="lnum">index.ts:L271</span> 起；Config schema <span class="lnum">index.ts:L118</span> 起）；弃用公告只能靠文档，不会有迁移提示。
 4. **`safetyPrompt` 与 `rulesText` 分工不同**：前者拼进评审 system 提示词，保存即热生效（<span class="lnum">index.ts:L424</span>）；后者是声明式执法规则，先于内置 allowlist/denyList 终局裁决 allow/deny/human（<span class="lnum">index.ts:L2433-2493</span>）。
-5. **`reviewerProvider+reviewerModel` 未弃用**：它是与 baseUrl 并存的第二在线路由——baseUrl 为空时成对配置即成为显式路由来源（<span class="lnum">index.ts:L464-466</span>），只是不再有设置卡控件。
+5. **`reviewerProvider` 键名已复活（2026-09-05 用户拍板）**：作为深度评审通道 `preset` 档的 provider 键与 `reviewerModel` 成对。它不再是「在线路由的 provider」——在线/自定义端点由共享 `endpointUrl`/`endpointModel`/`endpointProtocol` 承载，两通道 `endpoint` 源共用一份；`endpointProtocol` 默认 openai 保留 anthropic。旧 `reviewerBaseUrl` / `reviewerProtocol` / 2 档 `classifierModelSource` / `reviewerModelSource` 等键已由新体系取代（未发版直接换代，无兼容层）。
 6. **`showSessionPanel` / `aiButtonPosition` / `breakerAntiHijackMs` 是纯客户端呈现键**：host 裁决路径从不读取，改它们不影响任何审批结论。
 :::
 

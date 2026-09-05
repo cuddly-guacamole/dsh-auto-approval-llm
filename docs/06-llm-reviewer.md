@@ -1,15 +1,20 @@
 # 06 · LLM 评审器
 
-> *reasoning-blind, two transports*
+> *reasoning-blind, channel-driven*
 
 无论走哪条通道，评审收到的都是同一份「脱敏材料」，它**绝不含**评审者自述（`req.reason` 明确不转发）、工具输出、或任何模型生成的思考文本。它能看到的只有：**工具是谁、参数长什么样（消毒过）、最直接的 4 条用户消息、工作区地理事实**。
 
-## 6.1　双通道选择
+## 6.1　模型来源（每通道 3 档）
 
 ```mermaid
 flowchart TD
-    A1["reviewerBaseUrl 非空 → 在线通道：直接 HTTP 打你配置的 OpenAI/Anthropic 兼容端点，密钥每次从凭据库解析、绝不缓存 [online]"] -->|↓ 否则| A2["会话模型通道：route =（显式 reviewerProvider+reviewerModel）或 sessionModelRoute（当前会话 requestHeader 的 provider/model → 最新 recorded request/header 事件） [session]"]
-    A2 -->|↓ 都没有| A3["没有评审路由 → 返回 ESCALATE/failure='no reviewer route'，fail-closed 交人 [escalate]"]
+    A1["reviewerSource = session → 会话模型路由：sessionModelRoute（当前会话 requestHeader 的 provider/model → 最新 recorded request/header 事件） [host]"] -->|无会话路由| A3
+    A1 -->|有路由| A4["宿主 ctx.llm 流式评审 [host]"]
+    B1["reviewerSource = preset → reviewerProvider+reviewerModel 成对 DSH 模型 [host]"] --> A4
+    C1["reviewerSource = endpoint → 共享端点配置 endpointUrl/endpointModel：直接 HTTP 打自有 OpenAI/Anthropic 兼容端点，密钥快照冻结一次、绝不缓存 [raw]"]
+    A3["没有评审路由 → 返回 ESCALATE/failure='no reviewer route'，fail-closed 交人 [escalate]"]
+    B1 -->|半配| A5["fail-loud：{failure}，绝不静默回落 [fail]"]
+    C1 -->|缺 URL/model/密钥| A5
 ```
 
 ::: tip 在线通道安全约束（<span class="lnum">src/auto/trust.ts</span>：validateReviewerBaseUrl + resolvePublicReviewerTarget）

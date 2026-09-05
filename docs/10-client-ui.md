@@ -45,7 +45,7 @@ flowchart TD
 
 ```text
 li.dsa-card（可折叠；任一卡脏 → 头部「未保存」徽标）
-├─ 非法配置红横幅 + 「尝试修复」        ← 检测表镜像 host schema；reviewerProvider/Model 成对校验
+├─ 非法配置红横幅 + 「尝试修复」        ← 检测表镜像 host schema；3 值来源枚举（session/preset/endpoint）
 ├─ 调试横幅（debug=on 时）+「关闭调试」
 ├─ 顶层开关区（6 个即时保存 CapsuleSelect）
 │    enabled · timeoutAction · 评审与接管预设（一次写
@@ -62,7 +62,7 @@ li.dsa-card（可折叠；任一卡脏 → 头部「未保存」徽标）
     │                · privilegeAutoReview 开关（提权类别解锁，默认关；开启后 privilege 行可选 自动/拒绝）
 │    │                · 11 类逐行三态 CapsuleSelect（LOCKED 类只剩 继承/人工询问 可选；privilege 解锁后恢复三态）
 │    ├─ [安全底线] 确认制学习     learningEnabled(on/off) · learningThreshold(数字输入 min2 max10，保存钳回 2..10)（阈值行仅开关=on 时显示）（<span class="lnum">client/index.ts:L1761-1782</span>）
-│    ├─ 在线评审模型   协议(openai/anthropic) · API地址 · 模型 · 密钥(password型)「已配置|未配置」· 测试连接（恢复默认=三键回默认并清除评审密钥）
+│    ├─ 在线评审模型   快速判断模型[来源: 跟随会话/DSH模型(catalog chips 填 Provider·Model)/自定义端点] · 深度评审模型[同构] · 自定义端点[共享：协议·API地址·模型·密钥(password型)「已配置|未配置」· 测试连接]（恢复默认=双通道回 session + 端点配置清空 + 清除密钥）
 │    └─ 最近审批记录   搜索 · 分页(PAGE_SIZE=10) · 记录+[熔断]+原因(warn色) + LLM 响应耗时统计 · 清空历史(confirm)
 └─ 底部 footer：恢复默认 · 重启提示(applies=restart) · 全局错误行
 ```

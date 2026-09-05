@@ -37,14 +37,17 @@ const MOCK_API_KEY = process.env.DSH_VERIFY_MOCK_KEY ?? 'dsh-verify-mock-key'
 // Runtime-verification payload (mirrors the old standalone verify-config-set.mjs).
 // Deliberately puts the plugin into the mock-reviewer state so the approval
 // flow can be reproduced; the orchestrator restores the snapshot afterwards.
+// The deep-review lane rides the shared custom endpoint (mock reviewer).
 const MOCK_CONFIG = {
   enabled: true,
   autoSwitchPolicyToAsk: true,
   debug: true,
-  reviewerProvider: 'bogus-provider',
-  reviewerModel: 'bogus-model',
-  reviewerProtocol: 'openai',
-  reviewerBaseUrl: 'http://127.0.0.1:18777',
+  reviewerSource: 'endpoint',
+  reviewerProvider: '',
+  reviewerModel: '',
+  endpointProtocol: 'openai',
+  endpointUrl: 'http://127.0.0.1:18777',
+  endpointModel: 'mock-model',
   timeoutAction: 'allow',
   llmReviewScope: 'low-or-above',
   llmTakeoverScope: 'medium-or-below',
@@ -172,13 +175,13 @@ async function main() {
       const cred = await setupMockCredential()
       credentialWritten = cred === 'written'
       if (cred === 'unavailable') console.warn('[verify-runtime] WARN: credential route unavailable — reviewer falls back to the session model')
-      else if (cred === 'readonly') console.warn('[verify-runtime] WARN: credential store read-only — reviewer falls back to the session model')
-      else if (cred === 'write-failed') console.warn('[verify-runtime] WARN: credential write failed — reviewer falls back to the session model')
+      else if (cred === 'readonly') console.warn('[verify-runtime] WARN: credential store read-only — endpoint reviews will fail loudly (no key)')
+      else if (cred === 'write-failed') console.warn('[verify-runtime] WARN: credential write failed — endpoint reviews will fail loudly (no key)')
       else console.log(`[verify-runtime] mock credential: ${cred}`)
       await putSettings(MOCK_CONFIG)
       dirty = true
       console.log('\n[verify-runtime] mock reviewer up; mock config applied')
-      console.log('[verify-runtime]   reviewerBaseUrl=127.0.0.1:18777  debug=true  timeoutAction=allow')
+      console.log('[verify-runtime]   reviewerSource=endpoint endpointUrl=127.0.0.1:18777  debug=true  timeoutAction=allow')
       console.log('[verify-runtime] drive the approval flow now — settings auto-restore in 90s or on Ctrl-C')
       await new Promise((r) => setTimeout(r, 90_000))
     }

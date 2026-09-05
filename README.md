@@ -19,7 +19,7 @@
 - **静态规则 + LLM 分类器**：只读/会话/工作区常规操作直接放行；危险、外部写、凭据外泄、受保护路径直接拒绝；模糊操作交给 LLM 预分类（`tools/guard` + `tools/pre-execute`）。
 - **写向量完整性加固**：含真实文件写重定向（`>`/`>>`/`>|`/`&>``）的命令段脱离只读快径；build/test 与版本探测快径仅保留给 discard sink 或工作区内常规写目标（aggressive/trustedDirs 放宽模式同样生效）；POSIX 五头 `tee`/`dd of=`/`sed -i`/`truncate`/`install` 以操作数目标参与按目标闸门——直写插件运行态文件无条件硬拒。
 - **11 分类三态开关 + 信任目录双模式**：工具与 shell 命令归入 11 个类别（fileEdit / gitLocal / build / readOnly / delete / protected / privilege / networkExec / gitPush / publish / disk），设置卡逐类配 `auto` / `ask` / `deny`；**默认全部 `inherit` = 行为零变化**。危险类（delete / protected / disk 及未解锁的 privilege）LOCKED 仅接受 `ask`，误配 `auto`/`deny` 会被钳制丢弃并告警；**`privilegeAutoReview`（默认关）可解锁 privilege**——开启后特权命令（含可见内联代码如 `node -e '…'`）走分类器 + LLM 评审 + 倒计时管线；**LOCKED 转人带硬拒倒计时**——超时自动拒绝，`timeoutAction` 任何配置都无法放行（无人值守不再挂起）；`trustedDirs` 在 standard 档把常规位置扩展到显式信任目录，`categoryMode: aggressive` 则取消位置白名单——任意位置均视为常规位置（敏感名 fuse、运行态硬拒、symlink 复检等危险度门全部不动）；复合命令按「类别枚举序 + directive 取严」双轨合并；类别拒绝与 denyList 同构为终端拒绝（提权重试不可绕过）；每次类别决策全量写入 history / audit（`category-allow` / `category-deny` source）。
-- **在线评审模型（可选）**：填写 API 协议、地址、模型、密钥后，审批复审直接打到你的 OpenAI / Anthropic 兼容端点；密钥存在 DSH 凭据存储里，前端只显示「已配置」，永不回显。直连三件（地址 / 模型 / 密钥）配置完整才走在线评审——保存与「测试连接」有前端预检拦下缺项，存量半配置在运行时按未配置处理、评审跟随会话模型（fail-closed 不变）。
+- **双通道模型来源**：快速判断与深度评审各可独立选择模型来源——跟随会话模型（默认）/ DSH 已配置模型（从本机注册模型列表选）/ 自定义端点（直连自有 OpenAI/Anthropic 兼容端点，本地 mock、自建服务经此接入；不再维护但保留）。端点密钥存 DSH 凭据存储，前端只显示「已配置」，永不回显；端点未配密钥时评审 fail-closed，不静默回落会话模型。
 - **人工倒计时 + 超时兜底**：低/中/高三档倒计时（默认 5/8/10 秒）；超时按 `timeoutAction` 处理（`拒绝` / `通过` / `低风险自动同意`）。关浏览器也不悬挂（host 计时器独裁）。
 - **LLM 接管**：中风险且 LLM 在倒计时内给出明确结论时，客户端立即按 LLM 结论裁决，无需你点。
 - **熔断**：连续 `maxConsecutiveDenials` 次或累计 `maxTotalDenials` 次被 LLM 拒绝 → 转人工、不再自动倒计时；`/approval reset` 可重置。
@@ -95,7 +95,7 @@ npx tsdown                 # 构建 client bundle → lib/client.js
 
 1. 确保会话/预设处于 **Auto 档**（`auto` 预设）。
 2. 到 设置 → 插件 → 自动审批，按需配置；默认即可工作（空配置 = 静态规则 + 会话模型评审 + 拒绝式超时兜底）。
-3. 想让审批走你自己的模型：在「在线评审模型」卡填 协议 / API 地址 / 模型名称 / API 密钥 → 保存 → 测试连接。
+3. 想让审批走指定模型：在「在线评审模型」卡把对应通道的模型来源设为「DSH 模型」并从预设列表选（或手输 Provider/Model）；想直连自己的端点则选「自定义端点」并填协议 / API 地址 / 模型名称 / API 密钥 → 保存 → 测试连接。
 4. 嫌中风险弹窗频繁或超时漏拦：调大「中风险倒计时」，或把「超时动作」改为 `拒绝` / `低风险自动同意`。
 
 > 📚 工作原理详解文档站：<https://cuddly-guacamole.github.io/dsh-auto-approval-llm/>
@@ -156,9 +156,11 @@ npx tsdown                 # 构建 client bundle → lib/client.js
 | `breakerAntiHijackMs` | 0 | 熔断弹窗按钮防误点禁用时长，0 不启用；设置卡已撤下，仅 YAML 配置 |
 | `maxConsecutiveDenials` | 3 | 连续 LLM 拒绝熔断阈值，0 关闭 |
 | `maxTotalDenials` | 20 | 累计拒绝熔断阈值，0 关闭 |
-| `reviewerProtocol` | `openai` | 在线评审协议：`openai`(chat/completions) / `anthropic`(messages) |
-| `reviewerBaseUrl` | '' | 在线评审 API 地址；非空才走在线评审，空则跟随会话模型。三件齐备（地址＋模型名＋已配置密钥）才启用直连；缺任一自动跟随会话模型 |
-| `reviewerModel` | '' | 在线评审模型名；连同 `reviewerBaseUrl` 与已配置密钥三件齐备才启用直连（`reviewerProvider` 已退役：classifier 恒跟随会话模型） |
+| `classifierSource` | `session` | 快速判断通道模型来源：`session`（跟随会话模型）/ `preset`（DSH 已配置模型，配 `classifierProvider`+`classifierModel`）/ `endpoint`（自定义端点，配下方共享端点，不再维护） |
+| `classifierProvider` / `classifierModel` | ''/'' | 快速判断通道的 DSH 预设模型（`classifierSource=preset` 时成对必填） |
+| `reviewerSource` | `session` | 深度评审通道模型来源：`session` / `preset`（配 `reviewerProvider`+`reviewerModel`）/ `endpoint`（共享端点） |
+| `reviewerProvider` / `reviewerModel` | ''/'' | 深度评审通道的 DSH 预设模型（`reviewerSource=preset` 时成对必填） |
+| `endpointUrl` / `endpointModel` / `endpointProtocol` | ''/''/`openai` | 共享自定义端点（两通道 `endpoint` 源共用）：OpenAI/Anthropic 兼容 API 地址/模型/协议。本地 mock、自建服务等经此接入；未配密钥时评审 fail-closed 不静默回落 |
 | `safetyPrompt` | '' | 附加给评审模型的额外策略（保存即热生效） |
 | `allowlist` / `denyList` / `humanOnlyList` | [] | 工具名精确匹配 |
 | `rulesText` | '' | 声明式规则（优先于内置列表执行；支持 `[agent:main|subagent|名]`、`[workspace:路径]` 维度前缀，逗号组合=AND；解析错误=整段失效） |

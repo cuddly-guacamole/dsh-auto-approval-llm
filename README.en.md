@@ -150,9 +150,11 @@ Session approval stats — the "Auto Approval" header-button popup: totals / all
 | `breakerAntiHijackMs` | 0 | Disable breaker panel buttons for this many ms; 0 disables; card control removed, YAML only |
 | `maxConsecutiveDenials` | 3 | Consecutive LLM-denial breaker threshold; 0 off |
 | `maxTotalDenials` | 20 | Cumulative denial breaker threshold; 0 off |
-| `reviewerProtocol` | `openai` | Online review protocol: `openai` (chat/completions) / `anthropic` (messages) |
-| `reviewerBaseUrl` | '' | Online review API base URL; non-empty enables online review, empty follows the session model. Direct connection activates only with all three pieces (base URL + model name + configured key); any missing piece automatically follows the session model |
-| `reviewerModel` (+ legacy `reviewerProvider`) | '' | Online review model (legacy Provider route kept for compatibility, no longer in the UI). Direct connection activates only with all three pieces (base URL + model name + configured key); any missing piece automatically follows the session model |
+| `classifierSource` | `session` | Fast-decision lane model source: `session` (follow the conversation) / `preset` (DSH-configured model, with `classifierProvider`+`classifierModel`) / `endpoint` (shared custom endpoint, no longer maintained) |
+| `classifierProvider` / `classifierModel` | ''/'' | Fast-decision DSH preset model (required pair when `classifierSource=preset`) |
+| `reviewerSource` | `session` | Deep-review lane model source: `session` / `preset` (with `reviewerProvider`+`reviewerModel`) / `endpoint` (shared endpoint) |
+| `reviewerProvider` / `reviewerModel` | ''/'' | Deep-review DSH preset model (required pair when `reviewerSource=preset`) |
+| `endpointUrl` / `endpointModel` / `endpointProtocol` | ''/''/`openai` | Shared custom endpoint (both lanes' `endpoint` source): OpenAI/Anthropic-compatible URL/model/protocol. Local mock and self-hosted services connect through it; without a resolved key the review fails closed rather than silently falling back |
 | `safetyPrompt` | '' | Extra policy appended to the review model (hot-applied after save) |
 | `allowlist` / `denyList` / `humanOnlyList` | [] | Exact tool-name match |
 | `rulesText` | '' | Declarative rules (take precedence over the built-in lists; optional `[agent:…]` / `[workspace:…]` dimension prefix, comma = AND; parse error voids the whole text) |
