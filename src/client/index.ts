@@ -2200,11 +2200,11 @@ function SettingsSection() {
 
   const buildHistoryBody = () => React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 8 } },
     historyError ? React.createElement('p', { style: { color: 'var(--dsw-alias-state-error-primary)', fontSize: 12, margin: 0 } }, historyError) : null,
-    // Latency lines by lane: deep review (llmLatency, backward compatible) and
-    // fast decision (llmLatencyClassifier). A lane with no samples shows its
-    // empty hint instead of a blank row.
-    latencyLine(t('settings.history.llmLatencyReviewer'), llmLatency),
+    // Latency lines by lane: fast decision (llmLatencyClassifier) first, then
+    // deep review (llmLatency, backward compatible) — the classifier answers
+    // earlier in the pipeline, so its line leads (2026-09-06 ordering).
     latencyLine(t('settings.history.llmLatencyClassifier'), llmLatencyClassifier),
+    latencyLine(t('settings.history.llmLatencyReviewer'), llmLatency),
     React.createElement('input', {
       placeholder: t('settings.history.searchPlaceholder'),
       value: search,
