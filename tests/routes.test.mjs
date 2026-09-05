@@ -14,7 +14,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import {
-  installHistoryRoute, installLlmCatalogRoutes, installReviewStatusRoute, installSessionModeRoute, installSettingsRoute,
+  installHistoryRoute, installLatencyRoute, installLlmCatalogRoutes, installReviewStatusRoute, installSessionModeRoute, installSettingsRoute,
 } from '../lib/index.js'
 
 const LOOPBACK = { method: 'GET', headers: { host: 'localhost:3080' }, socket: { remoteAddress: '127.0.0.1' } }
@@ -138,6 +138,24 @@ test('history registers exactly one route; the models and export routes stay del
   const compiled = readFileSync(fileURLToPath(new URL('../lib/index.js', import.meta.url)), 'utf8')
   assert.ok(!compiled.includes('auto-approval-llm/models'), 'the retired models route is gone')
   assert.ok(!compiled.includes('auto-approval-llm/history/export'), 'the retired history export route is gone')
+})
+
+// ── llm-latency route (2026-09-06 "clear timings" action) ──────────────────
+
+test('llm-latency registers one route; DELETE-only with the loopback fence', async () => {
+  // The "clear timings" button clears only the latency telemetry window/file
+  // (the history DELETE deliberately leaves latency alone, so this clear
+  // leaves history alone). DELETE's file-truncation side effect is covered by
+  // the clearLatencySamples contract test with a temp path — the handler test
+  // here pins registration, the method gate and the trust fence without
+  // touching the live llm-latency.jsonl.
+  const { registrations: regs } = capture(installLatencyRoute)
+  assert.equal(regs.length, 1, 'the latency installer registers a single route')
+  const handler = handlerOf(regs, 'llm-latency')
+  const methodDenied = await callJson(handler, LOOPBACK)
+  assert.equal(methodDenied.status, 405, 'GET is not allowed on the latency route')
+  const foreign = await callJson(handler, { method: 'DELETE', headers: { host: 'evil.example:3080' }, socket: { remoteAddress: '10.0.0.7' } })
+  assert.equal(foreign.status, 403, 'foreign Host is refused even for DELETE')
 })
 
 // ── llm catalog routes (Issue #5 model-source pickers) ────────────────────

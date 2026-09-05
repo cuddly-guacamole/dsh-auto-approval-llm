@@ -30,7 +30,7 @@ import { sanitizeClassifierArguments, sanitizeClassifierText, sanitizeReviewReas
 import { DIRECT_HUMAN_TOOL, THRESHOLD_DEFAULTS } from './auto/constants.js'
 import { createDshClassifier, createEndpointClassifier } from './auto/dsh-classifier.js'
 import { type RaceHumanHandle, type ReviewResult, type StaticRisk, REVIEW_TIMEOUT_NOTICE, applyBreaker, approvalSource, assembleReviewerSystem, breakerNote, breakerTripped, countdownNote, createKeyedMutex, extractToolPath, followResolution, formatDenyFeedback, frameReviewerInput, lowRiskReviewOutcome, parseReview, unattendedMustFailClosed, preserveHostKeys, raceHumanDecision, reviewSuggestionNote, reviewerAutoAllowBlocked, riskFromAssessment, staticListDecision, type ContextSummary } from './auto/decision.js'
-import { LATENCY_SUMMARY_WINDOW, loadLatencySamples, pushLatencySample, summarizeLatency, type LatencySample } from './auto/latency.js'
+import { LATENCY_SUMMARY_WINDOW, clearLatencySamples, loadLatencySamples, pushLatencySample, summarizeLatency, type LatencySample } from './auto/latency.js'
 import { buildAskReason, buildEditDiff, buildEditDiffText, EDIT_DIFF_ARGS_MAX_CHARS, EDIT_DIFF_TOOLS } from './auto/editdiff.js'
 import {
   clampLearningThreshold,
@@ -1509,6 +1509,7 @@ const FEEDBACK_ROUTE = '/_dsh/auto-approval-llm/feedback'
 const SETTINGS_ROUTE = '/_dsh/auto-approval-llm/settings'
 const REVIEWER_CREDENTIAL_ROUTE = '/_dsh/auto-approval-llm/reviewer-credential'
 const HISTORY_ROUTE = '/_dsh/auto-approval-llm/history'
+const LLM_LATENCY_ROUTE = '/_dsh/auto-approval-llm/llm-latency'
 const TOOL_STATS_ROUTE = '/_dsh/auto-approval-llm/tool-stats'
 const TEST_ROUTE = '/_dsh/auto-approval-llm/test'
 const SESSION_MODE_ROUTE = '/_dsh/auto-approval-llm/session-mode'
@@ -2008,6 +2009,32 @@ export function installHistoryRoute(ctx: any): void {
       responseJson(res, 405, { ok: false, error: 'method-not-allowed' })
     },
   }), 'dsh-auto-approval-llm: history route')
+}
+
+export function installLatencyRoute(ctx: any): void {
+  const webServer = ctx.get('webServer')
+  if (!webServer) return
+  ctx.effect(() => webServer.register({
+    kind: 'exact',
+    path: LLM_LATENCY_ROUTE,
+    handler: async (req: any, res: any) => {
+      if (!isTrustedRequest(req, trustedHosts)) {
+        responseJson(res, 403, { ok: false, error: 'forbidden' })
+        return
+      }
+      if (req.method !== 'DELETE') {
+        res.setHeader('Allow', 'DELETE')
+        responseJson(res, 405, { ok: false, error: 'method-not-allowed' })
+        return
+      }
+      // Clear only the LLM latency telemetry window + file. Approval history
+      // is deliberately untouched — the history DELETE leaves latency alone
+      // (telemetry is not an approval record), so this clear leaves history
+      // alone in turn.
+      clearLatencySamples(llmLatency)
+      responseJson(res, 200, { ok: true, value: { records: [] } })
+    },
+  }), 'dsh-auto-approval-llm: llm-latency route')
 }
 
 export function installToolStatsRoute(ctx: any): void {
@@ -3203,6 +3230,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
   installSettingsRoute(anyCtx, settings)
   installReviewerCredentialRoute(anyCtx)
   installHistoryRoute(anyCtx)
+  installLatencyRoute(anyCtx)
   installToolStatsRoute(anyCtx)
   installReviewStatusRoute(anyCtx)
   installLearningStoreRoute(anyCtx, (key: string) =>

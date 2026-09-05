@@ -155,3 +155,15 @@ test('client bundle: reasoning picker fetches adapter-declared efforts per prese
   assert.ok(client.includes('draft.reviewerSource === "preset"') || client.includes('draft.reviewerSource === \'preset\''), 'reviewer efforts load only on a preset source')
   assert.ok(client.includes('options.some((o) => o.value === current)'), 'a stored effort outside the catalog is kept visible')
 })
+
+test('client bundle: history card has a separate clear-timings action left of clear-history', () => {
+  // 2026-09-06: the "清空计时" button clears only the LLM latency telemetry
+  // (separate host route, DELETE), while "清空历史" keeps clearing only the
+  // approval records. Both live in the history-card footer, timings first.
+  assert.ok(client.includes('LLM_LATENCY_ROUTE'), 'the latency clear route constant is bundled')
+  assert.ok(client.includes('clearLatency'), 'the clear-timings handler is bundled')
+  assert.ok(client.includes('confirm.clearLatency'), 'the clear-timings confirmation is localized')
+  assert.ok(client.includes('settings.history.clearLatency'), 'the clear-timings button label key is referenced')
+  assert.ok(client.includes('clearHistory'), 'the clear-history handler stays bundled')
+  assert.ok(client.includes('hasLatency'), 'the timings-present guard is bundled')
+})

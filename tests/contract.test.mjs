@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url'
 import { parseReview, lowRiskReviewOutcome, raceHumanDecision, preserveHostKeys, normalizeTimeoutAction, prepareReviewerArguments, extractToolPath, frameReviewerInput, breakerTripped, applyBreaker, reviewSuggestionNote, approvalSource, reviewerAutoAllowBlocked, staticListDecision, stripCountdownMarkers, countdownNote, BREAKER_MARKER, breakerNote, hasBreakerNote, riskFromAssessment, formatDenyFeedback, DENY_CIRCUMVENTION_GUIDANCE, REVIEW_TIMEOUT_NOTICE, REVIEWER_SYSTEM, assembleReviewerSystem, rulesTextSummary } from '../lib/auto/decision.js'
 import { sanitizeReviewReason, sanitizeClassifierText } from '../lib/auto/classifier.js'
 import { redactResultValue, redactSecrets } from '../lib/auto/redact.js'
-import { summarizeLatency } from '../lib/auto/latency.js'
+import { clearLatencySamples, summarizeLatency } from '../lib/auto/latency.js'
 import { trimAuditTail } from '../lib/auto/audit.js'
 import { normalizeReviewMode } from '../lib/auto/review-mode.js'
 import { parseRulesText, evaluateRules, extractRuleTarget, agentKind } from '../lib/auto/rules.js'
@@ -2261,6 +2261,21 @@ test('summarizeLatency: abort spikes cannot masquerade as healthy latency', () =
   assert.equal(out.count, 2)
   assert.equal(out.avgMs, 250)
   assert.equal(out.abortedCount, 8)
+})
+
+test('clearLatencySamples: empties the in-memory window and truncates the file', () => {
+  // 2026-09-06: the history card gained a separate "clear timings" action.
+  // The clear targets only the latency telemetry window/file (never approval
+  // history — the history DELETE leaves latency alone by design), and its
+  // file truncation accepts a path seam so the test never touches the live
+  // llm-latency.jsonl.
+  const tmp = join(tmpdir(), `dsa-latency-clear-${process.pid}-${Date.now()}.jsonl`)
+  writeFileSync(tmp, `${JSON.stringify(sample(1, 200))}\n${JSON.stringify(sample(2, 5000, false))}\n`)
+  const samples = [sample(1, 200), sample(2, 5000, false)]
+  clearLatencySamples(samples, tmp)
+  assert.equal(samples.length, 0, 'in-memory window is emptied')
+  assert.equal(readFileSync(tmp, 'utf8'), '', 'latency file is truncated')
+  rmSync(tmp, { force: true })
 })
 
 

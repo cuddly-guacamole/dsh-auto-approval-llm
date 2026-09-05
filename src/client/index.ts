@@ -15,6 +15,7 @@ export const inject = ['slots', 'sessions']
 
 const SETTINGS_ROUTE = '/_dsh/auto-approval-llm/settings'
 const HISTORY_ROUTE = '/_dsh/auto-approval-llm/history'
+const LLM_LATENCY_ROUTE = '/_dsh/auto-approval-llm/llm-latency'
 const TOOL_STATS_ROUTE = '/_dsh/auto-approval-llm/tool-stats'
 const TEST_ROUTE = '/_dsh/auto-approval-llm/test'
 const REVIEWER_CREDENTIAL_ROUTE = '/_dsh/auto-approval-llm/reviewer-credential'
@@ -1416,6 +1417,25 @@ function SettingsSection() {
     }
   }
 
+  // Clear only the LLM latency telemetry (fast decision + deep review lines
+  // above the record list). Approval history is untouched — the history
+  // DELETE deliberately leaves latency alone, so this clear leaves history
+  // alone in turn. Same verified-ok discipline as clearHistory.
+  const clearLatency = async () => {
+    if (!(globalThis as any).confirm?.(t('confirm.clearLatency'))) return
+    try {
+      const res = await (globalThis as any).fetch(LLM_LATENCY_ROUTE, { method: 'DELETE', credentials: 'same-origin' })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = await res.json().catch(() => null)
+      if (data?.ok !== true) throw new Error(String(data?.error ?? 'latency clear failed'))
+      setLlmLatency(null)
+      setLlmLatencyClassifier(null)
+      setLlmLatencyAll(null)
+    } catch (e) {
+      setHistoryError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
   // Remove stored keys that violate the schema so the defaults recover; POST a
   // sanitized value (missing keys get their schema default on the next read).
   const clearInvalidKeys = async () => {
@@ -2316,7 +2336,14 @@ function SettingsSection() {
     }, saving ? t('settings.saving') : t('settings.save')),
   )
 
-  const buildHistoryFooter = () => React.createElement('div', { style: { display: 'flex', justifyContent: 'flex-end' } },
+  const hasLatency = (stat: any) => stat !== null && stat !== undefined && ((stat.count ?? 0) > 0 || (stat.abortedCount ?? 0) > 0)
+  const buildHistoryFooter = () => React.createElement('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: 6 } },
+    React.createElement(Button, {
+      variant: 'outline',
+      size: 'sm',
+      disabled: !hasLatency(llmLatency) && !hasLatency(llmLatencyClassifier) && !hasLatency(llmLatencyAll),
+      onClick: clearLatency,
+    }, t('settings.history.clearLatency')),
     React.createElement(Button, {
       variant: 'outline',
       size: 'sm',

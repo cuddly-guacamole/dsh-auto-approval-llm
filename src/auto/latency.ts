@@ -134,3 +134,20 @@ export function pushLatencySample(samples: LatencySample[], sample: LatencySampl
     // Persistence is best-effort; the in-memory window still serves the UI.
   }
 }
+
+/**
+ * Clear the in-memory window and truncate the latency file. Approval history
+ * is untouched — telemetry is not an approval record, so the two clear
+ * surfaces stay separate (the history DELETE deliberately leaves latency
+ * alone). Best-effort file truncation mirrors every other persist path; the
+ * in-memory window is authoritative for the UI either way. `file` is a test
+ * seam (defaults to the real latency file; contract tests pass a temp path).
+ */
+export function clearLatencySamples(samples: LatencySample[], file = LATENCY_FILE): void {
+  samples.length = 0
+  try {
+    writeFileSync(file, '')
+  } catch {
+    // Best-effort clear; the in-memory window already reset.
+  }
+}
