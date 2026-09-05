@@ -3,7 +3,8 @@
 // MIT License, Copyright (c) 2026 程序员阿江-Relakkes (https://github.com/NanmiCoder/dsh-auto-mode).
 // Retained per the MIT License: this is a substantial portion of the original.
 import { homedir, tmpdir } from 'node:os';
-import { posix, win32 } from 'node:path';
+import { dirname, posix, win32 } from 'node:path';
+import { fileURLToPath } from 'node:url';
 function explicitStyleOf(value) {
     const canonical = canonicalizeWindowsNamespace(value);
     if (/^[A-Za-z]:/.test(canonical) || canonical.startsWith('\\'))
@@ -158,6 +159,36 @@ export function isProtectedProjectPath(target, roots) {
         return true;
     return false;
 }
+/**
+ * The plugin's own installation root, derived the same way audit.ts locates
+ * its runtime-state file (compiled module sits at <root>/lib/auto/paths.js —
+ * three dirnames up is <root>).
+ */
+const PLUGIN_ZONE_ROOT = normalizePath(dirname(dirname(dirname(fileURLToPath(import.meta.url)))));
+/**
+ * Execution-code shapes inside the plugin's own zone. The zone exists so an
+ * Auto session can develop the plugin (src/, tests/ stay writable); the
+ * review/audit CODE and its trust contract must stay outside agent reach —
+ * a write to lib/**, a dependency (node_modules can be a junction into the
+ * host install), the package manifests, the build config, or the loader
+ * patch would rewrite the approval body from inside an auto-approved
+ * session.
+ */
+const PLUGIN_ZONE_CODE_BASENAMES = new Set(['package.json', 'package-lock.json', 'tsdown.config.ts', 'tsconfig.json', 'cordis.patch.yml']);
+/** Fuse reason when the target is the plugin's own execution code or contract. */
+export function pluginZoneSelfModifyReason(normalized) {
+    if (!isWithin(PLUGIN_ZONE_ROOT, normalized))
+        return undefined;
+    const rel = normalized.slice(PLUGIN_ZONE_ROOT.length).replace(/^[\\/]+/, '');
+    const segments = rel.split(/[\\/]/);
+    const head = (segments[0] ?? '').toLowerCase();
+    if (head === 'lib' || head === 'node_modules' || head === 'dist')
+        return `the plugin's own execution code (${head}/) is not writable from agent sessions`;
+    const base = (segments[segments.length - 1] ?? '').toLowerCase();
+    if (PLUGIN_ZONE_CODE_BASENAMES.has(base))
+        return `the plugin's own contract/build file (${base}) is not writable from agent sessions`;
+    return undefined;
+}
 /** Deterministic destructive-target fuse. */
 export function hardDestructiveTargetReason(target, roots) {
     const namespaceReason = windowsDeviceNamespaceReason(target);
@@ -187,6 +218,13 @@ export function hardDestructiveTargetReason(target, roots) {
         && runtimeStateTargetReason(normalized) === undefined;
     if (isWithin(roots.dshHome, normalized) && !(roots.allowedDshSubpaths ?? []).some(root => isWithin(root, normalized)) && !inMaintenance)
         return `DSH_HOME path ${normalized}`;
+    // The plugin zone is a routine opening, but its own execution code is
+    // not: the zone exemption must never reach lib/** / manifests / build or
+    // loader contract files (checked after the DSH_HOME fuse so ordinary
+    // DSH_HOME targets keep their precise reason).
+    const selfModify = pluginZoneSelfModifyReason(normalized);
+    if (selfModify !== undefined)
+        return selfModify;
     if (isCriticalPath(normalized, roots))
         return `system or credential-critical path ${normalized}`;
     return undefined;
