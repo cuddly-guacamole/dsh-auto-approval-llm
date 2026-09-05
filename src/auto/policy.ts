@@ -10,6 +10,7 @@ import { hardDestructiveTargetReason, isProtectedProjectPath, isWithin, normaliz
 import { assessShell, hardDenyShellReason } from './shell.js';
 import { isEffectiveRoutine, sensitiveBasenameAt } from './category.js';
 import { DIRECT_HUMAN_TOOL } from './constants.js';
+import * as riskTokens from './risk-tokens.js';
 
 // Re-exported for callers/tests that referenced the policy-owned names; the
 // canonical definitions now live in paths.ts so shell.ts can share them
@@ -120,13 +121,7 @@ function containsCredentialMaterial(argumentsValue: unknown): boolean {
     return /(?:BEGIN (?:RSA |OPENSSH )?PRIVATE KEY|\b(?:sk|ghp|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{8,}\b|\bAKIA[0-9A-Z]{16}\b|(?:aws_secret_access_key|aws_access_key_id|secret_access_key|access_key_id)\s*=\s*[A-Za-z0-9/+=_-]{16,}|\bBearer\s+[A-Za-z0-9._~+\/-]{8,}|\.ssh[\\/](?:id_|config)|\.credentials\.yaml)/i
         .test(serializedArguments(argumentsValue));
 }
-const DESTRUCTIVE_TOOL = /(?:^|[_-])(?:delete|destroy|remove|erase|purge|drop|truncate|wipe|unlink|rmdir|reset|revoke)(?:$|[_-])/i;
-const EXTERNAL_WRITE_TOOL = /(?:^|[_-])(?:deploy|publish|push|upload|send|post|release|merge|submit|create[-_]?(?:issue|pull[-_]?request))(?:$|[_-])/i;
-const SECURITY_CHANGE_TOOL = /(?:^|[_-])(?:chmod|chown|permission|permissions|policy|grant|revoke|role|credential|credentials|secret|secrets|auth)(?:$|[_-])/i;
-export const RISK_NAME_PATTERN = new RegExp(
-    [DESTRUCTIVE_TOOL, EXTERNAL_WRITE_TOOL, SECURITY_CHANGE_TOOL].map((r) => r.source).join('|'),
-    'i',
-);
+const { DESTRUCTIVE_TOOL, EXTERNAL_WRITE_TOOL, SECURITY_CHANGE_TOOL } = riskTokens;
 function riskyPluginToolReason(name: string): string | undefined {
     if (DESTRUCTIVE_TOOL.test(name))
         return `registered tool name indicates a destructive operation: ${name}`;

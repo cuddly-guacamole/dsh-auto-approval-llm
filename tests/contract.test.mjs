@@ -64,6 +64,10 @@ test('risk-tokens: HIGH-risk name/reason patterns lock the dedup source', () => 
   assert.ok(RISK_REASON_PATTERN.test('external write'))
   assert.ok(RISK_REASON_PATTERN.test('security-boundary'))
   assert.ok(!RISK_REASON_PATTERN.test('routine edit'))
+  // Tokens the per-class policy probe enforces must escalate on the decision
+  // plane too — the flat union once dropped these two.
+  assert.ok(RISK_NAME_PATTERN.test('create_issue'), 'issue creation spells an external write')
+  assert.ok(RISK_NAME_PATTERN.test('set_role'), 'role changes are a security-boundary token')
 })
 
 test('parseReview: valid plain JSON', () => {
