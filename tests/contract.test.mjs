@@ -2925,6 +2925,16 @@ test('signatureFor: non-subcommand second words fold — skeletons stay value-fr
   assert.equal(LEARNING_SIG_VERSION, 2)
 })
 
+test('review-mode persistence: failures are surfaced, not swallowed', () => {
+  // Best-effort persistence is by design (the mode still applies in-process),
+  // but the silent catch meant a read-only DSH_HOME dropped every session's
+  // mode on restart with zero signal. Structural anchor on the compiled lib:
+  // the catch must carry the console.warn with the plugin prefix.
+  const lib = readFileSync(fileURLToPath(new URL('../lib/auto/review-mode.js', import.meta.url)), 'utf8')
+  assert.ok(lib.includes('review-mode persistence failed'), 'the persistence catch must warn')
+  assert.ok(lib.includes('best-effort'), 'the best-effort rationale stays documented')
+})
+
 test('signatureFor: dynamic / glob / quoted words prune the whole line', () => {
   const bash = (command) => signatureFor({ kind: 'shell-bash', command })
   assert.equal(bash('echo "$HOME/x"'), undefined, 'quoted word prunes')

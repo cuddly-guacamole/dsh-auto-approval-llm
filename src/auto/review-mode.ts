@@ -46,7 +46,11 @@ export function persistReviewModes(map: Map<string, ReviewMode>): void {
     const tmp = `${REVIEW_MODE_FILE}.tmp`
     writeFileSync(tmp, JSON.stringify(obj, null, 2))
     renameSync(tmp, REVIEW_MODE_FILE)
-  } catch {
-    // Persistence is best-effort; mode still applies for the current process.
+  } catch (error) {
+    // Persistence is best-effort (the mode still applies for the current
+    // process), but total silence meant a read-only DSH_HOME or a corrupt
+    // tmp file dropped every session's mode on the next restart with no
+    // signal at all — surface it.
+    console.warn('[dsh-auto-approval-llm] review-mode persistence failed:', error instanceof Error ? error.message : error)
   }
 }
