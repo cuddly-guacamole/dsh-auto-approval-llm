@@ -755,6 +755,22 @@ function SettingsSection() {
     return () => { disposed = true }
   }, [])
 
+  // Re-sync the snapshot after a failed save: a revision mismatch (another
+  // tab, or a save racing an instant capsule) must not wedge every later
+  // save — the stored revision has moved on, so the baseline has to be
+  // re-read before the next attempt. The local draft is kept: unsaved card
+  // edits are user intent, and each save overlays its own card's keys on the
+  // fresh baseline anyway.
+  const refreshSnapshot = async () => {
+    try {
+      const res = await (globalThis as any).fetch(SETTINGS_ROUTE, { credentials: 'same-origin' })
+      const data = await res.json()
+      if (data?.ok) setSnapshot(data.value)
+    } catch {
+      // best-effort: the next failed save retries the refresh
+    }
+  }
+
   React.useEffect(() => {
     if (!openHistory) return
     let disposed = false
@@ -920,6 +936,7 @@ function SettingsSection() {
       }
     } catch (e) {
       setCardStatus({ id: cardId, kind: 'err', text: e instanceof Error ? e.message : String(e) })
+      void refreshSnapshot()
     } finally {
       setSaving(false)
     }
@@ -940,6 +957,7 @@ function SettingsSection() {
   // Instant-save accepts a multi-key patch so one control can commit several
   // keys atomically (single POST, single expectedRevision check).
   const instantSaveKeys = async (patch: Record<string, unknown>) => {
+    const prevDraft = draft
     setDraft({ ...draft, ...(patch as Partial<Draft>) })
     setSaving(true)
     setMessage('')
@@ -956,6 +974,10 @@ function SettingsSection() {
       broadcastSettings(data.value)
       setSnapshot(data.value)
     } catch (e) {
+      // The optimistic draft patch did not persist — roll it back so the
+      // control reflects the stored value, and re-sync the revision.
+      setDraft(prevDraft)
+      void refreshSnapshot()
       setError(e instanceof Error ? e.message : String(e))
     } finally {
       setSaving(false)
@@ -1015,6 +1037,7 @@ function SettingsSection() {
       setCardStatus({ id: 'review', kind: 'ok', text: t('settings.reviewResetDone') })
     } catch (e: any) {
       setCardStatus({ id: 'review', kind: 'err', text: String(e?.message ?? e) })
+      void refreshSnapshot()
     } finally {
       setSaving(false)
     }
@@ -1045,6 +1068,7 @@ function SettingsSection() {
       setMessage(t('settings.defaultsRestoredInstant'))
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
+      void refreshSnapshot()
     } finally {
       setSaving(false)
     }
@@ -1190,6 +1214,7 @@ function SettingsSection() {
     } catch (e) {
       setMessage('')
       setError(e instanceof Error ? e.message : String(e))
+      void refreshSnapshot()
     } finally {
       setSaving(false)
     }
