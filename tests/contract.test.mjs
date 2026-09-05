@@ -1281,13 +1281,20 @@ test('isLoopbackHostname: IPv4-mapped IPv6 loopback is a loopback authority', ()
   assert.equal(isLoopbackHostname('[::ffff:127.0.0.1]'), true, 'bracketed dotted form')
   assert.equal(isLoopbackHostname('::ffff:127.0.0.1'), true, 'bare dotted form')
   assert.equal(isLoopbackHostname('[::FFFF:7F00:1]'), true, 'hex form is case-insensitive')
+  // The whole 127/8 mapped range counts (2026-09-05): 127.0.0.2 compressed is
+  // [::ffff:7f00:2] — it used to fall through to the non-loopback branch and
+  // 403 a real local caller. The peer-socket check still guards this branch,
+  // so the widening cannot admit a non-loopback caller.
+  assert.equal(isLoopbackHostname('[::ffff:7f00:2]'), true, '127.0.0.2 compressed hex')
+  assert.equal(isLoopbackHostname('::ffff:7f00:2'), true, 'unbracketed compressed hex')
+  assert.equal(isLoopbackHostname('[::ffff:7f01:203]'), true, '127.1.2.3 compressed hex')
   // The existing forms must keep working.
   assert.equal(isLoopbackHostname('localhost'), true)
   assert.equal(isLoopbackHostname('[::1]'), true)
   assert.equal(isLoopbackHostname('127.0.0.1'), true)
   // Not loopback: IPv4-mapped LAN addresses and lookalikes must stay out.
   assert.equal(isLoopbackHostname('[::ffff:192.168.1.9]'), false, 'IPv4-mapped LAN address')
-  assert.equal(isLoopbackHostname('[::ffff:7f00:2]'), false, 'mapped hex host other than 127.0.0.1')
+  assert.equal(isLoopbackHostname('[::ffff:c0a8:1]'), false, 'mapped hex 192.168.0.1')
   assert.equal(isLoopbackHostname('[::ffff:8f00:1]'), false, 'mapped hex outside 127/8')
   assert.equal(isLoopbackHostname('::ffff:127.0.0.1.evil.com'), false, 'suffix past the mapped address')
   assert.equal(isLoopbackHostname('evil.com'), false)

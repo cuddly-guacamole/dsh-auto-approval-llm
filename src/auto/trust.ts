@@ -15,10 +15,11 @@ export function isLoopbackHostname(hostname: string): boolean {
   // `[::ffff:127.0.0.1]` into the compressed hex form `[::ffff:7f00:1]`, so the
   // dotted spelling never reaches this predicate through a parsed Host — both
   // are accepted anyway, since a Host header can also arrive unparsed.
-  // Without this the peer is genuinely on loopback (isLoopbackIp already
-  // accepts ::ffff:127.*) while the Host is judged non-loopback, so every
-  // plugin route answers 403 to a real local caller.
-  if (/^\[?::ffff:(?:7f00:1|127(?:\.\d{1,3}){3})\]?$/i.test(hostname)) return true
+  // The hex branch covers the whole 127/8 mapped range (`7fxx:yyyy`), not just
+  // 127.0.0.1: the compressed spelling of 127.0.0.2 is `::ffff:7f00:2`, which
+  // used to fall through to the non-loopback branch and 403 a real local
+  // caller (isLoopbackIp on the peer already accepts every 127/8 form).
+  if (/^\[?::ffff:(?:7f[0-9a-f]{2}:[0-9a-f]{1,4}|127(?:\.\d{1,3}){3})\]?$/i.test(hostname)) return true
   const parts = hostname.split('.')
   return parts.length === 4 && parts[0] === '127' &&
     parts.every(part => /^\d{1,3}$/.test(part) && Number(part) <= 255)
