@@ -25,8 +25,12 @@ export const DIRECT_HUMAN_TOOL = 'dsa_request_user'
  * read-only Harness services, owner-scoped lifecycle control, AgentTeams
  * coordination, read-only external lookups and orchestration calls. These are
  * shown in the settings「默认放行工具」list. Conditionally-allowed tools
- * (read/write/bash/web_fetch on sensitive paths etc.) are intentionally NOT
- * here — their allow depends on path/argument inspection. This is the single
+ * (read/write/bash on sensitive paths etc.) are intentionally NOT here —
+ * their allow depends on path/argument inspection. web_fetch IS here: its
+ * safety boundary lives in the host fetch provider (public-address +
+ * connection-pinning enforcement in dsh-web-fetch-http), not in argument
+ * inspection, and denyList / categoryPolicy.networkExec / declared rules
+ * remain the operator's tightening knobs. This is the single
  * source of truth for both the policy allow plane and the settings-card
  * display, so the shown list can never drift from what the policy actually
  * allows.

@@ -11,7 +11,7 @@
 | 10 | `delete` | rm/del/Remove-Item 等删除 | <span class="badgeerr">LOCKED：仅可 ask</span> |
 | 9 | `disk` | format/bcdedit/磁盘镜像写 | <span class="badgeerr">LOCKED：仅可 ask</span> |
 | 8 | `protected` | 触碰受保护/关键路径的写改 | <span class="badgeerr">LOCKED：仅可 ask</span> |
-| 7 | `networkExec` | curl/wget/iwr 外联下载执行 | 三态可配 |
+| 7 | `networkExec` | curl/wget/iwr 外联下载执行；agent 的 `web_fetch` 同属此类（URL 级安全边界在宿主 fetch provider，插件可用本类目或声明式规则收紧） | 三态可配 |
 | 6 | `gitPush` | git push 及等价远端变更 | 三态可配 |
 | 5 | `publish` | npm publish/deploy 等发布动作 | 三态可配 |
 | 4 | `gitLocal` | 本地 git 变更（commit/branch…） | 三态可配 |
@@ -100,7 +100,7 @@ auto-approval-llm:
   # ---- 以下为主动收紧/放宽的样子 ----
   categoryPolicy:
     fileEdit: auto      # 工作区文件写改：降为 LOW 档（仍送 LLM 复审）
-    networkExec: ask    # 外联下载：无条件转人工
+    networkExec: ask    # 外联下载（含 web_fetch）：无条件转人工
     gitLocal: deny      # 本地 git 变更：绝对拒绝
     # delete/protected/privilege/disk 写 auto/deny 会被 warn+丢弃，仅 ask 有效
   categoryMode: aggressive   # 取消位置白名单：任意位置视为常规位置（危险度门、敏感名 fuse 不动）

@@ -2684,6 +2684,17 @@ export function apply(ctx: Context, rawConfig: Config): void {
       const stateReads = runtimeStateReadHits(exec.arguments.command, exec.name, roots)
       if (stateReads.length > 0) debugLog({ ev: 'runtime-state-read', callId: exec.callId ?? null, files: stateReads })
     }
+    // Bounded, sanitized fetch destination for the audit trail (web_fetch /
+    // web_search static allows). Returns undefined for every other tool or
+    // when the argument is missing.
+    const fetchAuditTarget = (exec: any): string | undefined => {
+      if (exec?.name !== 'web_fetch' && exec?.name !== 'web_search') return undefined
+      const raw = exec?.arguments?.url ?? exec?.arguments?.query
+      if (typeof raw !== 'string' || raw.trim() === '') return undefined
+      const sanitized = sanitizeReviewReason(raw).replace(/\s+/g, ' ').trim()
+      return sanitized === '' ? undefined : `target: ${sanitized.slice(0, 300)}`
+    }
+
     // ── user terminal gates (B1/G2 mirrored onto the pre-execute plane) ────
     // The answerer alone cannot be a terminal for these: the static allow
     // below and the classifier allow both return next() without ever creating
@@ -2814,12 +2825,18 @@ export function apply(ctx: Context, rawConfig: Config): void {
     if (assessment.decision === 'allow') {
       // A static-assessment allow is a verdict like any other: it takes
       // effect only if its decision audit record persisted (APPROVAL-07).
+      const fetchTarget = fetchAuditTarget(exec)
       const audited = pushHistory({
         sessionId: authorityKeyFor(exec),
         toolName: exec.name,
         outcome: 'allowed-once',
         source: 'static-allow',
         ...(typeof assessment.reason === 'string' && assessment.reason !== '' ? { reason: assessment.reason } : {}),
+        // A static-allowed web_fetch is the one external call whose target
+        // never appears anywhere else: no approval panel, no reviewer payload.
+        // Record the destination (sanitized + capped) so "what did it fetch"
+        // stays answerable from the audit trail.
+        ...(fetchTarget !== undefined ? { llmReason: fetchTarget } : {}),
       })
       if (!audited) {
         denyOnAuditFailure(exec.callId)

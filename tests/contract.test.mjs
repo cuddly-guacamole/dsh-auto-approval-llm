@@ -2925,6 +2925,22 @@ test('signatureFor: non-subcommand second words fold — skeletons stay value-fr
   assert.equal(LEARNING_SIG_VERSION, 2)
 })
 
+test('web_fetch static allow: the audit trail records the sanitized destination', () => {
+  // User decision (2026-09-05): keep the zero-review behavior (the host fetch
+  // provider enforces the SSRF boundary) but close the audit blind spot — a
+  // static-allowed web_fetch was the one external call whose target appeared
+  // nowhere. Structural anchors on the compiled lib.
+  const lib = readFileSync(fileURLToPath(new URL('../lib/index.js', import.meta.url)), 'utf8')
+  const helperAt = lib.indexOf('const fetchAuditTarget = (exec) =>')
+  assert.ok(helperAt > 0, 'the fetch audit helper is defined')
+  const scope = lib.slice(helperAt, helperAt + 900)
+  assert.ok(scope.includes("'web_fetch'") && scope.includes("'web_search'"), 'it covers both lookup tools')
+  assert.ok(scope.includes('sanitizeReviewReason'), 'the target passes the sanitizer')
+  assert.ok(scope.includes('.slice(0, 300)'), 'the target is length-capped')
+  const useAt = lib.indexOf('llmReason: fetchTarget')
+  assert.ok(useAt > helperAt, 'the static-allow history carries the target')
+  assert.ok(lib.slice(useAt - 600, useAt).includes("source: 'static-allow'"), 'wired into the static-allow audit entry')
+})
 test('/approval reset: bare form is session-scoped, all keeps the global hatch', () => {
   // User decision (2026-09-05): one session's escape hatch must not silently
   // clear a concurrent session's denial breaker. The bare reset deletes only
