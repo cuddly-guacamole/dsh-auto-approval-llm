@@ -4,7 +4,7 @@
 
 > English: [README.en.md](README.en.md)
 
-`Auto 档` = `sandbox: danger-full-access` + `approval: ask`。本插件在 Auto 会话里充当 `approval/request` 的**唯一终结裁决者**：常规操作放行、危险/模糊操作交给「静态规则 → LLM 分类 → LLM/人工裁决 → 倒计时兜底 → 熔断」的自动管线，把「自动但安全」的吞吐做高，同时保证有人工与审计兜底。
+`Auto 档` = `sandbox: danger-full-access` + `approval: ask`。本插件在 Auto 会话里充当 `approval/request` 的**唯一终结裁决者**：常规操作经静态规则直接放行，危险/模糊操作进入「静态规则 → LLM 分类 → LLM/人工裁决 → 倒计时兜底 → 熔断」的自动管线裁决，全程保留人工与审计兜底。
 
 > 🖥️ **平台支持**：主要在 **Windows + Git Bash** 环境开发与测试；macOS / Linux / WSL 欢迎反馈（见 [平台支持](#平台支持)）。**Android 浏览器访问仅收集 UI 反馈、不承诺支持；Auto 权限档不支持 Android 原生环境**（Termux / root / adb / shizuku 等）。
 
