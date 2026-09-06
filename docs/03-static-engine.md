@@ -9,7 +9,7 @@ host 编排在 `src/index.ts`，真正「长脑子」的静态规则引擎在 `s
 | `risk-tokens.ts` | 13 | HIGH 风险正则（NAME/REASON），供分类器与 policy 共用，防漂移 |
 | `paths.ts` | 213 | 路径规范化（Windows 命名空间/NT 别名折叠、~ 展开、win32 小写）、受保护/关键路径判定、运行态文件名单 |
 | `shell.ts` | 1016 | Bash/PowerShell 词法分解（sticky 正则状态机）＋ 整行熔断 ＋ 逐段静态分类 |
-| `policy.ts` | 370 | 每次工具调用的确定性第一遍分类 `assessTool`（推断型、保留类型检查） |
+| `policy.ts` | 401 | 每次工具调用的确定性第一遍分类 `assessTool`（推断型、保留类型检查） |
 | `rules.ts` | 370 | Claude-Code 风格声明规则解析/求值（纯函数，host 与浏览器共用） |
 | `classifier.ts` | 75 | 预分类提示词、参数脱敏、严格响应解析 |
 | `dsh-classifier.ts` | 94 | 复用 `ctx.llm` 做低 token 分类请求（temperature 0） |
@@ -21,9 +21,9 @@ host 编排在 `src/index.ts`，真正「长脑子」的静态规则引擎在 `s
 
 > 同层的其余模块（类别层 `category.ts`、学习层 `learning.ts`、diff 预览 `editdiff.ts`、耗时遥测 `latency.ts`、上下文探针 `probe.ts`、结果脱敏 `redact.ts`、重试 `retry.ts`）各有专章或见 [§14](./14-code-map) 全量清单。
 
-## 3.1　assessTool —— 每一次调用的 17 步判定 <span class="lnum">policy.ts:L230-370</span>
+## 3.1　assessTool —— 每一次调用的 18 步判定 <span class="lnum">policy.ts:L225-402</span>
 
-下面 17 个分支与 `policy.ts:L230-370` 的判定顺序一一对应。一级分支数没有变，但读/写/补丁/编辑四步内部各自长出了**子闸**（受保护读、敏感名熔丝、插件运行态无条件拒）：
+下面 18 个分支与 `policy.ts:L225-402` 的判定顺序一一对应。一级分支数没有变，但读/写/补丁/编辑四步内部各自长出了**子闸**（受保护读、敏感名熔丝、插件运行态无条件拒）：
 
 ```mermaid
 flowchart TD
@@ -43,14 +43,15 @@ flowchart TD
     A13 --> A14["⑭ 编排类 subagent/workflow/ralph/send_message/list_agents/interrupt_agent/… → 放行（子工具独立被查） [allow]"]
     A14 --> A15["⑮ git_push/deploy/publish/send_email/create_issue/create_pull_request → 交人工 [ask]"]
     A15 --> A16["⑯ 工具名命中风险正则（delete/upload/credential/auth …）→ 交人工 [ask]"]
-    A16 --> A17["⑰ 兜底 = 未识别注册工具 → **ask，fail-closed**（unrecognized registered plugin tool requires independent classification，<span class="lnum">policy.ts:L368-370</span>）—— 名字里没带风险词不再是放行理由 [ask]"]
+    A16 --> A17["⑰ dsa_request_user（DIRECT_HUMAN_TOOL）→ 一律 ask、不进 LLM 分类器（agent 正是想绕开它）[ask]"]
+    A17 --> A18["⑱ 兜底 = 未识别注册工具 → **ask，fail-closed**（unrecognized registered plugin tool requires independent classification，<span class="lnum">policy.ts:L400-402</span>）—— 名字里没带风险词不再是放行理由 [ask]"]
 ```
 
-::: warning 第⑰步语义
+::: warning 第⑱步语义
 兜底方向是「拿不准就问人」：一个注册插件工具若没有任何已知形态可对号入座，一律转人工并允许语义分类器介入，**绝不因为「名字无害」而静默放行**。
 :::
 
-## 3.2　硬拒闸门 hardDenyReason <span class="lnum">policy.ts:L198-228</span>
+## 3.2　硬拒闸门 hardDenyReason <span class="lnum">policy.ts:L193-222</span>
 
 - **凭据物质**：`web_fetch/curl/wget` 或外部写工具，参数里含 PEM 私钥、`sk-` / `ghp_` / `github_pat_` / `xox*`、`AKIA[0-9A-Z]{16}`、aws 密钥赋值、`Bearer …`、`.ssh` 路径等 → 拒。
 - **shell 熔断**：bash/pwsh 命令走 `hardDenyShellReason`（见 [§3.3](#33shell-命令分析管线)）。
@@ -87,7 +88,7 @@ flowchart TD
 | Windows 设备/NT 命名空间 | `\\.\` `\device\` `\\?\` `\??\`（非 UNC/X: 变体） | `canonicalizeWindowsNamespace` 折叠后再判包含 |
 | 保留设备名 | `con` `prn` `aux` `nul` `com1-9` `lpt1-9` | 硬拒 |
 
-**symlink 逃逸**：文本层判定无法识破**快捷方式/软链接指向工作区外**（如 `ws/ln → ~/.bashrc`）。宿主侧守卫 `symlinkEscapeReason`（<span class="lnum">index.ts:L2209-2270</span>）取 `symlinkGuardTargets` 提取每个工具的真实路径操作数，对「文本上在工作区内/受信区」的目标做 realpath 最深祖先解析，一旦真实路径离开工作区/受信区就硬拒。守卫解析的是**归一化后的文本路径**（`resolveDeepest(textual)`）：若拿原始参数 realpath，相对路径会被锚定到 `process.cwd()` 而非会话工作区，`dsh web` 下会把所有相对路径调用误硬拒（PR #4 修复，2026-09-02）。受信区不止插件目录：`trustedDirs` 成员与 allowedDshSubpaths 一并构成复检区（<span class="lnum">index.ts:L2222</span>）；aggressive 模式下「普通出区」是设计目标故放行，但落在 critical 树 / DSH_HOME / 插件运行态文件上的逃逸仍硬拒（<span class="lnum">index.ts:L2261</span>）——运行态文件复检与位置模式无关，改审批/审计/学习状态在任何模式下都不算例行写。
+**symlink 逃逸**：文本层判定无法识破**快捷方式/软链接指向工作区外**（如 `ws/ln → ~/.bashrc`）。宿主侧守卫 `symlinkEscapeReason`（<span class="lnum">symlink.ts:L57-71</span>，宿主调用 <span class="lnum">index.ts:L2829</span>）取 `symlinkGuardTargets` 提取每个工具的真实路径操作数，对「文本上在工作区内/受信区」的目标做 realpath 最深祖先解析，一旦真实路径离开工作区/受信区就硬拒。守卫解析的是**归一化后的文本路径**（`resolveDeepest(textual)`，<span class="lnum">symlink.ts:L30</span>）：若拿原始参数 realpath，相对路径会被锚定到 `process.cwd()` 而非会话工作区，`dsh web` 下会把所有相对路径调用误硬拒（PR #4 修复）。受信区不止插件目录：`trustedDirs` 成员与 allowedDshSubpaths 一并构成复检区；aggressive 模式下「普通出区」是设计目标故放行，但落在 critical 树 / DSH_HOME / 插件运行态文件上的逃逸仍硬拒——运行态文件复检与位置模式无关，改审批/审计/学习状态在任何模式下都不算例行写。
 
 ## 3.5　声明式规则 rulesText <span class="lnum">rules.ts</span> —— 用户写的「最优先纸条」
 
@@ -106,7 +107,7 @@ bash(rm\s+-\s*rf) | deny
 - **首条命中即胜**；`evaluateRules` 先用 `extractRuleTarget` 抽取命令文本（command/script/code/prompt/text/content），防锚定正则（如 `^git push`）被 JSON 信封击穿。
 - ReDoS 防护：长度 ≤2000；拒绝嵌套无界量词 `(a+)+`、交替外套量词、嵌套重复组、`{n,}` 计数重复。
 - **host 与浏览器设置卡共用同一份 `parseRulesText`**（错误逐行红字显示）。
-- 干跑 `rulesDryRun`：只记命中不执法（host 端 <span class="lnum">index.ts:L2448-2449</span>）。
+- 干跑 `rulesDryRun`：只记命中不执法（host 端 <span class="lnum">index.ts:L3000/L3819</span>）。
 
 ## 3.6　产物登记 ArtifactRegistry <span class="lnum">artifacts.ts</span>
 

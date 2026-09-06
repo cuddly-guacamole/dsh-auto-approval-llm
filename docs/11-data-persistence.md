@@ -71,11 +71,11 @@ pushHistory 每次附带写一条 `type:'decision'`；UI 清历史只清内存+h
    "count":3,"firstAt":…,"lastAt":…}}}
 ```
 
-- **键**：SHA-256(`sigVersion|kind|workspace|signature`)（<span class="lnum">learning.ts:L221-223</span>）——签名是确定性整行模板（[§18](./18-confirm-learning)），不含任何原始值。
-- **骨架卫生**：模板先过 `redactSecrets` 再落盘，且只允许字符白名单、长度 ≤512（<span class="lnum">learning.ts:L64-65</span>）。
-- **回收**：TTL 默认 30 天、上限默认 100 条，按 `lastAt` LRU 逐出（`evictLearning`，<span class="lnum">learning.ts:L305-315</span>）；关闭开关不清数据。
-- **写入**：同步 `tmp + rename` 原子替换（`persistLearning`，<span class="lnum">learning.ts:L339-347</span>），best-effort，进程内副本兜底。
-- **隔离**：查找要求 `entry.workspace === 当前工作区` 精确相等（<span class="lnum">learning.ts:L401</span>）——一个项目学到的放行资格不会带到另一个项目。
+- **键**：SHA-256(`sigVersion|kind|workspace|signature`)（<span class="lnum">learning.ts:L248-250</span>）——签名是确定性整行模板（[§18](./18-confirm-learning)），不含任何原始值。
+- **骨架卫生**：模板先过 `redactSecrets` 再落盘（<span class="lnum">learning.ts:L225/L242</span>），且只允许字符白名单、长度 ≤512（`SKELETON_MAX`，<span class="lnum">learning.ts:L68</span>）。
+- **回收**：TTL 默认 30 天、上限默认 100 条，按 `lastAt` LRU 逐出（`evictLearning`，<span class="lnum">learning.ts:L387-397</span>）；关闭开关不清数据。
+- **写入**：同步 `tmp + rename` 原子替换（`persistLearning`，<span class="lnum">learning.ts:L423</span>），best-effort，进程内副本兜底。
+- **隔离**：查找要求 `entry.workspace === 当前工作区` 精确相等（lookupLearning 门，<span class="lnum">learning.ts:L514-522</span>）——一个项目学到的放行资格不会带到另一个项目。
 
 ::: tip
 审计刻意存普通文件而非会话 user/message 事件：**主模型永远无法把它读回来当成提示注入通道**，同时保证「清空可恢复」。

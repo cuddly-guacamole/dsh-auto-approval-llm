@@ -68,5 +68,5 @@ Rules:
 </table>
 
 - **解析严格性**（`parseReview`）：剥围栏→取 {…}→JSON.parse；decision 不在三值、risk_level 不在四档、reason 非字符串 → **一律 throw**，走 catch 的 fail-closed 路径。半个解析结果永不被信任。
-- **超时**：评审超时 = **风险档秒数 ×1000ms**（5/8/10s，跟随倒计时）；只有 pre-execute 预分类器用独立的 `classifierTimeoutMs`（默认 8s）。`AbortSignal.timeout + .any([req.signal, timer])` 合并取消。
+- **超时**：每次评审尝试的等待上限由 `reviewWaitSeconds`（默认 5s，保存钳入 1–10s）决定，**与风险档倒计时解耦**；预分类器另用独立的 `classifierTimeoutMs`（默认 8s）。`AbortSignal.timeout + .any([req.signal, timer])` 合并取消。
 - **建议行**：`🤖 Review suggestion: ALLOW(MEDIUM) — 原因（经脱敏）`，理由永远先过 `sanitizeReviewReason` 才落进审批文案/历史（防密钥经评审 echo 泄漏）。

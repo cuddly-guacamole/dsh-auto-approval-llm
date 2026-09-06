@@ -46,7 +46,8 @@ export default withMermaid(defineConfig({
           { text: '10 客户端 UI', link: '/10-client-ui' },
           { text: '11 数据与持久化', link: '/11-data-persistence' },
           { text: '12 配置全景', link: '/12-config' },
-          { text: '13 HTTP API', link: '/13-http-api' }
+          { text: '13 HTTP API', link: '/13-http-api' },
+          { text: '19 平台支持', link: '/19-platform-support' }
         ]
       },
       {
