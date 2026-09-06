@@ -101,12 +101,12 @@ export interface Config {
   tempRoots?: string[]
   classifierTimeoutMs?: number
   classifierMaxOutputTokens?: number
-  /** Fast-decision lane model source: session / preset (host DSH model) / endpoint (custom, marked legacy). */
+  /** Fast-decision lane model source: session / preset (host DSH model) / endpoint (custom, retained but no longer maintained). */
   classifierSource: 'session' | 'preset' | 'endpoint'
   /** Fast-decision preset pair; honored only while classifierSource==='preset'. */
   classifierProvider: string
   classifierModel: string
-  /** Deep-review lane model source: session / preset / endpoint. */
+  /** Deep-review lane model source: session / preset / endpoint (custom, retained but no longer maintained). */
   reviewerSource: 'session' | 'preset' | 'endpoint'
   /** Deep-review preset provider (name revived from the retired pair era). */
   reviewerProvider: string

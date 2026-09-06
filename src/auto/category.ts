@@ -1,8 +1,8 @@
 /**
- * dsh-auto-approval-llm · category tri-state layer (pure, zero fs/network).
+ * dsh-auto-approval-llm · category four-state layer (pure, zero fs/network).
  *
  * A thin, fail-closed overlay that labels a tool call / shell command with one
- * of 11 categories and derives a tri-state directive ('inherit' | 'auto' |
+ * of 11 categories and derives a four-state directive ('inherit' | 'auto' |
  * 'ask' | 'deny') from the live category policy. It never changes the
  * assessment contracts of policy.ts / shell.ts: the layer only *covers* the
  * risk tier at the two wiring points (pre-execute tightening + answerer), and
@@ -661,7 +661,7 @@ export function categorizeCommand(source: string, shell: string, roots: Category
 }
 
 /**
- * Derive the tri-state directive for one category under a config slice.
+ * Derive the four-state directive for one category under a config slice.
  * - unknown / harnessInternal → inherit (no configurable key exists)
  * - LOCKED categories: only 'ask' is legal; a mis-clamped auto/deny clamps to
  *   'ask'; unconfigured → 'inherit' (standard) or 'ask' (aggressive builtin).

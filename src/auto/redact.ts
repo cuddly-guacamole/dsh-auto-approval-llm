@@ -139,9 +139,9 @@ export const REDACTED_FIELD = '[redacted:field]'
  * - Cycle terminator. A self-referencing result stops here.
  * - Cost guard on pathological shapes.
  *
- * 64 rather than 6: the copy-on-write walk below made the realistic cases
- * cheaper (2000 file rows: 4.50ms → 0.91ms), which buys the headroom to cover
- * far deeper results while staying an order of magnitude inside the stack.
+ * 64 rather than 6: the copy-on-write walk below measured 0.91ms vs 4.50ms on
+ * 2000 file rows — the budget covers far deeper results while staying an order
+ * of magnitude inside the stack.
  */
 const DEFAULT_MAX_DEPTH = 64
 
