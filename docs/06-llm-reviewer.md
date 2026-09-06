@@ -38,7 +38,7 @@ flowchart TD
 | 脱敏规则（classifier.ts） | 行为 |
 |---|---|
 | `sk-/ghp/github_pat/xox* token、Bearer、key=value、AKIA、aws 密钥、PEM 整块` | → `[redacted-secret]` |
-| `键名含 api/auth/access/secret/private/credential/password/token/cookie/authorization` | → `[redacted-secret-field]` |
+| `键名含 api/auth/access/secret/private/credential/password/passwd/passphrase/token/cookie/authorization/signature/session key` | → `[redacted-secret-field]` |
 | `内容类键（content/body/payload/data/text/old_string/new_string/description/justification）` | → `[redacted-{key}:{len}-chars]`（防 bulk 泄进 token 预算） |
 | `结构` | 递归深度 ≤3；数组 ≤25；对象键 ≤50；文本 ≤1000 字符 |
 
