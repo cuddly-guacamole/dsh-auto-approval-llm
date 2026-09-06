@@ -10,8 +10,13 @@
 | `debug` | false | 写 approval-debug.jsonl + [debug] 日志 |
 | `classifierSource` | session | 快速判断通道模型来源：session · preset(DSH 模型) · endpoint(共享端点) |
 | `classifierProvider / classifierModel` | '' | preset 档成对必填 |
+| `classifierReasoning` | '' | 快速判断通道推理强度：'' 跟随 adapter 默认；显式值（off/minimal/low/medium/high/xhigh/max）作为 dsh reasoningEffort 转发，模型不支持时 loud fail 不静默 |
+| `classifierTimeoutMs` | 8000 | 分类器超时（100–60000ms） |
+| `classifierMaxOutputTokens` | 1024 | 分类器输出上限（64–4096） |
 | `reviewerSource` | session | 深度评审通道模型来源：session · preset(DSH 模型) · endpoint(共享端点) |
 | `reviewerProvider / reviewerModel` | '' | preset 档成对必填 |
+| `reviewerReasoning` | '' | 深度评审通道推理强度（语义同 classifierReasoning） |
+| `reviewerMaxTokens` | 2048 | 深度评审输出上限（256–16384） |
 | `endpointUrl / endpointModel / endpointProtocol` | ''/''/openai | 共享自定义端点（两通道 endpoint 源共用）；openai · anthropic |
 | `timeoutAction` | reject | reject · allow · low-risk-allow |
 | `llmReviewScope` | low-or-above | 哪些档送审 |
@@ -28,10 +33,14 @@
 | `maxTotalDenials` | 20 | 0=关闭 |
 | `maxArgsChars` | 4000 | 参数取回截断 |
 | `notifyUser` | true | 「模型通过」通知进会话 |
+| `onboardingMessageEnabled` | true | 首次 Auto 会话向 agent 注入一次性英文引导消息（上下文声明，非用户横幅）；关掉后不再注入 |
+| `autoModeNoticeEnabled` | true | 自动审批模式进入/退出时向 agent 注入英文上下文声明（独立开关） |
 | `showSessionPanel` | off | on/auto/off（客户端消费） |
 | `breakerAntiHijackMs` | 0 | 熔断弹窗防误点（客户端消费）；设置卡已撤下，仅 YAML 配置 |
 | `aiButtonPosition` | header | header/floating（客户端消费） |
+| `workspaceRoot / dshHome / tempRoots` | ''/''/[] | 路径根（DSH_HOME 默认保护；host-only） |
 | `reviewMaxRetries` | 1 | LLM 审查首次失败后的额外重试次数（0-2；0=单次，1=默认；滚动剩余预算，见 src/auto/retry.ts）——**普通键**，安全规则卡可改 |
+| `reviewWaitSeconds` | 5 | 每次 LLM 评审尝试的等待时间（秒，1–10）；官方通道 TTFB 慢时调大，建议不超过低风险倒计时 |
 | `redactResults` | false | 开启后把成功工具结果也过一遍脱敏器再喂回模型（post-execute 侧） |
 | `reviewerContextFacts` | false | 上下文增强复审：给评审输入附加结构化工作区事实（只读元数据）；host-only 键：仅 settings.yaml 可配（设置卡无此控件） |
 | `editDiffPreview` | false | 编辑类工具进人工审批时展示行级红绿 diff（纯展示，不参与裁决） |
@@ -44,7 +53,8 @@
 | `trustedDshSubpaths` | [] | 允许 Auto 会话写入的 DSH_HOME 子目录（绝对路径数组，host-only）。默认空=DSH_HOME 整树恒拒；列出的子树获得与插件自身开发区同级的放行，请只写最窄目录。**开口只服务结构化工具（edit/write 等）；shell 写向量对 DSH_HOME 一律恒拒，不随开口放开。**六道清洗全部 warn+丢弃：非绝对路径、不在 DSH_HOME 内、等于 DSH_HOME 本身、覆盖 fenced 子树（`sessions` / `plugins` / `credentials*`）、归一化后落入 critical 树。**注意**：技能文件内容会作为指令注入 agent 上下文，放开 `skills` 等于允许 agent 改写自身行为约束且持久生效——只在明确需要时开启。插件运行态文件（history/audit/learning…）的恒拒与本键正交，不受影响 |
 | `learningEnabled` | false | 确认制学习总开关：默认关（铁律），开启后同一操作被人工反复确认才可能自动放行（§18） |
 | `learningThreshold` | 3 | 触发学习放行所需的人工确认次数；保存时钳入 [2,10]（clampLearningThreshold），越界值由 resolveConfig 发 warn（<span class="lnum">index.ts:L255-262</span>） |
-| `<span class="badgeok">host-only ×11</span>` | — | workspaceRoot / dshHome / tempRoots / **trustedDirs** / **trustedDshSubpaths** / classifierTimeoutMs(8s,100-60000) / classifierMaxOutputTokens(1024,64-4096) / maxArgsChars / notifyUser / **reviewerContextFacts**（<span class="lnum">decision.ts:L224-234</span>；preserveHostKeys 回填，卡片保存不抹掉）。注意 reviewMaxRetries **不在**此名单——它是可被设置卡修改的普通键 |
+| `directHumanEnabled` | false | 直接人工通道：agent 可调用 `dsa_request_user` 把后续操作路由给人工而非 LLM 分类器；默认关=零行为差异。工具仅在开启时于启动注册（工具集不可热换——开启需重启），审批通道读取实时，关掉立即停用已注册工具 |
+| `<span class="badgeok">host-only ×11</span>` | — | workspaceRoot / dshHome / tempRoots / **trustedDirs** / **trustedDshSubpaths** / maintenanceDshPaths / classifierTimeoutMs(8s,100-60000) / classifierMaxOutputTokens(1024,64-4096) / maxArgsChars / notifyUser / **reviewerContextFacts**（<span class="lnum">decision.ts:L275-287</span>；preserveHostKeys 回填，卡片保存不抹掉）。注意 reviewMaxRetries **不在**此名单——它是可被设置卡修改的普通键 |
 
 ### 三处设计亮点
 
