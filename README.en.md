@@ -2,7 +2,7 @@
 
 > LLM-assisted auto approval with a timeout fallback for DeepSeek Harness's **Auto permission preset**.
 
-`Auto` = `sandbox: danger-full-access` + `approval: ask`. This plugin is the **single terminal decision-maker** for `approval/request` inside Auto sessions: routine operations pass, risky/ambiguous ones go through the automatic pipeline `static rules → LLM classifier → LLM/human decision → countdown fallback → breaker`, maximizing "automatic yet safe" throughput while keeping human and audit fallbacks.
+`Auto` = `sandbox: danger-full-access` + `approval: ask`. This plugin is the **single terminal decision-maker** for `approval/request` inside Auto sessions: routine operations pass through static rules directly, risky/ambiguous ones go through the automatic pipeline `static rules → LLM classifier → LLM/human decision → countdown fallback → breaker` for a decision, with human and audit fallbacks kept throughout.
 
 > 🖥️ **Platform support**: primarily developed and tested on **Windows + Git Bash**; feedback from macOS / Linux / WSL is welcome (see [Platform support](#platform-support)). **Android-browser access collects UI feedback only, with no support promise; the Auto preset is not supported in Android-native environments** (Termux / root / adb / shizuku and the like).
 
