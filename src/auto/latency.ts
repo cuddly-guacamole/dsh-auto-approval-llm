@@ -30,8 +30,8 @@ export interface LatencySample {
   /** Total attempts (1 = single call); present once retries are in play. */
   attempts?: number
   /** Which LLM lane produced the sample: 'reviewer' (deep review, the
-   * original telemetry) or 'classifier' (fast-decision lane, added 2026-09-05).
-   * Absent = legacy reviewer-era sample. */
+   * original telemetry) or 'classifier' (fast-decision lane). Absent =
+   * legacy reviewer-era sample. */
   channel?: 'classifier' | 'reviewer'
 }
 

@@ -106,7 +106,7 @@ export function createDshClassifier(runtime, config) {
  * Endpoint-source classifier: a synchronous raw-endpoint call (the 'endpoint'
  * model source, marked legacy). The endpoint config is passed per classify()
  * — never captured at construction — so a settings change cannot silently
- * steer a later call at a stale URL/model (2026-09-05 ruling). The payload and
+ * steer a later call at a stale URL/model (security ruling). The payload and
  * system prompt are identical to the host path; only the transport differs.
  */
 export function createEndpointClassifier(config) {

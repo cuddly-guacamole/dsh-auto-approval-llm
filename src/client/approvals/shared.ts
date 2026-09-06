@@ -97,7 +97,7 @@ export function forgetAnsweredKeys(sessionId: string): void {
 // an approval, so the watcher's dispose can clear their answered-key
 // tombstones. Bounded with the same FIFO discipline as answeredApprovals —
 // a long-lived browser tab must not grow a per-session set without limit as
-// sessions are created and disposed (R007).
+// sessions are created and disposed.
 export const MAX_SEEN_SESSIONS = 500
 
 export interface SeenSessionTracker {
@@ -214,7 +214,7 @@ export function startReviewPolling(
   const g = globalThis as any
 
   let settled = false
-  // In-flight guard (F4): poll() may be entered by the immediate poll, the
+  // In-flight guard: poll() may be entered by the immediate poll, the
   // interval tick and pollNow() — a response slower than pollMs used to let
   // every later tick stack a second request for the same callId. Only one
   // outstanding review-status fetch per poller instance, ever.
@@ -259,7 +259,7 @@ export function startReviewPolling(
       if (status.source === 'human' || status.source === 'abort') {
         // The human answered the panel / the ask was cancelled: detaching is
         // enough — re-answering would re-respond to a settled approval and
-        // mislabel it (R001).
+        // mislabel it.
         detach()
         return
       }
@@ -303,7 +303,7 @@ export function startReviewPolling(
     }
     const next = `countdown:${status.action}:${status.seconds}`
     // A published countdown always supersedes any grace armed on an earlier
-    // observation (R002) — cancel FIRST, also when the same value is
+    // observation — cancel FIRST, also when the same value is
     // re-published: the grace may have been armed while the status window was
     // briefly empty (status-lag), and leaving it armed would let a stale
     // recorded action close the panel mid-countdown.
@@ -337,7 +337,7 @@ export function startReviewPolling(
     } finally {
       inFlight = false
     }
-    // Drop late responses for approvals already detached from (R004).
+    // Drop late responses for approvals already detached from.
     if (settled) return
     applyStatus(status)
   }
@@ -388,7 +388,7 @@ export interface BreakerGuard {
  * makes the guard a complete no-op (default). The window is re-applied on
  * every apply while it is open: a React re-render swaps the button nodes
  * mid-window, so each scan re-captures the CURRENT nodes (keeping them
- * disabled) and expiry restores whichever nodes are in the DOM then (F5).
+ * disabled) and expiry restores whichever nodes are in the DOM then.
  */
 export function createBreakerGuard(getWindowMs: () => number): BreakerGuard {
   const breakerTimers = new Map<string, BreakerEntry>()
@@ -426,7 +426,7 @@ export function createBreakerGuard(getWindowMs: () => number): BreakerGuard {
     if (current) {
       // Window still open: re-apply to the CURRENT nodes. A React re-render
       // mid-window swaps the button nodes; without re-arming here the new
-      // buttons would stay enabled for the rest of the window (F5).
+      // buttons would stay enabled for the rest of the window.
       armNode(current, reject, 'reject')
       armNode(current, allow, 'allow')
       return

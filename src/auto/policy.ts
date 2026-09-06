@@ -249,7 +249,7 @@ export function assessTool(exec: ExecLike, roots: Roots, artifacts: unknown): To
         if (isProtectedProjectPath(normalized, roots))
             return { decision: 'ask', reason: `reading protected project metadata requires semantic review: ${normalized}`, classifierEligible: true };
         // A relaxation that newly admits a path outside the (position) workspace
-        // must still fuse sensitive basenames anywhere (G1): trusted-dir or
+        // must still fuse sensitive basenames anywhere: trusted-dir or
         // aggressive reads of `.env`/`.ssh/...` stay gated.
         if (!isWithin(roots.workspace, normalized) && sensitiveBasenameAt(normalized, roots))
             return { decision: 'ask', reason: `reading a sensitive path outside the workspace requires semantic review: ${normalized}`, classifierEligible: true };

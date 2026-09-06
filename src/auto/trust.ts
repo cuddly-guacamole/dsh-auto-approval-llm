@@ -99,7 +99,7 @@ export function reviewerProbeTargetAllowed(probeUrl: URL): boolean {
 
 /**
  * Whether an IPv4 dotted-quad is globally reachable unicast. Aligned with
- * ipaddr.js `range() === 'unicast'` (verified 2026-09-03 against the official
+ * ipaddr.js `range() === 'unicast'` (verified against the official
  * package's own tables): rejects private/link-local/loopback/unspecified/
  * CGNAT/multicast/reserved/documentation/testing 100.64/10, 127/8, 169.254/16,
  * 10/8, 172.16/12, 192.168/16, 198.18/15, 224/4, 240/4, 0/8, and the

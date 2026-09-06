@@ -37,17 +37,17 @@ const UI_SESSION_RETRY_MS = 500
 const UI_SESSION_MAX_RETRIES = 30 // 15s covers the client application batch
 
 export function watchRemoteApprovals(ctx: any, options: WatcherOptions = {}): void {
-  // Injectable for node contract tests (M1, 2026-09-03); defaults keep the
+  // Injectable for node contract tests; defaults keep the
   // 15s probe window of the original alpha.4 wiring.
   const retryMs = options.retryMs ?? UI_SESSION_RETRY_MS
   const maxRetries = options.maxRetries ?? UI_SESSION_MAX_RETRIES
   const g = globalThis as any
   const active = new Map<string, { dispose: () => void; pollNow: () => void }>()
   // Tombstones: approvals the watcher already detached from (host resolved,
-  // follow answered). Prevents check() from re-arming a stale approval
-  // (R004); cleared when the item leaves the snapshot.
+  // follow answered). Prevents check() from re-arming a stale approval;
+  // cleared when the item leaves the snapshot.
   const resolvedKeys = new Set<string>()
-  // Session ids that ever showed an approval, bounded FIFO (R007): dispose
+  // Session ids that ever showed an approval, bounded FIFO: dispose
   // clears their answered-key tombstones. Without the cap a long-lived
   // browser tab grows this set with every historical session.
   const seenSessions = createSeenSessionTracker()
@@ -220,8 +220,7 @@ export function watchRemoteApprovals(ctx: any, options: WatcherOptions = {}): vo
     // A visibility-triggered restart must never stack a second probe interval
     // over a live one: the two would race their independent retry counters,
     // and the first to give up would clearProbeTimer() the OTHER interval
-    // (retryTimer is a shared slot), terminating the probe early (F1,
-    // 2026-09-03 audit).
+    // (retryTimer is a shared slot), terminating the probe early.
     if (retryTimer !== undefined) return
     let retries = 0
     retryTimer = setInterval(() => {
@@ -255,7 +254,7 @@ export function watchRemoteApprovals(ctx: any, options: WatcherOptions = {}): vo
   // uiSession after the probe window, and HMR is not guaranteed to rebuild the
   // bundle. Re-arm on the next visibility restore; if the service is still
   // missing, restart the bounded probe window instead of staying dead until
-  // the plugin is reloaded (F1, 2026-09-03 audit).
+  // the plugin is reloaded.
   function armVisibilityProbe(): void {
     const doc = g.document
     if (!doc || typeof doc.addEventListener !== 'function') return

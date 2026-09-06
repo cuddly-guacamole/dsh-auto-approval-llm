@@ -95,7 +95,7 @@ function isBoundedPattern(src: string): boolean {
   // A group carrying a counted repeat (closed or open upper bound: `(a{5})+`,
   // `(a{5,})+`, `(a{5,10})`) under an outer unbounded quantifier — the
   // composition-count blowup is reachable WITHOUT any `|`, so the alternation
-  // rules above cannot cover it (L2, 2026-09-03 audit; the `(a|aa)+` shape
+  // rules above cannot cover it; the `(a|aa)+` shape
   // itself is structurally impossible because the rule grammar splits on bare
   // `|` at parse time — see parseRulesText).
   if (/\(\s*[^()]*\{\s*\d+\s*(?:,\s*\d*\s*)?\}\s*\)\s*[+*]/.test(src)) return false

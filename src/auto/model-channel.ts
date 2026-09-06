@@ -3,13 +3,13 @@
  * classifier / deep-review reviewer), replacing the scattered per-lane source
  * switches and the online/offline branch inside the review snapshot.
  *
- * One semantic, three sources (2026-09-05, llm-channel-unify):
+ * One semantic, three sources (llm-channel-unify):
  *   session  — follow the current session's provider/model route
  *   preset   — use a provider/model the DSH host has registered (host LLM)
  *   endpoint — use a custom OpenAI/Anthropic-compatible endpoint (raw fetch;
  *              the shared endpoint config is lane-agnostic by design)
  *
- * Half-configuration discipline (user ruling, 2026-09-05): an explicit preset
+ * Half-configuration discipline (user ruling): an explicit preset
  * or endpoint choice that is misconfigured fails LOUDLY at the consumer —
  * it is never silently downgraded to the session model (the operator asked for
  * a specific model; a silent fallback would hide the misconfiguration). Only a
@@ -48,7 +48,7 @@ const nonEmpty = (v: string): boolean => String(v ?? '').trim().length > 0
  * reactivate); `preset` keeps a complete pair and marks an incomplete one with
  * `error` instead of silently degrading. Never throws — schema defaults ('' +
  * 'session') and this normalizer keep hand-written settings from crashing
- * bootstrap (2026-08-26 half-configuration precedent).
+ * bootstrap (half-configuration precedent).
  */
 export function normalizeLane(raw: Partial<LaneChannel>): NormalizedLane {
   const source = raw.source === 'preset' || raw.source === 'endpoint' ? raw.source : 'session'

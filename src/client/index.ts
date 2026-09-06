@@ -146,7 +146,7 @@ function hijackApprovalButtons(): () => void {
         // Expired: stop ticking but KEEP the key registered so a later scan
         // cannot re-arm this panel with the marker's static seconds — the
         // countdown restarted at its full value on every DOM mutation before
-        // (R008). The live-keys sweep in scan() releases the key when the
+        // The live-keys sweep in scan() releases the key when the
         // panel actually leaves the DOM. Restore the clean button text so the
         // stale "（0s）" suffix does not linger on a panel the host already
         // resolved.
@@ -469,7 +469,7 @@ function valueOf(draft: Draft): any {
     learningEnabled: draft.learningEnabled === 'on',
     learningThreshold: Math.max(2, Math.min(10, intOr(draft.learningThreshold, THRESHOLD_DEFAULTS.learningThreshold))),
   }
-  // Model sources (2026-09-05 llm-channel-unify): the source switches always
+  // Model sources: the source switches always
   // persist (schema default 'session'); preset pairs and the shared endpoint
   // config persist only while non-empty. resolveConfig normalizes leftover
   // values away when a source is 'session', so stale values cannot silently
@@ -773,7 +773,7 @@ function SettingsSection() {
   }
   const [history, setHistory] = React.useState<any[]>([])
   const [llmLatency, setLlmLatency] = React.useState<any>(null)
-  // Latency split by lane (2026-09-05): reviewer (deep review) and classifier
+  // Latency split by lane: reviewer (deep review) and classifier
   // (fast decision) summaries arrive alongside the merged view.
   const [llmLatencyClassifier, setLlmLatencyClassifier] = React.useState<any>(null)
   const [llmLatencyAll, setLlmLatencyAll] = React.useState<any>(null)
@@ -808,8 +808,8 @@ function SettingsSection() {
   const [llmProviders, setLlmProviders] = React.useState<{ id: string; name: string }[] | null>(null)
   const [llmPresetModels, setLlmPresetModels] = React.useState<{ provider: string; id: string; name: string }[] | null>(null)
   // Reasoning-effort catalog for each preset lane, fetched from the host
-  // resolveModelInfo route for the lane's CURRENT provider/model pair (2026-09-06,
-  // dynamic picker). null = not loaded / no preset pair; [] = the model has no
+  // resolveModelInfo route for the lane's CURRENT provider/model pair,
+  // dynamic picker. null = not loaded / no preset pair; [] = the model has no
   // declared efforts (default-only picker). The stale guard below discards any
   // response for a pair the user already switched away from, so the cached
   // catalog always belongs to the current pair once the latest fetch lands.
@@ -819,7 +819,7 @@ function SettingsSection() {
   }>({ classifier: null, reviewer: null })
   // Latest requested pair per lane, so a slow effort response for a pair the
   // user already switched away from is discarded instead of mislabeling the
-  // current model's options (stale-catalog guard, 2026-09-06).
+  // current model's options (stale-catalog guard).
   const latestEffortPair = React.useRef<{ classifier: string; reviewer: string }>({ classifier: '', reviewer: '' })
   // In-card feedback: the most recent ok/error text for each sub-card, shown
   // inside that card's footer (not piled at the bottom of the plugin body).
@@ -966,7 +966,7 @@ function SettingsSection() {
     return () => { disposed = true }
   }, [openReview])
 
-  // Dynamic reasoning-effort catalog (2026-09-06): while the review card is
+  // Dynamic reasoning-effort catalog: while the review card is
   // open, refetch each preset lane's adapter-declared efforts whenever its
   // provider/model pair changes (choosePreset / manual input). A lane that is
   // not on a concrete preset pair keeps null → the picker falls back to the
@@ -1020,7 +1020,7 @@ function SettingsSection() {
     setDraft({ ...draft, ...patch })
   }
 
-  // Model-source picker model (2026-09-05 llm-channel-unify): each lane has a
+  // Model-source picker model: each lane has a
   // direct 3-value source switch — 'session' (follow the session model),
   // 'preset' (host DSH model from the catalog, pair filled from the menu) and
   // 'endpoint' (shared custom endpoint config, marked legacy). The preset
@@ -1744,7 +1744,7 @@ function SettingsSection() {
 
   // Test-result line: level-coded colors so a failed probe is unmistakable —
   // a leading "HTTP <code>" is rendered red, the provider's error detail white;
-  // success is green, transient/info states stay secondary (2026-09-03 UX).
+  // success is green, transient/info states stay secondary.
   const renderTestResult = (r: { kind: 'ok' | 'err' | 'info'; text: string }) => {
     if (r.kind === 'ok') {
       return React.createElement('span', { className: 'dsa-success', role: 'status' }, r.text)
@@ -2222,7 +2222,7 @@ function SettingsSection() {
     historyError ? React.createElement('p', { style: { color: 'var(--dsw-alias-state-error-primary)', fontSize: 12, margin: 0 } }, historyError) : null,
     // Latency lines by lane: fast decision (llmLatencyClassifier) first, then
     // deep review (llmLatency, backward compatible) — the classifier answers
-    // earlier in the pipeline, so its line leads (2026-09-06 ordering).
+    // earlier in the pipeline, so its line leads.
     latencyLine(t('settings.history.llmLatencyClassifier'), llmLatencyClassifier),
     latencyLine(t('settings.history.llmLatencyReviewer'), llmLatency),
     React.createElement('input', {

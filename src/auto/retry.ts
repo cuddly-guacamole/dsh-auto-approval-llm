@@ -1,6 +1,5 @@
 /**
- * Plugin-owned LLM review retry (2026-08-23 design, see
- * docs/2026-08-23-review-retry-plan-insight.md).
+ * Plugin-owned LLM review retry.
  *
  * Why a plugin-owned loop instead of the platform `dsh-llm-retry` path: the
  * official `agent/request-error` recovery is guarded by an invariant that

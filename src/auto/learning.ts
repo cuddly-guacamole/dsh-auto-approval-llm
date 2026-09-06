@@ -283,7 +283,7 @@ export function confirmActionFor(source: string): 'increment' | 'reset' | 'ignor
 }
 
 // 'unknown' is deliberately absent: unrecognized-but-confirmed operations
-// became learnable in 2026-09 (E-line); only the locked four and the
+// became learnable; only the locked four and the
 // internal harness category stay out of the learning domain.
 const NON_LEARNABLE_CATEGORIES: readonly string[] = [...LOCKED_CATEGORIES, 'harnessInternal']
 

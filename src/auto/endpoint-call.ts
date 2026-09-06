@@ -3,7 +3,7 @@
  * endpoint test probe). One implementation owns the protocol routing
  * (OpenAI chat/completions vs Anthropic messages), the SSRF/redirect fence and
  * the response-text extraction, so the reviewer, the classifier and the test
- * probe cannot drift apart on trust checks (2026-09-05 security ruling: a
+ * probe cannot drift apart on trust checks (security ruling: a
  * "shared fetch" that only shares the body builder but not the fence would be
  * a vulnerability).
  *
