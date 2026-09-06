@@ -77,5 +77,6 @@
 
 | 命令 | 行为 |
 |---|---|
-| `/approval reset` | 清熔断双计数器 + denialLog + 全部 7 张 approvalState 表；不动持久策略 |
+| `/approval-reset` | 清熔断双计数器 + denialLog + 全部 7 张 approvalState 表（当前会话作用域）；不动持久策略 |
+| `/approval-reset-all` | 同上但作用于全部会话 |
 | `/approval-mode` | 查/设当前会话评审模式（manual/smart/unattended，持久化，smart 不落盘=默认） |

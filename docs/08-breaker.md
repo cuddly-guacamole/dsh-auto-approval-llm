@@ -27,7 +27,7 @@
 :::
 
 ::: tip 生命周期
-**生命周期**：`session/disposed` 在锁内删除该会话键；`/approval reset` 清两个计数器 + denialLog + 全部 6 张 approvalState 表（reviewStates/followExpiry/reviewVerdicts/resolvedCallIds/timeoutFeedback/decisionFeedback）。
+**生命周期**：`session/disposed` 在锁内删除该会话键；`/approval-reset` 清两个计数器 + denialLog + 全部 6 张 approvalState 表（reviewStates/followExpiry/reviewVerdicts/resolvedCallIds/timeoutFeedback/decisionFeedback）。
 :::
 
 ## 8.3　触发生效后的人工面
@@ -39,4 +39,4 @@ flowchart TD
     A3["客户端防劫持：面板文本含「熔断」→ 两按钮禁用 breakerAntiHijackMs（默认 0 = 不启用） [anti-hijack]"]
 ```
 
-**恢复路径**：① 人做任何决定 → 双清零；② LOW 被 LLM 放行 → 双清零；③ `/approval reset`；④ 会话销毁 → 删键。评审失败（`llm-failed`）**不**计熔断 —— 失败怪线路/超时，不怪 LLM 判断。
+**恢复路径**：① 人做任何决定 → 双清零；② LOW 被 LLM 放行 → 双清零；③ `/approval-reset`；④ 会话销毁 → 删键。评审失败（`llm-failed`）**不**计熔断 —— 失败怪线路/超时，不怪 LLM 判断。
