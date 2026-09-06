@@ -1,6 +1,6 @@
 # 15 · 质量保障体系
 
-> *491 tests · runtime proofs*
+> *834 tests · runtime proofs*
 
 ## 15.1　契约测试覆盖地图（按主题归纳）
 
@@ -22,7 +22,7 @@
 | 信任/传输 | isTrustedRequest（loopback Host 要真回路对端、LAN 白名单、空白名单=特权、cross-site/cross-origin 拒）；validateReviewerBaseUrl 明文 http 回环栅栏 |
 | 并发/一致性 | createKeyedMutex（同键原子无丢失更新/异键并发/异常保链）；exports↔产物一致性 |
 
-12 个测试文件，合计 **604 例**（node --test 全绿基线）。
+46 个测试文件，合计 **834 例**（node --test 全绿基线）。
 
 ## 15.2　验收命令与运行时证据
 
@@ -31,7 +31,7 @@
 ```bash
 node_modules/.bin/tsc -p tsconfig.json   # 类型（policy/shell/paths 不再 @ts-nocheck）
 node_modules/.bin/tsdown                  # 客户端 bundle
-node --test "tests/**/*.test.mjs"        # 491/491 全绿
+node --test "tests/**/*.test.mjs"        # 834/834 全绿
 ```
 
 :::

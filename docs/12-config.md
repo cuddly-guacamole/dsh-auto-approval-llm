@@ -1,5 +1,5 @@
 # 12 · 配置全景
-> *41 keys, one source of truth*
+> *57 keys, one source of truth*
 
 ### 全部配置键（src/index.ts Config schema Z.object 原文）
 
@@ -44,7 +44,7 @@
 | `trustedDshSubpaths` | [] | 允许 Auto 会话写入的 DSH_HOME 子目录（绝对路径数组，host-only）。默认空=DSH_HOME 整树恒拒；列出的子树获得与插件自身开发区同级的放行，请只写最窄目录。**开口只服务结构化工具（edit/write 等）；shell 写向量对 DSH_HOME 一律恒拒，不随开口放开。**六道清洗全部 warn+丢弃：非绝对路径、不在 DSH_HOME 内、等于 DSH_HOME 本身、覆盖 fenced 子树（`sessions` / `plugins` / `credentials*`）、归一化后落入 critical 树。**注意**：技能文件内容会作为指令注入 agent 上下文，放开 `skills` 等于允许 agent 改写自身行为约束且持久生效——只在明确需要时开启。插件运行态文件（history/audit/learning…）的恒拒与本键正交，不受影响 |
 | `learningEnabled` | false | 确认制学习总开关：默认关（铁律），开启后同一操作被人工反复确认才可能自动放行（§18） |
 | `learningThreshold` | 3 | 触发学习放行所需的人工确认次数；保存时钳入 [2,10]（clampLearningThreshold），越界值由 resolveConfig 发 warn（<span class="lnum">index.ts:L255-262</span>） |
-| `<span class="badgeok">host-only ×10</span>` | — | workspaceRoot / dshHome / tempRoots / **trustedDirs** / **trustedDshSubpaths** / classifierTimeoutMs(8s,100-60000) / classifierMaxOutputTokens(1024,64-4096) / maxArgsChars / notifyUser / **reviewerContextFacts**（<span class="lnum">decision.ts:L224-234</span>；preserveHostKeys 回填，卡片保存不抹掉）。注意 reviewMaxRetries **不在**此名单——它是可被设置卡修改的普通键 |
+| `<span class="badgeok">host-only ×11</span>` | — | workspaceRoot / dshHome / tempRoots / **trustedDirs** / **trustedDshSubpaths** / classifierTimeoutMs(8s,100-60000) / classifierMaxOutputTokens(1024,64-4096) / maxArgsChars / notifyUser / **reviewerContextFacts**（<span class="lnum">decision.ts:L224-234</span>；preserveHostKeys 回填，卡片保存不抹掉）。注意 reviewMaxRetries **不在**此名单——它是可被设置卡修改的普通键 |
 
 ### 三处设计亮点
 

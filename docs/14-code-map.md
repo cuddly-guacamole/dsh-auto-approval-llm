@@ -6,39 +6,46 @@
 
 ```text
 src/
-├─ index.ts              宿主编排：apply()、四挂点接线、10 路由、命令、评审器、审计、学习接线  2922 行
-├─ auto/                 静态评估纯函数层（20 文件，按字母序）
-│    ├─ artifacts.ts     98   本会话成功创建路径登记（删除豁免依据）
-│    ├─ audit.ts         45   append-only 审批审计（清空留墓碑、5MiB 保尾）
-│    ├─ category.ts      699  11 类三态开关层：归类/优先级合并/指令钳制/信任目录模式
-│    ├─ classifier.ts    75   预分类提示词、参数脱敏、严格响应解析
-│    ├─ constants.ts     27   数值默认唯一事实源（倒计时/熔断/截断/学习族阈值）
-│    ├─ decision.ts      722  纯决策函数：评审解析、人机竞速、来源标注、熔断、静态名单、host-only 键
-│    ├─ dsh-classifier.ts 94  复用 ctx.llm 的低 token 分类请求（temperature 0）
-│    ├─ editdiff.ts      448  编辑类工具行级 diff 预览（LCS、官方语义镜像、倒计时字面量剥离）
-│    ├─ latency.ts       114  LLM 评审耗时环形缓冲（settled/aborted 二分、1MB 轮转）
-│    ├─ learning.ts      445  确认制学习：签名、计数、回收、查找、消费闸
-│    ├─ paths.ts         213  路径规范化、受保护/关键路径判定、运行态文件名单
-│    ├─ policy.ts        370  assessTool 确定性第一遍分类（17 步）
+├─ index.ts              宿主编排：apply()、四挂点接线、14 路由、命令、评审器、审计、学习接线  4534 行
+├─ auto/                 静态评估纯函数层（24 文件，按字母序）
+│    ├─ artifacts.ts     104  本会话成功创建路径登记（删除豁免依据）
+│    ├─ audit.ts         94   append-only 审批审计（清空留墓碑、5MiB 保尾）
+│    ├─ category.ts      751  11 类三态开关层：归类/优先级合并/指令钳制/信任目录模式
+│    ├─ classifier.ts    95   预分类提示词、参数脱敏、严格响应解析
+│    ├─ constants.ts     112  数值默认唯一事实源（倒计时/熔断/截断/学习族阈值）
+│    ├─ decision.ts      842  纯决策函数：评审解析、人机竞速、来源标注、熔断、静态名单、host-only 键
+│    ├─ dsh-classifier.ts 140  复用 ctx.llm 的低 token 分类请求（temperature 0）
+│    ├─ editdiff.ts      451  编辑类工具行级 diff 预览（LCS、官方语义镜像、倒计时字面量剥离）
+│    ├─ endpoint-call.ts 134  共享端点连通性探测与模型校验
+│    ├─ latency.ts       153  LLM 评审耗时环形缓冲（settled/aborted 二分、1MB 轮转）
+│    ├─ learning.ts      566  确认制学习：签名、计数、回收、查找、消费闸
+│    ├─ model-channel.ts 119  模型通道路由与 provider 选择
+│    ├─ paths.ts         257  路径规范化、受保护/关键路径判定、运行态文件名单
+│    ├─ policy.ts        401  assessTool 确定性第一遍分类（17 步）
 │    ├─ probe.ts         72   工作区事实只读探针（reviewerContextFacts 的元数据来源）
-│    ├─ redact.ts        96   秘密脱敏器（token/AWS/PEM/Bearer…，供参数/评审理由/骨架/结果共用）
+│    ├─ redact.ts        207  秘密脱敏器（token/AWS/PEM/Bearer…，供参数/评审理由/骨架/结果共用）
 │    ├─ retry.ts         185  LLM 复审自动重试（瞬时故障判定、预算滚动、Retry-After）
-│    ├─ review-mode.ts   52   每会话评审模式持久化快照
-│    ├─ risk-tokens.ts   13   HIGH 风险正则（NAME/REASON 单一事实源）
-│    ├─ rules.ts         370  声明式规则解析/求值（host 与浏览器共用）
-│    ├─ shell.ts         1224 bash/pwsh 词法分解 + 整行熔断 + 逐段静态分类（最大单文件）
-│    └─ trust.ts         101  web 路由信任平面（loopback/LAN 边界、Host 伪造防护、在线端点 URL 校验）
+│    ├─ review-mode.ts   56   每会话评审模式持久化快照
+│    ├─ risk-tokens.ts   24   HIGH 风险正则（NAME/REASON 单一事实源）
+│    ├─ rules.ts         407  声明式规则解析/求值（host 与浏览器共用）
+│    ├─ shell.ts         1414 bash/pwsh 词法分解 + 整行熔断 + 逐段静态分类（最大单文件）
+│    ├─ symlink.ts       120  符号链接创建与目标校验
+│    ├─ tool-stats.ts    94   工具调用统计收集
+│    └─ trust.ts         271  web 路由信任平面（loopback/LAN 边界、Host 伪造防护、在线端点 URL 校验）
 └─ client/
-     ├─ index.ts         React 客户端主体 2347 行（设置卡 6 子卡/面板增强/应答 watcher 装配/浮动按钮/CSS）
+     ├─ index.ts         React 客户端主体 3049 行（设置卡 6 子卡/面板增强/应答 watcher 装配/浮动按钮/CSS）
      ├─ approvals/       应答模块（0.0.12 起；0.0.16 起单协议——remote 源适配 + shared 协议无关核心；rc.2 legacy/feature 已删）
-     ├─ auto-icon.ts     权限菜单图标 + Auto 风险确认弹窗 624 行
-     └─ locale.ts        zh/en 双语 354 行
+     │    ├─ remote.ts       294
+     │    └─ shared.ts       518
+     ├─ auto-icon.ts     权限菜单图标 + Auto 风险确认弹窗 632 行
+     ├─ locale.ts        zh/en 双语 496 行
+     └─ tool-chips.ts    150  工具芯片
 
 tests/
 ├─ contract.test.mjs / category.test.mjs / classifier.test.mjs / redact.test.mjs
 ├─ editdiff.test.mjs / probe.test.mjs / history-robust.test.mjs / audit.test.mjs
 ├─ approvals-protocol.test.mjs / contract-devloop.test.mjs / trusted-dsh-subpaths.test.mjs / posix-platform.test.mjs
-└─ 合计 604 例（node --test 全绿基线）
+└─ 合计 834 例（node --test 全绿基线）
 scripts/
 ├─ build.sh             （DSH 源码仓库布局）tsc 编译 src→lib
 ├─ audit-query.mjs      审计查询 CLI
