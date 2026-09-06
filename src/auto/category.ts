@@ -114,7 +114,7 @@ interface Segment {
   readTargets: SegmentWord[]
 }
 
-// ── sensitive-name fuse (G1) ────────────────────────────────────────────────
+// ── sensitive-name fuse ────────────────────────────────────────────────
 // The workspace-scoped isProtectedProjectPath intentionally returns false for
 // paths outside the workspace, so an aggressive/trusted-dir relaxation must
 // re-fuse the same sensitive basenames at ANY position.
@@ -133,7 +133,7 @@ const SENSITIVE_DIRS = new Set(['.ssh', '.gnupg', '.aws', '.azure', '.kube'])
 
 /**
  * Whether a normalized path carries a sensitive basename or traverses a
- * sensitive directory at any position (G1). `roots` is accepted for signature
+ * sensitive directory at any position. `roots` is accepted for signature
  * symmetry with the policy call sites; the check itself is location-free.
  * `.config/gcloud` is a two-level marker (mirrors the paths.ts
  * credentialRoots entry) that single-segment lookup cannot see, so it is
@@ -616,7 +616,7 @@ export interface CommandDecision {
 }
 
 /**
- * Merge per-segment decisions (Q5 dual-track): the category is the first by
+ * Merge per-segment decisions: the category is the first by
  * global precedence (unknown never drags), and the directive is the strictest
  * of the segment values (deny > ask > auto > inherit).
  */

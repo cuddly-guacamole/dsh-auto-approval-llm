@@ -183,7 +183,7 @@ export const Config: z<Config> = z.object({
   // safetyPrompt goes verbatim into the reviewer system prompt (decision.ts
   // assembleReviewerSystem) and into every online review — bound it like the
   // rules text so an oversized prompt cannot inflate review cost or eat the
-  // countdown window (L3, 2026-09-03 audit).
+  // countdown window.
   safetyPrompt: z.string().default('').max(2000),
   allowlist: z.array(z.string()).default([]),
   denyList: z.array(z.string()).default([]),
@@ -212,18 +212,17 @@ export const Config: z<Config> = z.object({
   // (custom, marked legacy) source. Keys carry .default('') / a default enum
   // (never a bare optional) so a hand-written settings/patch file with one side
   // only cannot reach the classifier constructor half-wired — resolveConfig
-  // normalizes anyway, this is the schema-level backstop (2026-08-26
-  // half-configuration bootstrap crash precedent).
+  // normalizes anyway, this is the schema-level backstop.
   classifierSource: z.union(['session', 'preset', 'endpoint'] as const).default('session'),
   classifierProvider: z.string().default(''),
   classifierModel: z.string().default(''),
   reviewerSource: z.union(['session', 'preset', 'endpoint'] as const).default('session'),
   // reviewerProvider: preset-pair provider for the deep-review lane (name
-  // revived from the retired pair era — 2026-09-05 user ruling).
+  // revived from the retired pair era — user ruling).
   reviewerProvider: z.string().default(''),
   reviewerModel: z.string().default(''),
   // Deep-review output budget (reasoning models spend most of it thinking —
-  // 256 starved the final JSON answer on mimo-v2.5-free, 2026-09-05).
+  // 256 starved the final JSON answer on mimo-v2.5-free).
   reviewerMaxTokens: z.number().default(THRESHOLD_DEFAULTS.reviewerMaxTokens).min(256).max(16_384),
   // Reasoning effort: '' follows the adapter default (byte-identical to the
   // pre-switch era); an explicit value is forwarded to the dsh reasoningEffort
@@ -445,14 +444,14 @@ export function resolveConfig(raw: Config): Config {
   ) {
     console.warn(`[dsh-auto-approval-llm] clamping learningThreshold ${String(raw.learningThreshold)} to ${learningThreshold} (valid range: integer 2..10)`)
   }
-  // Model-source normalization (2026-09-05, llm-channel-unify): each lane
+  // Model-source normalization: each lane
   // resolves through the shared channel layer. An explicit preset/endpoint
   // choice that is half-configured is surfaced via the lane's `error` (consumers
   // fail loudly); it is never silently downgraded to the session model. A
   // `session` source carrying leftover preset values is silently cleaned, and a
   // stale 'custom' enum from the retired 2-source era normalizes to session —
   // warn and never throw, so a hand-written settings file can never crash
-  // bootstrap (2026-08-26 half-configuration precedent).
+  // bootstrap.
   const classifierLane = normalizeLane({
     source: (raw as any).classifierSource,
     presetProvider: (raw as any).classifierProvider,
@@ -528,8 +527,8 @@ function isModelRouteConfig(cfg: any): cfg is { provider: string; model: string 
 }
 
 // One normalized "all session events" view: rc.1 (0.1.2+) removed the
-// `Session.events` getter in favor of `snapshotEvents()` (commit 27bf1039,
-// 2026-09). The rc.2 fallback was dropped; snapshotEvents is the only source.
+// `Session.events` getter in favor of `snapshotEvents()` (commit 27bf1039).
+// The rc.2 fallback was dropped; snapshotEvents is the only source.
 export function sessionEventList(session: any): readonly any[] {
   if (session === undefined || session === null) return []
   if (typeof session.snapshotEvents === 'function') {
@@ -590,9 +589,9 @@ function findToolDescription(tools: any, toolName: string): string | undefined {
 }
 
 /**
- * Retry calibration history: the original 3.5s fit the 2026-08-23
+ * Retry calibration history: the original 3.5s fit the
  * mock/opencode latency profile (p95 ≈ 3.06s); direct DeepSeek official
- * review latency measured 2026-08-26 spans 266ms–4.9s, so the per-attempt
+ * review latency spans 266ms–4.9s, so the per-attempt
  * timeout became a user setting (`reviewWaitSeconds`, default 5, schema-clamped
  * 1..10). It should stay at or below the LOW countdown so a healthy review
  * still lands inside the window.
@@ -721,7 +720,7 @@ export async function buildReviewSnapshot(
   // summary (rules are constraints only; they can never authorize).
   const system = assembleReviewerSystem(config.safetyPrompt, config.rulesText)
 
-  // Channel-driven transport (2026-09-05, llm-channel-unify): the reviewer
+  // Channel-driven transport: the reviewer
   // source switch decides how this review travels — session/preset ride the
   // host LLM through a provider/model route; endpoint rides raw fetch to the
   // shared custom endpoint config. The API key (endpoint) resolves once into
@@ -734,7 +733,7 @@ export async function buildReviewSnapshot(
   })
   if (reviewerLane.error) {
     // The operator explicitly chose a source and misconfigured it — fail
-    // loudly, never silently follow the session model (2026-09-05 ruling).
+    // loudly, never silently follow the session model (ruling).
     return { failure: reviewerLane.error }
   }
   const endpoint = normalizeSharedEndpoint({
@@ -1053,8 +1052,7 @@ export const OFFICIAL_REJECT_GUIDANCE_TEXT =
  * match. Only the structured denial shape counts: error.message present, an
  * isError flag set, or the official "Error: the user rejected tool" text
  * prefix. Successful tool payloads (file reads, grep output, command output)
- * may legitimately carry the bare phrase and must NOT match on their own —
- * 2026-09-03 mis-injection: 13 phantom injections, zero real rejections.
+ * may legitimately carry the bare phrase and must NOT match on their own.
  * Pure; contract-tested.
  */
 export function officialRejectionIn(result: unknown): boolean {
@@ -1325,7 +1323,7 @@ export interface HistoryRecord {
   /** Wall-clock milliseconds the LLM took to produce this decision: the
    * fast-decision lane measures the classify call; a deep-review takeover
    * measures from the approval request to the LLM's claim resolution. Only
-   * present on LLM-adjudicated records (2026-09-05). */
+   * present on LLM-adjudicated records. */
   llmTookMs?: number
   /** Per-attempt failure trail when the review was retried (1-based `n`). */
   attempts?: RetryAttempt[]
@@ -1901,8 +1899,7 @@ export function installReviewerCredentialRoute(ctx: any): void {
       }
       // Resolve the service per request: the provider mounts asynchronously
       // after apply(), so a closure captured earlier would stay undefined and
-      // report "unavailable" even when the store is up (2026-09-03, web
-      // profile: GET returned configured:false / POST 400 on a live store).
+      // report "unavailable" even when the store is up.
       const credentials = ctx.get('credentials')
       try {
         if (req.method === 'GET') {
@@ -2184,8 +2181,7 @@ function installTestRoute(ctx: any, llm: any): void {
           // (the key was saved earlier and the input clears on save): resolve
           // the credential service per request, then the shared credential
           // file — the same chain the live review path uses, so the probe
-          // behaves exactly like the review it prepares for (2026-09-03:
-          // without this, a saved key probed as 401 when the field was blank).
+          // behaves exactly like the review it prepares for.
           const probeApiKey = apiKey || await (async () => {
             const creds = ctx.get('credentials')
             try {
@@ -2364,7 +2360,7 @@ export function installLlmCatalogRoutes(ctx: any, llm: any): void {
       try {
         // Resolve the exact model's metadata from its owning adapter — the
         // adapter's own declared reasoning efforts drive the picker, so the
-        // plugin never maintains a per-provider effort table (2026-09-05).
+        // plugin never maintains a per-provider effort table.
         const info = await llm.resolveModelInfo(provider, model)
         const reasoning = info?.reasoning
         const efforts = Array.isArray(reasoning?.efforts)
@@ -2402,7 +2398,7 @@ export function installSessionModeRoute(ctx: any): void {
       // Session id travels in a request header (never the URL query) so it
       // does not leak into devtools/logs/Referer — the same discipline as the
       // review-status call-id header (shared.ts documents the rule
-      // client-side; 2026-09-03 audit).
+      // client-side).
       const sessionId = String(req.headers?.['x-auto-approval-session-id'] ?? '').trim()
       if (!sessionId) {
         responseJson(res, 400, { ok: false, error: 'sessionId is required' })
@@ -2581,11 +2577,9 @@ export function apply(ctx: Context, rawConfig: Config): void {
 
   // Reviewer provider/model and classifier knobs are read at construction
   // time, so the classifier must be rebuilt whenever (live) settings change;
-  // Reviewer and classifier knobs are read at construction time, so the
-  // classifier must be rebuilt whenever (live) settings change.
   // The override pair must be complete: a lone provider (or model) would throw
   // inside the classifier once-during construction and take the whole plugin
-  // down at boot (seen 2026-08-26: half-configured reviewer settings crashed
+  // down at boot: half-configured reviewer settings crashed
   // dsh). Single-sided values are ignored defensively.
   // The classifier follows the session model unless the operator opted into a
   // preset lane: classifierSource==='preset' with a complete pair (already
@@ -2826,8 +2820,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
   // contract-tested): the workspace root and every target are resolved FRESH
   // per call — one process serves every workspace, and a process-wide cached
   // anchor made every non-first workspace's targets look like escapes and
-  // hard-denied all of their file mutations (multi-workspace regression,
-  // 2026-09-03 audit).
+  // hard-denied all of their file mutations (multi-workspace regression).
   anyCtx.tools?.guard?.((exec: any) => {
     if (!isAutoExecution(exec)) return undefined
     const roots = rootsFor(exec)
@@ -3075,7 +3068,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
     if (directive === 'ask') {
       return { kind: 'ask', reason: `[auto-mode category ask] ${exec.name}` }
     }
-    // Explicit allowlist (mirrored onto the pre-execute plane, 2026-09-05):
+    // Explicit allowlist (mirrored onto the pre-execute plane):
     // the allowlist used to answer only in the approval/request answerer, but
     // the classifier fast path below returns next() without ever creating an
     // approval/request, so a classifier deny could override a user's explicit
@@ -3175,7 +3168,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
         }
       } catch (error) {
         // The fast-decision lane's own latency is telemetry too: a failed or
-        // timed-out classification still cost wall-clock time (2026-09-05).
+        // timed-out classification still cost wall-clock time.
         pushLatencySample(llmLatency, { at: Date.now(), tookMs: Date.now() - classifierStart, settled: false, channel: 'classifier' })
         throw error
       }
@@ -3413,8 +3406,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       // session starts with a full learning allowance again).
       sessionLearnedAllows.delete(key)
       // The one-shot greeting marker is keyed by the same id; drop it so a
-      // long-lived process never grows the Set with disposed sessions (L1,
-      // 2026-09-03 audit).
+      // long-lived process never grows the Set with disposed sessions.
       firstAutoNoticeSeen.delete(key)
       // rejectGuidanceSeen keys are `${sessionId}:${callId}`; drop every key
       // of a disposed session wholesale (same L1 discipline — the Set is
@@ -4111,7 +4103,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
     if (staticRisk === 'LOW') {
       if (!llmReviews) {
         // Two LOW shapes reach this branch without a reviewer, and only one
-        // of them may auto-allow (user decision, 2026-09-05):
+        // of them may auto-allow (user decision):
         // - a NATIVE allow assessment (decision:'allow'; those are always
         //   classifierEligible:false) is the documented low-risk channel the
         //   relaxed/strict presets and the onboarding text promise;
@@ -4419,7 +4411,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
           return
         }
         // Session id travels in a request header, never the URL query (same
-        // discipline as SESSION_MODE_ROUTE; 2026-09-03 audit).
+        // discipline as SESSION_MODE_ROUTE).
         const sessionId = String(req.headers?.['x-auto-approval-session-id'] ?? '').trim()
         if (!sessionId) {
           responseJson(res, 400, { ok: false, error: 'sessionId is required' })
@@ -4487,7 +4479,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       name: 'approval-reset',
       description: '/approval-reset — reset this session breaker counters (global variant: /approval-reset-all)',
       handler: (invocation: any) => {
-        // User decision (2026-09-05): a bare reset is session-scoped — one
+        // User decision: a bare reset is session-scoped — one
         // session's escape hatch must not silently clear a concurrent
         // session's denial breaker (the counters are authority-session keyed,
         // so the scoped variant is a plain key delete). The global variant is
