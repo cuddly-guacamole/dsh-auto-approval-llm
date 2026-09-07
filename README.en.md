@@ -184,6 +184,7 @@ Session approval stats — the "Auto Approval" header-button popup: totals / all
 | `trustedDirs` | [] | Host-only key: extra trusted directory roots (array of absolute paths) — members of the `standard`-mode location whitelist and of the symlink re-check zone shared by both modes; credential/home/dshHome/critical paths are excluded; patch/YAML only — card saves won't wipe it |
 | `trustedDshSubpaths` | [] | Host-only key: DSH_HOME subtrees an Auto session may write (array of absolute paths). Empty by default = the whole DSH_HOME tree stays hard-denied (consistently across `edit`/`write`/`apply_patch`/`str_replace_editor`); a listed subtree gets the same allow as the plugin's own development zone. Patch/YAML only. Entries are dropped with a warning when they are not absolute, sit outside DSH_HOME, name DSH_HOME itself, cover `sessions`/`plugins`/`credentials*`, or normalize into a critical tree. **Know before enabling**: skill files are injected into the agent's context as instructions, so opening `skills` lets the agent durably rewrite its own constraints. The plugin's runtime-state hard-deny (history/audit/learning…) is orthogonal and unaffected |
 | `directHumanEnabled` | false | Direct-human channel: the agent may call `dsa_request_user` to route a follow-up operation to a human instead of the LLM classifier. Off by default = zero behavior change. The tool is REGISTERED only when the switch is on at boot (tool sets are not hot-swappable — enabling needs a restart); the answerer and execute checks read the switch live, so turning it off stops the channel at once |
+| `slashCommandsEnabled` | false | Registers `/approval-mode` `/approval-reset` `/approval-reset-all` in the command palette (review-mode show/set + breaker reset). Off by default = zero command surface. Command sets are not hot-swappable — they are REGISTERED only when the switch is on at boot (enabling needs a restart); every handler reads the switch live, so turning it off stops the already-registered commands at once |
 | `learningEnabled` | false | Confirmation learning: an operation approved manually enough times gets auto-released (a hit still passes one standard online review); off by default = zero behavior change. High risk / LOCKED categories / sensitive paths never participate (unknown is learnable since 0.0.15); max 50 learned releases per root session |
 | `learningThreshold` | 3 | Manual confirmations required before a learned release (clamped to 2–10 on save); a manual denial resets that signature's count |
 
@@ -192,6 +193,8 @@ Session approval stats — the "Auto Approval" header-button popup: totals / all
 ---
 
 ## Review modes and commands
+
+> The commands below are NOT registered by default: enable "Register /approval-mode /approval-reset /approval-reset-all commands" in the settings card (`slashCommandsEnabled`) and restart to get them in the palette; turning the switch off live disables the already-registered commands at once.
 
 - `/approval-mode` — show the current session review mode
 - `/approval-mode manual|smart|unattended` — set it (persisted)

@@ -39,4 +39,4 @@ flowchart TD
     A3["客户端防劫持：面板文本含「熔断」→ 两按钮禁用 breakerAntiHijackMs（默认 0 = 不启用） [anti-hijack]"]
 ```
 
-**恢复路径**：① 人做任何决定 → 双清零；② LOW 被 LLM 放行 → 双清零；③ `/approval-reset`；④ 会话销毁 → 删键。评审失败（`llm-failed`）**不**计熔断 —— 失败怪线路/超时，不怪 LLM 判断。
+**恢复路径**：① 人做任何决定 → 双清零；② LOW 被 LLM 放行 → 双清零；③ `/approval-reset`（命令为可选注册，`slashCommandsEnabled` 默认关——未注册时熔断只能靠人工决定/会话销毁恢复）；④ 会话销毁 → 删键。评审失败（`llm-failed`）**不**计熔断 —— 失败怪线路/超时，不怪 LLM 判断。
