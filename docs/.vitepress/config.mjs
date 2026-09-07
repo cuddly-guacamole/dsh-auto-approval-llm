@@ -72,17 +72,20 @@ export default withMermaid(defineConfig({
     lastUpdated: { text: '最后更新', formatOptions: { dateStyle: 'short', timeStyle: 'medium' } }
   },
   mermaid: {
-    // base 主题 + GitHub 风格变量：节点框用面板色而非 dark 主题的纯黑 #1f2020
+    // 亮色（白天）模式变量：vitepress-plugin-mermaid 在非 .dark 下保留此 themeVariables，
+    // 用 GitHub 浅色图表配色；暗色模式由该插件强制 theme:'dark' 并丢弃 themeVariables，
+    // 节点会落到 dark 主题自带近黑 #1f2020 —— 暗色配色在 theme/custom.css 中按 .dark 覆盖。
     theme: 'base',
     themeVariables: {
-      darkMode: true,
-      background: '#0d1117',
-      primaryColor: '#161b22',
-      primaryBorderColor: '#30363d',
-      primaryTextColor: '#c9d1d9',
-      lineColor: '#8b949e',
-      clusterBkg: '#161b22',
-      clusterBorder: '#30363d',
+      darkMode: false,
+      background: '#ffffff',
+      primaryColor: '#f6f8fa',        // 节点底
+      primaryBorderColor: '#d0d7de',  // 节点描边
+      primaryTextColor: '#1f2328',    // 节点文字
+      lineColor: '#59636e',           // 连线 / 箭头
+      edgeLabelBackground: '#f6f8fa', // 连线标签底
+      clusterBkg: '#f6f8fa',
+      clusterBorder: '#d0d7de',
       fontSize: '14px'
     }
   }        // vitepress-plugin-mermaid 配置
