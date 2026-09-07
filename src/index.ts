@@ -3753,7 +3753,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
         debugLog({ ev: 'learn-cap', sessionId: sessionKey, allows: used })
       }
       if (config.notifyUser && req.callId !== undefined) {
-        queueNotice(req.agent, req.callId, `✅ 已学习放行（仍通过一次在线评审）"${req.toolName}"`)
+        queueNotice(req.agent, req.callId, `✅ Learned allow for "${req.toolName}" (still passes one online review)`)
       }
       const audited = pushHistory({
         sessionId: sessionKey,
