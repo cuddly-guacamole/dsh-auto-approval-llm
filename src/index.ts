@@ -4487,7 +4487,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
   if (commands && config.slashCommandsEnabled === true) {
     ctx.effect(() => commands.register({
       name: 'approval-reset-all',
-      description: '/approval-reset-all — reset breaker counters and in-flight approval state for ALL sessions (global escape hatch)',
+      description: '/approval-reset-all — global reset of ALL sessions: clears every session\'s denial-breaker counters AND in-flight approval state. Destructive to current approval state; prefer the session-scoped /approval-reset unless you need a global reset.',
       handler: () => {
         if (!slashCommandsLive()) {
           return { kind: 'error', text: 'Slash commands are disabled (slashCommandsEnabled off); re-enable the switch and restart to use /approval-reset-all.' }
@@ -4497,7 +4497,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
     }), 'dsh-auto-approval-llm: /approval-reset-all command')
     ctx.effect(() => commands.register({
       name: 'approval-reset',
-      description: '/approval-reset — reset this session breaker counters (global variant: /approval-reset-all)',
+      description: '/approval-reset — reset THIS session\'s denial-breaker counters (consecutive/cumulative). Does not affect other sessions or in-flight approvals; use /approval-reset-all for a global reset. Takes no arguments.',
       handler: (invocation: any) => {
         if (!slashCommandsLive()) {
           return { kind: 'error', text: 'Slash commands are disabled (slashCommandsEnabled off); re-enable the switch and restart to use /approval-reset.' }
@@ -4527,7 +4527,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
     }), 'dsh-auto-approval-llm: /approval-reset command')
     ctx.effect(() => commands.register({
       name: 'approval-mode',
-      description: '/approval-mode [manual|smart|unattended] show/set this session review mode',
+      description: '/approval-mode — show or set THIS session\'s review mode: manual (human decides every ask), smart (LLM-assisted review), unattended (auto-answer; HIGH risk still asks a human). No argument shows the current mode. Only affects this session.',
       handler: (invocation: any) => {
         if (!slashCommandsLive()) {
           return { kind: 'error', text: 'Slash commands are disabled (slashCommandsEnabled off); re-enable the switch and restart to use /approval-mode.' }
