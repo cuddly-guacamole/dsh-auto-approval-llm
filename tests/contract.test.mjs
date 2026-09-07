@@ -33,7 +33,7 @@ import { parseClassifierDecision } from '../lib/auto/classifier.js'
 import { MODEL_REASON_MAX_CHARS } from '../lib/auto/constants.js'
 import { RISK_NAME_PATTERN, RISK_REASON_PATTERN } from '../lib/auto/risk-tokens.js'
 import { buildAskReason, buildEditDiffText } from '../lib/auto/editdiff.js'
-import { Config, resolveConfig, sessionModelRoute, buildReviewSnapshot, markFirstAutoSessionNotice, onboardingTimeoutLabel, onboardingNoticeText, extractProbeErrorSummary, extractReviewerKeyLine, installFeedbackRoute, installReviewerCredentialRoute, sessionEventList, currentPreset, trustedUserMessages, officialRejectionIn } from '../lib/index.js'
+import { Config, resolveConfig, sessionModelRoute, buildReviewSnapshot, markFirstAutoSessionNotice, onboardingTimeoutLabel, onboardingNoticeText, extractProbeErrorSummary, extractReviewerKeyLine, installFeedbackRoute, installReviewerCredentialRoute, sessionEventList, currentPreset, trustedUserMessages, questionAnswerMessages, officialRejectionIn } from '../lib/index.js'
 import { categorizeCommand } from '../lib/auto/category.js'
 
 test('parseClassifierDecision: valid allow/ask/deny', () => {
@@ -4339,6 +4339,89 @@ test('trustedUserMessages: no inbox and undefined authority behave like before',
     trustedUserMessages({ session: { snapshotEvents: () => [{ type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: 'plain' }] } }] } }),
     ['plain'],
   )
+})
+
+// ── ask_user_question answers as trusted user intents ─────────────────────
+// A user decision made through ask_user_question arrives as a tool result,
+// never as a user/message event. The user ruling: the user's ANSWER is
+// authorization evidence, while the question text is only context anchoring
+// what the user was answering (an agent-crafted question cannot authorize).
+
+const qaCallEvent = (callId, questions) => ({
+  type: 'tool/call',
+  data: { callId, name: 'ask_user_question', arguments: JSON.stringify({ questions }) },
+})
+const qaResultEvent = (callId, answers) => ({
+  type: 'tool/result',
+  data: { message: { source: { callId }, content: [{ type: 'text', text: JSON.stringify({ answers }) }] } },
+})
+
+test('questionAnswerMessages: pairs a call with its result and renders the answer as the trusted text', () => {
+  const events = [
+    qaCallEvent('q1', [{ id: 'a', question: '继续剩余修复项？', options: [{ label: '全部执行' }, { label: '跳过' }] }]),
+    qaResultEvent('q1', [{ id: 'a', selected: ['全部执行'] }]),
+  ]
+  const out = questionAnswerMessages(events)
+  assert.equal(out.length, 1)
+  assert.ok(out[0].text.includes('Question "继续剩余修复项？"'))
+  assert.ok(out[0].text.includes('user chose: 全部执行'))
+})
+
+test('questionAnswerMessages: custom answers and multi-select both render; empty answers are skipped', () => {
+  const events = [
+    qaCallEvent('q2', [{ id: 'm', question: 'which batch?', multiSelect: true }, { id: 'c', question: 'anything else?' }]),
+    qaResultEvent('q2', [
+      { id: 'm', selected: ['P1-9', 'M2'] },
+      { id: 'c', custom: 'run npm test first' },
+      { id: 'gone', selected: ['orphan'] },
+    ]),
+  ]
+  const out = questionAnswerMessages(events)
+  assert.equal(out.length, 2)
+  const text = out.map((e) => e.text).join('\n')
+  assert.ok(text.includes('user chose: P1-9, M2'))
+  assert.ok(text.includes('custom answer: run npm test first'))
+  assert.ok(!text.includes('orphan'), 'an answer without a matching question is dropped')
+})
+
+test('questionAnswerMessages: malformed call arguments or result payloads are ignored, never crash', () => {
+  const events = [
+    { type: 'tool/call', data: { callId: 'bad', name: 'ask_user_question', arguments: 'not json' } },
+    qaResultEvent('bad', [{ id: 'x', selected: ['y'] }]),
+    { type: 'tool/call', data: { callId: 'r2', name: 'ask_user_question', arguments: JSON.stringify({ questions: [{ id: 'x', question: 'q?' }] }) } },
+    { type: 'tool/result', data: { message: { source: { callId: 'r2' }, content: [{ type: 'text', text: 'not json either' }] } } },
+  ]
+  assert.deepEqual(questionAnswerMessages(events), [])
+})
+
+test('trustedUserMessages: admits an ask_user_question answer interleaved with plain messages in time order', () => {
+  const events = [
+    { type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: 'first words' }] } },
+    qaCallEvent('q3', [{ id: 'v', question: '版本？', options: [{ label: 'v0.0.19' }] }]),
+    qaResultEvent('q3', [{ id: 'v', selected: ['v0.0.19'] }]),
+    { type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: 'final note' }] } },
+  ]
+  const out = trustedUserMessages({ session: { snapshotEvents: () => events } })
+  assert.equal(out.length, 3)
+  assert.equal(out[0], 'first words')
+  assert.ok(out[1].includes('Question "版本？"'))
+  assert.equal(out[2], 'final note')
+})
+
+test('trustedUserMessages: the 4-slot budget keeps the newest intents across messages and answers', () => {
+  const events = [
+    { type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: 'one' }] } },
+    { type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: 'two' }] } },
+    { type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: 'three' }] } },
+    { type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: 'four' }] } },
+    qaCallEvent('q4', [{ id: 'z', question: 'pick', options: [{ label: 'chosen' }] }]),
+    qaResultEvent('q4', [{ id: 'z', selected: ['chosen'] }]),
+  ]
+  const out = trustedUserMessages({ session: { snapshotEvents: () => events } })
+  assert.equal(out.length, 4)
+  assert.ok(!out.includes('one'), 'the oldest plain message is evicted by the question answer')
+  assert.ok(out.includes('two') && out.includes('three') && out.includes('four'), 'the three newest plain messages stay')
+  assert.equal(out[out.length - 1], 'Question "pick" — user chose: chosen.', 'the question answer is the newest trusted intent')
 })
 
 // ── extractProbeErrorSummary: bounded, alert-worthy probe failure detail ──

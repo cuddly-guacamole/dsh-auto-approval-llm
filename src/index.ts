@@ -2428,45 +2428,143 @@ export function installSessionModeRoute(ctx: any): void {
   }), 'dsh-auto-approval-llm: session mode route')
 }
 
+/**
+ * Extract ask_user_question conversations from a session event list and
+ * render them as trusted user messages.
+ *
+ * ask_user_question is a normal tool call: its answers arrive as a tool
+ * result, never as a user/message event, so the trusted-message scan alone
+ * would miss a decision the user actually made through a question prompt.
+ * The user ruling is: the user's ANSWER is their expression (authorization
+ * evidence), while the QUESTION text is only context — an agent-crafted
+ * question cannot by itself authorize anything, and the answer labels were
+ * offered by the asker, so the reviewer still judges the concrete effect.
+ *
+ * Rendering: `Question "<question>" — user chose: <selected labels>[; custom: <text>]`.
+ * Question text rides along only to anchor what the user was answering.
+ * Call/result pairing uses the tool-call callId carried on the result's
+ * message source. Pure over the event list so the contract is unit-testable.
+ */
+export interface QuestionAnswerEntry {
+  /** Index of the tool/result event this answer came from (time anchor). */
+  index: number
+  text: string
+}
+
+export function questionAnswerMessages(events: readonly any[]): QuestionAnswerEntry[] {
+  const out: QuestionAnswerEntry[] = []
+  if (!Array.isArray(events)) return out
+  const askCalls = new Map<string, any>()
+  for (const event of events) {
+    const d = event?.data
+    if (event?.type === 'tool/call' && d?.name === 'ask_user_question' && typeof d?.callId === 'string') {
+      try {
+        const parsed = JSON.parse(String(d.arguments ?? '{}'))
+        if (Array.isArray(parsed?.questions)) askCalls.set(d.callId, parsed.questions)
+      } catch {
+        // Malformed arguments cannot pair; skip the call.
+      }
+    }
+  }
+  for (let index = 0; index < events.length; index += 1) {
+    const d = events[index]?.data
+    const callId = d?.message?.source?.callId
+    if (events[index]?.type !== 'tool/result' || typeof callId !== 'string') continue
+    const questions = askCalls.get(callId)
+    if (!Array.isArray(questions) || questions.length === 0) continue
+    let answersText = ''
+    for (const block of d?.message?.content ?? []) {
+      if (block?.type === 'text' && typeof block.text === 'string') answersText += block.text
+    }
+    let answers: any[] = []
+    try {
+      const parsed = JSON.parse(answersText)
+      if (Array.isArray(parsed?.answers)) answers = parsed.answers
+    } catch {
+      // Unparseable tool payload cannot be trusted as a structured answer.
+    }
+    const byId = new Map(questions.map((q: any) => [q?.id, q]))
+    for (const answer of answers) {
+      if (answer === null || typeof answer !== 'object') continue
+      const q = byId.get(answer?.id)
+      // An answer whose id matches no asked question is orphaned tool noise
+      // (or a replay); it cannot be attributed to any user decision.
+      if (q === undefined) continue
+      const selected = Array.isArray(answer?.selected)
+        ? answer.selected.filter((s: any) => typeof s === 'string' && s.trim() !== '')
+        : []
+      const custom = typeof answer?.custom === 'string' && answer.custom.trim() !== '' ? answer.custom.trim() : undefined
+      if (selected.length === 0 && custom === undefined) continue
+      const question = typeof q?.question === 'string' && q.question.trim() !== '' ? q.question.trim() : String(q?.id ?? '')
+      const parts: string[] = []
+      if (selected.length > 0) parts.push(`user chose: ${selected.join(', ')}`)
+      if (custom !== undefined) parts.push(`custom answer: ${custom}`)
+      out.push({ index, text: `Question "${question}" — ${parts.join('; ')}.` })
+    }
+  }
+  return out
+}
+
 export function trustedUserMessages(authority: any) {
   if (authority === undefined) return []
   const events = sessionEventList(authority.session)
-  const messages: string[] = []
-  let remaining = 4_000
-  const pushText = (text: unknown): void => {
-    const trimmed = String(text ?? '').trim()
-    if (trimmed === '') return
-    const sanitized = sanitizeClassifierText(trimmed).slice(0, remaining)
-    if (messages.includes(sanitized)) return
-    messages.push(sanitized)
-    remaining -= sanitized.length
-  }
   // Steered/interjected prompts live in the agent inbox until the next step
-  // consumes them, so the event stream cannot see them yet — admit them as
-  // the newest trusted user intent (deduped against the events below; only
-  // genuine user sources, never plugin injections).
+  // consumes them; admit them as trusted user intents (genuine user sources
+  // only, never plugin injections).
   const inbox = authority.inbox as { nextStep?: unknown[]; nextTurn?: unknown[] } | undefined
-  if (inbox !== undefined && messages.length < 4 && remaining > 0) {
+  const inboxTexts: string[] = []
+  if (inbox !== undefined) {
     for (const batch of [...(inbox.nextStep ?? []), ...(inbox.nextTurn ?? [])]) {
       const msg: any = Array.isArray(batch) ? batch[0] : batch
       if (msg?.source?.kind !== 'user') continue
       const content = msg.content
-      pushText(Array.isArray(content)
+      const text = Array.isArray(content)
         ? content.filter((block: any) => block.type === 'text').map((block: any) => block.text).join('\n')
-        : content)
-      if (messages.length >= 4 || remaining <= 0) break
+        : content
+      const trimmed = String(text ?? '').trim()
+      if (trimmed !== '') inboxTexts.push(sanitizeClassifierText(trimmed))
     }
   }
-  for (let index = events.length - 1; index >= 0 && messages.length < 4 && remaining > 0; index -= 1) {
-    const event = events[index]
-    if (event?.type !== 'user/message' || event.data.source.kind !== 'user') continue
-    const text = event.data.content
-      .filter((block: any) => block.type === 'text')
-      .map((block: any) => block.text)
-      .join('\n')
-    pushText(text)
+  // Event-stream intents, newest first: plain user messages plus rendered
+  // ask_user_question answers (see questionAnswerMessages), each anchored to
+  // its event index so recency is exact.
+  const qaByEvent = new Map<number, string>()
+  for (const qa of questionAnswerMessages(events)) qaByEvent.set(qa.index, qa.text)
+  const eventCandidates: Array<{ seq: number; text: string }> = []
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const event = events[i]
+    if (event?.type === 'user/message' && event.data?.source?.kind === 'user') {
+      const text = (event.data.content ?? [])
+        .filter((block: any) => block.type === 'text')
+        .map((block: any) => block.text)
+        .join('\n')
+      const trimmed = String(text).trim()
+      if (trimmed !== '') eventCandidates.push({ seq: i, text: sanitizeClassifierText(trimmed) })
+    } else if (event?.type === 'tool/result' && qaByEvent.has(i)) {
+      eventCandidates.push({ seq: i, text: qaByEvent.get(i)! })
+    }
   }
-  return messages.reverse()
+  // Budget: at most 4 messages, newest first; deduped; 4000-char cap. Inbox
+  // entries are the newest intents (they arrive after the last event), so
+  // they are admitted first and appear last in the oldest-first output.
+  const chosen: string[] = []
+  const remainingBudget = () => 4_000 - chosen.reduce((sum, t) => sum + t.length, 0)
+  const tryPick = (text: string): boolean => {
+    if (chosen.includes(text)) return true
+    if (chosen.length >= 4) return false
+    if (text.length > remainingBudget()) return false
+    chosen.push(text)
+    return true
+  }
+  for (let i = 0; i < inboxTexts.length; i += 1) tryPick(inboxTexts[i])
+  const eventOrdered = eventCandidates.sort((a, b) => b.seq - a.seq)
+  for (const c of eventOrdered) {
+    if (chosen.length >= 4) break
+    tryPick(c.text)
+  }
+  const inboxChosen = chosen.filter((t) => inboxTexts.includes(t))
+  const eventChosen = chosen.filter((t) => !inboxTexts.includes(t))
+  return [...eventChosen.reverse(), ...inboxChosen]
 }
 
 function isAutoPermissionExecution(exec: any, permissionPresets: any, presetName = AUTO_PRESET) {
