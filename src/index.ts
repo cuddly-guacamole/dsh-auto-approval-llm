@@ -29,7 +29,7 @@ import { AGGRESSIVE_BUILTIN, applyCategoryDirective, CATEGORY_KEYS, categoryDire
 import { sanitizeClassifierArguments, sanitizeClassifierText, sanitizeReviewReason } from './auto/classifier.js'
 import { DIRECT_HUMAN_TOOL, THRESHOLD_DEFAULTS } from './auto/constants.js'
 import { createDshClassifier, createEndpointClassifier } from './auto/dsh-classifier.js'
-import { type RaceHumanHandle, type ReviewResult, type StaticRisk, REVIEW_TIMEOUT_NOTICE, applyBreaker, approvalSource, assembleReviewerSystem, breakerNote, breakerTripped, countdownNote, createKeyedMutex, extractToolPath, followResolution, formatDenyFeedback, frameReviewerInput, lowRiskReviewOutcome, parseReview, unattendedMustFailClosed, preserveHostKeys, raceHumanDecision, reviewSuggestionNote, reviewerAutoAllowBlocked, riskFromAssessment, staticListDecision, type ContextSummary } from './auto/decision.js'
+import { type RaceHumanHandle, type ReviewResult, type StaticRisk, REVIEW_TIMEOUT_NOTICE, applyBreaker, approvalSource, assembleReviewerSystem, breakerNote, breakerTripped, countdownNote, createKeyedMutex, DENY_CIRCUMVENTION_GUIDANCE, extractToolPath, followResolution, formatDenyFeedback, frameReviewerInput, lowRiskReviewOutcome, parseReview, unattendedMustFailClosed, preserveHostKeys, raceHumanDecision, reviewSuggestionNote, reviewerAutoAllowBlocked, riskFromAssessment, staticListDecision, type ContextSummary } from './auto/decision.js'
 import { LATENCY_SUMMARY_WINDOW, clearLatencySamples, loadLatencySamples, pushLatencySample, summarizeLatency, type LatencySample } from './auto/latency.js'
 import { buildAskReason, buildEditDiff, buildEditDiffText, EDIT_DIFF_ARGS_MAX_CHARS, EDIT_DIFF_TOOLS } from './auto/editdiff.js'
 import {
@@ -2956,7 +2956,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
         reason: assessment.reason,
       })
       debugLog({ ev: 'hard-deny', callId: exec.callId ?? null, toolName: exec.name, reason: sanitizeReviewReason(assessment.reason) })
-      return { kind: 'deny', reason: `[auto-mode hard deny] ${assessment.reason}` }
+      return { kind: 'deny', reason: `[auto-mode hard deny] ${assessment.reason}\n${DENY_CIRCUMVENTION_GUIDANCE}` }
     }
     // Audit-only trail: a shell command that cleared the hard fuse and may
     // still run (statically allowed or classifier-approved) while opening one
@@ -3211,7 +3211,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
         }
         return next()
       }
-      if (decision.decision === 'deny') return { kind: 'deny', reason: `[auto-mode classifier deny] ${decision.reason}` }
+      if (decision.decision === 'deny') return { kind: 'deny', reason: `[auto-mode classifier deny] ${decision.reason}\n${DENY_CIRCUMVENTION_GUIDANCE}` }
       return { kind: 'ask', reason: `[auto-mode classifier asks] ${decision.reason}` }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
