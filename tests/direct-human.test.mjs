@@ -94,7 +94,9 @@ test('static anchors: parameters are a full JSON Schema object (register stores 
   // consumed the tool.
   const host = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
   const regStart = host.indexOf('name: DIRECT_HUMAN_TOOL,')
-  const regBlock = host.slice(regStart, regStart + 1600)
+  // Slice must cover the full description block plus the parameters schema
+  // (the description is a five-sentence block, so keep the window generous).
+  const regBlock = host.slice(regStart, regStart + 2400)
   assert.match(regBlock, /parameters: \{\s*\n\s*type: 'object',/, 'parameters declares a top-level JSON Schema object type')
   assert.match(regBlock, /required: \['toolName'\]/, 'parameters declares the required target toolName')
   assert.match(regBlock, /additionalProperties: false/, 'parameters rejects unknown keys')

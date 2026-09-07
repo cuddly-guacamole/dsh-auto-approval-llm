@@ -2854,19 +2854,17 @@ export function apply(ctx: Context, rawConfig: Config): void {
       const disposeDirectHumanTool = anyCtx.tools.register({
         name: DIRECT_HUMAN_TOOL,
         description:
-          'Request a human verdict on a follow-up tool operation instead of the automatic LLM classifier review. ' +
-          'Only available in an Auto-preset session with the direct-human channel enabled; ' +
-          'in any other session calling this fails with an error telling you to execute the operation directly. ' +
-          'Call this BEFORE the operation you believe is reasonable but may be misjudged as unauthorized; ' +
-          'the human approves or rejects it in the approval panel. Approval trains the confirmation-learning ' +
-          'layer for the named target operation (same signature), so repeated identical operations may later ' +
-          'pass without asking. Executes nothing by itself.',
+          'Request a human decision on a follow-up tool operation before running it, instead of relying on the automatic LLM classifier review. ' +
+          'This tool is registered when the direct-human channel is enabled and answers only in an Auto-preset session; in any other session it has no special effect, so if you are not sure the current session is Auto, execute the operation through its normal tool instead. ' +
+          'It is meant for LOW/MEDIUM-risk operations that a human should review: delete / protected / disk operations, privilege escalation, and other hard-denied targets are refused here and must go through the ordinary approval pipeline. ' +
+          'The human approves or rejects in the approval panel. On approval the target operation is allowed once and, when the target is learnable, trains the confirmation layer for that signature so identical later operations may pass without asking; a rejected target is never learned. ' +
+          'Executes nothing itself; after it returns, run the target operation through its normal tool.',
         parameters: {
           type: 'object',
           properties: {
             toolName: { type: 'string', description: 'Name of the follow-up tool operation to submit for human review (e.g. "memory_update", "write").' },
-            args: { type: 'string', description: 'Optional JSON text of the target operation arguments, used to build the learned signature. Omit for a coarse tool-name-level confirmation.' },
-            reason: { type: 'string', description: 'Optional short reason for requesting a human review (bounded, display only).' },
+            args: { type: 'string', description: 'JSON text of the target operation arguments used to build the learned signature; must parse as valid JSON or the request is rejected. Omit for a coarse tool-name-level confirmation.' },
+            reason: { type: 'string', description: 'Optional short reason for requesting a human review; shown in the approval panel only.' },
           },
           required: ['toolName'],
           additionalProperties: false,
@@ -2875,7 +2873,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
           schema: {
             type: 'object',
             properties: {
-              status: { type: 'string', enum: ['pending', 'granted', 'rejected'] },
+              status: { type: 'string', enum: ['granted'] },
               message: { type: 'string' },
               targetTool: { type: 'string' },
             },
@@ -2908,7 +2906,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
           // execute runs; reaching execute means the panel granted it.
           return {
             status: 'granted',
-            message: `human approval granted for ${String(args?.toolName ?? '')}; you may retry the target operation`,
+            message: `human approval granted for ${String(args?.toolName ?? 'the request')}; run the target operation now through its normal tool`,
             targetTool: String(args?.toolName ?? ''),
           }
         },
