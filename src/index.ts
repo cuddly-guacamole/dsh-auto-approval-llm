@@ -182,10 +182,10 @@ export const Config: z<Config> = z.object({
   lowRiskSeconds: z.number().default(THRESHOLD_DEFAULTS.lowRiskSeconds).min(1),
   mediumRiskSeconds: z.number().default(THRESHOLD_DEFAULTS.mediumRiskSeconds).min(1),
   highRiskSeconds: z.number().default(THRESHOLD_DEFAULTS.highRiskSeconds).min(1),
-  // safetyPrompt goes verbatim into the reviewer system prompt (decision.ts
-  // assembleReviewerSystem) and into every online review — bound it like the
-  // rules text so an oversized prompt cannot inflate review cost or eat the
-  // countdown window.
+  // safetyPrompt goes (secret-redacted, framed as constraints-only) into the
+  // reviewer system prompt (decision.ts assembleReviewerSystem) and into every
+  // online review — bound it like the rules text so an oversized prompt cannot
+  // inflate review cost or eat the countdown window.
   safetyPrompt: z.string().default('').max(2000),
   allowlist: z.array(z.string()).default([]),
   denyList: z.array(z.string()).default([]),

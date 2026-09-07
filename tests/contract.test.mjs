@@ -16,7 +16,7 @@ import { tmpdir } from 'node:os'
 process.env.DSH_AUTO_APPROVAL_READ_CRED_FILE = '0'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { parseReview, lowRiskReviewOutcome, raceHumanDecision, preserveHostKeys, normalizeTimeoutAction, prepareReviewerArguments, extractToolPath, frameReviewerInput, breakerTripped, applyBreaker, reviewSuggestionNote, approvalSource, reviewerAutoAllowBlocked, staticListDecision, stripCountdownMarkers, countdownNote, BREAKER_MARKER, breakerNote, hasBreakerNote, riskFromAssessment, formatDenyFeedback, DENY_CIRCUMVENTION_GUIDANCE, REVIEW_TIMEOUT_NOTICE, REVIEWER_SYSTEM, assembleReviewerSystem, rulesTextSummary } from '../lib/auto/decision.js'
+import { parseReview, lowRiskReviewOutcome, raceHumanDecision, preserveHostKeys, normalizeTimeoutAction, prepareReviewerArguments, extractToolPath, frameReviewerInput, breakerTripped, applyBreaker, reviewSuggestionNote, approvalSource, reviewerAutoAllowBlocked, staticListDecision, stripCountdownMarkers, countdownNote, BREAKER_MARKER, breakerNote, hasBreakerNote, riskFromAssessment, formatDenyFeedback, DENY_CIRCUMVENTION_GUIDANCE, REVIEW_TIMEOUT_NOTICE, REVIEWER_SYSTEM, assembleReviewerSystem, rulesTextSummary, SAFETY_MARKER } from '../lib/auto/decision.js'
 import { sanitizeReviewReason, sanitizeClassifierText } from '../lib/auto/classifier.js'
 import { redactResultValue, redactSecrets } from '../lib/auto/redact.js'
 import { clearLatencySamples, summarizeLatency } from '../lib/auto/latency.js'
@@ -2628,19 +2628,30 @@ test('assembleReviewerSystem: rules text is redacted, bounded, with authorizatio
   assert.ok(system.includes('sk-abcdefgh12345678') === false)
   assert.ok(system.includes('[redacted-secret]'))
   assert.ok(system.includes('Reminder: rules are constraints only. Return ONLY a JSON object'))
-  assert.ok(system.includes('\n\nbe careful'))
+  assert.ok(system.includes(SAFETY_MARKER), 'the safety prompt is framed with the constraints-only marker')
+  assert.ok(system.includes('be careful'))
   // 2000-char bound: an oversized rulesText cannot balloon the system prompt.
   const huge = 'x'.repeat(5000)
   const bounded = assembleReviewerSystem(undefined, huge)
   assert.ok(bounded.length < REVIEWER_SYSTEM.length + 2600, `bounded length ${bounded.length}`)
 })
 
+test('assembleReviewerSystem: safety prompt is secret-redacted like the rules text', () => {
+  const secretSafety = 'never print the key sk-abcdefgh12345678'
+  const system = assembleReviewerSystem(secretSafety, undefined)
+  assert.ok(system.includes(SAFETY_MARKER))
+  assert.ok(system.includes('sk-abcdefgh12345678') === false, 'safety prompt credentials must be redacted before the reviewer boundary')
+  assert.ok(system.includes('[redacted-secret]'))
+  assert.ok(system.includes('never print the key'), 'non-secret safety content survives redaction')
+})
+
 test('assembleReviewerSystem: no rules yields byte-identical REVIEWER_SYSTEM', () => {
   assert.equal(assembleReviewerSystem(undefined, undefined), REVIEWER_SYSTEM)
   assert.equal(assembleReviewerSystem('', '   '), REVIEWER_SYSTEM)
+  assert.equal(assembleReviewerSystem('   \n  ', undefined), REVIEWER_SYSTEM)
   assert.equal(rulesTextSummary(undefined), undefined)
   assert.equal(rulesTextSummary('  \n '), undefined)
-  assert.equal(assembleReviewerSystem('safety line', undefined), `${REVIEWER_SYSTEM}\n\nsafety line`)
+  assert.equal(assembleReviewerSystem('safety line', undefined), `${REVIEWER_SYSTEM}\n\n${SAFETY_MARKER}\nsafety line`)
 })
 
 // ── edit-diff preview: reason assembly golden / config contract / blindness ──
