@@ -1467,7 +1467,7 @@ function pushHistory(entry: Omit<HistoryRecord, 'id' | 'at'>): boolean {
  * verdict must never train the confirmation layer.
  */
 function denyOnAuditFailure(callId: string | undefined): void {
-  recordDecisionFeedback(callId, '[auto-mode audit failure] the decision audit could not be persisted; failing closed to rejected so no unaudited allow can take effect')
+  recordDecisionFeedback(callId, '[dsh-auto-approval-llm] audit failure the decision audit could not be persisted; failing closed to rejected so no unaudited allow can take effect')
   debugLog({ ev: 'audit-failure-deny', callId: callId ?? null })
 }
 
@@ -2956,7 +2956,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
         reason: assessment.reason,
       })
       debugLog({ ev: 'hard-deny', callId: exec.callId ?? null, toolName: exec.name, reason: sanitizeReviewReason(assessment.reason) })
-      return { kind: 'deny', reason: `[auto-mode hard deny] ${assessment.reason}\n${DENY_CIRCUMVENTION_GUIDANCE}` }
+      return { kind: 'deny', reason: `[dsh-auto-approval-llm] hard deny ${assessment.reason}\n${DENY_CIRCUMVENTION_GUIDANCE}` }
     }
     // Audit-only trail: a shell command that cleared the hard fuse and may
     // still run (statically allowed or classifier-approved) while opening one
@@ -3016,9 +3016,9 @@ export function apply(ctx: Context, rawConfig: Config): void {
               llmReason: `matched ${matched.rule.source}`,
             })
             maybeInjectRejectGuidance(exec.agent, exec.callId, config, buildRejectGuidanceText('rule'))
-            return { kind: 'deny', reason: `[auto-mode rule deny] ${exec.name}` }
+            return { kind: 'deny', reason: `[dsh-auto-approval-llm] rule deny ${exec.name}` }
           } else if (matched.policy === 'human') {
-            return { kind: 'ask', reason: `[auto-mode rule ask] ${exec.name}` }
+            return { kind: 'ask', reason: `[dsh-auto-approval-llm] rule ask ${exec.name}` }
           } else {
             const audited = pushHistory({
               sessionId: authorityKeyFor(exec),
@@ -3029,7 +3029,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
             })
             if (!audited) {
               denyOnAuditFailure(exec.callId)
-              return { kind: 'deny', reason: `[auto-mode audit failure] ${exec.name}` }
+              return { kind: 'deny', reason: `[dsh-auto-approval-llm] audit failure ${exec.name}` }
             }
             return next()
           }
@@ -3046,10 +3046,10 @@ export function apply(ctx: Context, rawConfig: Config): void {
         source: 'denyList-deny',
       })
       maybeInjectRejectGuidance(exec.agent, exec.callId, config, buildRejectGuidanceText('denyList'))
-      return { kind: 'deny', reason: `[auto-mode denyList] ${exec.name}` }
+      return { kind: 'deny', reason: `[dsh-auto-approval-llm] denyList ${exec.name}` }
     }
     if (listDecision.kind === 'ask-human') {
-      return { kind: 'ask', reason: `[auto-mode human-only] ${exec.name}` }
+      return { kind: 'ask', reason: `[dsh-auto-approval-llm] human-only ${exec.name}` }
     }
     // Category tightening (only deny/ask; auto/inherit never intercept here).
     // Deny/ask apply to every non-hard-denied result, including static allows,
@@ -3070,10 +3070,10 @@ export function apply(ctx: Context, rawConfig: Config): void {
         mode: config.categoryMode,
       })
       debugLog({ ev: 'category', callId: exec.callId ?? null, toolName: exec.name, category, decision: 'deny', mode: config.categoryMode })
-      return { kind: 'deny', reason: `[auto-mode category deny] ${exec.name}` }
+      return { kind: 'deny', reason: `[dsh-auto-approval-llm] category deny ${exec.name}` }
     }
     if (directive === 'ask') {
-      return { kind: 'ask', reason: `[auto-mode category ask] ${exec.name}` }
+      return { kind: 'ask', reason: `[dsh-auto-approval-llm] category ask ${exec.name}` }
     }
     // Explicit allowlist (mirrored onto the pre-execute plane):
     // the allowlist used to answer only in the approval/request answerer, but
@@ -3090,7 +3090,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       // name: the mirror skips them and hands an explicit ask to the
       // answerer, which pins the call to the hard-reject countdown.
       if (HARD_LOCKED_CATEGORIES.includes(category as never)) {
-        return { kind: 'ask', reason: `[auto-mode hard-locked category] ${exec.name}` }
+        return { kind: 'ask', reason: `[dsh-auto-approval-llm] hard-locked category ${exec.name}` }
       }
       const audited = pushHistory({
         sessionId: authorityKeyFor(exec),
@@ -3100,7 +3100,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       })
       if (!audited) {
         denyOnAuditFailure(exec.callId)
-        return { kind: 'deny', reason: `[auto-mode audit failure] ${exec.name}` }
+        return { kind: 'deny', reason: `[dsh-auto-approval-llm] audit failure ${exec.name}` }
       }
       return next()
     }
@@ -3122,11 +3122,11 @@ export function apply(ctx: Context, rawConfig: Config): void {
       })
       if (!audited) {
         denyOnAuditFailure(exec.callId)
-        return { kind: 'deny', reason: `[auto-mode audit failure] ${exec.name}` }
+        return { kind: 'deny', reason: `[dsh-auto-approval-llm] audit failure ${exec.name}` }
       }
       return next()
     }
-    if (!assessment.classifierEligible) return { kind: 'ask', reason: `[auto-mode approval required] ${assessment.reason}` }
+    if (!assessment.classifierEligible) return { kind: 'ask', reason: `[dsh-auto-approval-llm] approval required ${assessment.reason}` }
     try {
       const authority = authorityFor(exec)
       const route = resolveModelRoute(exec.agent) ?? resolveModelRoute(authority)
@@ -3207,15 +3207,15 @@ export function apply(ctx: Context, rawConfig: Config): void {
       if (decision.decision === 'allow') {
         if (!audited) {
           denyOnAuditFailure(exec.callId)
-          return { kind: 'deny', reason: `[auto-mode audit failure] ${exec.name}` }
+          return { kind: 'deny', reason: `[dsh-auto-approval-llm] audit failure ${exec.name}` }
         }
         return next()
       }
-      if (decision.decision === 'deny') return { kind: 'deny', reason: `[auto-mode classifier deny] ${decision.reason}\n${DENY_CIRCUMVENTION_GUIDANCE}` }
-      return { kind: 'ask', reason: `[auto-mode classifier asks] ${decision.reason}` }
+      if (decision.decision === 'deny') return { kind: 'deny', reason: `[dsh-auto-approval-llm] classifier deny ${decision.reason}\n${DENY_CIRCUMVENTION_GUIDANCE}` }
+      return { kind: 'ask', reason: `[dsh-auto-approval-llm] classifier asks ${decision.reason}` }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      return { kind: 'ask', reason: `[auto-mode classifier unavailable] ${message}` }
+      return { kind: 'ask', reason: `[dsh-auto-approval-llm] classifier unavailable ${message}` }
     }
   })
 
@@ -3903,7 +3903,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
         targetArgsText = typeof rec.args === 'string' ? rec.args : undefined
       }
       if (targetTool === undefined || targetTool === '' || targetTool === DIRECT_HUMAN_TOOL) {
-        recordDecisionFeedback(req.callId, '[auto-mode direct human request] missing a valid target toolName')
+        recordDecisionFeedback(req.callId, '[dsh-auto-approval-llm] direct human request missing a valid target toolName')
         pushHistory({
           sessionId: sessionKey,
           toolName,
@@ -3928,7 +3928,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       const targetRisk = targetClassified.risk
       const targetCategory = targetClassified.category
       if ((targetRisk !== 'LOW' && targetRisk !== 'MEDIUM') || (targetRisk === 'MEDIUM' && targetClassified.directive === 'deny')) {
-        recordDecisionFeedback(req.callId, `[auto-mode direct human request] target "${targetTool}" is high-risk and cannot use this channel; it takes the ordinary approval pipeline`)
+        recordDecisionFeedback(req.callId, `[dsh-auto-approval-llm] direct human request target "${targetTool}" is high-risk and cannot use this channel; it takes the ordinary approval pipeline`)
         pushHistory({
           sessionId: sessionKey,
           toolName,

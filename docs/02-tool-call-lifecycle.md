@@ -11,7 +11,7 @@
     <div class="cap">不是事件，而是 tools 服务的**同步注册守卫**：`isAutoExecution` 后先 `hardDenyReason`（凭据物质 / 受保护路径 / shell 熔断），再 `symlinkEscapeReason`（realpath 逃逸工作区）。命中即返回原因字符串 → 直接拒，**不弹窗**。这一层只做硬拒，永不挂类别分类。</div></li>
 
   <li><span class="who">③ 静态评估 + 类别收紧 · <code>tools/pre-execute</code> <span class="lnum">index.ts:L2915-3210</span></span>
-    <div class="cap">`assessTool` → `deny`（硬拒 `[auto-mode hard deny]`，**落 `hard-deny` 历史记录 + debug 行**）/ `allow`（直接放行）/ `ask`。中间还有一层**类别收紧**（<span class="lnum">index.ts:L2973-2990</span>）：三态开关配成 `deny` 的类别在这里终端拒绝、配成 `ask` 的无条件跳过 classifier 快径直接转人工（详见 [§17](./17-category-switches)）。之后若 `classifierEligible`，交给 LLM 预分类器（`classifier.classify`）再定 `allow | deny | ask` —— 快路径的放行/拒绝各自落 `classifier-allow` / `classifier-deny` 历史记录（`ask` 除外，留待 answerer 记终局）；分类器不可用 → 一律向人工（`classifier unavailable`）。</div></li>
+    <div class="cap">`assessTool` → `deny`（硬拒 `[dsh-auto-approval-llm] hard deny`，**落 `hard-deny` 历史记录 + debug 行**）/ `allow`（直接放行）/ `ask`。中间还有一层**类别收紧**（<span class="lnum">index.ts:L2973-2990</span>）：三态开关配成 `deny` 的类别在这里终端拒绝、配成 `ask` 的无条件跳过 classifier 快径直接转人工（详见 [§17](./17-category-switches)）。之后若 `classifierEligible`，交给 LLM 预分类器（`classifier.classify`）再定 `allow | deny | ask` —— 快路径的放行/拒绝各自落 `classifier-allow` / `classifier-deny` 历史记录（`ask` 除外，留待 answerer 记终局）；分类器不可用 → 一律向人工（`classifier unavailable`）。</div></li>
 
   <li><span class="who">④ 终局裁决 · <code>approval/request</code> <span class="lnum">index.ts:L3778（prepend+global，options L4394）</span></span>
     <div class="cap">本插件的**核心决策管线**（详见 [§04](./04-adjudicator-pipeline)）：声明规则 → 名单 → 类别开关 → 评审模式 → 熔断 → 策略硬拒 → 学习放行 → 风险分档 → LLM 复审 + 人工倒计时。产出 `allowed-once` 或 `rejected`，或委托官方面板走人工竞速。</div></li>

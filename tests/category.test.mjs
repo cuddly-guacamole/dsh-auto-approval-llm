@@ -605,16 +605,16 @@ test('T64: pre-execute tightens only with deny/ask returns, never auto→next', 
   // and the assertions silently depended on the handler staying under it.
   const end = HOST_SRC.indexOf("'tools/result'", start)
   const pre = HOST_SRC.slice(start, end > start ? end : start + 4000)
-  assert.ok(pre.includes('[auto-mode category deny]'), 'category deny return exists')
-  assert.ok(pre.includes('[auto-mode category ask]'), 'category ask return exists')
-  assert.ok(!pre.includes('[auto-mode category auto]'), 'no category auto branch in pre-execute')
+  assert.ok(pre.includes('[dsh-auto-approval-llm] category deny'), 'category deny return exists')
+  assert.ok(pre.includes('[dsh-auto-approval-llm] category ask'), 'category ask return exists')
+  assert.ok(!pre.includes('[dsh-auto-approval-llm] category auto'), 'no category auto branch in pre-execute')
   assert.ok(!/directive === 'auto'/.test(pre), 'auto never intercepts in pre-execute')
 })
 
 test('T74: the pre-execute category-ask branch precedes the classifier call', () => {
   // Global-order assertion (robust to compiled-layout shifts): the category
   // ask early-return sits before the LLM classifier call inside pre-execute.
-  const askIdx = HOST_SRC.indexOf('[auto-mode category ask]')
+  const askIdx = HOST_SRC.indexOf('[dsh-auto-approval-llm] category ask')
   const classifyIdx = HOST_SRC.indexOf('classifier.classify')
   assert.ok(askIdx !== -1 && classifyIdx !== -1)
   assert.ok(askIdx < classifyIdx, 'a category ask returns before the LLM classifier fast path')
@@ -1186,7 +1186,7 @@ test('runtimeStateReadHits: matching is case- and spelling-normalized, deduplica
 test('host wiring: pre-execute logs runtime-state reads before handing over to execution', () => {
   assert.ok(HOST_SRC.includes("from './auto/shell.js'"), 'the detector is imported from the pure layer')
   assert.ok(HOST_SRC.includes("'runtime-state-read'"), 'the audit event is wired')
-  const denyAt = HOST_SRC.indexOf('[auto-mode hard deny]')
+  const denyAt = HOST_SRC.indexOf('[dsh-auto-approval-llm] hard deny')
   const auditAt = HOST_SRC.indexOf("'runtime-state-read'")
   const nextAt = HOST_SRC.indexOf("assessment.decision === 'allow'", auditAt)
   const classifyAt = HOST_SRC.indexOf('classifier.classify(', auditAt)

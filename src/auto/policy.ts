@@ -393,7 +393,7 @@ export function assessTool(exec: ExecLike, roots: Roots, artifacts: unknown): To
     // classifier-ineligible terminals above. Whether the answer trains the
     // confirmation layer is decided in the answerer, not here.
     if (exec.name === DIRECT_HUMAN_TOOL) {
-        return { decision: 'ask', reason: '[auto-mode direct human request]', classifierEligible: false };
+        return { decision: 'ask', reason: '[dsh-auto-approval-llm] direct human request', classifierEligible: false };
     }
     // Fail closed on genuinely unknown names: a plugin/MCP tool this policy
     // cannot read must be classified independently instead of silently

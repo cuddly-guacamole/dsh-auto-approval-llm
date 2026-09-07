@@ -22,7 +22,7 @@
 | 请求被取消/会话销毁 | `abort → 永远 action=reject（不假装有人决定过）` |
 | 声明规则（G1）/静态名单（G2） | `rule-deny / rule-allow`、`denyList-deny / allowlist-allow` |
 | 策略层无条件硬拒（运行态文件等） | `policy-deny → 立即 rejected，无倒计时、不计熔断、不发布 review-status` |
-| **pre-execute 快路径静态硬拒**（`assessTool` → deny，`[auto-mode hard deny]`） | `hard-deny`（携带 `reason`）——不经 approval/request，无倒计时、不计熔断 |
+| **pre-execute 快路径静态硬拒**（`assessTool` → deny，`[dsh-auto-approval-llm] hard deny`） | `hard-deny`（携带 `reason`）——不经 approval/request，无倒计时、不计熔断 |
 | **LLM 预分类器自主放行**（fast path） | `classifier-allow → allowed-once`（携带 `llmDecision` / `llmRisk` / `llmReason`） |
 | **LLM 预分类器自主拒绝**（fast path） | `classifier-deny → rejected`（同上）——`ask` 不在此列，交给 answerer 记终局 |
 

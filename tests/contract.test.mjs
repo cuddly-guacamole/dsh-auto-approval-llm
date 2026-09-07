@@ -4174,7 +4174,7 @@ test('pre-execute fast path: the hard fuse and both classifier verdicts write hi
   // before the deny is handed back — it used to leave no trace whatsoever.
   const hardRecordAt = pre.indexOf("source: 'hard-deny'")
   const hardDebugAt = pre.indexOf("ev: 'hard-deny'")
-  const hardReturnAt = pre.indexOf('[auto-mode hard deny]')
+  const hardReturnAt = pre.indexOf('[dsh-auto-approval-llm] hard deny')
   assert.ok(hardRecordAt !== -1, 'the hard deny must push a history record')
   assert.ok(hardDebugAt !== -1, 'the hard deny must leave a debug line')
   assert.ok(hardRecordAt < hardReturnAt && hardDebugAt < hardReturnAt, 'both are written before the deny returns')
@@ -4182,7 +4182,7 @@ test('pre-execute fast path: the hard fuse and both classifier verdicts write hi
   // stay separable from the static fuse and from the answerer's records.
   const classifierRecordAt = pre.indexOf("'classifier-allow'")
   assert.ok(classifierRecordAt !== -1 && pre.includes("'classifier-deny'"), 'both classifier verdicts must be recorded')
-  assert.ok(classifierRecordAt < pre.indexOf('[auto-mode classifier deny]'), 'the record precedes the deny return')
+  assert.ok(classifierRecordAt < pre.indexOf('[dsh-auto-approval-llm] classifier deny'), 'the record precedes the deny return')
   assert.ok(classifierRecordAt > pre.indexOf("ev: 'classifier-decision'"), 'the record consumes the settled decision')
   // Nothing is recomputed for the record: the risk tier and the reason are
   // the exact values the decision was made and logged with.

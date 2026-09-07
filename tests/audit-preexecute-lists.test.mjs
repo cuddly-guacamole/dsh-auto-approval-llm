@@ -38,10 +38,10 @@ test('pre-execute: user terminal gates run ahead of the static and classifier al
   const rulesIdx = pre.indexOf('evaluateRules(declared.rules, subject)')
   const allowIdx = pre.indexOf("assessment.decision === 'allow'")
   const classifyIdx = pre.indexOf('classifier.classify(')
-  const denyListIdx = pre.indexOf('[auto-mode denyList]')
-  const humanIdx = pre.indexOf('[auto-mode human-only]')
-  const ruleDenyIdx = pre.indexOf('[auto-mode rule deny]')
-  const categoryIdx = pre.indexOf('[auto-mode category deny]')
+  const denyListIdx = pre.indexOf('[dsh-auto-approval-llm] denyList')
+  const humanIdx = pre.indexOf('[dsh-auto-approval-llm] human-only')
+  const ruleDenyIdx = pre.indexOf('[dsh-auto-approval-llm] rule deny')
+  const categoryIdx = pre.indexOf('[dsh-auto-approval-llm] category deny')
   for (const [name, idx] of [
     ['static-list gate', gateIdx], ['rules gate', rulesIdx],
     ['static-allow literal', allowIdx], ['classifier call', classifyIdx],
@@ -75,8 +75,8 @@ test('pre-execute: allowlist mirror sits after category deny/ask and before the 
   const end = HOST_SRC.indexOf("'tools/result'", start)
   const pre = HOST_SRC.slice(start, end)
   const allowListAllowIdx = pre.indexOf('listDecision.kind === \'allow\'')
-  const categoryDenyIdx = pre.indexOf('[auto-mode category deny]')
-  const categoryAskIdx = pre.indexOf('[auto-mode category ask]')
+  const categoryDenyIdx = pre.indexOf('[dsh-auto-approval-llm] category deny')
+  const categoryAskIdx = pre.indexOf('[dsh-auto-approval-llm] category ask')
   const staticAllowIdx = pre.indexOf("assessment.decision === 'allow'")
   const classifyIdx = pre.indexOf('classifier.classify(')
   assert.ok(allowListAllowIdx !== -1, 'allowlist allow branch exists in pre-execute')
@@ -94,10 +94,10 @@ test('pre-execute: matched user rules short-circuit exactly like the answerer (n
   const pre = HOST_SRC.slice(start, end)
   // Every matched branch returns (deny / ask / next) inside the gate; the
   // answerer is never reached for a rule-matched call, so no double record.
-  assert.ok(pre.includes("return { kind: 'deny', reason: `[auto-mode rule deny]")
-      || pre.includes("'[auto-mode rule deny]'"), 'rule deny returns a terminal denial')
-  assert.ok(pre.includes('return { kind: \'deny\', reason: `[auto-mode denyList]'), 'denyList deny returns a terminal denial')
-  assert.ok(pre.includes('return { kind: \'ask\', reason: `[auto-mode human-only]'), 'humanOnly converts the call into an official ask')
+  assert.ok(pre.includes("return { kind: 'deny', reason: `[dsh-auto-approval-llm] rule deny")
+      || pre.includes("'[dsh-auto-approval-llm] rule deny'"), 'rule deny returns a terminal denial')
+  assert.ok(pre.includes('return { kind: \'deny\', reason: `[dsh-auto-approval-llm] denyList'), 'denyList deny returns a terminal denial')
+  assert.ok(pre.includes('return { kind: \'ask\', reason: `[dsh-auto-approval-llm] human-only'), 'humanOnly converts the call into an official ask')
   assert.ok(pre.includes('return next()'), 'the rule-allow branch hands over to execution')
 })
 
@@ -106,7 +106,7 @@ test('hard-locked categories: no name-based channel pre-authorizes delete/disk',
   // NOT settle as allowed-once. The pre-execute mirror hands an explicit ask,
   // and the answerer routes the call into the hard-reject countdown (same
   // shape as the locked ask branch) before its allowlist allow.
-  const gatePre = HOST_SRC.indexOf('[auto-mode hard-locked category]')
+  const gatePre = HOST_SRC.indexOf('[dsh-auto-approval-llm] hard-locked category')
   assert.ok(gatePre > 0, 'the pre-execute mirror must exempt hard-locked categories')
   const firstAllow = HOST_SRC.indexOf("source: 'allowlist-allow'")
   assert.ok(gatePre < firstAllow, 'the pre-execute hard-locked gate must precede the allowlist allow')
