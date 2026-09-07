@@ -1047,11 +1047,11 @@ let rejectGuidanceWindow: number[] = []
 export function buildRejectGuidanceText(source: string, category?: string): string {
   const src = REJECT_GUIDANCE_KNOWN_SOURCES.includes(source) ? source : 'policy'
   const cat = category !== undefined && CATEGORY_KEYS.includes(category as (typeof CATEGORY_KEYS)[number]) ? ` (category: ${category})` : ''
-  return `[reject-guidance] Tool call denied by ${src} policy${cat}. Try a different approach or review the approval settings.`
+  return `[reject-guidance] Tool call denied by ${src} policy${cat}. Same target or effect stays denied under any wording or tool; ask the user if the denial seems wrong.`
 }
 
 export const OFFICIAL_REJECT_GUIDANCE_TEXT =
-  '[reject-guidance] Tool call rejected outside plugin control (user or official channel). Try a different approach or review the approval settings.'
+  '[reject-guidance] The user rejected this tool call through the official approval channel. Do not retry the same operation; ask the user how to proceed.'
 
 /**
  * Whether a finished tool result carries the official "user rejected tool"

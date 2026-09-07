@@ -3,9 +3,10 @@
  *
  * The guidance note is an agent-inbox (user-role) injection, so its payload
  * is frozen to whitelist enums: a known source and an optional category key.
- * These tests pin the builder's whitelist discipline, the marker-safety
- * invariant (no countdown/breaker literals), the OFFICIAL text, fail-closed
- * injection behavior, and the config default.
+ * These tests pin the builder's whitelist discipline, the anti-circumvention
+ * wording (guidance never invites retrying or rewording a denied operation),
+ * the marker-safety invariant (no countdown/breaker literals), the OFFICIAL
+ * text, fail-closed injection behavior, and the config default.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -49,8 +50,27 @@ test('reject guidance texts contain no countdown or breaker literals', () => {
   }
 })
 
-test('OFFICIAL_REJECT_GUIDANCE_TEXT: static, generic, bound', () => {
-  assert.ok(OFFICIAL_REJECT_GUIDANCE_TEXT.includes('user or official channel'))
+// ── anti-circumvention discipline: guidance must never invite a workaround ─
+
+test('policy-denial guidance never suggests retrying, rewording, or a different approach', () => {
+  for (const text of [buildRejectGuidanceText('rule'), buildRejectGuidanceText('denyList'), buildRejectGuidanceText('category', 'delete')]) {
+    assert.ok(!/\b(try|retry)\b/i.test(text), `no try/retry in: ${text}`)
+    assert.ok(!/different approach|review the approval settings/i.test(text), `no workaround hint in: ${text}`)
+  }
+})
+
+test('buildRejectGuidanceText: policy denials anchor the operation, not the wording', () => {
+  const text = buildRejectGuidanceText('category', 'delete')
+  assert.ok(text.includes('Same target or effect stays denied under any wording or tool'))
+  assert.ok(text.includes('ask the user'))
+})
+
+test('OFFICIAL_REJECT_GUIDANCE_TEXT: user denial tells the agent to stop, never to reword', () => {
+  assert.ok(OFFICIAL_REJECT_GUIDANCE_TEXT.includes('The user rejected this tool call'))
+  // The user's own rejection is authoritative: forbid retrying, forbid rewording.
+  assert.ok(OFFICIAL_REJECT_GUIDANCE_TEXT.includes('Do not retry the same operation'))
+  assert.ok(OFFICIAL_REJECT_GUIDANCE_TEXT.includes('ask the user how to proceed'))
+  assert.ok(!/different approach|review the approval settings/i.test(OFFICIAL_REJECT_GUIDANCE_TEXT))
   assert.ok(OFFICIAL_REJECT_GUIDANCE_TEXT.length < 200)
 })
 
