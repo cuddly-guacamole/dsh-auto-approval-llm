@@ -985,9 +985,11 @@ export function onboardingTimeoutLabel(timeoutAction: string, lang: 'zh' | 'en' 
 
 /** Shared English behavior summary for both the onboarding notice and the
  * auto-mode enter/exit announcements — one wording source so the agent never
- * sees contradictory descriptions. The timeout slot carries the live label. */
+ * sees contradictory descriptions. The timeout slot carries the live label.
+ * "Low-risk" here means the automated safety check passed; an uncertain call
+ * still shows a countdown prompt, so nothing is auto-allowed sight unseen. */
 function autoApprovalSummary(timeoutAction: string): string {
-  return `low-risk actions pass automatically; uncertain ones will show a countdown prompt; no response applies the configured timeout action (currently "${onboardingTimeoutLabel(timeoutAction, 'en')}")`
+  return `calls the automated safety check considers low-risk pass after that check; uncertain ones show a countdown prompt; no response applies the configured timeout action (currently "${onboardingTimeoutLabel(timeoutAction, 'en')}")`
 }
 
 /** First-use notice body; the timeout slot always carries the live label. */
@@ -996,7 +998,7 @@ export function onboardingNoticeText(timeoutAction: string, lang: 'zh' | 'en' = 
   if (lang === 'en') {
     return `(Auto-approval) is active: ${autoApprovalSummary(timeoutAction)}. Reasons for denials are recorded in "recent approvals".`
   }
-  return `（自动审批）已生效：低风险自动通过；拿不准的操作会弹出倒计时询问你，没人回答则按设置处理（当前为「${label}」）。被拒的原因会写进「最近审批记录」。`
+  return `（自动审批）已生效：被自动安全检查判定为低风险的调用在该检查通过后放行；拿不准的会弹出倒计时询问你，没人回答则按设置处理（当前为「${label}」）。被拒的原因会写进「最近审批记录」。`
 }
 
 // ── approval notice queue ────────────────────────────────────────────────
