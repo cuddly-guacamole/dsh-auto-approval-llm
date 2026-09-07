@@ -207,7 +207,7 @@ function iconStyles() {
 }
 const EN_RISK_COPY = {
     title: 'Enable Auto?',
-    description: 'Auto keeps the Full access filesystem scope and adds an automatic policy layer to assess tool calls. This policy is not an operating-system sandbox: classifier mistakes and operations performed by plugins or other code outside the DSH tool pipeline can escape its checks. Only use Auto when you trust the current task, workspace, and installed plugins.',
+    description: 'Auto keeps the Full access filesystem scope and adds an automatic policy layer to assess tool calls. This policy is not an operating-system sandbox: classifier mistakes and operations performed by plugins or other code outside the DSH tool pipeline can escape its checks. Only use Auto when you trust the current task, workspace, and installed plugins. High-risk and locked-category operations (delete / protected / disk, and privilege unless enabled) still require a human.',
     acknowledge: 'I understand the risks and want to continue',
     cancel: 'Cancel',
     confirm: 'Enable Auto',
@@ -215,7 +215,7 @@ const EN_RISK_COPY = {
 };
 const ZH_RISK_COPY = {
     title: '确认启用自动审批？',
-    description: '自动审批保留“完全权限”的文件访问范围，并通过自动策略层判断工具调用。该策略不是操作系统级沙箱：分类误判，以及插件或其他代码在 DSH 工具链外执行的操作，仍可能避开检查。仅建议在你信任当前任务、工作区和已安装插件时使用。',
+    description: '自动审批保留“完全权限”的文件访问范围，并通过自动策略层判断工具调用。该策略不是操作系统级沙箱：分类器可能误判，且插件或 DSH 工具链之外的代码执行的操作不受其检查。仅当你信任当前任务、工作区与已安装插件时才可启用 Auto。高风险与锁定类别操作（delete / protected / disk，以及未开启的 privilege）仍需人工确认。',
     acknowledge: '我已了解风险，并愿意继续',
     cancel: '取消',
     confirm: '启用自动审批',
