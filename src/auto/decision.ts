@@ -695,7 +695,7 @@ const DENY_FEEDBACK_TABLE: Record<DenyFeedbackKind, DenyFeedbackRow> = {
   },
   denyList: {
     styled: true,
-    build: ({ toolName }) => `[dsh-auto-approval-llm] Rule denied: ${toolName ?? 'unknown'} is in the denyList (static deny-list)`,
+    build: ({ toolName }) => `[dsh-auto-approval-llm] Denied by the denyList (static deny-list): ${toolName ?? 'unknown'} is listed`,
   },
   policy: {
     styled: true,

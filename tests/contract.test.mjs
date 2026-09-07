@@ -2487,7 +2487,8 @@ test('retryReviewLoop: user cancellation aborts the backoff wait', async () => {
 
 test('formatDenyFeedback: denyList branch carries the static source marker and guidance', () => {
   const text = formatDenyFeedback('denyList', { toolName: 'bash' })
-  assert.ok(text.startsWith('[dsh-auto-approval-llm] Rule denied: bash is in the denyList (static deny-list)'))
+  assert.ok(text.startsWith('[dsh-auto-approval-llm] Denied by the denyList (static deny-list): bash is listed'))
+  assert.ok(!text.includes('Rule denied'), 'denyList must not reuse the declared-rule wording')
   assert.ok(text.includes(DENY_CIRCUMVENTION_GUIDANCE))
 })
 
