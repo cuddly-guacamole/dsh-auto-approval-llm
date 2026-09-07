@@ -360,6 +360,7 @@ interface Draft {
   reviewMaxRetries: string
   aiButtonPosition: 'header' | 'floating'
   directHumanEnabled: 'on' | 'off'
+  slashCommandsEnabled: 'on' | 'off'
   debug: 'on' | 'off'
   redactResults: 'on' | 'off'
   editDiffPreview: 'on' | 'off'
@@ -411,6 +412,7 @@ function draftOf(value: any): Draft {
     reviewMaxRetries: String(value?.reviewMaxRetries ?? THRESHOLD_DEFAULTS.reviewMaxRetries),
     aiButtonPosition: value?.aiButtonPosition === 'floating' ? 'floating' : 'header',
     directHumanEnabled: value?.directHumanEnabled === true ? 'on' : 'off',
+    slashCommandsEnabled: value?.slashCommandsEnabled === true ? 'on' : 'off',
     debug: value?.debug === true ? 'on' : 'off',
     redactResults: value?.redactResults === true ? 'on' : 'off',
     editDiffPreview: value?.editDiffPreview === true ? 'on' : 'off',
@@ -458,6 +460,7 @@ function valueOf(draft: Draft): any {
     reviewMaxRetries: Math.max(0, Math.min(2, Number(draft.reviewMaxRetries) || 0)),
     aiButtonPosition: draft.aiButtonPosition,
     directHumanEnabled: draft.directHumanEnabled === 'on',
+    slashCommandsEnabled: draft.slashCommandsEnabled === 'on',
     debug: draft.debug === 'on',
     redactResults: draft.redactResults === 'on',
     editDiffPreview: draft.editDiffPreview === 'on',
@@ -1069,7 +1072,7 @@ function SettingsSection() {
   // overlaid on the last-saved baseline; other cards' unsaved edits are left
   // in the local draft and never accidentally persisted by another card.
   const TOP_KEYS = ['enabled', 'autoSwitchPolicyToAsk', 'timeoutAction', 'llmReviewScope', 'llmTakeoverScope', 'defaultReviewMode', 'showSessionPanel', 'aiButtonPosition', 'autoModeNoticeEnabled']
-  const TIMER_KEYS = ['breakerAntiHijackMs', 'lowRiskSeconds', 'mediumRiskSeconds', 'highRiskSeconds', 'maxConsecutiveDenials', 'maxTotalDenials', 'reviewWaitSeconds', 'directHumanEnabled']
+  const TIMER_KEYS = ['breakerAntiHijackMs', 'lowRiskSeconds', 'mediumRiskSeconds', 'highRiskSeconds', 'maxConsecutiveDenials', 'maxTotalDenials', 'reviewWaitSeconds', 'directHumanEnabled', 'slashCommandsEnabled']
   const REVIEW_KEYS = ['classifierSource', 'classifierProvider', 'classifierModel', 'reviewerSource', 'reviewerProvider', 'reviewerModel', 'reviewerMaxTokens', 'reviewerReasoning', 'classifierReasoning', 'endpointUrl', 'endpointModel', 'endpointProtocol', 'reviewMaxRetries']
   const SECURITY_KEYS = ['safetyPrompt', 'allowlist', 'denyList', 'humanOnlyList', 'rulesText', 'rulesDryRun']
   const UTILITY_KEYS = ['onboardingMessageEnabled', 'redactResults', 'editDiffPreview', 'rejectGuidance']
@@ -1224,6 +1227,7 @@ function SettingsSection() {
       maxConsecutiveDenials: String(THRESHOLD_DEFAULTS.maxConsecutiveDenials),
       maxTotalDenials: String(THRESHOLD_DEFAULTS.maxTotalDenials),
       directHumanEnabled: 'off',
+      slashCommandsEnabled: 'off',
     })
   }
 
@@ -1735,6 +1739,11 @@ function SettingsSection() {
       className: 'dsa-input',
       style: { width: 110 },
     }), t('settings.breakerAntiHijackHint')),
+    row(t('settings.slashCommands.title'), React.createElement(CapsuleSelect, {
+      value: draft.slashCommandsEnabled,
+      options: onOffOptions(),
+      onChange: (v: string) => update({ slashCommandsEnabled: v as 'on' | 'off' }),
+    }), t('settings.slashCommands.desc')),
     row(t('settings.directHuman.title'), React.createElement(CapsuleSelect, {
       value: draft.directHumanEnabled,
       options: onOffOptions(),

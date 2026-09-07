@@ -3063,24 +3063,31 @@ test('denial log: the recent-denial cap is independent of the breaker thresholds
   assert.ok(shiftAt > 0, 'the shift uses the display cap')
   assert.ok(!lib.slice(shiftAt - 300, shiftAt + 100).includes('maxConsecutiveDenials'), 'the threshold no longer caps the log')
 })
-test('/approval-reset command pair: session-scoped reset, zero-argument global hatch', () => {
+test('/approval-reset command pair: optional registration, session-scoped reset, zero-argument global hatch', () => {
   // User decision (2026-09-05): one session's escape hatch must not silently
   // clear a concurrent session's denial breaker, and the GUI palette runs a
   // picked command immediately with no argument entry — so the pair is two
   // zero-argument commands (/approval-reset and /approval-reset-all) sharing
-  // one helper, with no dead argument parsing in between.
+  // one helper, with no dead argument parsing in between. Since 0.0.19 the
+  // trio (/approval-mode included) registers ONLY when slashCommandsEnabled
+  // is on at boot (fail-closed off), and each handler reads the switch live.
   const lib = readFileSync(fileURLToPath(new URL('../lib/index.js', import.meta.url)), 'utf8')
   const helperAt = lib.indexOf('const resetAllSessions = () =>')
   assert.ok(helperAt > 0, 'the shared reset-all helper is defined')
   const helperScope = lib.slice(helperAt, helperAt + 500)
   assert.ok(helperScope.includes('denials.clear()'), 'the helper keeps the global clear')
   assert.ok(helperScope.includes('clearApprovalState()'), 'the helper clears the approval registry')
+  const gateAt = lib.indexOf("if (commands && config.slashCommandsEnabled === true)")
+  assert.ok(gateAt > helperAt, 'the whole trio registers only when slashCommandsEnabled is on (off = absent from the palette)')
   const allCmdAt = lib.indexOf("name: 'approval-reset-all'")
-  assert.ok(allCmdAt > helperAt, 'the /approval-reset-all command is registered (global hatch)')
-  assert.ok(lib.slice(allCmdAt, allCmdAt + 300).includes('resetAllSessions()'), 'the global command delegates to the shared helper')
+  assert.ok(allCmdAt > gateAt, 'the /approval-reset-all command is registered inside the gate (global hatch)')
+  const allScope = lib.slice(allCmdAt, allCmdAt + 700)
+  assert.ok(allScope.includes("slashCommandsLive()"), 'the handler first checks the live switch')
+  assert.ok(allScope.includes('resetAllSessions()'), 'the global command delegates to the shared helper')
   const handlerAt = lib.indexOf("name: 'approval-reset'")
   assert.ok(handlerAt > allCmdAt, 'the session-scoped command is registered after the global one')
   const scope = lib.slice(handlerAt, handlerAt + 2000)
+  assert.ok(scope.includes("slashCommandsLive()"), 'the session handler carries the live switch guard')
   assert.ok(scope.includes("denials.delete("), 'the bare form deletes only the session key')
   assert.ok(scope.includes('Cannot resolve the calling session'), 'an unresolvable session gets pointed at the global command')
   assert.ok(scope.includes('/approval-reset-all'), 'the usage text names the global variant')

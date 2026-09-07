@@ -163,6 +163,8 @@ export interface Config {
   learningThreshold: number
   /** Direct-human-approval channel: the agent may call dsa_request_user to route a follow-up operation to a human instead of the LLM classifier. Off by default (zero behavior change). */
   directHumanEnabled: boolean
+  /** Slash commands /approval-mode, /approval-reset, /approval-reset-all registration. Off by default: commands are absent from the palette unless enabled. */
+  slashCommandsEnabled: boolean
 }
 
 export const Config: z<Config> = z.object({
@@ -288,6 +290,13 @@ export const Config: z<Config> = z.object({
   // execute checks read the switch LIVE, so turning it off stops the channel
   // at once and a boot-time-registered tool routes only while enabled.
   directHumanEnabled: z.boolean().default(false),
+  // Slash commands /approval-mode, /approval-reset, /approval-reset-all:
+  // fail-closed default (off). Command sets are not hot-swappable — they are
+  // REGISTERED only when the switch is on at boot (enabling needs a restart,
+  // same as the direct-human tool); each handler additionally reads the
+  // switch LIVE and refuses with a clear error when it is off, so disabling
+  // stops the already-registered commands at once.
+  slashCommandsEnabled: z.boolean().default(false),
 })
 
 const AUTO_PRESET = 'auto'
@@ -4454,14 +4463,20 @@ export function apply(ctx: Context, rawConfig: Config): void {
     }), 'dsh-auto-approval-llm: stats route')
   }
 
-  // ── /approval-reset + /approval-reset-all ─────────────────────────────
+  // ── /approval-mode + /approval-reset + /approval-reset-all (optional) ──
   // Escape hatch: reset breaker counters and in-flight review status without
-  // touching persisted policy. Registered only when the commands service is
-  // present (it is active in the web profile). The GUI command palette runs a
-  // picked command immediately and offers no argument entry, so the global
-  // variant is its own zero-argument command — otherwise `reset all` would be
+  // touching persisted policy. Registered ONLY when slashCommandsEnabled is on
+  // at boot (command sets are not hot-swappable — enabling needs a restart,
+  // mirroring the direct-human tool) and only when the commands service is
+  // present (it is active in the web profile). Each handler additionally reads
+  // the switch LIVE and refuses with a clear error when it is off, so a
+  // running process that disables the switch stops the already-registered
+  // commands at once. The GUI command palette runs a picked command
+  // immediately and offers no argument entry, so the global reset variant is
+  // its own zero-argument command — otherwise `reset all` would be
   // unreachable from the web UI.
   const commands = anyCtx.get('commands')
+  const slashCommandsLive = () => config.slashCommandsEnabled === true
   const resetAllSessions = () => {
     denials.clear()
     totalDenials.clear()
@@ -4469,16 +4484,24 @@ export function apply(ctx: Context, rawConfig: Config): void {
     clearApprovalState()
     return { kind: 'success', text: 'Breaker counters and in-flight approval state reset for ALL sessions.' }
   }
-  if (commands) {
+  if (commands && config.slashCommandsEnabled === true) {
     ctx.effect(() => commands.register({
       name: 'approval-reset-all',
       description: '/approval-reset-all — reset breaker counters and in-flight approval state for ALL sessions (global escape hatch)',
-      handler: () => resetAllSessions(),
+      handler: () => {
+        if (!slashCommandsLive()) {
+          return { kind: 'error', text: 'Slash commands are disabled (slashCommandsEnabled off); re-enable the switch and restart to use /approval-reset-all.' }
+        }
+        return resetAllSessions()
+      },
     }), 'dsh-auto-approval-llm: /approval-reset-all command')
     ctx.effect(() => commands.register({
       name: 'approval-reset',
       description: '/approval-reset — reset this session breaker counters (global variant: /approval-reset-all)',
       handler: (invocation: any) => {
+        if (!slashCommandsLive()) {
+          return { kind: 'error', text: 'Slash commands are disabled (slashCommandsEnabled off); re-enable the switch and restart to use /approval-reset.' }
+        }
         // User decision: a bare reset is session-scoped — one
         // session's escape hatch must not silently clear a concurrent
         // session's denial breaker (the counters are authority-session keyed,
@@ -4506,6 +4529,9 @@ export function apply(ctx: Context, rawConfig: Config): void {
       name: 'approval-mode',
       description: '/approval-mode [manual|smart|unattended] show/set this session review mode',
       handler: (invocation: any) => {
+        if (!slashCommandsLive()) {
+          return { kind: 'error', text: 'Slash commands are disabled (slashCommandsEnabled off); re-enable the switch and restart to use /approval-mode.' }
+        }
         const agent = invocation?.agent
         const key = authorityKeyFor({ agent })
         const current = reviewModes.get(key) ?? config.defaultReviewMode
@@ -4520,7 +4546,9 @@ export function apply(ctx: Context, rawConfig: Config): void {
         return { kind: 'success', text: `Review mode for this session set to: ${arg}` }
       },
     }), 'dsh-auto-approval-llm: /approval-mode command')
+  } else if (commands) {
+    console.log('[dsh-auto-approval-llm] slash commands disabled (slashCommandsEnabled off), /approval-mode /approval-reset /approval-reset-all not registered')
   } else {
-    console.log('[dsh-auto-approval-llm] commands service unavailable, /approval & /approval-mode disabled')
+    console.log('[dsh-auto-approval-llm] commands service unavailable, /approval-mode /approval-reset /approval-reset-all disabled')
   }
 }

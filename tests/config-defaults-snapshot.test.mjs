@@ -76,6 +76,7 @@ test('schema defaults snapshot: changing a default must be a reviewed diff', () 
       learningEnabled: false,
       learningThreshold: 3,
       directHumanEnabled: false,
+      slashCommandsEnabled: false,
     },
     'a changed schema default ships to every new install — update this snapshot deliberately',
   )
