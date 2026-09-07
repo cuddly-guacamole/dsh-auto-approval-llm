@@ -1640,7 +1640,7 @@ const reviewVerdicts = new Map<string, ReviewResult>()
 // callIds whose approval/request has already been settled by the host (any
 // resolution path). The client's follow ACK (FEEDBACK POST) arrives AFTER
 // askHuman finished, so without this set the ACK would relabel a resolved ask
-// as "no response: auto-*". Map<callId, timestamp>; swept with the follow
+// with the timeout notice. Map<callId, timestamp>; swept with the follow
 // sweep; only used to gate feedback text.
 const resolvedCallIds = new Map<string, number>()
 const RESOLVED_TTL_MS = 30_000
@@ -1797,7 +1797,7 @@ export function installFeedbackRoute(ctx: any): void {
           resolvedCallIds.has(body.callId) || reviewStates.has(body.callId) ||
           followExpiry.has(body.callId) || reviewVerdicts.has(body.callId)
         if (knownCallId && !decisionFeedback.has(body.callId) && !resolvedCallIds.has(body.callId)) {
-          recordTimeoutFeedback(body.callId, `[dsh-auto-approval-llm] no response: auto-${actionText}`)
+          recordTimeoutFeedback(body.callId, `[dsh-auto-approval-llm] auto-${actionText} by the configured timeout action (timeout — not a user denial)`)
         }
         // The client has seen the follow phase and is answering: release the
         // follow state early instead of waiting for the TTL sweep.
@@ -3549,7 +3549,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       }
     }
     // Mark the ask as host-resolved so a late client ACK (FEEDBACK POST) cannot
-    // relabel it "no response: auto-*". Covers status-less asks too: their
+    // relabel it with the timeout notice. Covers status-less asks too: their
     // client-side countdown answer is also a resolution the host has already
     // finished by the time the ACK lands.
     if (req.callId !== undefined) resolvedCallIds.set(req.callId, Date.now())

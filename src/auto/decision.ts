@@ -136,7 +136,7 @@ export async function raceHumanDecision(
         const actionText = opts.status.action === 'allow' ? 'approved' : 'rejected'
         opts.recordTimeout(
           opts.callId,
-          `[dsh-auto-approval-llm] no response: auto-${actionText} (${opts.status.seconds}s)`,
+          `[dsh-auto-approval-llm] no human response in ${opts.status.seconds}s: auto-${actionText} by the configured timeout action (timeout — not a user denial)`,
         )
       }
       settle(opts.status.action === 'allow' ? 'allowed-once' : 'rejected', true)
@@ -674,7 +674,7 @@ export type DenyFeedbackKind = 'rule' | 'denyList' | 'policy' | 'llm' | 'timeout
 
 /** Fail-closed reviewer-unavailable notice (shared by feedback and status). */
 export const REVIEW_TIMEOUT_NOTICE =
-  'The review model did not respond or was unavailable (recorded). This outcome is fail-closed and does NOT count toward the denial breaker — only decided LLM denials do.'
+  'The review model did not respond or was unavailable, so this request failed closed as rejected — a missing review can never allow a call. This does not count toward the denial breaker: breaker limits apply only to LLM-decided denials, and reviewer failures or timeouts never increment them.'
 
 export interface DenyFeedbackDetail {
   toolName?: string
