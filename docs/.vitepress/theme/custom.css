@@ -74,6 +74,87 @@
 .vp-doc .homebadges { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin: 8px 0 4px; }
 .vp-doc .homebadges img { border-radius: 6px; }
 
+/* ── mermaid 流程图配色：GitHub 面板色 ──
+   vitepress-plugin-mermaid@2 在站点 .dark 时会强制 theme:'dark' 并丢弃 config 的
+   themeVariables，节点因此落到 dark 主题自带近黑 #1f2020 + #ccc 文字（白天模式则因
+   旧 config 里 darkMode:true 变成深色块）。这里绕过 config 变量，直接对两种模式的
+   DOM 上色：选择器带 #app（id）锚定，特异性高于 mermaid 注入的 #mermaid-* 规则。 */
+#app .mermaid .node rect,
+#app .mermaid .node circle,
+#app .mermaid .node ellipse,
+#app .mermaid .node polygon,
+#app .mermaid .node path {
+  fill: #f6f8fa;      /* 亮色：GitHub 浅面板 */
+  stroke: #d0d7de;
+}
+#app .mermaid .node .nodeLabel,
+#app .mermaid .node .nodeLabel p,
+#app .mermaid .node .nodeLabel span {
+  color: #1f2328;
+}
+#app .mermaid .labelBkg,
+#app .mermaid .edgeLabel {
+  background-color: #f6f8fa;
+}
+#app .mermaid .edgeLabel,
+#app .mermaid .edgeLabel p,
+#app .mermaid .edgeLabel span {
+  color: #59636e;
+}
+#app .mermaid .flowchart-link,
+#app .mermaid .edgePath .path {
+  stroke: #59636e;
+}
+#app .mermaid .arrowMarkerPath {
+  fill: #59636e;
+  stroke: #59636e;
+}
+#app .mermaid .cluster rect {
+  fill: #f6f8fa;
+  stroke: #d0d7de;
+}
+
+.dark #app .mermaid .node rect,
+.dark #app .mermaid .node circle,
+.dark #app .mermaid .node ellipse,
+.dark #app .mermaid .node polygon,
+.dark #app .mermaid .node path {
+  fill: #161b22;      /* 暗色：GitHub 面板（非纯黑） */
+  stroke: #30363d;
+}
+.dark #app .mermaid .node .nodeLabel,
+.dark #app .mermaid .node .nodeLabel p,
+.dark #app .mermaid .node .nodeLabel span {
+  color: #c9d1d9;
+}
+.dark #app .mermaid .labelBkg,
+.dark #app .mermaid .edgeLabel {
+  background-color: #161b22;
+}
+.dark #app .mermaid .edgeLabel,
+.dark #app .mermaid .edgeLabel p,
+.dark #app .mermaid .edgeLabel span {
+  color: #8b949e;
+}
+.dark #app .mermaid .flowchart-link,
+.dark #app .mermaid .edgePath .path {
+  stroke: #8b949e;
+}
+.dark #app .mermaid .arrowMarkerPath {
+  fill: #8b949e;
+  stroke: #8b949e;
+}
+.dark #app .mermaid .cluster rect {
+  fill: #161b22;
+  stroke: #30363d;
+}
+
+/* 图中的行号锚（.lnum）保持正文同款青色，不被 mermaid 注入规则抹平 */
+#app .mermaid .lnum,
+.dark #app .mermaid .lnum {
+  color: #39c5cf;
+}
+
 /* ── mermaid 节点文本修复 ──
    VitePress 全局 `.vp-doc p` 会给 foreignObject 内的 <p> 施加 line-height:28px 等样式，
    撑大行高后文本溢出节点盒子而被截断。这里恢复 mermaid 自身的段落渲染。 */
