@@ -2930,12 +2930,39 @@ export function apply(ctx: Context, rawConfig: Config): void {
   // per call — one process serves every workspace, and a process-wide cached
   // anchor made every non-first workspace's targets look like escapes and
   // hard-denied all of their file mutations (multi-workspace regression).
+  // The host consults guards only AFTER an allow decision, so a guard denial
+  // here overrides an `allowed-once` record the pre-execute plane just wrote
+  // for the same call (the tool never dispatches). The fuse verdict is
+  // appended under its own `guard` source — outcome rejected, reason carried
+  // like the pre-execute `hard-deny` record — and the prior allow record is
+  // never amended (the audit is append-only); the guard line is the call's
+  // terminal state, and the fuse sources (`guard`, `hard-deny`, the static
+  // allows) sit outside the tool-stats adjudicated-source whitelist, so the
+  // pair is never double-tallied as allow + deny. Recording failure never
+  // softens the denial: the reason is still returned, so the host refuses
+  // the call either way (a broken audit cannot let the call dispatch).
   anyCtx.tools?.guard?.((exec: any) => {
     if (!isAutoExecution(exec)) return undefined
     const roots = rootsFor(exec)
     const hard = hardDenyReason(exec, roots)
-    if (hard !== undefined) return hard
-    return symlinkEscapeReason(exec, roots, resolveDeepest)
+    const reason = hard !== undefined ? hard : symlinkEscapeReason(exec, roots, resolveDeepest)
+    if (reason === undefined) return undefined
+    try {
+      if (!pushHistory({
+        sessionId: authorityKeyFor(exec),
+        toolName: exec.name,
+        outcome: 'rejected',
+        source: 'guard',
+        reason,
+      })) {
+        debugLog({ ev: 'guard-deny-audit-failure', callId: exec.callId ?? null, toolName: exec.name })
+        console.warn('[dsh-auto-approval-llm] guard denial could not be persisted to the audit; the call stays denied')
+      }
+    } catch (error) {
+      debugLog({ ev: 'guard-deny-record-error', callId: exec.callId ?? null, toolName: exec.name, error: error instanceof Error ? error.message : String(error) })
+      console.warn('[dsh-auto-approval-llm] guard denial record failed; the call stays denied')
+    }
+    return reason
   })
 
   // ── direct-human-approval tool ─────────────────────────────────────────
