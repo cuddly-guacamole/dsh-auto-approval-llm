@@ -267,6 +267,33 @@ export function parseRulesText(text: string): RuleSet {
   return { rules, errors }
 }
 
+/**
+ * Cap on how many bad lines one rules-parse report may carry before the rest
+ * is counted as `more` — keeps a flood of malformed lines readable instead of
+ * dumping the whole broken block.
+ */
+export const RULES_PARSE_REPORT_CAP = 8
+
+/**
+ * Collapse a parse-error list into a bounded, de-duplicated report body.
+ * Shared by the two host evaluation planes so their parse-error observations
+ * agree; stays pure and import-free like the rest of this module so the
+ * browser settings-card bundle is unaffected. Keeps insertion order, drops
+ * duplicate (line, message) pairs, and truncates past the cap while counting
+ * how many distinct errors were left out.
+ */
+export function summarizeRulesParseErrors(errors: RuleParseError[], cap = RULES_PARSE_REPORT_CAP): { entries: RuleParseError[]; more: number } {
+  const seen = new Set<string>()
+  const entries: RuleParseError[] = []
+  for (const error of errors) {
+    const key = JSON.stringify([error.line, error.message])
+    if (seen.has(key)) continue
+    seen.add(key)
+    if (entries.length < cap) entries.push(error)
+  }
+  return { entries, more: seen.size > cap ? seen.size - cap : 0 }
+}
+
 export interface RuleSubject {
   toolName: string
   reason?: string

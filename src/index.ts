@@ -57,7 +57,7 @@ import { assessTool, hardDenyReason } from './auto/policy.js'
 import { resolveDeepest, symlinkEscapeReason } from './auto/symlink.js'
 import { probeTargetFacts } from './auto/probe.js'
 import { redactResultValue } from './auto/redact.js'
-import { agentKind, evaluateRules, parseRulesText } from './auto/rules.js'
+import { agentKind, evaluateRules, parseRulesText, summarizeRulesParseErrors, type RuleParseError } from './auto/rules.js'
 import { isReviewRetryable, retryAfterMs, retryReviewLoop, toLlmFailure, type RetryAttempt, type ReviewFailure } from './auto/retry.js'
 import { type ReviewMode, loadReviewModes, normalizeReviewMode, persistReviewModes } from './auto/review-mode.js'
 import { runtimeStateReadHits } from './auto/shell.js'
@@ -1411,6 +1411,44 @@ function debugLog(entry: Record<string, unknown>): void {
     appendFileSync(DEBUG_FILE, `${JSON.stringify({ at: Date.now(), ...entry })}\n`)
   } catch {
     // Debug is best-effort; never affects the approval outcome.
+  }
+}
+
+// One shared loud path for a malformed rulesText block. rulesText is parsed
+// in both evaluation planes — pre-execute and the answerer — and a block
+// with parse errors disables the whole declared-rules segment in each
+// (documented semantics, not changed here). The pre-execute plane used to
+// skip that in silence and the answerer only console.error'd, so a deny rule
+// dropped by a hand-edited block could fail open with nothing consistent to
+// search for. Both planes now funnel through this single reporter (same
+// payload, same channels): console always, the debug trail when enabled, and
+// a dedicated non-decision audit event that never counts as a verdict.
+// Per-plane suppression keyed on the reported signature keeps a broken block
+// from re-alerting on every tool call or rotating real decision records out
+// of the audit file; any edit that leaves the block broken changes the
+// signature and re-reports.
+const rulesParseReported = new Map<string, string>()
+
+function reportRulesParseErrors(plane: 'pre-execute' | 'answerer', errors: RuleParseError[]): void {
+  try {
+    const { entries, more } = summarizeRulesParseErrors(errors)
+    if (entries.length === 0) return
+    const signature = `${plane}:${entries.map((e) => `${e.line}:${e.message}`).join('|')}`
+    if (rulesParseReported.get(plane) === signature) return
+    rulesParseReported.set(plane, signature)
+    const detail = entries.map((e) => `L${e.line}: ${e.message}`).join('; ')
+    const overflow = more > 0 ? `；另有 ${more} 处未列出` : ''
+    console.error(`[dsh-auto-approval-llm][rules-parse-error] ${plane}: rulesText 解析错误，整段声明规则不生效（共 ${errors.length} 处）: ${detail}${overflow}`)
+    debugLog({ ev: 'rules-parse-error', plane, count: errors.length, errors: entries })
+    appendAuditLine(JSON.stringify({
+      type: 'rules-parse-error',
+      at: Date.now(),
+      plane,
+      count: errors.length,
+      errors: entries,
+    }))
+  } catch {
+    // Reporting is observational; a failure here never touches the decision path.
   }
 }
 
@@ -3121,7 +3159,9 @@ export function apply(ctx: Context, rawConfig: Config): void {
     // inherent to the pre-execute plane).
     if (config.rulesText.trim() !== '') {
       const declared = parseRulesText(config.rulesText)
-      if (declared.errors.length === 0) {
+      if (declared.errors.length > 0) {
+        reportRulesParseErrors('pre-execute', declared.errors)
+      } else {
         const subject = {
           toolName: exec.name,
           arguments: exec.arguments,
@@ -3938,7 +3978,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
     if (config.rulesText.trim() !== '') {
       const declared = parseRulesText(config.rulesText)
       if (declared.errors.length > 0) {
-        console.error('[dsh-auto-approval-llm] rulesText 解析错误，跳过声明规则', declared.errors)
+        reportRulesParseErrors('answerer', declared.errors)
       } else {
         const subject = {
           toolName,
