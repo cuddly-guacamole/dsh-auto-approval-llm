@@ -28,6 +28,18 @@
 
 pushHistory 每次附带写一条 `type:'decision'`；UI 清历史只清内存+history 文件，审计只剩墓碑。`>5MiB 保尾 5000 行`。查询：`node scripts/audit-query.mjs [--last N | --tool X | --session S | --source S | --since ISO | --json]`。
 
+#### 非决策观测事件
+
+除 `decision` / `clear` 外，audit.jsonl 还承载**非决策观测事件**——只记观测事实、不改任何裁决、不进审批历史窗口与统计（`type` 见 <span class="lnum">index.ts</span> 各 `appendAuditLine` 处）：
+
+- `result-redacted` / `mask-failed`：成功工具结果过脱敏器的命中 / 失败记录（post-execute 侧），只带 callId/toolName，永不落被掩码的原料；
+- `learning-cap-reached` / `learning-revoked` / `learning-tamper`：学习放行到达会话上限告警 / 设置卡吊销单条（learning-store DELETE）/ 进程外改写 learning.json 的检测；
+- `rules-context-missing`：声明规则含 deny/human 维度作用域但代理上下文（agentKind/workspaceRoot）不可得时降级人工，留一条原因记录；
+- `rules-parse-error`：rulesText 解析错误——pre-execute 与 answerer 两平面 loud 报错（console.error + debugLog），审计事件按平面去重、签名变化才追加；
+- `runtime-state-read`：读取插件运行态文件（结构化读工具与 shell 读）默认落审计，纯观测。
+
+`decision` 侧新增：`tools/guard` 熔丝拒绝（硬拒 / symlink 逃逸）也会以 `source:'guard'`、`outcome:'rejected'`（reason 随行）经 pushHistory 落一条终局 decision 记录——审计写入失败不软化拒绝，调用仍被拒。
+
 ### 11.1.3 review-mode.json（每会话评审模式）
 
 ```json

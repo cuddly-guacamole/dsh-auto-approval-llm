@@ -47,30 +47,31 @@ flowchart TD
 li.dsa-card（可折叠；任一卡脏 → 头部「未保存」徽标）
 ├─ 非法配置红横幅 + 「尝试修复」        ← 检测表镜像 host schema；3 值来源枚举（session/preset/endpoint）
 ├─ 调试横幅（debug=on 时）+「关闭调试」
-├─ 顶层开关区（6 个即时保存 CapsuleSelect）
+├─ 顶层开关区（8 个即时保存 CapsuleSelect；第 8 个按条件显示）
 │    enabled · timeoutAction · 评审与接管预设（一次写
 │    llmReviewScope + llmTakeoverScope 两键；非预设 YAML 组合显示「自定义」兜底，选中不写值）
-│    · defaultReviewMode · showSessionPanel · aiButtonPosition(条件显示)
+│    · defaultReviewMode · autoSwitchPolicyToAsk · autoModeNotice · showSessionPanel · aiButtonPosition(条件显示)
 ├─ 首次使用引导块（一次性：首次展开即显示，折叠时写 localStorage
 │    dsa-onboarding-seen-v1 后不再出现；标题+三行+提示；第二行的
 │    {timeout} 标签按实时 timeoutAction 渲染，非 reject 不出现「拒绝」）
-├─ 6 张可折叠子卡（均独立 保存/放弃；安全规则卡另有 恢复默认）
-│    ├─ [安全底线] 计时器与熔断   风险倒计时一行（低/中/高三组内联输入）· LLM 等待时间一行（秒，1-10，重置=THRESHOLD_DEFAULTS） · 拒绝熔断阈值一行（连续/累计）（重置=THRESHOLD_DEFAULTS）
+├─ 7 张可折叠子卡（均独立 保存/放弃；安全规则卡另有 恢复默认）
+│    ├─ [安全底线] 计时器与熔断   风险倒计时一行（低/中/高三组内联输入）· LLM 等待时间一行（秒，1-10，重置=THRESHOLD_DEFAULTS） · 拒绝熔断阈值一行（连续/累计）（重置=THRESHOLD_DEFAULTS）· 熔断弹窗防误点毫秒数 breakerAntiHijackMs（恢复默认不动它——防误点窗口只能 YAML 设回）
 │    ├─ [安全底线] 安全规则列表   safetyPrompt · 精确名单（页签切换 allowlist/denyList/humanOnlyList，单个复用 textarea 按页签绑定三字段）
-│    │                · redactResults · editDiffPreview（默认关的增强开关）· rulesText(实时语法校验)
+│    │                · rulesText(实时语法校验) · rulesDryRun（干跑开关）
 │    ├─ [安全底线] 分类开关与信任模式   categoryMode(standard/aggressive，切 aggressive 弹放开范围警示)
     │                · privilegeAutoReview 开关（提权类别解锁，默认关；开启后 privilege 行可选 自动/拒绝）
 │    │                · 11 类逐行三态 CapsuleSelect（LOCKED 类只剩 继承/人工询问 可选；privilege 解锁后恢复三态）
-│    ├─ [安全底线] 确认制学习     learningEnabled(on/off) · learningThreshold(数字输入 min2 max10，保存钳回 2..10)（阈值行仅开关=on 时显示）（<span class="lnum">client/index.ts:L1761-1782</span>）
+│    ├─ [安全底线] 确认制学习     learningEnabled(on/off) · learningThreshold(数字输入 min2 max10，保存钳回 2..10)（阈值行仅开关=on 时显示）（<span class="lnum">client/index.ts:L2137-2205</span>）· 已学习条目区块（键哈希 + 脱敏骨架 + 计数，可单条吊销，落 `learning-revoked` 审计）
+│    ├─ 实用小功能    onboardingMessageEnabled（首次使用引导消息）· redactResults（成功结果二次脱敏）· editDiffPreview（默认关的增强开关）· rejectGuidance（拒绝引导提示）
 │    ├─ 在线评审模型   快速判断模型[来源: 跟随会话/DSH模型(catalog chips 填 Provider·Model)/自定义端点] · 深度评审模型[同构] · 自定义端点[共享：协议·API地址·模型·密钥(password型)「已配置|未配置」· 测试连接]（恢复默认=双通道回 session + 端点配置清空 + 清除密钥）
 │    └─ 最近审批记录   搜索 · 分页(PAGE_SIZE=10) · 记录+[熔断]+原因(warn色) + LLM 响应耗时统计 · 清空历史(confirm)
 └─ 底部 footer：恢复默认 · 重启提示(applies=restart) · 全局错误行
 ```
 
-> 分组标签（只加标签不移动控件）：前四张子卡（计时器与熔断 / 安全规则列表 / 分类开关与信任模式 / 确认制学习）标题带「安全底线」标签（计时器含倒计时秒数——决策窗口属安全项；`settings.group.safetyBase` 键），评审模型卡与历史卡保持现状。归组合约：后续新增设置键默认进安全底线组。
+> 分组标签（只加标签不移动控件）：前四张子卡（计时器与熔断 / 安全规则列表 / 分类开关与信任模式 / 确认制学习）标题带「安全底线」标签（计时器含倒计时秒数——决策窗口属安全项；`settings.group.safetyBase` 键），实用小功能卡与评审模型卡、历史卡保持现状。归组合约：后续新增设置键默认进安全底线组。
 
-- **保存语义**：每卡只 POST 自己拥有的键（`sliceValueOf`），叠加到「最后保存基线」上 —— 保存 A 卡不会吞掉 B 卡未保存的编辑；顶层开关即时保存（预设行一次提交两个键、其余单键；`expectedRevision` 乐观并发控制）。学习子卡只提交 `LEARNING_KEYS = ['learningEnabled','learningThreshold']` 两键（<span class="lnum">client/index.ts:L1106</span>），threshold 保存时钳入 2..10。
-- **host-only 键保护**：九员名单 `workspaceRoot / dshHome / tempRoots / trustedDirs / classifierTimeoutMs / classifierMaxOutputTokens / maxArgsChars / notifyUser / reviewerContextFacts`（<span class="lnum">decision.ts:L224-234</span>）走 patch/YAML 配置；保存时 `preserveHostKeys` 让存储值**恒胜出**，卡片改不掉它们。其中 `trustedDirs` 与 `reviewerContextFacts` 完全没有设置卡控件，改动入口只有 YAML。
+- **保存语义**：每卡只 POST 自己拥有的键（`sliceValueOf`），叠加到「最后保存基线」上 —— 保存 A 卡不会吞掉 B 卡未保存的编辑；顶层开关即时保存（预设行一次提交两个键、其余单键；`expectedRevision` 乐观并发控制）。学习子卡只提交 `LEARNING_KEYS = ['learningEnabled','learningThreshold']` 两键（<span class="lnum">client/index.ts:L1079</span>），threshold 保存时钳入 2..10。
+- **host-only 键保护**：11 员名单 `workspaceRoot / dshHome / tempRoots / trustedDirs / trustedDshSubpaths / maintenanceDshPaths / classifierTimeoutMs / classifierMaxOutputTokens / maxArgsChars / notifyUser / reviewerContextFacts`（<span class="lnum">decision.ts:L275-287</span>）走 patch/YAML 配置；保存时 `preserveHostKeys` 让存储值**恒胜出**，卡片改不掉它们。其中 `trustedDirs`、`trustedDshSubpaths`、`maintenanceDshPaths` 与 `reviewerContextFacts` 完全没有设置卡控件，改动入口只有 YAML。
 - **密钥永不出现在 settings value**：独立 `/reviewer-credential` 路由；输入框 password + new-password 自动完成；保存后立即清空不回显。
 
 ## 10.3　会话标题栏「自动审批」统计

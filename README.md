@@ -31,7 +31,7 @@
 - **上下文增强复审（可选开启，默认关）**：`reviewerContextFacts` 开启后，LLM 复审输入附加结构化工作区事实——目标路径存在性/类型/大小（只读元数据，绝不读内容）＋本会话最近创建的文件相对路径（最多 8 条，经脱敏与工作区过滤）。边界：工作区外目标只报存在性与类型、大小恒为 null；工作区 symlink/联接逃逸到外部时整个事实块省略；临时目录（tempRoots）文件不进 recent_creates；探测失败→事实块整体省略（fail-closed），默认关闭时复审载荷与既往逐字节一致。
 - **编辑操作 diff 预览（editDiffPreview）**：开启后，进入人工审批的编辑类工具（write/edit/str_replace_editor/apply_patch）在审批面板展示目标文件的行级红绿 diff（目标仅限工作区内非受保护路径，≤1MiB/≤200 行/约 32KiB，失败自动省略）。纯展示：不参与任何裁决，不进 LLM 复审输入；默认关闭。边界：可读的工作区内非受保护目标对比现有内容出 diff；全量写类操作（`write` / `str_replace_editor` `create`）目标不可读（工作区外/受保护/新文件等）时预览「仅新内容」的全量新增 diff——素材全部来自工具参数、零读取目标文件，外部/受保护旧内容绝不因此上屏；对比类（`edit` / `str_replace` / `insert` / `apply_patch`）目标不可读时整体省略。LCS 输入 ≤1024 行/侧，单行 >200 字符省略号，输出 ≤200 行且总字节 ≤32KiB，截断带 `…truncated` 标记；语义镜像官方工具（edit/str_replace 多匹配省略、insert 按官方 0 基 splice、create 已存在省略、apply_patch 全目标顺序应用且任一失败整体省略）；diff 块内倒计时字面量被剥离，无法伪造/劫持客户端自动应答。
 - **确认制学习（可选开启，默认关）**：`learningEnabled` 开启后，同一操作（以确定性签名称呼：命令模板 / 工具参数形状，不含任何原始值）在 Auto 档被人工反复确认达到阈值（`learningThreshold` 默认 3，钳制 2–10）起自动放行；**每次学习放行前仍对本次调用执行一次标准在线评审**——非干净 ALLOW 或 CRITICAL 矛盾一律回退原有人工分支。边界：仅低/中风险可学；高风险、锁定四类（delete/protected/privilege/disk）与敏感路径永不参与（unknown 类别自 0.0.15 起可学，命中仍须过一次标准在线评审）；含变量/glob/引号或危险头命令（tee/dd/sed/truncate/install）的命令既不学也不中；同签名被人工拒绝立即清零计数；每根会话学习放行上限 50 次（恰达上限的那一次落审计告警）；条目保留 30 天、至多 100 条、按工作区隔离；任何一环失效都视同未命中回人工；设置卡「已学习条目」区块可查看（仅展示键哈希与条目骨架，不泄签名/原始值）与吊销已学条目（即时生效并落审计）。
-- **复用 DSH 原生 UI 体系的设置卡**：6 张可折叠子卡（计时器与熔断 / 在线评审模型 / 安全规则列表 / 分类开关与信任模式 / 确认制学习 / 最近审批记录），顶部「评审与接管预设」单选（标准 / 稳健 / 严格 / 自定义）一键写回 LLM 参与门槛组合，三个名单合并为「精确名单」页签编辑器，倒计时三档与熔断双阈值各并为一行；顶层开关即时保存、每卡独立 保存/放弃；非法配置值有红色横幅 +「尝试修复」。
+- **复用 DSH 原生 UI 体系的设置卡**：7 张可折叠子卡（计时器与熔断 / 安全规则列表 / 分类开关与信任模式 / 确认制学习 / 实用小功能 / 在线评审模型 / 最近审批记录），顶部「评审与接管预设」单选（标准 / 稳健 / 严格 / 自定义）一键写回 LLM 参与门槛组合，三个名单合并为「精确名单」页签编辑器，倒计时三档与熔断双阈值各并为一行；顶层开关即时保存、每卡独立 保存/放弃；非法配置值有红色横幅 +「尝试修复」。
 - **DSH 应答协议（0.0.16 起单协议）**：客户端自动应答走 DSH 0.1.2+（rc.1/alpha.4 同代际）的 `uiSession.pendingInteractions` + `PendingApproval.answer` 投递协议；0.1.1-rc.2 的 `snapshot.pending` 兼容适配器已移除。
 
 ---
@@ -147,13 +147,13 @@ npx tsdown                 # 构建 client bundle → lib/client.js
 | 键 | 默认 | 说明 |
 |---|---|---|
 | `enabled` | true | 总开关 |
-| `autoSwitchPolicyToAsk` | false | 仅 Auto 预设且 override=never 时自动切 ask；设置卡已撤下，仅 YAML 配置 |
+| `autoSwitchPolicyToAsk` | false | 仅 Auto 预设且 override=never 时自动切 ask（bundle 覆盖为 true）；设置卡可配（顶层开关，即时保存） |
 | `timeoutAction` | `reject` | 倒计时超时动作：`reject` 拒绝 / `allow` 全部通过 / `low-risk-allow` 仅低风险放行（**锁定类别除外**：删除/受保护/磁盘/未解锁提权恒拒，不受此键影响） |
 | `llmReviewScope` | `low-or-above` | LOW/MEDIUM/HIGH 哪些档送 LLM 复审 |
-| `llmTakeoverScope` | `medium-or-below` | 哪些档允许 LLM 结论直接接管 |
+| `llmTakeoverScope` | `medium-or-below` | 哪些档允许 LLM 结论直接接管（取值 `low` / `medium-or-below` / `high-or-below`；schema 接受 `high-or-below` 但行为与 `medium-or-below` 等同——HIGH 分支从不把控制权交给 LLM，高风险恒落人工，选它不会带来 HIGH 自动化） |
 | `defaultReviewMode` | `smart` | 每会话评审模式默认：人工 / 智能 / 无人值守 |
 | `lowRiskSeconds` / `mediumRiskSeconds` / `highRiskSeconds` | 5 / 8 / 10 | 三档倒计时（秒） |
-| `breakerAntiHijackMs` | 0 | 熔断弹窗按钮防误点禁用时长，0 不启用；设置卡已撤下，仅 YAML 配置 |
+| `breakerAntiHijackMs` | 0 | 熔断弹窗按钮防误点禁用时长，0 不启用；设置卡可配（计时器与熔断子卡） |
 | `maxConsecutiveDenials` | 3 | 连续 LLM 拒绝熔断阈值，0 关闭 |
 | `maxTotalDenials` | 20 | 累计拒绝熔断阈值，0 关闭 |
 | `classifierSource` | `session` | 快速判断通道模型来源：`session`（跟随会话模型）/ `preset`（DSH 已配置模型，配 `classifierProvider`+`classifierModel`）/ `endpoint`（自定义端点，配下方共享端点，不再维护） |
@@ -167,7 +167,7 @@ npx tsdown                 # 构建 client bundle → lib/client.js
 | `safetyPrompt` | '' | 附加给评审模型的额外策略（保存即热生效） |
 | `allowlist` / `denyList` / `humanOnlyList` | [] | 工具名精确匹配 |
 | `rulesText` | '' | 声明式规则（优先于内置列表执行；支持 `[agent:main|subagent|名]`、`[workspace:路径]` 维度前缀，逗号组合=AND；解析错误=整段失效） |
-| `rulesDryRun` | false | 规则干跑：只记命中不执法；设置卡已撤下，仅 YAML 配置 |
+| `rulesDryRun` | false | 规则干跑：只记命中不执法；设置卡可配（安全规则列表子卡） |
 | `maxArgsChars` | 4000 | 取回工具参数的最大长度 |
 | `notifyUser` | true | 「模型通过」通知进会话 |
 | `showSessionPanel` | `off` | 会话标题栏按钮：关 / 仅Auto / 开 |
@@ -194,9 +194,9 @@ npx tsdown                 # 构建 client bundle → lib/client.js
 | `learningEnabled` | false | 确认制学习：同一操作被人工反复确认达阈值后自动放行（命中仍须过一次标准在线评审）；默认关 = 零行为差异。高风险/锁定四类/敏感路径永不参与（unknown 自 0.0.15 起可学）；每根会话学习放行上限 50 次 |
 | `learningThreshold` | 3 | 触发学习放行所需的人工确认次数（保存时钳入 2–10）；同签名操作被人工拒绝即清零计数 |
 
-> 顶层开关（启用/超时动作/评审·接管范围/默认模式/按钮显示与位置）改动即保存；每张子卡有独立的 保存/放弃修改 按钮（安全规则列表另有 恢复默认）。host-only 键（workspaceRoot 等）用 patch/YAML 配置，设置卡保存不会抹掉它们。
+> 顶层开关（启用/超时动作/评审·接管范围与 never 自动转 ask/默认模式/Auto 档进出提示/会话面板与按钮位置）改动即保存；每张子卡有独立的 保存/放弃修改 按钮（安全规则列表另有 恢复默认）。host-only 键（workspaceRoot 等）用 patch/YAML 配置，设置卡保存不会抹掉它们。
 >
-> 设置卡子卡分组（仅标签，不移动控件）：计时器与熔断 / 安全规则列表 / 分类开关与信任模式 / 确认制学习 四卡带「安全底线」标签（倒计时秒数是决策窗口，属安全项）；在线评审模型与最近审批记录不加标签。
+> 设置卡子卡分组（仅标签，不移动控件）：计时器与熔断 / 安全规则列表 / 分类开关与信任模式 / 确认制学习 四卡带「安全底线」标签（倒计时秒数是决策窗口，属安全项）；实用小功能 / 在线评审模型 / 最近审批记录不加标签。
 
 ---
 
@@ -216,7 +216,7 @@ npx tsdown                 # 构建 client bundle → lib/client.js
 | 文件 | 语义 |
 |---|---|
 | `history.jsonl` | 审批历史（内存窗口 200 条 + 落盘；>1MB 轮转）。删除文件不触发重载、不清内存窗口，下一条裁决会自动重建 |
-| `audit.jsonl` | append-only 审计（清空留 `clear` tombstone） |
+| `audit.jsonl` | append-only 审计：`decision` 记录 + `clear` 墓碑 + 非决策观测事件（`result-redacted` / `mask-failed` / `learning-*` / `rules-context-missing` / `rules-parse-error` / `runtime-state-read` 等） |
 | `review-mode.json` | 每会话评审模式快照 |
 | `llm-latency.jsonl` | LLM 评审/分类真实响应耗时统计（最近 100 次 MIN/AVG/MAX；>1MB 轮转） |
 | `approval-debug.jsonl` | 仅调试模式开启时写入：评审/审批时序（decision/risk/tookMs/outcome/source），>1MB 轮转 |
@@ -234,6 +234,9 @@ npx tsdown                 # 构建 client bundle → lib/client.js
 - **密钥不出 host**：在线评审密钥存 DSH 凭据，每操作解析、前端仅显「已配置」。
 - **倒计时按钮规则**：倒计时只贴在「会超时自动执行」的那个按钮上——`timeoutAction=通过` → 超时自动通过，「允许一次」倒计时、拒绝按钮干净；`timeoutAction=拒绝` / `低风险自动同意` → 中/高风险超时自动拒绝，「拒绝」按钮倒计时（低风险自动同意时仅低风险超时通过）。中风险默认 8 秒偏紧，建议按需调大。
 - **diff 预览只进人工面板**：编辑类 diff 文本只追加到 ask reason（人工面板可见），绝不进入 review payload / REVIEWER_SYSTEM（reasoning-blind）、不进 history/audit；diff 块内若含倒计时字面量会在注入前剥离，客户端也只解析隐藏后的文本——改不了任何自动应答路径。受保护/密钥文件（.env 等）不读旧内容（对比类整体省略；全量写类仅预览工具参数里的新内容，外层/受保护旧内容绝不上屏）；但旧内容与 tool arguments 一样随会话 approval/asked 日志明文持久化（官方契约 log-only、模型上下文不可见），与既有参数暴露面同级。
+- **guard 熔丝拒绝落审计**：`tools/guard` 的硬拒/符号链接逃逸拒绝会先以 `guard` 源记一条 `outcome=rejected` 的 decision 记录（reason 随行）再拒绝调用——审计写入失败也不软化拒绝（调用仍被拒）。
+- **rulesText 解析错误 loud 化**：pre-execute 与 answerer 两平面解析出错都会 `console.error` + debugLog，并在去重后落 `rules-parse-error` 审计事件——声明规则不再静默失效。
+- **读运行态文件默认审计**：读取插件运行态文件（history/audit/learning…，含 read/grep 等结构化读工具与 shell 读命令）默认落 `runtime-state-read` 非决策审计事件；纯观测，不拒绝、不改任何裁决。
 
 ---
 

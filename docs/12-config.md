@@ -6,7 +6,7 @@
 | 键 | 默认 | 说明 |
 |---|---|---|
 | `enabled` | true | 总开关 |
-| `autoSwitchPolicyToAsk` | false | 仅 auto+override=never 时自动翻 ask（bundle 覆盖为 true）；设置卡已撤下，仅 YAML 配置 |
+| `autoSwitchPolicyToAsk` | false | 仅 auto+override=never 时自动翻 ask（bundle 覆盖为 true）；设置卡可配（顶层开关，即时保存） |
 | `debug` | false | 写 approval-debug.jsonl + [debug] 日志 |
 | `classifierSource` | session | 快速判断通道模型来源：session · preset(DSH 模型) · endpoint(共享端点) |
 | `classifierProvider / classifierModel` | '' | preset 档成对必填 |
@@ -20,7 +20,7 @@
 | `endpointUrl / endpointModel / endpointProtocol` | ''/''/openai | 共享自定义端点（两通道 endpoint 源共用）；openai · anthropic |
 | `timeoutAction` | reject | reject · allow · low-risk-allow |
 | `llmReviewScope` | low-or-above | 哪些档送审 |
-| `llmTakeoverScope` | medium-or-below | 哪些档可接管 |
+| `llmTakeoverScope` | medium-or-below | 哪些档可接管（取值 `low` / `medium-or-below` / `high-or-below`；schema 接受 `high-or-below` 但行为与 `medium-or-below` 等同——HIGH 分支从不把控制权交给 LLM，高风险恒落人工，选它不会带来 HIGH 自动化） |
 | `defaultReviewMode` | smart | manual · smart · unattended |
 | `lowRiskSeconds` | 5 | min 1 |
 | `mediumRiskSeconds` | 8 | min 1 |
@@ -28,7 +28,7 @@
 | `safetyPrompt` | '' | 拼接进评审 system，即时热生效 |
 | `allowlist / denyList / humanOnlyList` | [] | 精确工具名 |
 | `rulesText` | '' | 声明式规则，优先于内置列表 |
-| `rulesDryRun` | false | 只记不罚；设置卡已撤下，仅 YAML 配置 |
+| `rulesDryRun` | false | 只记不罚；设置卡可配（安全规则列表子卡） |
 | `maxConsecutiveDenials` | 3 | 0=关闭 |
 | `maxTotalDenials` | 20 | 0=关闭 |
 | `maxArgsChars` | 4000 | 参数取回截断 |
@@ -36,7 +36,7 @@
 | `onboardingMessageEnabled` | true | 首次 Auto 会话向 agent 注入一次性英文引导消息（上下文声明，非用户横幅）；关掉后不再注入 |
 | `autoModeNoticeEnabled` | true | 自动审批模式进入/退出时向 agent 注入英文上下文声明（独立开关） |
 | `showSessionPanel` | off | on/auto/off（客户端消费） |
-| `breakerAntiHijackMs` | 0 | 熔断弹窗防误点（客户端消费）；设置卡已撤下，仅 YAML 配置 |
+| `breakerAntiHijackMs` | 0 | 熔断弹窗防误点（客户端消费）；设置卡可配（计时器与熔断子卡） |
 | `aiButtonPosition` | header | header/floating（客户端消费） |
 | `workspaceRoot / dshHome / tempRoots` | ''/''/[] | 路径根（DSH_HOME 默认保护；host-only） |
 | `reviewMaxRetries` | 1 | LLM 审查首次失败后的额外重试次数（0-2；0=单次，1=默认；滚动剩余预算，见 src/auto/retry.ts）——**普通键**，安全规则卡可改 |

@@ -33,7 +33,7 @@ src/
 │    ├─ tool-stats.ts    94   工具调用统计收集
 │    └─ trust.ts         271  web 路由信任平面（loopback/LAN 边界、Host 伪造防护、在线端点 URL 校验）
 └─ client/
-     ├─ index.ts         React 客户端主体 3049 行（设置卡 6 子卡/面板增强/应答 watcher 装配/浮动按钮/CSS）
+     ├─ index.ts         React 客户端主体 3058 行（设置卡 7 子卡/面板增强/应答 watcher 装配/浮动按钮/CSS）
      ├─ approvals/       应答模块（0.0.12 起；0.0.16 起单协议——remote 源适配 + shared 协议无关核心；rc.2 legacy/feature 已删）
      │    ├─ remote.ts       294
      │    └─ shared.ts       518
@@ -45,7 +45,7 @@ tests/
 ├─ contract.test.mjs / category.test.mjs / classifier.test.mjs / redact.test.mjs
 ├─ editdiff.test.mjs / probe.test.mjs / history-robust.test.mjs / audit.test.mjs
 ├─ approvals-protocol.test.mjs / contract-devloop.test.mjs / trusted-dsh-subpaths.test.mjs / posix-platform.test.mjs
-└─ 合计 834 例（node --test 全绿基线）
+└─ 合计 875 例（node --test 全绿基线）
 scripts/
 ├─ build.sh             （DSH 源码仓库布局）tsc 编译 src→lib
 ├─ audit-query.mjs      审计查询 CLI
