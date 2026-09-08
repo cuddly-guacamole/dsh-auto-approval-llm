@@ -245,10 +245,16 @@ export function isArtifactArea(target, roots) {
  */
 export const RUNTIME_STATE_BASENAMES = new Set(['history.jsonl', 'audit.jsonl', 'approval-debug.jsonl', 'review-mode.json', 'llm-latency.jsonl', 'learning.json']);
 
+/** Canonical basename when a normalized target names one of those state files. */
+export function runtimeStateBasename(normalizedPath) {
+    const base = normalizedPath.split(/[\\/]/).pop()?.toLowerCase() ?? '';
+    return RUNTIME_STATE_BASENAMES.has(base) ? base : undefined;
+}
+
 /** Reason when a normalized target names one of those state files. */
 export function runtimeStateTargetReason(normalizedPath) {
-    const base = normalizedPath.split(/[\\/]/).pop()?.toLowerCase() ?? '';
-    return RUNTIME_STATE_BASENAMES.has(base) ? `plugin runtime state file ${normalizedPath}` : undefined;
+    const base = runtimeStateBasename(normalizedPath);
+    return base === undefined ? undefined : `plugin runtime state file ${normalizedPath}`;
 }
 
 /** Whether a normalized path is a runtime-state file inside the trusted plugin zone. */

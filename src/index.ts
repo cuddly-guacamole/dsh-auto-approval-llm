@@ -53,7 +53,7 @@ import {
   type LearningStore,
 } from './auto/learning.js'
 import { isWithin, isCriticalPath, normalizePath, resolveRoots } from './auto/paths.js'
-import { assessTool, hardDenyReason } from './auto/policy.js'
+import { assessTool, hardDenyReason, structuredRuntimeStateReadHits } from './auto/policy.js'
 import { resolveDeepest, symlinkEscapeReason } from './auto/symlink.js'
 import { probeTargetFacts } from './auto/probe.js'
 import { redactResultValue } from './auto/redact.js'
@@ -3123,13 +3123,27 @@ export function apply(ctx: Context, rawConfig: Config): void {
       debugLog({ ev: 'hard-deny', callId: exec.callId ?? null, toolName: exec.name, reason: sanitizeReviewReason(assessment.reason) })
       return { kind: 'deny', reason: `[dsh-auto-approval-llm] hard deny ${assessment.reason}\n${DENY_CIRCUMVENTION_GUIDANCE}` }
     }
-    // Audit-only trail: a shell command that cleared the hard fuse and may
-    // still run (statically allowed or classifier-approved) while opening one
-    // of the plugin's own runtime-state files for reading (approval history,
-    // audit log, …). Purely observational — it never alters any verdict.
-    if ((exec.name === 'bash' || exec.name === 'pwsh') && typeof exec.arguments?.command === 'string') {
-      const stateReads = runtimeStateReadHits(exec.arguments.command, exec.name, roots)
-      if (stateReads.length > 0) debugLog({ ev: 'runtime-state-read', callId: exec.callId ?? null, files: stateReads })
+    // Audit-only trail: a call that cleared the hard fuse and may still run
+    // (statically allowed or classifier-approved) while opening one of the
+    // plugin's own runtime-state files for reading (approval history, audit
+    // log, review modes, learning allow-list, …) — a shell reader command, or
+    // a structured read tool whose path operand names such a file directly.
+    // Purely observational — it never alters any verdict, never counts as a
+    // decision. The audit line is written unconditionally (default-on, unlike
+    // the debug trail below which stays behind the settings debug switch).
+    const stateReads = (exec.name === 'bash' || exec.name === 'pwsh') && typeof exec.arguments?.command === 'string'
+      ? runtimeStateReadHits(exec.arguments.command, exec.name, roots)
+      : structuredRuntimeStateReadHits(exec.name, exec.arguments, roots)
+    if (stateReads.length > 0) {
+      debugLog({ ev: 'runtime-state-read', callId: exec.callId ?? null, toolName: exec.name, files: stateReads })
+      appendAuditLine(JSON.stringify({
+        type: 'runtime-state-read',
+        at: Date.now(),
+        callId: exec.callId ?? null,
+        sessionId: authorityKeyFor(exec),
+        toolName: exec.name,
+        files: stateReads,
+      }))
     }
     // Bounded, sanitized fetch destination for the audit trail (web_fetch /
     // web_search static allows). Returns undefined for every other tool or

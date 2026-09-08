@@ -6,7 +6,7 @@
 // fail-closed classifier must not escape the compiler — DSH schema drift must
 // surface at build time, not at runtime. Keep the helper types below minimal so
 // the logic stays the single source of truth.
-import { hardDestructiveTargetReason, isProtectedProjectPath, isWithin, normalizePath, runtimeStateTargetInZone, runtimeStateTargetReason, } from './paths.js';
+import { hardDestructiveTargetReason, isProtectedProjectPath, isWithin, normalizePath, runtimeStateBasename, runtimeStateTargetInZone, runtimeStateTargetReason, } from './paths.js';
 import { assessShell, hardDenyShellReason } from './shell.js';
 import { isEffectiveRoutine, sensitiveBasenameAt } from './category.js';
 import { DIRECT_HUMAN_TOOL } from './constants.js';
@@ -108,6 +108,40 @@ export function symlinkGuardTargets(name: string, args?: unknown): string[] | un
     if (name === 'lsp')
         return typeof (args as JsonObject)?.cwd === 'string' ? [(args as JsonObject).cwd as string] : [];
     return undefined;
+}
+/**
+ * Audit-only structured read detection (pure): basenames of plugin
+ * runtime-state files a structured (non-shell) read tool opens — `read` /
+ * `read_image` through file_path, `grep` and `str_replace_editor` `view`
+ * through path. The judgment mirrors shell.ts's runtimeStateReadHits
+ * (basename membership via paths.ts runtimeStateBasename), so both planes
+ * share one rule and no second membership test can drift. Faces with no
+ * statically attributable single-file operand are uncovered by design:
+ * glob/lsp search a root tree or pattern instead of opening one file, and
+ * write/edit/apply_patch mutate rather than read. Never feeds any verdict —
+ * the host uses the result strictly as an observability trail.
+ */
+export function structuredRuntimeStateReadHits(name: string, args: unknown, roots: Roots): string[] {
+    const object = record(args);
+    if (object === undefined)
+        return [];
+    let operand: unknown;
+    if (name === 'read' || name === 'read_image') {
+        operand = object['file_path'];
+    }
+    else if (name === 'grep') {
+        operand = object['path'];
+    }
+    else if (name === 'str_replace_editor' && object['command'] === 'view') {
+        operand = object['path'];
+    }
+    else {
+        return [];
+    }
+    if (typeof operand !== 'string' || operand === '')
+        return [];
+    const base = runtimeStateBasename(normalizePath(operand, roots.workspace, roots.home));
+    return base === undefined ? [] : [base];
 }
 function serializedArguments(argumentsValue: unknown): string {
     try {

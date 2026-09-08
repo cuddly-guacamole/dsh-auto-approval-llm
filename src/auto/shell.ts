@@ -3,7 +3,7 @@
 // MIT License, Copyright (c) 2026 程序员阿江-Relakkes (https://github.com/NanmiCoder/dsh-auto-mode).
 // Retained per the MIT License: this is a substantial portion of the original.
 import { basename } from 'node:path';
-import { RUNTIME_STATE_BASENAMES, hardDestructiveTargetReason, isArtifactArea, isProtectedProjectPath, isWithin, normalizePath, runtimeStateTargetInZone, runtimeStateTargetReason, } from './paths.js';
+import { hardDestructiveTargetReason, isArtifactArea, isProtectedProjectPath, isWithin, normalizePath, runtimeStateBasename, runtimeStateTargetInZone, runtimeStateTargetReason, } from './paths.js';
 import { isEffectiveRoutine, sensitiveBasenameAt } from './category.js';
 function ambiguous(reason) {
     return { decision: 'ask', reason, classifierEligible: true };
@@ -1406,8 +1406,8 @@ export function runtimeStateReadHits(source, shell, roots) {
             if (word.dynamic || word.glob)
                 continue;
             const normalized = normalizePath(word.text, roots.workspace, roots.home);
-            const base = normalized.split(/[\\/]/).pop()?.toLowerCase() ?? '';
-            if (RUNTIME_STATE_BASENAMES.has(base) && !hits.includes(base))
+            const base = runtimeStateBasename(normalized);
+            if (base !== undefined && !hits.includes(base))
                 hits.push(base);
         }
     }
