@@ -561,6 +561,19 @@ function findNestedWriteDenyReason(words, roots) {
         const source = typeof nestedExec?.source === 'string' ? nestedExec.source : undefined;
         if (source !== undefined && (nestedSourceWritesToDshHome(source, roots) || nestedRedirectTargetsDenied(source, roots)))
             return 'find executes a nested command writing to a protected location';
+        if (source === undefined) {
+            // A nested body without an interpreter boundary is an ordinary
+            // command judged on its own operands (`find . -exec cp a b \;`,
+            // `-exec rm ~/.dsh/x \;`, `-exec sed -i …`): hand it to the same
+            // segment fuses so a direct DSH_HOME / runtime-state / critical
+            // / deletion target cannot hide behind find -exec and decay into
+            // an LLM-answerable ask. Interpreter bodies keep the source scan
+            // above; `{}` placeholders are not explicit paths and stay with
+            // the caller's routine/semantic judgment.
+            const reason = segmentHardDenyReason({ words: nested, writeTargets: [], readTargets: [] }, 'bash', roots);
+            if (reason !== undefined)
+                return `find -exec nested command: ${reason}`;
+        }
         index = terminator;
     }
     return undefined;
