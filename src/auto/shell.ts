@@ -994,6 +994,21 @@ function segmentHardDenyReason(segment, shell, roots) {
         writeOperands = [];
         for (let index = 1; index < unwrapped.words.length; index += 1) {
             const word = unwrapped.words[index];
+            // Inline colon spellings (`-Path:VALUE`) fuse the flag and its
+            // value into one word. Without lifting the value the write-target
+            // fuses below never see a destination that the separated spelling
+            // (`-Path VALUE`) flags, so `set-content -Path:$HOME/.dsh/…` used
+            // to decay into an LLM-answerable ask. Mirror the separated path:
+            // carry the source word's dynamic/glob markers so `$HOME` keeps
+            // the unconditional hard deny. `-Destination` belongs here too
+            // (its separated value is caught as a positional below; the fused
+            // form would otherwise hide it behind a leading `-`).
+            const inlineValue = /^-(?:path|literalpath|filepath|destination):(.+)$/i.exec(word.text);
+            if (inlineValue !== null) {
+                if (inlineValue[1] !== '')
+                    writeOperands.push({ text: inlineValue[1], dynamic: word.dynamic, glob: word.glob, quoted: true });
+                continue;
+            }
             if (/^-(?:path|literalpath|filepath)$/i.test(word.text)) {
                 const value = unwrapped.words[index + 1];
                 if (value !== undefined) writeOperands.push(value);
