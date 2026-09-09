@@ -921,7 +921,14 @@ function writeOperandCandidates(words) {
         else if (text.startsWith('--target-directory=')) {
             const value = text.slice('--target-directory='.length);
             if (value !== '')
-                candidates.push({ text: value, dynamic: false, glob: false, quoted: true });
+                // The fused spelling derives a new operand from one word; the
+                // derived operand must inherit that word's dynamic/glob flags
+                // (the lexer marks a `$VAR`/`*` spelling dynamic/glob on the
+                // word itself). Dropping them let a `$HOME` target dodge the
+                // dynamic-home hard-deny and a `*`/`?` target dodge the glob
+                // gate; `-t DEST` (separate word above) already preserves the
+                // flags, so this branch must not diverge from it.
+                candidates.push({ text: value, dynamic: words[index].dynamic, glob: words[index].glob, quoted: true });
         }
     }
     return candidates;
