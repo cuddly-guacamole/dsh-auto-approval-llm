@@ -25,6 +25,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { ArtifactRegistry } from '../lib/auto/artifacts.js'
 import { assessShell } from '../lib/auto/shell.js'
+import { assessTool } from '../lib/auto/policy.js'
 import { categoryDirective, categoryDirectiveFor } from '../lib/auto/category.js'
 import { normalizePath, resolveRoots } from '../lib/auto/paths.js'
 
@@ -114,6 +115,82 @@ test('the answerer half is anchored: its locked predicate reads the same flag', 
     /isLockedCategory\(classified\.category, classified\.assessment\?\.sessionArtifactDeletion === true\)/.test(host),
     'and the flag must actually be passed at the call site',
   )
+})
+
+test('every file-creating allow branch in the DSH_HOME zone records its provenance', () => {
+  // The exemption rests on the registry knowing what the session created, so
+  // every branch that allows a CREATE has to hand its target to `plan()`. A
+  // branch that allows without recording leaves the exemption unreachable, and
+  // that is not hypothetical: the allowed-DSH_HOME-subtree branches omitted it,
+  // so in the plugin's own development zone (a workspace inside DSH_HOME) `rm`
+  // of a file the session had just written fell back to a locked countdown. The
+  // existing plan/settle test used a tmpdir workspace, which takes the
+  // project-local branch, so it stayed green.
+  //
+  // Behavioural on purpose: asserting "the word plannedCreates appears nearby"
+  // is satisfied by a read-only branch that correctly has none, and would not
+  // catch a new create-capable branch that forgets it.
+  const dshHome = 'C:/Users/u/.dsh'
+  const ws = `${dshHome}/plugins/dsh-auto-approval-llm`
+  const zoneRoots = { workspace: ws, home: 'C:/Users/u', dshHome, tempRoots: [], allowedDshSubpaths: [ws.toLowerCase()] }
+  const target = `${ws}/scratch.txt`
+  const expected = [normalizePath(target, ws, 'C:/Users/u')]
+  const stub = { has: () => false }
+
+  const creators = [
+    ['write', { name: 'write', arguments: { file_path: target, content: 'x' } }],
+    ['apply_patch Add File', { name: 'apply_patch', arguments: { patches: [{ file_path: target, content: 'x' }] } }],
+    ['str_replace_editor create', { name: 'str_replace_editor', arguments: { command: 'create', path: target, file_text: 'x' } }],
+  ]
+  for (const [label, exec] of creators) {
+    const verdict = assessTool(exec, zoneRoots, stub)
+    assert.equal(verdict.decision, 'allow', `${label}: expected allow, got ${verdict.decision}: ${verdict.reason}`)
+    assert.deepEqual(verdict.plannedCreates, expected, `${label} must report the create so plan() can register it`)
+  }
+
+  // Control: a non-creating mutation of an existing file must NOT claim a create,
+  // otherwise the registry would mark files the session merely edited.
+  const noCreate = assessTool({ name: 'str_replace_editor', arguments: { command: 'str_replace', path: target, old_str: 'a', new_str: 'b' } }, zoneRoots, stub)
+  assert.equal(noCreate.decision, 'allow')
+  assert.equal(noCreate.plannedCreates, undefined, 'str_replace cannot create, so it must not report a create')
+})
+
+test('the whole chain works in the DSH_HOME zone shape (the live failure)', () => {
+  // The live probe that failed: with the workspace inside DSH_HOME (the plugin's
+  // own dev zone), a write is allowed by the DSH_HOME branch, so with no
+  // plannedCreates the registry stayed empty and `rm` of the just-written file
+  // fell to the locked delete countdown. This replays plan -> settle -> rm in
+  // that shape, which the tmpdir-based chain test could not catch.
+  const dshHome = 'C:/Users/u/.dsh'
+  const ws = `${dshHome}/plugins/dsh-auto-approval-llm`
+  const zoneRoots = {
+    workspace: ws,
+    home: 'C:/Users/u',
+    dshHome,
+    tempRoots: [],
+    allowedDshSubpaths: [ws.toLowerCase()],
+    maintenanceDshPaths: [],
+    mode: 'aggressive',
+    trustedDirs: [],
+  }
+  const registry = new ArtifactRegistry()
+  const session = { id: 'zone-session' }
+  const target = `${ws}/scratch.txt`
+
+  // The plugin's own wiring: pre-execute asks policy, then plan()s the creates.
+  const create = assessTool({ name: 'write', arguments: { file_path: target, content: 'x' } }, zoneRoots, registry)
+  assert.equal(create.decision, 'allow', `the zone write must be allowed, got ${create.decision}: ${create.reason}`)
+  const exec = { name: 'write', token: 't-zone', agent: { session } }
+  registry.plan(exec, create.plannedCreates, zoneRoots)
+  registry.settle(exec, { isError: false, value: { operation: 'create', path: target } }, zoneRoots)
+  assert.equal(registry.has(session, normalizePath(target, ws, 'C:/Users/u'), zoneRoots), true, 'the create must be registered')
+
+  // And the deletion of it must ride the provenance exemption, not the lock.
+  const removal = assessShell('rm scratch.txt', 'bash', zoneRoots, registry, session)
+  assert.equal(removal.decision, 'allow', `rm of the session's own file must allow, got ${removal.decision}: ${removal.reason}`)
+  assert.equal(removal.sessionArtifactDeletion, true)
+  const threaded = categoryDirectiveFor({ name: 'bash', arguments: { command: 'rm scratch.txt' } }, zoneRoots, { categoryPolicy: {}, categoryMode: 'aggressive' }, removal)
+  assert.equal(threaded.directive, 'inherit', 'and the clamp must be lifted for it')
 })
 
 test('the exemption is structured, not parsed out of the reason text', () => {

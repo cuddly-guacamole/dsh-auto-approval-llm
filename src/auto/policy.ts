@@ -324,7 +324,20 @@ export function assessTool(exec: ExecLike, roots: Roots, artifacts: unknown): To
             // countdown into an allow, silently rewriting the audit trail.
             if (runtimeStateTargetInZone(normalized, roots.allowedDshSubpaths))
                 return { decision: 'deny', reason: `mutation of ${runtimeStateTargetReason(normalized)} is not permitted`, classifierEligible: false };
-            return { decision: 'allow', reason: 'trusted DSH_HOME path', classifierEligible: false };
+            // Provenance is recorded here too. This branch is how a write into an
+            // allowed DSH_HOME subtree is allowed, and the plugin's own
+            // development zone is one — so omitting the planned create would
+            // leave the session-artifact exemption unreachable for exactly the
+            // workspace this plugin is developed in, turning `rm` of a file the
+            // session just created into a locked countdown. `plan()` keeps only
+            // not-yet-existing paths inside an artifact area, so recording the
+            // target here cannot outlive the create it describes.
+            return {
+                decision: 'allow',
+                reason: 'trusted DSH_HOME path',
+                classifierEligible: false,
+                ...(exec.name === 'write' ? { plannedCreates: [normalized] } : {}),
+            };
         }
         if (!isEffectiveRoutine(normalized, roots) || isProtectedProjectPath(normalized, roots)
             || (!isWithin(roots.workspace, normalized) && sensitiveBasenameAt(normalized, roots))) {
@@ -356,7 +369,16 @@ export function assessTool(exec: ExecLike, roots: Roots, artifacts: unknown): To
         if (patchState !== undefined)
             return { decision: 'deny', reason: `mutation of ${runtimeStateTargetReason(patchState)} is not permitted`, classifierEligible: false };
         if (normalized.every((n) => (roots.allowedDshSubpaths ?? []).some((root) => isWithin(root, n)))) {
-            return { decision: 'allow', reason: 'trusted DSH_HOME path', classifierEligible: false };
+            // Same provenance requirement as the write/edit branch above and for
+            // the same reason: this is how a patch into an allowed DSH_HOME
+            // subtree is allowed, so a session-artifact deletion of what it
+            // created must still be recognisable afterwards.
+            return {
+                decision: 'allow',
+                reason: 'trusted DSH_HOME path',
+                classifierEligible: false,
+                plannedCreates: [...normalized],
+            };
         }
         const allRoutine = normalized.every((n) => isEffectiveRoutine(n, roots) && !isProtectedProjectPath(n, roots)
             && !(!isWithin(roots.workspace, n) && sensitiveBasenameAt(n, roots)));
@@ -382,7 +404,15 @@ export function assessTool(exec: ExecLike, roots: Roots, artifacts: unknown): To
             // timeout allow under timeoutAction=allow.
             if (runtimeStateTargetInZone(normalized, roots.allowedDshSubpaths))
                 return { decision: 'deny', reason: `mutation of ${runtimeStateTargetReason(normalized)} is not permitted`, classifierEligible: false };
-            return { decision: 'allow', reason: 'trusted DSH_HOME path', classifierEligible: false };
+            // `create` makes a new file, so its provenance is recorded like the
+            // other DSH_HOME allow branches; `str_replace`/`insert` require an
+            // existing target and can create nothing.
+            return {
+                decision: 'allow',
+                reason: 'trusted DSH_HOME path',
+                classifierEligible: false,
+                ...(command === 'create' ? { plannedCreates: [normalized] } : {}),
+            };
         }
         if (command === 'view') {
             if (!isEffectiveRoutine(normalized, roots))
