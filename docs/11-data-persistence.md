@@ -26,7 +26,7 @@
 {"type":"clear","at":…,"cleared":6}
 ```
 
-pushHistory 每次附带写一条 `type:'decision'`；UI 清历史只清内存+history 文件，审计只剩墓碑。`>5MiB 保尾 5000 行`。查询：`node scripts/audit-query.mjs [--last N | --tool X | --session S | --source S | --since ISO | --json]`。
+pushHistory 每次附带写一条 `type:'decision'`；UI 清历史只清内存+history 文件，审计只剩墓碑。`>5MiB 保尾 5000 行`。查询：`node scripts/audit-query.mjs [--last N | --tool X | --session S | --source S | --since ISO | --json]`。摩擦统计（面板介入率 panel-mediated / 倒计时结算率 / 翻案交叉表 / 评审通道落定率 / 无人值守窗口判据，判定 `PASS`/`FAIL`/`VACUOUS`/`INSUFFICIENT` 并附退出码 0/1/2/3）：`node scripts/friction-report.mjs [--window N | --since ISO | --json]`。
 
 #### 非决策观测事件
 

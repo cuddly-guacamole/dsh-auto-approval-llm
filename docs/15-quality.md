@@ -1,6 +1,6 @@
 # 15 · 质量保障体系
 
-> *887 tests · runtime proofs*
+> *915 tests · runtime proofs*
 
 ## 15.1　契约测试覆盖地图（按主题归纳）
 
@@ -21,8 +21,9 @@
 | 脱敏 | sanitizeClassifierText/Arguments/ReviewReason（AWS/PEM/sk-/Bearer）；description 在注入边界脱敏 |
 | 信任/传输 | isTrustedRequest（loopback Host 要真回路对端、LAN 白名单、空白名单=特权、cross-site/cross-origin 拒）；validateReviewerBaseUrl 明文 http 回环栅栏 |
 | 并发/一致性 | createKeyedMutex（同键原子无丢失更新/异键并发/异常保链）；exports↔产物一致性 |
+| 摩擦报告/审计渲染 | friction-report.test.mjs：翻案方向（ESCALATE 与 classifier 判定均不可翻案）、空转护栏（无带方向的 LLM 判定 → `VACUOUS`，纯 classifier 窗口不得判通过）、窗口按**最后活动时间**取最近 N 个会话（长命会话不被挤掉）、撤销按时间入窗、参数校验与退出码映射（PASS 0 / FAIL 1 / VACUOUS 2 / INSUFFICIENT 3）；audit-query-format.test.mjs：decision 行形状逐字不变、非决策行按 type 分派并保留真实载荷（`files`/`plane`+`count`+`errors`/`key`/`allows` 等）、`at` 缺失降级为 `?`、参数校验 |
 
-53 个测试文件，合计 **887 例**（node --test 全绿基线）。
+55 个测试文件，合计 **915 例**（node --test 全绿基线）。
 
 ## 15.2　验收命令与运行时证据
 
@@ -31,7 +32,7 @@
 ```bash
 node_modules/.bin/tsc -p tsconfig.json   # 类型（policy/shell/paths 不再 @ts-nocheck）
 node_modules/.bin/tsdown                  # 客户端 bundle
-node --test "tests/**/*.test.mjs"        # 887/887 全绿
+node --test "tests/**/*.test.mjs"        # 915/915 全绿
 ```
 
 :::

@@ -224,6 +224,8 @@ npx tsdown                 # 构建 client bundle → lib/client.js
 
 数据查询：`node scripts/audit-query.mjs [--last N|--tool X|--session S|--source S|--since ISO|--json]`
 
+摩擦报告（只读）：`node scripts/friction-report.mjs [--file <audit.jsonl>] [--latency <llm-latency.jsonl>] [--since ISO] [--window N] [--json]` —— 汇总面板介入率（panel-mediated，含 LLM 抢占）、人工作答数、倒计时结算率、拒绝来源、人工作答与 LLM 判定的交叉表、两条评审通道的落定率；并按最近 N 个会话（按最后活动时间）判定「无人值守窗口」判据，输出 `PASS` / `FAIL` / `VACUOUS` / `INSUFFICIENT` 与对应退出码（0/1/2/3）。窗口内没有可翻案的 LLM 判定时判 `VACUOUS`，不判通过。
+
 ---
 
 ## 安全设计要点

@@ -216,6 +216,8 @@ Session approval stats — the "Auto Approval" header-button popup: totals / all
 
 Query: `node scripts/audit-query.mjs [--last N|--tool X|--session S|--source S|--since ISO|--json]`
 
+Friction report (read-only): `node scripts/friction-report.mjs [--file <audit.jsonl>] [--latency <llm-latency.jsonl>] [--since ISO] [--window N] [--json]` — summarizes the panel-mediated rate (LLM takeovers included), how many answers a human gave, the countdown-settled rate, rejection sources, the cross-tab of human answers against the LLM verdict in hand, and how each review lane settled. It also evaluates the unattended-window criterion over the last N sessions (by last activity) and prints `PASS` / `FAIL` / `VACUOUS` / `INSUFFICIENT` with exit codes 0/1/2/3. A window with no LLM verdict to overturn reports `VACUOUS`, never a pass.
+
 ---
 
 ## Security design

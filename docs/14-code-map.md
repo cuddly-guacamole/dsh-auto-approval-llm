@@ -45,10 +45,12 @@ tests/
 ├─ contract.test.mjs / category.test.mjs / classifier.test.mjs / redact.test.mjs
 ├─ editdiff.test.mjs / probe.test.mjs / history-robust.test.mjs / audit.test.mjs
 ├─ approvals-protocol.test.mjs / contract-devloop.test.mjs / trusted-dsh-subpaths.test.mjs / posix-platform.test.mjs
-└─ 合计 887 例（node --test 全绿基线）
+├─ friction-report.test.mjs / audit-query-format.test.mjs
+└─ 合计 915 例（node --test 全绿基线）
 scripts/
 ├─ build.sh             （DSH 源码仓库布局）tsc 编译 src→lib
-├─ audit-query.mjs      审计查询 CLI
+├─ audit-query.mjs      审计查询 CLI（decision 行 + 按 type 渲染的观测事件行）
+├─ friction-report.mjs  摩擦报告 CLI（面板介入率 / 倒计时结算率 / 翻案交叉表 / 评审通道落定率 / 无人值守窗口判据 + 退出码）
 ├─ mock-reviewer.mjs    本地 mock 评审器（127.0.0.1:18777，确定性 ALLOW/MEDIUM）
 └─ link-client-packs.cjs
 verify-*.mjs            3 个运行时验证脚本（verify-auth / verify-config / verify-runtime）
