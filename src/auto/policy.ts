@@ -243,18 +243,16 @@ const OWNER_CONTROL_TOOLS = new Set([
  * Audited AgentTeams control calls. These mutate only workspace-local team
  * coordination state. Member file/shell calls are separate tool executions
  * and inherit Auto from their captain in the runtime integration.
+ *
+ * Membership is driven by what the installed package actually registers
+ * (`dsh-experimental-tool-agent-team` exports exactly the nine names below).
+ * The nine `agent_teams_*` names inherited from the upstream dsh-auto-mode
+ * project are deliberately absent: nothing in the DSH_HOME tree registers
+ * them, so they only widened the static allow plane against tools that do not
+ * exist. A future package that does register that spelling gets the
+ * unrecognized-tool fallback (ask, fail-closed) instead of a silent allow.
  */
 const AGENT_TEAMS_CONTROL_TOOLS = new Set([
-    'agent_teams_create',
-    'agent_teams_add_member',
-    'agent_teams_remove_member',
-    'agent_teams_create_task',
-    'agent_teams_claim_task',
-    'agent_teams_update_task',
-    'agent_teams_send_message',
-    'agent_teams_status',
-    // The verified implementation archives team state instead of erasing it.
-    'agent_teams_delete',
     // Scoped Agent Teams shared-task board: in-memory/journal coordination
     // state only (no filesystem, no shell, no network). `write_scopes` is
     // advisory metadata the service never resolves to a path.

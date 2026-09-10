@@ -236,10 +236,10 @@ const HARNESS_READ_TOOLS = new Set([
   'cordis_inspect_list', 'cordis_inspect_query', 'cordis_inspect_self',
 ])
 const OWNER_CONTROL_TOOLS = new Set(['job_kill', 'terminal_signal', 'terminal_close'])
+// Mirrors policy.ts AGENT_TEAMS_CONTROL_TOOLS. The retired `agent_teams_*`
+// spelling is intentionally absent (nothing registers it); keeping the three
+// copies identical is what the cross-copy contract test pins.
 const AGENT_TEAMS_CONTROL_TOOLS = new Set([
-  'agent_teams_create', 'agent_teams_add_member', 'agent_teams_remove_member',
-  'agent_teams_create_task', 'agent_teams_claim_task', 'agent_teams_update_task',
-  'agent_teams_send_message', 'agent_teams_status', 'agent_teams_delete',
   'team_task_create', 'team_task_get', 'team_task_list', 'team_task_update',
 ])
 const ORCHESTRATION_TOOLS = new Set([

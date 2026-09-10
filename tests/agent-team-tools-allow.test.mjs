@@ -123,9 +123,6 @@ const EXTERNAL_LOOKUP_LABELS = new Map([
  */
 const RISK_TOKEN_EXCEPTIONS = new Map([
   ['send_message', 'the token is the verb "send"; the tool posts to the durable peer mailbox, not to an external service'],
-  ['agent_teams_send_message', 'same mailbox semantics under the retired agent_teams_* spelling'],
-  ['agent_teams_remove_member', 'removes a member from the in-memory roster, not a file or an account'],
-  ['agent_teams_delete', 'archives team state instead of erasing it (upstream tombstone)'],
 ])
 
 /** The nine tools the installed Agent Teams package actually registers. */
@@ -286,7 +283,7 @@ test('trigger condition: the allow is exact-name membership, not a substring or 
     'spawn_teammate_extra',
     'unspawn_teammate',
     'Team_Task_Create',        // case matters: membership is exact
-    'agent_teams_created',     // exact members are allowed, near-misses are not
+    'agent_teams_created',     // the retired spelling family is not in the plane at all
     'team_task_create_all',
   ]
   for (const name of nonTools) {
