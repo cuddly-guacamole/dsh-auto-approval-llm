@@ -679,7 +679,7 @@ export function categorizeCommand(source: string, shell: string, roots: Category
 export function categoryDirective(
   config: CategoryConfig,
   category: string,
-  assessment: { decision?: string; classifierEligible?: boolean; sessionArtifactDeletion?: boolean },
+  assessment: { decision?: string; classifierEligible?: boolean; sessionArtifactDeletion?: boolean; credentialRead?: boolean },
 ): CategoryDirective {
   if (category === 'unknown' || category === 'harnessInternal') return 'inherit'
   const mode = config.categoryMode === 'aggressive' ? 'aggressive' : 'standard'
@@ -693,7 +693,16 @@ export function categoryDirective(
   // through isCriticalPath, and that fuse is unaffected by this switch.
   // Unlocking therefore hands all of those to the ordinary pipeline (classifier
   // / reviewer / countdown), which is why it ships off.
+  //
+  // The unlock is clamped to metadata that is merely protected: a read the
+  // policy layer flagged as credential material (sensitive basename/tree, or a
+  // critical tree) stays locked whatever the switch says. The switch exists to
+  // stop dead-ending `.git/`-style workspace metadata, not to hand private keys
+  // and token stores to a reviewer — so `credentialRead` is the floor, and the
+  // answerer's locked predicate reads the same field (one predicate, two
+  // planes, or the two would disagree the way the protected read once did).
   const protectedUnlocked = category === 'protected' && config.protectedAutoReview === true
+    && assessment.credentialRead !== true
   // A deletion the policy plane proved targets only paths this session created
   // carries that provenance as a structured flag. Labelling it `delete` is still
   // honest (it is one), but the LOCKED clamp must not swallow it: the static

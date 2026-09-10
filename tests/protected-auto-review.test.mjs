@@ -212,6 +212,16 @@ test('the answerer half is anchored: the locked predicate honours the same switc
   assert.ok(body.length > 0, 'the predicate body was located')
   for (const name of ['privilege', 'protected']) {
     const wiring = new RegExp(`if \\(category === ['"]${name}['"] && config\\.${name}AutoReview === true\\)\\s*\\n\\s*return false;`)
+    if (name === 'protected') {
+      // The protected opt-out carries the credential floor: a read the policy
+      // plane flagged as credential material stays locked whatever the switch
+      // says, so the anchor pins the clamp as well as the polarity.
+      assert.ok(
+        new RegExp(`if \\(category === ['"]protected['"] && config\\.protectedAutoReview === true && !credentialRead\\)\\s*\\n\\s*return false;`).test(body),
+        `the protected opt-out must be live AND clamped by the credential floor:\n${body.slice(0, 400)}`,
+      )
+      continue
+    }
     assert.ok(
       wiring.test(body),
       `the ${name} opt-out must be live (not commented out, not inverted) in the locked predicate:\n${body.slice(0, 400)}`,

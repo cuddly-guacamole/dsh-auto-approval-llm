@@ -6,8 +6,8 @@
 // fail-closed classifier must not escape the compiler — DSH schema drift must
 // surface at build time, not at runtime. Keep the helper types below minimal so
 // the logic stays the single source of truth.
-import { hardDestructiveTargetReason, isProtectedProjectPath, isWithin, normalizePath, runtimeStateBasename, runtimeStateTargetInZone, runtimeStateTargetReason, } from './paths.js';
-import { assessShell, hardDenyShellReason } from './shell.js';
+import { hardDestructiveTargetReason, isCriticalPath, isProtectedProjectPath, isWithin, normalizePath, runtimeStateBasename, runtimeStateTargetInZone, runtimeStateTargetReason, } from './paths.js';
+import { assessShell, hardDenyShellReason, shellReadsCredentialMaterial } from './shell.js';
 import { isEffectiveRoutine, sensitiveBasenameAt } from './category.js';
 import { DIRECT_HUMAN_TOOL } from './constants.js';
 import * as riskTokens from './risk-tokens.js';
@@ -52,6 +52,30 @@ export interface ToolAssessment {
      * re-lock the exemption, which is exactly the defect it was written to fix.
      */
     sessionArtifactDeletion?: boolean
+    /**
+     * True when a READ target is credential material rather than protected
+     * workspace metadata: a sensitive basename or tree (`.env`, `.npmrc`,
+     * `.ssh/…`) or a critical system tree. The `protected` category already
+     * covers both, and the two halves must not be unlocked together — the
+     * opt-out exists to stop dead-ending workspace metadata (`.git/`,
+     * `.vscode/`), not to hand private keys and token stores to a reviewer.
+     * Carried as a structured field for the same reason as
+     * `sessionArtifactDeletion`: a consumer that re-derives it from a reason
+     * string is exactly the coupling the plugin forbids for authorization
+     * signals.
+     */
+    credentialRead?: boolean
+}
+
+/**
+ * Whether a read operand is credential material (as opposed to metadata that is
+ * merely protected). `sensitiveBasenameAt` is location-free and
+ * `isCriticalPath` covers the credential trees and system roots, so the pair is
+ * the same predicate the `protected` category is built from, minus the
+ * workspace-metadata dirs.
+ */
+function credentialReadTarget(normalized: string, roots: Roots): boolean {
+    return sensitiveBasenameAt(normalized, roots) || isCriticalPath(normalized, roots);
 }
 
 type JsonObject = Record<string, unknown>
@@ -287,7 +311,17 @@ export function assessTool(exec: ExecLike, roots: Roots, artifacts: unknown): To
     const args = record(exec.arguments);
     const owner = exec.agent?.session;
     if ((exec.name === 'bash' || exec.name === 'pwsh') && typeof args?.command === 'string') {
-        return assessShell(args.command, exec.name, roots, artifacts, owner);
+        const shellAssessment = assessShell(args.command, exec.name, roots, artifacts, owner);
+        // The credential floor has to cover the shell vector too. The category
+        // layer labels a shell read of a sensitive path `protected` from its own
+        // read-target check, so without this the widest reader of all would stay
+        // unlockable by `protectedAutoReview` + an explicit `protected: 'auto'`.
+        // The flag is only meaningful for a protected category, so it is added
+        // exactly where the shell classifier reached a non-allow verdict.
+        if (shellAssessment.decision !== 'allow' && shellReadsCredentialMaterial(args.command, exec.name, roots)) {
+            return { ...shellAssessment, credentialRead: true };
+        }
+        return shellAssessment;
     }
     if (exec.name === 'bash' || exec.name === 'pwsh') {
         return { decision: 'ask', reason: `${exec.name} command argument is missing or invalid`, classifierEligible: false };
@@ -305,12 +339,22 @@ export function assessTool(exec: ExecLike, roots: Roots, artifacts: unknown): To
         // (`readPathsAreRoutine`), so routing the read *tool* to semantic review
         // here closes the mismatch (mirror of the F1 contract).
         if (isProtectedProjectPath(normalized, roots))
-            return { decision: 'ask', reason: `reading protected project metadata requires semantic review: ${normalized}`, classifierEligible: true };
+            return {
+                decision: 'ask',
+                reason: `reading protected project metadata requires semantic review: ${normalized}`,
+                classifierEligible: true,
+                ...(credentialReadTarget(normalized, roots) ? { credentialRead: true } : {}),
+            };
         // A relaxation that newly admits a path outside the (position) workspace
         // must still fuse sensitive basenames anywhere: trusted-dir or
         // aggressive reads of `.env`/`.ssh/...` stay gated.
         if (!isWithin(roots.workspace, normalized) && sensitiveBasenameAt(normalized, roots))
-            return { decision: 'ask', reason: `reading a sensitive path outside the workspace requires semantic review: ${normalized}`, classifierEligible: true };
+            return {
+                decision: 'ask',
+                reason: `reading a sensitive path outside the workspace requires semantic review: ${normalized}`,
+                classifierEligible: true,
+                credentialRead: true,
+            };
         return { decision: 'allow', reason: 'read-only project inspection', classifierEligible: false };
     }
     if (exec.name === 'write' || exec.name === 'edit') {
@@ -418,7 +462,12 @@ export function assessTool(exec: ExecLike, roots: Roots, artifacts: unknown): To
             if (!isEffectiveRoutine(normalized, roots))
                 return { decision: 'ask', reason: `reading outside the workspace requires semantic review: ${normalized}`, classifierEligible: true };
             if (!isWithin(roots.workspace, normalized) && sensitiveBasenameAt(normalized, roots))
-                return { decision: 'ask', reason: `reading a sensitive path outside the workspace requires semantic review: ${normalized}`, classifierEligible: true };
+                return {
+                    decision: 'ask',
+                    reason: `reading a sensitive path outside the workspace requires semantic review: ${normalized}`,
+                    classifierEligible: true,
+                    credentialRead: true,
+                };
             return { decision: 'allow', reason: 'read-only project inspection', classifierEligible: false };
         }
         // The create command is a file creation in progress: recording the

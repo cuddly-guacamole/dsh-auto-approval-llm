@@ -3,7 +3,7 @@
 // MIT License, Copyright (c) 2026 程序员阿江-Relakkes (https://github.com/NanmiCoder/dsh-auto-mode).
 // Retained per the MIT License: this is a substantial portion of the original.
 import { basename } from 'node:path';
-import { hardDestructiveTargetReason, isArtifactArea, isProtectedProjectPath, isWithin, normalizePath, runtimeStateBasename, runtimeStateTargetInZone, runtimeStateTargetReason, } from './paths.js';
+import { hardDestructiveTargetReason, isArtifactArea, isCriticalPath, isProtectedProjectPath, isWithin, normalizePath, runtimeStateBasename, runtimeStateTargetInZone, runtimeStateTargetReason, } from './paths.js';
 import { isEffectiveRoutine, sensitiveBasenameAt } from './category.js';
 function ambiguous(reason) {
     return { decision: 'ask', reason, classifierEligible: true };
@@ -666,6 +666,60 @@ function readPathsAreRoutine(words, roots) {
         && !(!isWithin(roots.workspace, path) && sensitiveBasenameAt(path, roots)))
         || roots.tempRoots.some(root => isWithin(root, path)));
 }
+/**
+ * Whether a shell command line READS credential material (a sensitive basename
+ * or tree, or a critical path). Same question the policy layer answers with its
+ * `credentialRead` field for the structured readers, asked here for the shell
+ * vector so one floor covers both.
+ *
+ * A shell `cat`/`grep` of a token store is labeled `protected` by the category
+ * layer through its own read-target check, so a floor wired only to the
+ * structured readers would leave the widest reader of all unlockable by
+ * `protectedAutoReview` + an explicit `protected: 'auto'`.
+ *
+ * Deliberately reuses `decomposeCommandLine` + `explicitPaths` and the same two
+ * predicates the category and policy layers use — not a second lexer and not a
+ * second sensitivity table. A command that cannot be read statically (opaque)
+ * is judged conservative: an opaque line's read operands are unknown, so any
+ * such line counts as potentially-credential only when it also carries the
+ * literal markers `explicitPaths` can lift; otherwise the category layer will
+ * not have labeled it `protected` either, and the clamp has nothing to bite on.
+ */
+export function shellReadsCredentialMaterial(source, shell, roots) {
+    if (typeof source !== 'string' || source.length === 0)
+        return false;
+    const decomposition = decomposeCommandLine(source, shell);
+    if (decomposition.kind !== 'segments')
+        return false;
+    for (const segment of decomposition.segments) {
+        const unwrapped = unwrapCommand(segment.words);
+        const name = commandName(unwrapped.words[0]?.text ?? '');
+        // A reader's operands are all sources. A file-manipulating command has
+        // SOURCES too, and those decide whether credential material is exposed:
+        // `cp secret out`, `tee out < secret` and `dd if=secret of=out` all make
+        // the bytes reachable through the tool result, so they count as
+        // credential reads for this flag even though the head writes. The write
+        // DESTINATION is the write fuse's business — but a destination that is
+        // itself a sensitive name stays flagged too, since a credential store
+        // being overwritten is no less sensitive.
+        const judgesSources = readOnlyCommand(name, unwrapped.words, shell)
+            || writesThroughOperands(name, unwrapped.words)
+            // cp/mv are not in writesThroughOperands (their destinations come
+            // from the operand list instead), but their sources are just as
+            // readable as tee's stdin.
+            || name === 'cp' || name === 'mv';
+        if (!judgesSources)
+            continue;
+        const operands = [...unwrapped.words.slice(1), ...segment.readTargets];
+        if (name === 'dd')
+            operands.push(...ddInputTargets(unwrapped.words));
+        for (const path of explicitPaths(operands, roots)) {
+            if (sensitiveBasenameAt(path, roots) || isCriticalPath(path, roots))
+                return true;
+        }
+    }
+    return false;
+}
 /** Every redirection target must be a discard sink or ordinary project content. */
 function writeTargetsAreRoutine(segment, shell, roots) {
     return segment.writeTargets.every((target) => {
@@ -878,6 +932,16 @@ function ddOutputTargets(words) {
     const targets = [];
     for (let index = 1; index < words.length; index += 1) {
         const match = /^of=(.+)$/i.exec(words[index].text);
+        if (match !== null)
+            targets.push({ text: match[1], dynamic: words[index].dynamic, glob: words[index].glob, quoted: true });
+    }
+    return targets;
+}
+/** `dd if=…` sources: the operand the command reads its bytes from. */
+function ddInputTargets(words) {
+    const targets = [];
+    for (let index = 1; index < words.length; index += 1) {
+        const match = /^if=(.+)$/i.exec(words[index].text);
         if (match !== null)
             targets.push({ text: match[1], dynamic: words[index].dynamic, glob: words[index].glob, quoted: true });
     }
@@ -1554,6 +1618,22 @@ function classifyEffectiveCommand(name, words, segment, shell, roots, artifacts,
                     : words.slice(1).filter(word => !word.text.startsWith('-'));
         if (writeTargets.some(word => word.dynamic || word.glob))
             return semanticReview('file write target is dynamic or globbed and cannot be statically proven inside the routine roots');
+        // A write head can also READ. `tee out < secret` echoes stdin to its
+        // stdout and `dd if=secret of=out` copies it, so a credential SOURCE
+        // must not ride the write fast path: only write targets used to be
+        // judged here, which made a credential read through a write head a
+        // static allow with no approval, no reviewer and no verdict naming the
+        // read. Both the `<` redirects and dd's `if=` operand are checked.
+        const readSources = [...segment.readTargets, ...(name === 'dd' ? ddInputTargets(words) : [])];
+        if (readSources.some(word => word.dynamic || word.glob))
+            return semanticReview('file write command reads a target that cannot be statically proven inside the routine roots');
+        if (readSources.length > 0) {
+            const sourcePaths = explicitPaths(readSources, roots);
+            if (readSources.some(word => tildeUserTarget(word.text)) || sourcePaths.length === 0
+                || !sourcePaths.every(path => isEffectiveRoutine(path, roots) && !isProtectedProjectPath(path, roots)
+                    && !(!isWithin(roots.workspace, path) && sensitiveBasenameAt(path, roots))))
+                return semanticReview('file write command reads an external, protected, or unclear path');
+        }
         // Flags stay in the list: explicitPaths lifts embedded values out of
         // them, so `--target-directory=C:/abs` is judged like a bare operand.
         // dd hides its destination inside `of=…`, so the extracted output

@@ -2851,11 +2851,13 @@ export function apply(ctx: Context, rawConfig: Config): void {
   // LOCKED-category predicate honoring the two opt-outs: delete / disk are
   // always locked; privilege is locked unless privilegeAutoReview is on, and
   // protected unless protectedAutoReview is on (both then follow the ordinary
-  // pipeline).
-  const isLockedCategory = (category: string | undefined, provenArtifactDeletion = false): boolean => {
+  // pipeline). The protected opt-out is clamped by the same `credentialRead`
+  // floor `categoryDirective` applies, so a credential-material read cannot be
+  // unlocked in one plane and locked in the other.
+  const isLockedCategory = (category: string | undefined, provenArtifactDeletion = false, credentialRead = false): boolean => {
     if (category === undefined) return false
     if (category === 'privilege' && config.privilegeAutoReview === true) return false
-    if (category === 'protected' && config.protectedAutoReview === true) return false
+    if (category === 'protected' && config.protectedAutoReview === true && !credentialRead) return false
     // A deletion the policy plane proved targets only session-created paths keeps
     // its honest `delete` label but must not take the locked countdown. Both
     // planes read the same structured flag, so the label and the clamp cannot
@@ -4360,7 +4362,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       // handle is wired, and no learnable context is passed — after
       // highRiskSeconds with no response the ask settles as timeout-deny so
       // unattended sessions cannot hang forever on a dangerous command.
-      if (isLockedCategory(classified.category, classified.assessment?.sessionArtifactDeletion === true)) {
+      if (isLockedCategory(classified.category, classified.assessment?.sessionArtifactDeletion === true, classified.assessment?.credentialRead === true)) {
         const lockedStatus: ReviewStatus = {
           risk: 'HIGH',
           phase: 'countdown',

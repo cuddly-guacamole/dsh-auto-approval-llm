@@ -112,7 +112,7 @@ test('the answerer half is anchored: its locked predicate reads the same flag', 
     `the answerer must honour the proven-artifact-deletion flag, got:\n${body}`,
   )
   assert.ok(
-    /isLockedCategory\(classified\.category, classified\.assessment\?\.sessionArtifactDeletion === true\)/.test(host),
+    /isLockedCategory\(classified\.category, classified\.assessment\?\.sessionArtifactDeletion === true, classified\.assessment\?\.credentialRead === true\)/.test(host),
     'and the flag must actually be passed at the call site',
   )
 })
