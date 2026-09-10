@@ -10,7 +10,7 @@
 | 11 | `privilege` | sudo/su、set-executionpolicy 等提权 | <span class="badgeerr">LOCKED：仅可 ask</span>（开启 `privilegeAutoReview` 后三态可配） |
 | 10 | `delete` | rm/del/Remove-Item 等删除 | <span class="badgeerr">LOCKED：仅可 ask</span> |
 | 9 | `disk` | format/bcdedit/磁盘镜像写 | <span class="badgeerr">LOCKED：仅可 ask</span> |
-| 8 | `protected` | 触碰受保护/关键路径的写改 | <span class="badgeerr">LOCKED：仅可 ask</span> |
+| 8 | `protected` | 触碰受保护/关键路径的写改 | <span class="badgeerr">LOCKED：仅可 ask</span>（开启 `protectedAutoReview` 后三态可配） |
 | 7 | `networkExec` | curl/wget/iwr 外联下载执行；agent 的 `web_fetch` 同属此类（URL 级安全边界在宿主 fetch provider，插件可用本类目或声明式规则收紧） | 三态可配 |
 | 6 | `gitPush` | git push 及等价远端变更 | 三态可配 |
 | 5 | `publish` | npm publish/deploy 等发布动作 | 三态可配 |
@@ -54,9 +54,13 @@ delete / protected / privilege / disk 四类在配置面上默认**只能收 `as
 2. **resolveConfig 层**：未知键 warn+丢弃，LOCKED 类别收到非 ask 值一律钳回丢弃并告警（<span class="lnum">index.ts:L308-330</span>）；
 3. **决策层常量兜底**：即便有漏网配置进了运行时，`categoryDirective` 对 locked 类别的分支也只会给出 `ask` 或 `inherit`，绝无 auto/deny（<span class="lnum">category.ts:L685-693</span>）。
 
-**两档锁定分层**：`LOCKED_CATEGORIES`（delete/protected/privilege/disk，L40）之上还有更硬的 `HARD_LOCKED_CATEGORIES = ['delete','disk']`（<span class="lnum">category.ts:L50</span>）——后两者**任何按名授权的通道都不得预先放行**：allowlist、pre-execute 镜像、显式配置一律无效，delete/disk 的批准只能来自人工逐次确认（带恒拒倒计时），绝不静默自动允许；protected/privilege 保留显式 operator override（privilege 另有 `privilegeAutoReview` 解锁）。理由：delete/disk 的破坏在大规模上不可逆。
+**两档锁定分层**：`LOCKED_CATEGORIES`（delete/protected/privilege/disk，L40）之上还有更硬的 `HARD_LOCKED_CATEGORIES = ['delete','disk']`（<span class="lnum">category.ts:L50</span>）——后两者**任何按名授权的通道都不得预先放行**：allowlist、pre-execute 镜像、显式配置一律无效，delete/disk 的批准只能来自人工逐次确认（带恒拒倒计时），绝不静默自动允许；protected/privilege 保留显式 operator override（分别由 `protectedAutoReview` / `privilegeAutoReview` 解锁）。理由：delete/disk 的破坏在大规模上不可逆。
 
-**例外：`privilegeAutoReview`（默认关，fail-closed）**。开启后 `privilege` 类别从 LOCKED 名单中剔除（delete / protected / disk 仍锁死）：配置面上 privilege 可设 auto/ask/deny，未配置时走 `inherit`——类别层不再强制转人，命令进入正常评审管线（classifier + LLM 评审 + 倒计时）。三层改动：schema 新键（<span class="lnum">index.ts:L275</span>）、resolveConfig 解锁分支（<span class="lnum">index.ts:L329</span>）、categoryDirective 解锁判定（<span class="lnum">category.ts:L686-693</span>）；client 设置卡「分类开关与信任模式」子卡新增同名开关（locale 键 `settings.category.privilegeAutoReview`），开启后 privilege 行的下拉才出现 自动/拒绝 选项。
+**例外一：`privilegeAutoReview`（默认关，fail-closed）**。开启后 `privilege` 类别从 LOCKED 名单中剔除（delete / protected / disk 仍锁死）：配置面上 privilege 可设 auto/ask/deny，未配置时走 `inherit`——类别层不再强制转人，命令进入正常评审管线（classifier + LLM 评审 + 倒计时）。三层改动：schema 新键（<span class="lnum">index.ts:L275</span>）、resolveConfig 解锁分支（<span class="lnum">index.ts:L329</span>）、categoryDirective 解锁判定（<span class="lnum">category.ts:L686-693</span>）；client 设置卡「分类开关与信任模式」子卡新增同名开关（locale 键 `settings.category.privilegeAutoReview`），开启后 privilege 行的下拉才出现 自动/拒绝 选项。
+
+**例外二：`protectedAutoReview`（默认关，fail-closed）**。形状与上面完全一致，只是对象换成 `protected`（delete / disk 仍锁死，privilege 仍由它自己的开关决定）。**解锁面比名字听起来的宽，务必看清**：`protected` 不只涵盖工作区敏感文件与受保护元数据（`.env` / `.npmrc` / `.git/*` / `.vscode/*` 等），**还涵盖凭据树的读取**——`~/.ssh/id_rsa`、`~/.aws/credentials` 这类目标的**读**在策略层本就是 `ask` + `classifierEligible:true`（硬拒闸门只管**写**：`hardDestructiveReason` 的 mutation 分支与 shell 写向量），所以开启本键意味着**这些读取也可以由分类器/评审器作答**；对它们的**写入**依旧硬拒，不受本键影响。解锁判定读 `category.ts` 的 `protectedUnlocked`，answerer 的锁定谓词（`index.ts` 的 `isLockedCategory`）同读，两平面一致。
+
+**例外三：已证实的会话自建物删除（无需配置，始终生效）**。`delete` 仍是 LOCKED，但策略层对「删除目标全部是本会话成功创建过的路径」有不依赖配置的出处豁免（`shell.ts` 的 artifact 分支 → `allowed('delete exact session-created artifacts')`）。该豁免以**结构化字段** `sessionArtifactDeletion` 带出，类别层的锁定钳制与 answerer 的锁定谓词都读它——否则类别层看不到 artifact 注册表，会把这条静态放行拦成锁定询问，使豁免在 aggressive 模式下**永远不可达**（修复见 commit `cb02a3d`）。红线遵守：授权性信号走结构化通道，**不从 reason 文本解析**。
 
 **LOCKED 类的转人行为**：LOCKED 类（delete / protected / disk；privilege 未解锁时）的类别 ask **不再是 status-less**——answerer 注入硬拒倒计时（`action:'reject'` 恒拒、秒数取 `highRiskSeconds` 默认 10），无 LLM 接管 handle、无学习上下文；超时未响应自动 `timeout-deny`（agent 收到「no response: auto-rejected」），**任何 timeoutAction 配置都无法把它变成自动放行**。无人值守会话不再因危险命令无限挂起；面板上拒绝按钮带 10s 倒计时可直接点击。
 

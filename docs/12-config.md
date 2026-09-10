@@ -1,5 +1,5 @@
 # 12 · 配置全景
-> *58 keys, one source of truth*
+> *59 keys, one source of truth*
 
 ### 全部配置键（src/index.ts Config schema Z.object 原文）
 
@@ -46,9 +46,10 @@
 | `editDiffPreview` | false | 编辑类工具进人工审批时展示行级红绿 diff（纯展示，不参与裁决） |
 | `rejectGuidance` | false | 拒绝引导：被拒时向 agent 注入白名单式短说明（来源/类别枚举，不含工具名与自由文本），减少盲目重试；同调用去重 + 60s 限 5 条，fail-closed。v0.0.17 起官方拒绝检测只认结构化错误形状（error.message/isError/官方 Error: 前缀）——read/grep 等成功工具输出里出现的 "user rejected tool" 字面量不再误触发（此前 13 次幽灵注入根因） |
 | `maintenanceDshPaths` | [] | host-only 键：DSH_HOME 中供运维维护的子目录（绝对路径数组）。其内 guard 的 DSH_HOME 硬拒只对**非运行态文件**放宽（技能/配置/文档）；插件运行态文件（history/audit/learning…）在其内仍恒拒，shell 写向量仍恒拒，fenced 子树（sessions/plugins/credentials*）不可指名。仅 patch/YAML 可配 |
-| `categoryPolicy` | {} | 11 类三态开关 `{类别: auto\|ask\|deny}`；未配置=inherit 行为零变化；未知键 warn+丢弃（resolveConfig），LOCKED 类仅收 ask（privilege 在 `privilegeAutoReview=true` 时例外，可收 auto/deny） |
+| `categoryPolicy` | {} | 11 类三态开关 `{类别: auto\|ask\|deny}`；未配置=inherit 行为零变化；未知键 warn+丢弃（resolveConfig），LOCKED 类仅收 ask（privilege 在 `privilegeAutoReview=true`、protected 在 `protectedAutoReview=true` 时例外，可收 auto/deny） |
 | `categoryMode` | standard | standard/aggressive：信任目录模式。standard 常规位置=工作区 ∪ trustedDirs；aggressive 取消位置白名单（任意位置均视为常规位置；危险度门与敏感名 fuse 不动） |
 | `privilegeAutoReview` | false | 特权类别解锁开关（默认关=fail-closed）：开启后 privilege 可设 auto/ask/deny 并进入 LLM 评审管线；delete/protected/disk 不受影响仍锁 ask |
+| `protectedAutoReview` | false | 受保护类别解锁开关（默认关=fail-closed）：开启后 protected 可设 auto/ask/deny 并进入 LLM 评审管线。**解锁面较宽**：protected 涵盖工作区敏感文件与受保护元数据（`.env`/`.npmrc`/`.git` 等）**以及凭据树的读取**（`~/.ssh`/`~/.aws` 等——读取本就是 protected 询问，只有**写入**是硬拒且不受本键影响）。删除/磁盘不受影响仍锁 ask |
 | `trustedDirs` | [] | 额外信任目录根（绝对路径数组）：非绝对路径/凭据树/home/critical 内的条目 warn+丢弃后归一化 |
 | `trustedDshSubpaths` | [] | 允许 Auto 会话写入的 DSH_HOME 子目录（绝对路径数组，host-only）。默认空=DSH_HOME 整树恒拒；列出的子树获得与插件自身开发区同级的放行，请只写最窄目录。**开口只服务结构化工具（edit/write 等）；shell 写向量对 DSH_HOME 一律恒拒，不随开口放开。**六道清洗全部 warn+丢弃：非绝对路径、不在 DSH_HOME 内、等于 DSH_HOME 本身、覆盖 fenced 子树（`sessions` / `plugins` / `credentials*`）、归一化后落入 critical 树。**注意**：技能文件内容会作为指令注入 agent 上下文，放开 `skills` 等于允许 agent 改写自身行为约束且持久生效——只在明确需要时开启。插件运行态文件（history/audit/learning…）的恒拒与本键正交，不受影响 |
 | `learningEnabled` | false | 确认制学习总开关：默认关（铁律），开启后同一操作被人工反复确认才可能自动放行（§18） |
