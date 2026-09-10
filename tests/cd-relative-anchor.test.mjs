@@ -124,13 +124,28 @@ test('boundary: an unreadable changer keeps the workspace reading', () => {
   }
 })
 
-test('boundary: an opaque line abstains from the fuse, as it did before this change', () => {
-  // `${DIR}` is an opaque grouping form, so decomposeCommandLine reports
-  // `opaque` and hardDenyShellReason returns undefined before any per-segment
-  // check. That abstention is pre-existing (the line goes to semantic review
-  // instead) and is asserted here so it is not mistaken for something the
-  // re-anchoring introduced.
-  assert.equal(deny(String.raw`cd \${DIR} && printf x > package.json`), undefined)
+test('boundary: an opaque line still judges the redirect targets it spells', () => {
+  // `\${DIR}` makes the line opaque (the `{` is a grouping/brace form), so no
+  // segment is parsed and the re-anchoring above never runs. That used to mean
+  // the whole line abstained from every per-target fuse, and a write to the
+  // plugin's own contract file decayed into a classifier-eligible ask. The
+  // opaque path now recovers just the redirect targets, so the strongest
+  // verdict stays reachable: the fuse is what protects this file.
+  const reason = deny(String.raw`cd \${DIR} && printf x > package.json`)
+  assert.ok(reason !== undefined && reason.includes(CONTRACT_FILE_REASON), `got: ${reason}`)
+})
+
+test('boundary: an opaque line whose targets are ordinary still abstains', () => {
+  // The other half of the boundary, and the reason the recovery is not "deny
+  // every opaque line": a line whose redirects are ordinary workspace paths
+  // must keep its previous reading so the semantic classifier still sees it.
+  // Without this case a blanket opaque-deny would pass the test above.
+  for (const command of [
+    String.raw`cd \${DIR} && printf x > /tmp/cd-anchor-out.txt`,
+    String.raw`(printf x > /tmp/cd-anchor-notes.txt)`,
+  ]) {
+    assert.equal(deny(command), undefined, `${command} must keep abstaining from the fuse`)
+  }
 })
 
 test('boundary: a win32 traversal re-anchors to its true destination and still denies', () => {

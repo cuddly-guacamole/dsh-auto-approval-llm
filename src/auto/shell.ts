@@ -1189,6 +1189,76 @@ function effectiveCwdAfter(segment, shell, roots) {
     return resolved;
 }
 
+/**
+ * Redirect targets found by scanning a raw command line for `>` / `>>`
+ * spellings, used only where the lexer cannot read the line at all.
+ *
+ * The guard target class excludes the shell metacharacters that can end a
+ * redirect target, so a match is a plausible target rather than a parsed one:
+ * this is a best-effort recovery, not a second lexer. The clobber form (`>|`)
+ * is included because the lexer's operator table accepts it everywhere else.
+ */
+const OPAQUE_REDIRECT_TARGET = /(?:^|[\s;&|(])(?:\d*&?>{1,2}\|?)\s*("[^"]*"|'[^']*'|[^\s;&|()<>]+)/g;
+
+/**
+ * The redirect-target fuse applied to a command line `decomposeCommandLine`
+ * reports as opaque (grouping, brace expansion, command substitution, a
+ * here-document, an unbalanced quote, or a target-less redirect).
+ *
+ * Why this exists: the whole-line fuses above only cover privilege escalation,
+ * OS policy changes, credential exfiltration and `$HOME` deletion. Everything
+ * they miss used to reach an early `return undefined` at the opaque branch,
+ * which made every per-target fuse unreachable for the whole line — so
+ * `printf x > package.json; (:)` lost its `redirection overwrites the plugin's
+ * own contract/build file` hard deny and decayed into a classifier-eligible
+ * MEDIUM ask. Under `timeoutAction=allow` (or an unattended review mode) that
+ * ask is answered by the countdown, so the strongest verdict class in the
+ * plugin became the weakest one. The fuses below are the SAME predicates the
+ * decomposed path uses (`hardDestructiveTargetReason`, `runtimeStateWriteReason`,
+ * `shellWriteToDshHomeDenied`), deliberately not a private re-derivation: the
+ * DSH_HOME `allowedDshSubpaths` openings and maintenance paths live in those
+ * single owners, and a second copy would drift from them.
+ *
+ * Scope discipline — the two halves of the trade:
+ * - Only targets that another vector would already hard-deny are reported, so
+ *   an opaque line whose writes are ordinary workspace/temp paths keeps its
+ *   existing `ask` and the classifier still sees it. This is why the scan is
+ *   not "deny every opaque line".
+ * - Quoted text that merely spells a redirect to such a target is treated as a
+ *   real one (`echo "see > package.json for config"; (true)` hard-denies), and
+ *   the here-document body is exempted by scanning the command line only. A
+ *   here-document body is data handed to the command's stdin, so a `>` inside
+ *   it is literal text — but the redirect in `cat <<'EOF' > package.json` sits
+ *   on the first line and is still judged. The residual false positive is
+ *   accepted: a needless human-visible refusal is the failure mode this plugin
+ *   prefers over a silent allowance.
+ */
+function opaqueRedirectDenyReason(source, shell, opaqueReason, roots) {
+    const scan = opaqueReason === 'here-document input cannot be read statically'
+        ? source.split(/\r?\n/, 1)[0]
+        : source;
+    for (const match of scan.matchAll(OPAQUE_REDIRECT_TARGET)) {
+        const raw = match[1];
+        const target = raw.length > 1 && ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'")))
+            ? raw.slice(1, -1)
+            : raw;
+        if (target === '' || isNullSink({ text: target }, shell))
+            continue;
+        if (dynamicHomeTarget(target))
+            return 'dynamic redirection targeting the user home is not permitted';
+        const destructive = hardDestructiveTargetReason(globRoot(target), roots);
+        if (destructive !== undefined)
+            return `redirection overwrites ${destructive}`;
+        const stateReason = runtimeStateWriteReason(normalizePath(target, roots.workspace, roots.home), roots);
+        if (stateReason !== undefined)
+            return `redirection targets ${stateReason}`;
+        const dshReason = shellWriteToDshHomeDenied(normalizePath(target, roots.workspace, roots.home), roots);
+        if (dshReason !== undefined)
+            return `redirection targets ${dshReason}`;
+    }
+    return undefined;
+}
+
 export function hardDenyShellReason(source, shell, roots) {
     const compact = source.trim();
     // Newline-flattened copy for the whole-line fuses: `decomposeCommandLine`
@@ -1219,8 +1289,13 @@ export function hardDenyShellReason(source, shell, roots) {
         return 'dynamic deletion targeting the user home is not permitted';
     }
     const decomposition = decomposeCommandLine(compact, shell);
-    if (decomposition.kind === 'opaque')
-        return undefined;
+    if (decomposition.kind === 'opaque') {
+        // The line cannot be decomposed, but it may still spell a redirect at a
+        // target every other vector hard-denies. Recovering just that much (and
+        // nothing else) keeps the strongest verdict reachable on opaque lines
+        // while a line whose writes are ordinary paths keeps its `ask`.
+        return opaqueRedirectDenyReason(compact, shell, decomposition.reason, roots);
+    }
     // Fuses resolve relative targets against the directory the segment really
     // sees. A changer only moves that base inside an `&&` chain: there, reaching
     // this segment proves the changer ran and succeeded, so a relative name is
