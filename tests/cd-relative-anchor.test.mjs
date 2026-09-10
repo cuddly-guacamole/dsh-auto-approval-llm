@@ -52,19 +52,62 @@ test('precondition: the bare relative write is still denied in the workspace', (
 })
 
 test('the changer re-anchors the relative target, so the tmp write is allowed through', () => {
-  const command = String.raw`mkdir -p /tmp/probe-backslash && cd /tmp/probe-backslash && printf '{"name":"probe","private":true}' > package.json`
-  assert.equal(deny(command), undefined, 'the write lands in /tmp, not in the workspace')
+  // Re-anchoring is sound only inside an `&&` chain, where reaching the write
+  // proves the changer ran and succeeded. This is the incident's shape with the
+  // win32 spelling (the fixture used a Git-Bash /tmp path, which cannot be
+  // compared against a win32 workspace and is refused — see the style test).
+  const command = `mkdir -p C:/Users/Administrator/AppData/Local/Temp/probe-bs && cd C:/Users/Administrator/AppData/Local/Temp/probe-bs && printf '{"name":"probe","private":true}' > package.json`
+  assert.equal(deny(command), undefined, 'the write lands in the temp directory, not in the workspace')
 })
 
-test('a pwsh directory changer re-anchors too', () => {
-  const command = String.raw`Set-Location C:/Windows/Temp; Set-Content -Path package.json -Value x`
+test('a pwsh directory changer re-anchors inside an && chain', () => {
+  const command = `Set-Location C:/Users/Administrator/AppData/Local/Temp/probe-bs && Set-Content -Path package.json -Value x`
   assert.equal(hardDenyShellReason(command, 'pwsh', roots), undefined)
+})
+
+test('the win32 incident spelling still addresses the workspace contract file', () => {
+  // Regression proof for the reporting case, stated in the workspace's own
+  // spelling: a bare relative write is denied, and denying it is the correct
+  // outcome (it really names the contract file).
+  const reason = deny(String.raw`printf x > package.json`)
+  assert.ok(reason !== undefined && reason.includes(CONTRACT_FILE_REASON), `got: ${reason}`)
 })
 
 test('boundary: a changer inside the workspace re-anchors to the same place', () => {
   // `cd .` is a no-op, so the fuse must still see the workspace file.
   const reason = deny(String.raw`cd . && printf x > package.json`)
   assert.ok(reason !== undefined && reason.includes(CONTRACT_FILE_REASON), `got: ${reason}`)
+})
+
+test('boundary: a changer that may have failed does NOT move the base', () => {
+  // The base may only move where reaching the write proves the changer
+  // succeeded. `;` gives no such proof: if the `cd` fails the shell stays in the
+  // workspace, so `package.json` really is the contract file. (This is the
+  // regression a first version of the fix introduced — it assumed success.)
+  for (const command of [
+    String.raw`cd C:/nodir; printf x > package.json`,
+    String.raw`cd C:/nodir-tmp; cd -; printf x > package.json`,
+    String.raw`cd C:/nodir-tmp | printf x > package.json`,
+    String.raw`cd C:/nodir-tmp & printf x > package.json`,
+  ]) {
+    const reason = deny(command)
+    assert.ok(reason !== undefined && reason.includes(CONTRACT_FILE_REASON), `${command} must keep the workspace reading, got: ${reason}`)
+  }
+})
+
+test('boundary: a posix-spelled changer is refused on a win32 workspace', () => {
+  // A posix base cannot be compared against the plugin zone, DSH_HOME or the
+  // credential trees, so every win32-rooted fuse would silently miss —
+  // `cd /c/Users/.../dsh-auto-approval-llm` names the plugin repo itself.
+  // Refusing the substitution is the fail-closed answer. Do not weaken this
+  // into an expectation of "no hard deny": that is the hole, not the fix.
+  for (const command of [
+    String.raw`cd /c/Users/Administrator/.dsh/plugins/dsh-auto-approval-llm && printf x > package.json`,
+    String.raw`cd /tmp/probe-backslash && printf x > package.json`,
+  ]) {
+    const reason = deny(command)
+    assert.ok(reason !== undefined && reason.includes(CONTRACT_FILE_REASON), `${command} must keep the workspace reading, got: ${reason}`)
+  }
 })
 
 test('boundary: an unreadable changer keeps the workspace reading', () => {
@@ -99,15 +142,14 @@ test('boundary: a win32 traversal re-anchors to its true destination and still d
   assert.ok(reason !== undefined && reason.includes(CONTRACT_FILE_REASON), `got: ${reason}`)
 })
 
-test('known limit: a POSIX changer target cannot be re-anchored onto win32 paths', () => {
-  // On Windows a `/tmp` changer target normalizes as a posix path, and a posix
-  // base cannot be compared against the win32 plugin root, so the traversal
-  // below is not caught. Asserted rather than hidden: the pre-change code could
-  // not judge it either (it resolved the relative name against the win32
-  // workspace, which is a different wrong answer), and Git Bash's translation
-  // of /tmp is not something the analyzer can read. Documented, not fixed here.
+test('known limit: a posix changer target cannot be seen as the same tree', () => {
+  // The conservative rule refuses to re-anchor onto a posix base, so the
+  // relative traversal is still resolved against the win32 workspace and lands
+  // under DSH_HOME — denied, but for the workspace reading rather than for the
+  // contract file. Pinning "denied" (not the exact reason) keeps the assertion
+  // honest without freezing which fuse happens to fire.
   const command = String.raw`cd /tmp && printf x > ../Administrator/.dsh/plugins/dsh-auto-approval-llm/package.json`
-  assert.equal(deny(command), undefined)
+  assert.ok(deny(command) !== undefined, 'the traversal must stay denied')
 })
 
 test('boundary: a changer placed after the write does not re-anchor it', () => {
@@ -139,5 +181,4 @@ test('chained changers compose the way a shell would', () => {
   // re-anchored only the first would leave `deeper` pointing into the plugin
   // tree and deny this line.
   assert.equal(deny(`cd C:/Users/Administrator/AppData/Local/Temp/probe-bs && cd deeper && printf x > package.json`), undefined)
-  assert.equal(deny(String.raw`cd /tmp && cd deeper && printf x > package.json`), undefined)
 })

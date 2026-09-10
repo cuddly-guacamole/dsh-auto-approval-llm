@@ -77,6 +77,12 @@ export function decomposeCommandLine(source, shell) {
     let quoted = false;
     let quote;
     let pending;
+    /**
+     * Operator that will precede the next segment pushed. Kept so consumers can
+     * tell a `&&` chain (where reaching a later segment proves the earlier one
+     * succeeded) from `;`/`|`/`&` (where it proves nothing).
+     */
+    let nextPrecededBy = '';
     const flushWord = () => {
         if (!started)
             return;
@@ -97,12 +103,13 @@ export function decomposeCommandLine(source, shell) {
     const flushSegment = () => {
         flushWord();
         if (words.length > 0 || writeTargets.length > 0 || readTargets.length > 0) {
-            segments.push({ words, writeTargets, readTargets });
+            segments.push({ words, writeTargets, readTargets, precededBy: nextPrecededBy });
         }
         words = [];
         writeTargets = [];
         readTargets = [];
         pending = undefined;
+        nextPrecededBy = '';
     };
     for (let index = 0; index < input.length; index += 1) {
         const char = input[index];
@@ -150,6 +157,7 @@ export function decomposeCommandLine(source, shell) {
         }
         if (char === '\n' || char === '\r') {
             flushSegment();
+            nextPrecededBy = '\n';
             continue;
         }
         if (/\s/.test(char)) {
@@ -206,6 +214,7 @@ export function decomposeCommandLine(source, shell) {
         if (char === '&') {
             if (input[index + 1] === '&') {
                 flushSegment();
+                nextPrecededBy = '&&';
                 index += 1;
                 continue;
             }
@@ -217,16 +226,19 @@ export function decomposeCommandLine(source, shell) {
                 continue;
             }
             flushSegment();
+            nextPrecededBy = '&';
             continue;
         }
         if (char === '|') {
             if (input[index + 1] === '|')
                 index += 1;
             flushSegment();
+            nextPrecededBy = '|';
             continue;
         }
         if (char === ';') {
             flushSegment();
+            nextPrecededBy = ';';
             continue;
         }
         if (char === '>' || char === '<') {
@@ -1120,28 +1132,48 @@ function segmentHardDenyReason(segment, shell, roots) {
  */
 /**
  * Commands that rewrite the working directory for every later segment of the
- * same line.
+ * same line. Deliberately narrow: `pushd`/`popd` are paired and `cd -` is a
+ * history lookup, so their net effect cannot be read one segment at a time, and
+ * `chdir` is not a bash builtin.
  */
-const DIRECTORY_CHANGER_COMMANDS = new Set(['cd', 'pushd', 'chdir', 'set-location', 'sl']);
+const DIRECTORY_CHANGER_COMMANDS = new Set(['cd', 'set-location', 'sl']);
+
+/** The spelling family of a normalized path ('win32' for drive/UNC, 'posix' for '/…'). */
+function pathSpellingFamily(path) {
+    if (/^[a-z]:/i.test(path) || path.startsWith('\\\\') || path.startsWith('//'))
+        return 'win32';
+    if (path.startsWith('/'))
+        return 'posix';
+    return undefined;
+}
 
 /**
- * The working directory a directory-changer segment establishes for the
- * segments that follow it, or undefined when that cannot be read statically.
+ * The working directory a directory-changer segment establishes, or undefined
+ * when that cannot be read statically.
  *
- * The hard-deny fuses resolve a relative target against `roots.workspace`,
- * which is the session's directory — right for a plain command, wrong for a
- * line that first moves elsewhere: `cd /tmp/x && printf … > package.json`
- * writes /tmp/x/package.json, yet the fuse read the bare name as if it landed
- * in the workspace and denied the line for touching the plugin's own
- * package.json.
+ * A hard-deny fuse resolves a relative target against `roots.workspace`, the
+ * session's directory — right for a plain command, wrong for a line that moves
+ * elsewhere first. Returning the changer's target here lets the caller use it as
+ * the resolution base for the segments that follow.
  *
- * Substituting the changer's target as the resolution base fixes that at the
- * owner: every fuse keeps running, and a relative target is judged by the path
- * it really names — including a `..` traversal, which resolves to its true
- * destination instead of being waved through. A dynamic or globbed target
- * (`cd $DIR`, `cd *`) returns undefined so the caller keeps the workspace
- * reading: an unreadable changer must never widen what a relative name may
- * reach.
+ * Two conditions make the substitution sound, and both are enforced here or by
+ * the caller:
+ *
+ * - The caller only carries a base across `&&`. Reaching a later segment in an
+ *   `&&` chain proves the changer succeeded, so the shell really is standing
+ *   there. Across `;`/`|`/`&` it proves nothing — `cd /nodir; printf x >
+ *   package.json` fails its `cd` and still writes into the workspace, so the
+ *   base must not move. (A `cd` shadowed by an alias is the residual
+ *   assumption.)
+ * - The base must be comparable with the workspace. A posix-spelled target on a
+ *   win32 workspace (or the reverse) cannot be compared against the plugin zone,
+ *   DSH_HOME or the credential trees, so every fuse would silently miss —
+ *   `cd /c/Users/.../dsh-auto-approval-llm` names the plugin repo itself.
+ *   Refusing the substitution keeps the workspace reading, which is the
+ *   fail-closed answer.
+ *
+ * A dynamic, globbed or missing target returns undefined for the same reason:
+ * an unreadable changer must never move the base on a guess.
  */
 function effectiveCwdAfter(segment, shell, roots) {
     const unwrapped = unwrapCommand(segment.words);
@@ -1151,7 +1183,10 @@ function effectiveCwdAfter(segment, shell, roots) {
     const target = unwrapped.words.slice(1).find(word => !word.text.startsWith('-'));
     if (target === undefined || target.dynamic || target.glob)
         return undefined;
-    return normalizePath(target.text, roots.workspace, roots.home);
+    const resolved = normalizePath(target.text, roots.workspace, roots.home);
+    if (pathSpellingFamily(resolved) !== pathSpellingFamily(roots.workspace))
+        return undefined;
+    return resolved;
 }
 
 export function hardDenyShellReason(source, shell, roots) {
@@ -1186,11 +1221,21 @@ export function hardDenyShellReason(source, shell, roots) {
     const decomposition = decomposeCommandLine(compact, shell);
     if (decomposition.kind === 'opaque')
         return undefined;
-    // Fuses run against the directory each segment actually sees: a changer
-    // takes effect only for the segments after it, so the changer itself is
-    // still judged against the incoming workspace.
+    // Fuses resolve relative targets against the directory the segment really
+    // sees. A changer only moves that base inside an `&&` chain: there, reaching
+    // this segment proves the changer ran and succeeded, so a relative name is
+    // judged by the path it denotes. Across `;`/`|`/`&` the changer's outcome is
+    // unknown — it may have failed and left the shell in the workspace — so the
+    // base resets and the relative target is judged against the workspace, which
+    // is what keeps `cd /nodir; printf x > package.json` a hard deny. The
+    // changer's own segment is always judged against the base it runs in.
     let segmentRoots = roots;
+    let changerBase;
     for (const segment of decomposition.segments) {
+        if (segment.precededBy !== '' && segment.precededBy !== '&&')
+            changerBase = undefined;
+        if (changerBase !== undefined)
+            segmentRoots = { ...roots, workspace: changerBase };
         // Per-segment privilege fuse: the whole-line regex above only sees the
         // raw source; a decomposed segment lets us judge the effective command
         // after wrappers, so `echo hi; sudo ls` cannot dodge the hard deny.
@@ -1200,11 +1245,9 @@ export function hardDenyShellReason(source, shell, roots) {
         const reason = segmentHardDenyReason(segment, shell, segmentRoots);
         if (reason !== undefined)
             return reason;
-        // Resolved against the directory the changer itself runs in, so a
-        // chained `cd a && cd b` composes the way the shell would.
         const next = effectiveCwdAfter(segment, shell, segmentRoots);
         if (next !== undefined)
-            segmentRoots = { ...roots, workspace: next };
+            changerBase = next;
     }
     return undefined;
 }
