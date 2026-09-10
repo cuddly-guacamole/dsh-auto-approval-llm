@@ -54,7 +54,7 @@ import {
   type LearningStore,
 } from './auto/learning.js'
 import { isWithin, isCriticalPath, normalizePath, resolveRoots } from './auto/paths.js'
-import { assessTool, hardDenyReason, structuredRuntimeStateReadHits } from './auto/policy.js'
+import { assessTool, hardDenyReason, structuredRuntimeStateReadHits, type Roots } from './auto/policy.js'
 import { resolveDeepest, symlinkEscapeReason } from './auto/symlink.js'
 import { probeTargetFacts } from './auto/probe.js'
 import { redactResultValue } from './auto/redact.js'
@@ -1375,6 +1375,35 @@ const approvalHistory: HistoryRecord[] = []
 const HISTORY_FILE = join(dirname(fileURLToPath(import.meta.url)), '..', 'history.jsonl')
 const DEBUG_FILE = join(dirname(fileURLToPath(import.meta.url)), '..', 'approval-debug.jsonl')
 
+/**
+ * Test-only redirect for history persistence.
+ *
+ * `history.jsonl` is a live runtime file: the running host appends decisions to
+ * it and the /history DELETE branch truncates it. Before this override the only
+ * history test could assert the GET response shape, so a DELETE that truncated
+ * the live file — and tombstoned the live audit — was invisible to the suite.
+ * Mirrors `setAuditFilePathForTests` in `src/auto/audit.ts`: nothing in
+ * production sets it, so the default stays the plugin-root file and
+ * `historyFilePath()` reports the effective path so a contract test can pin
+ * that default without relying on the caller's cooperation.
+ */
+let historyFileOverride: string | undefined
+
+/** Test-only: point history persistence at `path` (pass undefined to restore the default). */
+export function setHistoryFilePathForTests(path: string | undefined): void {
+  historyFileOverride = path
+}
+
+/** The history file this process is actually appending to. */
+function historyPath(): string {
+  return historyFileOverride ?? HISTORY_FILE
+}
+
+/** The history file this process is actually appending to. */
+export function historyFilePath(): string {
+  return historyPath()
+}
+
 // ── atomic JSONL rotation + tolerant history parse ─────────────────────────
 // Rotations write a same-directory temp file and rename it over the target,
 // so a crash between truncate and write can never leave a truncated last
@@ -1479,8 +1508,8 @@ function reportRulesParseErrors(plane: 'pre-execute' | 'answerer', errors: RuleP
 
 function loadHistory(): void {
   try {
-    if (!existsSync(HISTORY_FILE)) return
-    const lines = readFileSync(HISTORY_FILE, 'utf8').split('\n').filter(Boolean)
+    if (!existsSync(historyPath())) return
+    const lines = readFileSync(historyPath(), 'utf8').split('\n').filter(Boolean)
     const { records, badCount } = parseHistoryLines(lines)
     approvalHistory.push(...records)
     if (badCount > 0) {
@@ -1507,11 +1536,11 @@ function pushHistory(entry: Omit<HistoryRecord, 'id' | 'at'>): boolean {
   approvalHistory.push(record)
   if (approvalHistory.length > 200) approvalHistory.shift()
   try {
-    appendFileSync(HISTORY_FILE, `${JSON.stringify(record)}\n`)
+    appendFileSync(historyPath(), `${JSON.stringify(record)}\n`)
     // Rotate the on-disk log once it grows past 1 MB so it cannot grow without
     // bound (the in-memory window is already capped at 200 records).
-    if (statSync(HISTORY_FILE).size > 1_048_576) {
-      atomicWriteFile(HISTORY_FILE, `${approvalHistory.map((r) => JSON.stringify(r)).join('\n')}\n`)
+    if (statSync(historyPath()).size > 1_048_576) {
+      atomicWriteFile(historyPath(), `${approvalHistory.map((r) => JSON.stringify(r)).join('\n')}\n`)
     }
   } catch {
     // History persistence is best-effort.
@@ -1522,6 +1551,23 @@ function pushHistory(entry: Omit<HistoryRecord, 'id' | 'at'>): boolean {
   // verdicts must take effect only when their audit record persisted. The
   // history.jsonl write above stays best-effort — the audit is the gate.
   return appendAuditLine(JSON.stringify({ type: 'decision', ...record }))
+}
+
+/**
+ * The guard's refusal reason for a call, as a value: `undefined` means the call
+ * may dispatch.
+ *
+ * The guard hook needs a resolved `roots` (it is built from the live config by
+ * the caller), so this takes the roots rather than resolving them. Lifting the
+ * fuse order out of the hook is what makes it reachable from a unit test: the
+ * composed "hard deny wins, otherwise symlink escape" decision had no
+ * behavioural coverage at all, because the hook itself cannot be booted outside
+ * a running plugin — only its SOURCE TEXT was pinned, so a change to the
+ * composition would have passed. The Auto-only gate stays with the caller,
+ * where it also decides whether the denial is recorded.
+ */
+export function guardDenyDecision(exec: any, roots: Roots): string | undefined {
+  return hardDenyReason(exec, roots) ?? symlinkEscapeReason(exec, roots, resolveDeepest)
 }
 
 /**
@@ -1740,6 +1786,20 @@ const approvalState = {
 
 function clearApprovalState(): void {
   for (const map of Object.values(approvalState)) map.clear()
+}
+
+/**
+ * Test-only view of the callId-keyed approval maps.
+ *
+ * The /feedback route's real contract is that it WRITES for a callId the plugin
+ * issued and stays a no-op otherwise, and the two cases answer with the same
+ * `200 {ok:true}`. Pinning only the response therefore cannot tell them apart:
+ * dropping the write entirely used to leave the suite green. This accessor lets
+ * a test seed a live callId, exercise the route, and assert the write actually
+ * landed — and that the no-op path still writes nothing.
+ */
+export function approvalStateForTests(): typeof approvalState {
+  return approvalState
 }
 
 function sweepFollowPhase(now = Date.now()): void {
@@ -2078,7 +2138,7 @@ export function installHistoryRoute(ctx: any): void {
         const clearedCount = approvalHistory.length
         approvalHistory.length = 0
         try {
-          writeFileSync(HISTORY_FILE, '')
+          writeFileSync(historyPath(), '')
         } catch {
           // Best-effort clear.
         }
@@ -3027,8 +3087,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
   anyCtx.tools?.guard?.((exec: any) => {
     if (!isAutoExecution(exec)) return undefined
     const roots = rootsFor(exec)
-    const hard = hardDenyReason(exec, roots)
-    const reason = hard !== undefined ? hard : symlinkEscapeReason(exec, roots, resolveDeepest)
+    const reason = guardDenyDecision(exec, roots)
     if (reason === undefined) return undefined
     try {
       if (!pushHistory({
