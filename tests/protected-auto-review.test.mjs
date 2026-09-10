@@ -74,21 +74,29 @@ test('on: the clamp is lifted onto the ordinary pipeline, not into a silent allo
   assert.equal(categoryDirective(cfg({ ...on, categoryPolicy: { protected: 'deny' } }), 'protected', { decision: 'ask', classifierEligible: true }), 'deny')
 })
 
-test('the measured case: an allow-assessed protected call is never silently allowed', () => {
-  // `str_replace_editor view` of a workspace .env is a policy ALLOW with the
-  // protected label. Locked it was an unanswerable countdown; unlocked it must
-  // be an answerable ask — the fix may not turn it into an unreviewed allow.
+test('the measured case: view of protected metadata is gated exactly like read', () => {
+  // `str_replace_editor view` used to be a policy ALLOW for a workspace .env
+  // while `read` of the same path was an ask, which made the choice of reader
+  // the security boundary. Both planes now agree: `view` is a read, so it
+  // carries the same protected-metadata and sensitive-name gates as the read
+  // family. The directive contract for an allow-assessed protected call (the
+  // shape this test used to exercise) is pinned synthetically in the cases
+  // above, since no reader reaches it any more.
   const exec = { name: 'str_replace_editor', arguments: { command: 'view', path: 'C:/ws/.env' } }
   const assessment = assessTool(exec, { ...roots, workspace: 'C:/ws' }, artifacts)
   const category = categorizeTool(exec, { ...roots, workspace: 'C:/ws' })
-  assert.equal(assessment.decision, 'allow', 'precondition: the policy plane allows this call')
-  assert.equal(category, 'protected', 'precondition: the category layer labels it protected')
+  assert.equal(assessment.decision, 'ask', 'view of protected metadata is an ask, like read')
+  assert.equal(assessment.classifierEligible, true, 'the ask is answerable by the reviewer')
+  assert.equal(category, 'protected', 'the category layer labels it protected')
   assert.equal(categoryDirective(aggressive, category, assessment), 'ask', 'locked: an ask the countdown pins to reject')
   assert.equal(
     categoryDirective({ ...aggressive, protectedAutoReview: true }, category, assessment),
     'ask',
     'unlocked: still an ask, now answerable by the reviewer',
   )
+  // The parity that matters: the two readers agree on the same path.
+  const viaRead = assessTool({ name: 'read', arguments: { file_path: 'C:/ws/.env' } }, { ...roots, workspace: 'C:/ws' }, artifacts)
+  assert.equal(viaRead.decision, assessment.decision, 'read and view agree on protected metadata')
 })
 
 test('on: an auto directive still refuses to auto-allow a call the reviewer cannot answer', () => {

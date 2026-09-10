@@ -121,8 +121,18 @@ const SYMLINK_GUARD_MUTATION = new Set(['write', 'edit', 'apply_patch']);
 /**
  * Resolve the concrete path operands the host-side symlink-escape guard must
  * check for a tool call. Returns the target list for mutation tools, the
+ * `str_replace_editor` path (every command, `view` included — see below), the
  * `read`/`read_image` file path, the `grep`/`glob` path, and the `lsp` cwd;
  * `undefined` when the tool carries no checked path operand.
+ *
+ * `view` used to be excluded here on the reading that only mutations could
+ * escape through a link. That left the one reader with no realpath re-check at
+ * all: a workspace junction pointing at a credential file was read through
+ * `view` with a static allow, while the same path through `read` was gated.
+ * The guard's own position rule still decides whether a target is its business
+ * (textually inside the workspace/trusted zone, or any target under the
+ * aggressive mode), so a textually external target keeps its ordinary
+ * hard-deny / ask escalation rather than becoming an unconditional deny.
  *
  * Kept pure so contract tests pin the exact per-tool spelling (grep/glob read
  * `path`, lsp reads `cwd`) and the host guard cannot silently drop a family
@@ -131,7 +141,7 @@ const SYMLINK_GUARD_MUTATION = new Set(['write', 'edit', 'apply_patch']);
 export function symlinkGuardTargets(name: string, args?: unknown): string[] | undefined {
     if (SYMLINK_GUARD_MUTATION.has(name))
         return patchTargetPaths(args, name) ?? [];
-    if (name === 'str_replace_editor' && (args as JsonObject)?.command !== 'view')
+    if (name === 'str_replace_editor')
         return typeof (args as JsonObject)?.path === 'string' ? [(args as JsonObject).path as string] : [];
     if (name === 'read' || name === 'read_image')
         return typeof (args as JsonObject)?.file_path === 'string' ? [(args as JsonObject).file_path as string] : [];
@@ -461,6 +471,18 @@ export function assessTool(exec: ExecLike, roots: Roots, artifacts: unknown): To
         if (command === 'view') {
             if (!isEffectiveRoutine(normalized, roots))
                 return { decision: 'ask', reason: `reading outside the workspace requires semantic review: ${normalized}`, classifierEligible: true };
+            // Mirror of the read family above: `view` is a read, so protected
+            // workspace metadata (.env, .npmrc, .git/*, ...) must not be
+            // silently readable through it. Without this the same path was an
+            // ask through `read` and a static allow through `view`, which made
+            // the reader choice the security boundary.
+            if (isProtectedProjectPath(normalized, roots))
+                return {
+                    decision: 'ask',
+                    reason: `reading protected project metadata requires semantic review: ${normalized}`,
+                    classifierEligible: true,
+                    ...(credentialReadTarget(normalized, roots) ? { credentialRead: true } : {}),
+                };
             if (!isWithin(roots.workspace, normalized) && sensitiveBasenameAt(normalized, roots))
                 return {
                     decision: 'ask',
