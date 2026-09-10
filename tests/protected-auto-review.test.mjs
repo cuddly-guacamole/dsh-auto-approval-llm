@@ -31,6 +31,7 @@ const roots = { workspace: 'C:/ws', home: 'C:/Users/u', dshHome: 'C:/Users/u/.ds
 const artifacts = { has: () => false }
 
 const cfg = (overrides = {}) => ({ categoryPolicy: {}, categoryMode: 'aggressive', ...overrides })
+const aggressive = cfg()
 
 // The exact assessment the policy plane produces for a protected read: an ask
 // the reviewer is nominally eligible for.
@@ -60,16 +61,34 @@ test('default off: protected stays clamped to ask so no LLM takeover can answer 
   )
 })
 
-test('on: the clamp is lifted and the category follows its policy like an ordinary one', () => {
+test('on: the clamp is lifted onto the ordinary pipeline, not into a silent allow', () => {
   const on = { protectedAutoReview: true }
-  // Unconfigured: no category tightening, so the ordinary pipeline (classifier
-  // fast path included) decides — this is what lets a protected read be
-  // answered instead of waiting out an unanswerable countdown.
-  assert.equal(categoryDirective(cfg(on), 'protected', { decision: 'ask', classifierEligible: true }), 'inherit')
+  // Unconfigured: the call must become an ordinary ask so the reviewer can
+  // answer it. 'inherit' would let a static allow stand with no classifier, no
+  // reviewer and no countdown — the reason this is 'ask' and not 'inherit'.
+  assert.equal(categoryDirective(cfg(on), 'protected', { decision: 'ask', classifierEligible: true }), 'ask')
+  assert.equal(categoryDirective(cfg(on), 'protected', { decision: 'allow', classifierEligible: false }), 'ask')
   // Explicit tri-state now flows through.
   assert.equal(categoryDirective(cfg({ ...on, categoryPolicy: { protected: 'auto' } }), 'protected', { decision: 'ask', classifierEligible: true }), 'auto')
   assert.equal(categoryDirective(cfg({ ...on, categoryPolicy: { protected: 'ask' } }), 'protected', { decision: 'ask', classifierEligible: true }), 'ask')
   assert.equal(categoryDirective(cfg({ ...on, categoryPolicy: { protected: 'deny' } }), 'protected', { decision: 'ask', classifierEligible: true }), 'deny')
+})
+
+test('the measured case: an allow-assessed protected call is never silently allowed', () => {
+  // `str_replace_editor view` of a workspace .env is a policy ALLOW with the
+  // protected label. Locked it was an unanswerable countdown; unlocked it must
+  // be an answerable ask — the fix may not turn it into an unreviewed allow.
+  const exec = { name: 'str_replace_editor', arguments: { command: 'view', path: 'C:/ws/.env' } }
+  const assessment = assessTool(exec, { ...roots, workspace: 'C:/ws' }, artifacts)
+  const category = categorizeTool(exec, { ...roots, workspace: 'C:/ws' })
+  assert.equal(assessment.decision, 'allow', 'precondition: the policy plane allows this call')
+  assert.equal(category, 'protected', 'precondition: the category layer labels it protected')
+  assert.equal(categoryDirective(aggressive, category, assessment), 'ask', 'locked: an ask the countdown pins to reject')
+  assert.equal(
+    categoryDirective({ ...aggressive, protectedAutoReview: true }, category, assessment),
+    'ask',
+    'unlocked: still an ask, now answerable by the reviewer',
+  )
 })
 
 test('on: an auto directive still refuses to auto-allow a call the reviewer cannot answer', () => {
@@ -100,20 +119,28 @@ test('the switch is scoped to protected: the other locked categories are untouch
   assert.equal(categoryDirective(cfg({ privilegeAutoReview: true }), 'protected', { decision: 'ask', classifierEligible: true }), 'ask')
 })
 
-test('blast radius: credential reads are protected asks, and the switch really does open them', () => {
+test('blast radius: credential reads are protected asks, and the switch makes them answerable', () => {
   // Measured, not assumed. The hard-deny fuses cover *mutations* of credential
   // trees (isCriticalPath), not reads of them: a read of ~/.ssh/id_rsa is an
-  // ordinary protected ask. So this switch genuinely widens what the LLM may
-  // answer — a private key read included. The test states that plainly instead
-  // of claiming a narrower radius than the code has.
+  // ordinary protected ask. So this switch genuinely widens what the reviewer
+  // may answer — a private key read included. The test states that plainly
+  // instead of claiming a narrower radius than the code has.
   for (const target of ['C:/Users/u/.ssh/id_rsa', 'C:/Users/u/.aws/credentials', 'C:/Users/u/.gnupg/secring.gpg']) {
-    const read = assessTool({ name: 'read', arguments: { path: target } }, roots, artifacts)
-    assert.equal(read.decision, 'ask', `${target} read is an ask`)
-    assert.equal(read.classifierEligible, true, `${target} read is reviewer-eligible`)
-    assert.equal(categorizeTool({ name: 'read', arguments: { path: target } }, roots), 'protected')
-    // The clamp is what keeps that ask unanswerable today; the unlock lifts it.
-    assert.equal(categoryDirective(cfg(), 'protected', { decision: 'ask', classifierEligible: true }), 'ask')
-    assert.equal(categoryDirective(cfg({ protectedAutoReview: true }), 'protected', { decision: 'ask', classifierEligible: true }), 'inherit')
+    const exec = { name: 'read', arguments: { path: target } }
+    const assessment = assessTool(exec, roots, artifacts)
+    const category = categorizeTool(exec, roots)
+    assert.equal(assessment.decision, 'ask', `${target} read is an ask`)
+    assert.equal(assessment.classifierEligible, true, `${target} read is reviewer-eligible`)
+    assert.equal(category, 'protected')
+    // The clamp is what keeps that ask unanswerable today; the unlock turns it
+    // into an ordinary ask the reviewer can actually answer. It must not become
+    // an allow, and it must not stop being an ask.
+    assert.equal(categoryDirective(cfg(), category, assessment), 'ask', `${target}: locked ask`)
+    assert.equal(
+      categoryDirective(cfg({ protectedAutoReview: true }), category, assessment),
+      'ask',
+      `${target}: unlocked, still an ask — now answerable`,
+    )
   }
 })
 
@@ -150,27 +177,48 @@ test('the settings card exposes the switch in both locales', () => {
   }
 })
 
+test('the settings card can actually SAVE the switch', () => {
+  // Rendering the row is not enough: the save key list, the discard reset and
+  // the locked-row filter each have to know about the new key, or the toggle
+  // lights up the Save button and is then silently dropped by the POST body.
+  // Grepping the compiled bundle for the label alone misses all three.
+  const source = readFileSync(fileURLToPath(new URL('../src/client/index.ts', import.meta.url)), 'utf8')
+  const saveCall = /saveCard\(\[([^\]]*)\], 'category'\)/.exec(source)
+  assert.ok(saveCall !== null, 'the category card save call is present')
+  assert.ok(
+    saveCall[1].includes("'protectedAutoReview'"),
+    `the save key list must carry protectedAutoReview, got: [${saveCall[1]}]`,
+  )
+  assert.ok(
+    /CATEGORY_LOCKED_LIST\.includes\(key\)[\s\S]{0,220}protectedAutoReview === 'on'/.test(source),
+    'the locked-row filter must honour the protected unlock so the dropdown offers auto/deny',
+  )
+  const discard = /setDraft\(\{ \.\.\.draft, categoryPolicy[\s\S]{0,320}?\}\)/.exec(source)
+  assert.ok(discard !== null, 'the category discard reset is present')
+  assert.ok(discard[0].includes('protectedAutoReview'), 'discard must reset the protected switch too')
+})
+
 test('the answerer half is anchored: the locked predicate honours the same switch', () => {
   // The false positive needs BOTH halves: pre-execute must stop intercepting
   // (covered above) AND the answerer must stop pinning the countdown to reject.
-  // The predicate that does the second half is a closure inside the plugin
-  // function, so anchor the compiled bundle instead of leaving it untested —
-  // an unlock that only reached one half would look fixed and still be
-  // unanswerable.
+  // The predicate is a closure inside the plugin function, so anchor the
+  // compiled bundle. The polarity is asserted too: a commented-out or
+  // `return true`-flipped branch must not satisfy this.
   const host = readFileSync(fileURLToPath(new URL('../lib/index.js', import.meta.url)), 'utf8')
-  const predicate = host.slice(host.indexOf('const isLockedCategory = ('))
-  const body = predicate.slice(0, predicate.indexOf('\n    }'))
-  assert.ok(body.length > 0, 'the locked-category predicate is present in the compiled host')
+  const start = host.indexOf('const isLockedCategory = (')
+  assert.notEqual(start, -1, 'the locked-category predicate is present in the compiled host')
+  const end = host.indexOf('classifyStaticRisk', start)
+  const body = host.slice(start, end === -1 ? start + 1200 : end)
+  assert.ok(body.length > 0, 'the predicate body was located')
+  for (const name of ['privilege', 'protected']) {
+    const wiring = new RegExp(`if \\(category === ['"]${name}['"] && config\\.${name}AutoReview === true\\)\\s*\\n\\s*return false;`)
+    assert.ok(
+      wiring.test(body),
+      `the ${name} opt-out must be live (not commented out, not inverted) in the locked predicate:\n${body.slice(0, 400)}`,
+    )
+  }
   assert.ok(
-    /category === ['"]protected['"] && config\.protectedAutoReview === true/.test(body),
-    `the protected opt-out must be wired into the locked predicate, got:\n${body}`,
-  )
-  assert.ok(
-    /category === ['"]privilege['"] && config\.privilegeAutoReview === true/.test(body),
-    'the privilege opt-out must remain wired too',
-  )
-  assert.ok(
-    /LOCKED_CATEGORIES\.includes\(category\)/.test(body),
+    /return LOCKED_CATEGORIES\.includes\(category\)/.test(body),
     'delete/disk must still fall through to the locked list',
   )
 })

@@ -2078,7 +2078,9 @@ function SettingsSection() {
       : null,
     React.createElement('p', { className: 'dsa-hint', style: { margin: 0 } }, t('settings.category.policyHint')),
     ...CATEGORY_KEY_LIST.map((key) => {
-      const locked = CATEGORY_LOCKED_LIST.includes(key) && !(key === 'privilege' && draft.privilegeAutoReview === 'on')
+      const locked = CATEGORY_LOCKED_LIST.includes(key)
+        && !(key === 'privilege' && draft.privilegeAutoReview === 'on')
+        && !(key === 'protected' && draft.protectedAutoReview === 'on')
       const options: CapsuleOption[] = [
         { value: '', label: t('settings.category.inherit') },
         { value: 'auto', label: t('option.category.value.auto') },
@@ -2108,7 +2110,7 @@ function SettingsSection() {
       size: 'sm',
       disabled: saving || !snapshot.writable,
       onClick: () => {
-        setDraft({ ...draft, categoryPolicy: baseDraft.categoryPolicy ?? {}, categoryMode: baseDraft.categoryMode ?? 'standard', privilegeAutoReview: baseDraft.privilegeAutoReview ?? 'off' })
+        setDraft({ ...draft, categoryPolicy: baseDraft.categoryPolicy ?? {}, categoryMode: baseDraft.categoryMode ?? 'standard', privilegeAutoReview: baseDraft.privilegeAutoReview ?? 'off', protectedAutoReview: baseDraft.protectedAutoReview ?? 'off' })
         setCardStatus({ id: 'category', kind: 'ok', text: '' })
       },
     }, t('settings.discard')),
@@ -2116,7 +2118,7 @@ function SettingsSection() {
       variant: 'primary',
       size: 'sm',
       disabled: saving || !snapshot.writable || !categoryDirty,
-      onClick: () => saveCard(['categoryPolicy', 'categoryMode', 'privilegeAutoReview'], 'category'),
+      onClick: () => saveCard(['categoryPolicy', 'categoryMode', 'privilegeAutoReview', 'protectedAutoReview'], 'category'),
     }, saving ? t('settings.saving') : t('settings.save')),
   )
 

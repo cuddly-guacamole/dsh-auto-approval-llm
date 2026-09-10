@@ -3294,8 +3294,12 @@ export function apply(ctx: Context, rawConfig: Config): void {
     if (listDecision.kind === 'allow') {
       // Hard-locked categories (delete / disk) cannot be pre-authorized by a
       // name: the mirror skips them and hands an explicit ask to the
-      // answerer, which pins the call to the hard-reject countdown.
-      if (HARD_LOCKED_CATEGORIES.includes(category as never)) {
+      // answerer, which pins the call to the hard-reject countdown. The one
+      // exception is a deletion the shell classifier proved targets only
+      // session-created paths — that provenance is not a name-based channel, so
+      // it lifts the hard lock here exactly as it does in the locked predicate.
+      if (HARD_LOCKED_CATEGORIES.includes(category as never)
+        && !(category === 'delete' && assessment?.sessionArtifactDeletion === true)) {
         return { kind: 'ask', reason: `[dsh-auto-approval-llm] hard-locked category ${exec.name}` }
       }
       const audited = pushHistory({
@@ -4283,7 +4287,9 @@ export function apply(ctx: Context, rawConfig: Config): void {
       maybeInjectRejectGuidance(req.agent, req.callId, config, buildRejectGuidanceText('category', classified.category))
       return 'rejected'
     }
-    if (staticDecision.kind === 'allow' && HARD_LOCKED_CATEGORIES.includes(classified.category as never)) {
+    if (staticDecision.kind === 'allow'
+      && HARD_LOCKED_CATEGORIES.includes(classified.category as never)
+      && !(classified.category === 'delete' && classified.assessment?.sessionArtifactDeletion === true)) {
       // Hard-locked categories (delete / disk) cannot be pre-authorized by a
       // name — the allowlist does not beat them in either plane. The call
       // falls to the same hard-reject countdown as the locked ask branch

@@ -706,6 +706,14 @@ export function categoryDirective(
     if (explicit !== undefined) return 'ask'
     return mode === 'aggressive' ? 'ask' : 'inherit'
   }
+  // An unlocked protected category stays a sensitive one: unconfigured means
+  // "let it be reviewed", not "let a static allow stand unreviewed". Returning
+  // 'ask' routes the call into the ordinary pipeline, where the reviewer can
+  // actually answer it — which is the whole point of the opt-out. Falling
+  // through to 'inherit' here would silently auto-allow every allow-assessed
+  // protected call (e.g. `str_replace_editor view` of a `.env`) with no
+  // classifier, no reviewer and no countdown.
+  if (protectedUnlocked && explicit === undefined) return 'ask'
   const value = explicit ?? (AGGRESSIVE_BUILTIN.includes(category as CategoryKey) && mode === 'aggressive' ? 'auto' : 'inherit')
   if (value === 'ask' || value === 'deny') return value
   if (value === 'auto') {

@@ -146,3 +146,41 @@ test('a compound line with any unproven deletion stays locked', () => {
   assert.notEqual(verdict.decision, 'allow', `got ${verdict.decision}: ${verdict.reason}`)
   assert.notEqual(verdict.sessionArtifactDeletion, true)
 })
+
+test('the every-operand boundary: one unobserved operand on the same command blocks the flag', () => {
+  // This is the boundary that makes the exemption safe, and it is a single
+  // segment: `rm a b` with only `a` observed. Flipping the extractor's `every`
+  // to `some` would exempt the whole call and delete an unobserved file while
+  // every other assertion here stayed green.
+  const registry = sessionArtifact('C:/ws/scratch.txt')
+  const mixed = assessShell('rm scratch.txt b.txt', 'bash', roots, registry, owner)
+  assert.notEqual(mixed.decision, 'allow', `mixed operands must not allow, got ${mixed.decision}: ${mixed.reason}`)
+  assert.notEqual(mixed.sessionArtifactDeletion, true, 'an unobserved operand must block the provenance flag')
+
+  // Control: the same shape with every operand observed does carry it, so the
+  // assertion above is not passing merely because the command is unrecognised.
+  const both = sessionArtifact('C:/ws/scratch.txt')
+  both.add(owner, normalizePath('C:/ws/other.txt', roots.workspace, roots.home), roots)
+  const all = assessShell('rm scratch.txt other.txt', 'bash', roots, both, owner)
+  assert.equal(all.decision, 'allow', `all-observed operands must allow, got ${all.decision}: ${all.reason}`)
+  assert.equal(all.sessionArtifactDeletion, true)
+})
+
+test('the exemption lifts the hard-locked allowlist gates too', () => {
+  // An allowlist entry naming the tool is a name-based channel; the provenance
+  // flag is not, so the hard lock must not discard the exemption when the tool
+  // name is allowlisted. Both gates are anchored in the compiled host because
+  // they are wiring, not pure functions: each `HARD_LOCKED_CATEGORIES` test must
+  // be accompanied by the delete+flag exemption right next to it.
+  const host = readFileSync(fileURLToPath(new URL('../lib/index.js', import.meta.url)), 'utf8')
+  const gateRegex = /HARD_LOCKED_CATEGORIES\.includes\([^)]*\)/g
+  const gates = [...host.matchAll(gateRegex)]
+  assert.equal(gates.length, 2, 'both hard-locked gates are present (pre-execute mirror and answerer)')
+  for (const gate of gates) {
+    const window = host.slice(gate.index, gate.index + 200)
+    assert.ok(
+      /category === ['"]delete['"]\s*&&\s*[\w.?]*assessment\?\.sessionArtifactDeletion === true/.test(window),
+      `every hard-locked gate must honour the proven-artifact-deletion flag, got:\n${window}`,
+    )
+  }
+})

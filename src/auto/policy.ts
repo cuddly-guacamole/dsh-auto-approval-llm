@@ -44,6 +44,14 @@ export interface ToolAssessment {
     classifierEligible?: boolean
     /** Files the shell classifier predicts the command will create (artifacts). */
     plannedCreates?: string[]
+    /**
+     * Provenance for a deletion the shell classifier proved targets only paths
+     * this session created. Declared here rather than only produced inside the
+     * `@ts-nocheck` shell module so the compiler tracks the signal its consumers
+     * depend on: re-assembling an assessment without carrying it would quietly
+     * re-lock the exemption, which is exactly the defect it was written to fix.
+     */
+    sessionArtifactDeletion?: boolean
 }
 
 type JsonObject = Record<string, unknown>
