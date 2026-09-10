@@ -193,6 +193,36 @@ test('the whole chain works in the DSH_HOME zone shape (the live failure)', () =
   assert.equal(threaded.directive, 'inherit', 'and the clamp must be lifted for it')
 })
 
+test('known interaction: a directory changer in the line costs the exemption', () => {
+  // Measured behaviour, pinned so it is a documented limitation rather than a
+  // surprise. Directory changers are deliberately kept out of the static fast
+  // paths (the analyzer cannot follow the resulting cwd), so a line containing
+  // one never reaches the all-allow merge and the segment-level exemption is
+  // discarded with it:
+  //
+  //   rm own.txt                  -> allow (exempted)
+  //   rm own.txt && echo done     -> allow (exempted)
+  //   cd <dir> && rm own.txt      -> ask   (not exempted)
+  //
+  // Fail-closed, and arguably right: under a changer a relative target's meaning
+  // is uncertain, so withholding a provenance-based allow is conservative. It is
+  // still worth pinning, because `cd dir && rm file` is a common idiom and the
+  // ask lands on the locked delete countdown, which no reviewer can answer.
+  const registry = sessionArtifact('C:/ws/scratch.txt')
+  assert.equal(assessShell('rm scratch.txt', 'bash', roots, registry, owner).decision, 'allow')
+
+  const withEcho = assessShell('rm scratch.txt && echo done', 'bash', roots, registry, owner)
+  assert.equal(withEcho.decision, 'allow')
+  assert.equal(withEcho.sessionArtifactDeletion, true, 'a trailing read-only segment keeps the flag')
+
+  for (const command of ['cd C:/ws && rm scratch.txt', 'cd C:/ws && rm scratch.txt && echo done']) {
+    const verdict = assessShell(command, 'bash', roots, registry, owner)
+    assert.equal(verdict.decision, 'ask', `${command}: the changer routes the line to classification`)
+    assert.notEqual(verdict.sessionArtifactDeletion, true, `${command}: no exemption may be claimed`)
+    assert.match(String(verdict.reason), /independent classification/, 'the reason names the changer as the cause')
+  }
+})
+
 test('the exemption is structured, not parsed out of the reason text', () => {
   // An authorization signal must never be re-derived from free text. Guard the
   // shape: the flag is a field, set where the registry was consulted, and no

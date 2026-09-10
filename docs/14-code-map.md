@@ -48,7 +48,7 @@ tests/
 ├─ approvals-protocol.test.mjs / contract-devloop.test.mjs / trusted-dsh-subpaths.test.mjs / posix-platform.test.mjs
 ├─ friction-report.test.mjs / audit-query-format.test.mjs / permission-change.test.mjs
 ├─ agent-team-tools-allow.test.mjs / default-allow-catalog.test.mjs / default-allow-ui.test.mjs
-└─ 合计 987 例（node --test 全绿基线）
+└─ 合计 988 例（node --test 全绿基线）
 scripts/
 ├─ build.sh             （DSH 源码仓库布局）tsc 编译 src→lib
 ├─ audit-query.mjs      审计查询 CLI（decision 行 + 按 type 渲染的观测事件行）

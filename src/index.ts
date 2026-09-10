@@ -1362,6 +1362,13 @@ export interface HistoryRecord {
   category?: string
   categoryDecision?: string
   mode?: string
+  /**
+   * Set when a static allow came from the session-artifact delete exemption.
+   * Without it that exemption is invisible: on a multi-segment line the merge
+   * replaces the segment reason with the generic "every command …" text, so the
+   * allow cannot be told apart from a routine one.
+   */
+  sessionArtifactDeletion?: boolean
 }
 
 const approvalHistory: HistoryRecord[] = []
@@ -3337,6 +3344,10 @@ export function apply(ctx: Context, rawConfig: Config): void {
         outcome: 'allowed-once',
         source: 'static-allow',
         ...(typeof assessment.reason === 'string' && assessment.reason !== '' ? { reason: assessment.reason } : {}),
+        // Mark the provenance-based allow explicitly: on a compound line the
+        // reason above is the generic merged text, so the exemption would be
+        // indistinguishable from a routine allow in the trail.
+        ...(assessment.sessionArtifactDeletion === true ? { sessionArtifactDeletion: true } : {}),
         // A static-allowed web_fetch is the one external call whose target
         // never appears anywhere else: no approval panel, no reviewer payload.
         // Record the destination (sanitized + capped) so "what did it fetch"

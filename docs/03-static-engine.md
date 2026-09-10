@@ -88,7 +88,7 @@ flowchart TD
 | Windows 设备/NT 命名空间 | `\\.\` `\device\` `\\?\` `\??\`（非 UNC/X: 变体） | `canonicalizeWindowsNamespace` 折叠后再判包含 |
 | 保留设备名 | `con` `prn` `aux` `nul` `com1-9` `lpt1-9` | 硬拒 |
 
-**symlink 逃逸**：文本层判定无法识破**快捷方式/软链接指向工作区外**（如 `ws/ln → ~/.bashrc`）。宿主侧守卫 `symlinkEscapeReason`（<span class="lnum">symlink.ts:L57-120</span>，宿主调用 <span class="lnum">index.ts:L2987</span>）取 `symlinkGuardTargets` 提取每个工具的真实路径操作数，对「文本上在工作区内/受信区」的目标做 realpath 最深祖先解析，一旦真实路径离开工作区/受信区就硬拒。守卫解析的是**归一化后的文本路径**（`resolveDeepest(textual)`，<span class="lnum">symlink.ts:L30</span>）：若拿原始参数 realpath，相对路径会被锚定到 `process.cwd()` 而非会话工作区，`dsh web` 下会把所有相对路径调用误硬拒（PR #4 修复）。受信区不止插件目录：`trustedDirs` 成员与 allowedDshSubpaths 一并构成复检区；aggressive 模式下「普通出区」是设计目标故放行，但落在 critical 树 / DSH_HOME / 插件运行态文件上的逃逸仍硬拒——运行态文件复检与位置模式无关，改审批/审计/学习状态在任何模式下都不算例行写。
+**symlink 逃逸**：文本层判定无法识破**快捷方式/软链接指向工作区外**（如 `ws/ln → ~/.bashrc`）。宿主侧守卫 `symlinkEscapeReason`（<span class="lnum">symlink.ts:L57-120</span>，宿主在 guard 处调用）取 `symlinkGuardTargets` 提取每个工具的真实路径操作数，对「文本上在工作区内/受信区」的目标做 realpath 最深祖先解析，一旦真实路径离开工作区/受信区就硬拒。守卫解析的是**归一化后的文本路径**（`resolveDeepest(textual)`，<span class="lnum">symlink.ts:L30</span>）：若拿原始参数 realpath，相对路径会被锚定到 `process.cwd()` 而非会话工作区，`dsh web` 下会把所有相对路径调用误硬拒（PR #4 修复）。受信区不止插件目录：`trustedDirs` 成员与 allowedDshSubpaths 一并构成复检区；aggressive 模式下「普通出区」是设计目标故放行，但落在 critical 树 / DSH_HOME / 插件运行态文件上的逃逸仍硬拒——运行态文件复检与位置模式无关，改审批/审计/学习状态在任何模式下都不算例行写。
 
 ## 3.5　声明式规则 rulesText <span class="lnum">rules.ts</span> —— 用户写的「最优先纸条」
 
@@ -107,7 +107,7 @@ bash(rm\s+-\s*rf) | deny
 - **首条命中即胜**；`evaluateRules` 先用 `extractRuleTarget` 抽取命令文本（command/script/code/prompt/text/content），防锚定正则（如 `^git push`）被 JSON 信封击穿。
 - ReDoS 防护：长度 ≤2000；拒绝嵌套无界量词 `(a+)+`、交替外套量词、嵌套重复组、`{n,}` 计数重复。
 - **host 与浏览器设置卡共用同一份 `parseRulesText`**（错误逐行红字显示）。
-- 干跑 `rulesDryRun`：只记命中不执法（host 端 <span class="lnum">index.ts:L3189/L4077</span>）。
+- 干跑 `rulesDryRun`：只记命中不执法（host 端 `if (config.rulesDryRun)` 两处：pre-execute 与 answerer）。
 
 ## 3.6　产物登记 ArtifactRegistry <span class="lnum">artifacts.ts</span>
 

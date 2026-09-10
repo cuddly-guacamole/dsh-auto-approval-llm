@@ -3065,7 +3065,15 @@ test('web_fetch static allow: the audit trail records the sanitized destination'
   assert.ok(scope.includes('.slice(0, 300)'), 'the target is length-capped')
   const useAt = lib.indexOf('llmReason: fetchTarget')
   assert.ok(useAt > helperAt, 'the static-allow history carries the target')
-  assert.ok(lib.slice(useAt - 600, useAt).includes("source: 'static-allow'"), 'wired into the static-allow audit entry')
+  // Locate the enclosing pushHistory call instead of a fixed-size character
+  // window: the window broke the moment an unrelated field was added ahead of
+  // this one, which is a property of the anchor rather than of the wiring.
+  const entryStart = lib.lastIndexOf('pushHistory({', useAt)
+  assert.ok(entryStart > 0, 'the target is recorded inside a pushHistory entry')
+  assert.ok(
+    lib.slice(entryStart, useAt).includes("source: 'static-allow'"),
+    'wired into the static-allow audit entry',
+  )
 })
 test('denial log: the recent-denial cap is independent of the breaker thresholds', () => {
   // D2-F3: the log shift used maxConsecutiveDenials as its cap, so setting
