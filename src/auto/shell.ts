@@ -1398,13 +1398,17 @@ export function hardDenyShellReason(source, shell, roots) {
     // base resets and the relative target is judged against the workspace, which
     // is what keeps `cd /nodir; printf x > package.json` a hard deny. The
     // changer's own segment is always judged against the base it runs in.
-    let segmentRoots = roots;
+    //
+    // The base must be RECOMPUTED per segment, not carried in a variable that
+    // only advances: a previous version kept the last established base after the
+    // reset, so `cd C:/tmp && printf a > f1; cd <workspace>; printf x >
+    // package.json` judged the final write against C:/tmp and missed the
+    // workspace contract file entirely (a fail-open on the strongest fuse).
     let changerBase;
     for (const segment of decomposition.segments) {
         if (segment.precededBy !== '' && segment.precededBy !== '&&')
             changerBase = undefined;
-        if (changerBase !== undefined)
-            segmentRoots = { ...roots, workspace: changerBase };
+        const segmentRoots = changerBase !== undefined ? { ...roots, workspace: changerBase } : roots;
         // Per-segment privilege fuse: the whole-line regex above only sees the
         // raw source; a decomposed segment lets us judge the effective command
         // after wrappers, so `echo hi; sudo ls` cannot dodge the hard deny.
