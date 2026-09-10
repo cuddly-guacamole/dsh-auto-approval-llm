@@ -31,9 +31,16 @@
  * is no `--write` mode, and the summary always separates the buckets: a green
  * run never claims more than it proved.
  *
- * Usage: node scripts/check-anchors.mjs [--check] [--quiet] [path…]
- *   --check  exit non-zero on any violation (default when no flag is given)
- *   --quiet  print violations and the summary only
+ * A span this script cannot fully parse is a FAILURE, not a footnote. A span
+ * with no parsable anchor, and a span carrying a second `Lnnn` claim outside
+ * the parsable form, both used to be printed as `UNVERIFIED` while the run
+ * still exited 0 — so an anchor naming nothing could sit in a page forever.
+ * Both now fail the check; split the span instead.
+ *
+ * Usage: node scripts/check-anchors.mjs [--check] [--quiet] [--per-doc] [path…]
+ *   --check    exit non-zero on any violation or unparsable span (always on)
+ *   --quiet    print violations and the summary only
+ *   --per-doc  also print one tally line per document
  */
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs'
 import { join, dirname, basename } from 'node:path'
@@ -45,6 +52,7 @@ const args = process.argv.slice(2)
 const flags = {
   check: args.includes('--check'),
   quiet: args.includes('--quiet'),
+  perDoc: args.includes('--per-doc'),
 }
 flags.check = true
 const explicitPaths = args.filter((a) => !a.startsWith('--'))
@@ -58,8 +66,11 @@ const SPAN = /<span class="lnum">([^<]*)<\/span>/g
 // `file.ts#`, and the older symbol spelling `file.ts:symbol`.
 const TOKEN = /([\w./-]+\.[a-z]+):L(\d+(?:-\d+)?|"[^"]+"|'[^']+'|[A-Za-z_$][\w$]*)|([\w./-]+\.[a-z]+)#|([\w./-]+\.[a-z]+):([A-Za-z_$][\w$]*)/g
 // Only keyword-led declarations count as a definition: a call site or a
-// mention inside a comment must not satisfy a declaration anchor.
-const DEFINITION = /^(?:export\s+)?(?:declare\s+)?(?:default\s+)?(?:async\s+)?(?:function|class|interface|type|const|let|var|enum)\s+([A-Za-z_$][\w$]*)/
+// mention inside a comment must not satisfy a declaration anchor. Leading
+// whitespace is allowed because the entities the docs name are often declared
+// inside a function (a nested `const`), and refusing those forced pages onto
+// weaker anchor forms.
+const DEFINITION = /^\s*(?:export\s+)?(?:declare\s+)?(?:default\s+)?(?:async\s+)?(?:function|class|interface|type|const|let|var|enum)\s+([A-Za-z_$][\w$]*)/
 
 const SKIP_DIRS = new Set(['node_modules', '.git', 'lib', 'dist', 'coverage', '.vitepress'])
 
@@ -142,6 +153,13 @@ const buckets = { declaration: 0, literal: 0, token: 0, range: 0, whole: 0 }
 const violations = []
 const unresolved = []
 
+/** doc -> running tally, so a page cannot silently drop its anchors. */
+const perDoc = new Map()
+function tally(doc) {
+  if (!perDoc.has(doc)) perDoc.set(doc, { anchors: 0, verified: 0, range: 0, whole: 0, failed: 0, unresolved: 0 })
+  return perDoc.get(doc)
+}
+
 function parseTokens(body) {
   const tokens = []
   TOKEN.lastIndex = 0
@@ -173,11 +191,14 @@ function scanDoc(rel) {
     const docLine = text.slice(0, span.index).split('\n').length
     const tokens = parseTokens(body)
     if (tokens.length === 0) {
-      unresolved.push(`${rel}:${docLine}  no parsable anchor in ${JSON.stringify(body)}`)
+      unresolved.push({ doc: rel, line: docLine, message: `no parsable anchor in ${JSON.stringify(body)}` })
       continue
     }
+    // A second `Lnnn` claim in the same span cannot be resolved on its own (it
+    // carries no file name), so it used to be skipped entirely. Failing instead
+    // keeps every claim in a page checkable: split the span.
     if (/L\d/.test(body.replace(TOKEN, ''))) {
-      unresolved.push(`${rel}:${docLine}  a second line claim in the same span is not checked: ${JSON.stringify(body)}`)
+      unresolved.push({ doc: rel, line: docLine, message: `a second line claim in the same span is not parsable; split it into its own span: ${JSON.stringify(body)}` })
     }
     for (const t of tokens) anchors.push({ ...t, doc: rel, docLine, offset: span.index, body })
   }
@@ -186,10 +207,17 @@ function scanDoc(rel) {
 
 const dupReported = new Set()
 for (const doc of DOCS) {
+  // Seed a row for every document, including the ones that carry no anchor at
+  // all: a page whose anchors all disappear is a silent regression, and it is
+  // only visible if it still reports a row with anchors=0.
+  tally(doc)
   for (const anchor of scanDoc(doc)) {
+    const row = tally(anchor.doc)
+    row.anchors++
     const rel = resolveModule(anchor.file)
     if (rel === null) {
       violations.push(`${anchor.doc}:${anchor.docLine}  unknown module ${anchor.file}  (${anchor.body})`)
+      row.failed++
       continue
     }
     const total = sourceLines(rel).length
@@ -198,6 +226,8 @@ for (const doc of DOCS) {
 
     if (anchor.kind === 'whole') {
       buckets.whole++
+      row.whole++
+      row.verified++
       continue
     }
 
@@ -206,8 +236,10 @@ for (const doc of DOCS) {
       const upper = end ?? start
       if (start < 1 || upper > total || start > upper) {
         violations.push(`${where}  out of bounds: ${rel} has ${total} lines  (${anchor.body})`)
+        row.failed++
       } else {
         buckets.range++
+        row.range++
       }
       continue
     }
@@ -233,6 +265,7 @@ for (const doc of DOCS) {
     }
     if (found === null) {
       violations.push(`${where}  not found in ${rel}: no declaration, literal, or unique token matches ${JSON.stringify(anchor.needle)}  (${anchor.body})`)
+      row.failed++
       continue
     }
     if (found.hits.length > 1) {
@@ -241,35 +274,48 @@ for (const doc of DOCS) {
         dupReported.add(key)
         violations.push(`${where}  ${found.kind} anchor is ambiguous: ${anchor.needle} matches ${found.hits.length} lines in ${rel} (${found.hits.join(', ')}); use an explicit range instead`)
       }
+      row.failed++
       continue
     }
     buckets[found.kind]++
+    row.verified++
   }
 }
 
-for (const line of unresolved) console.log(`UNVERIFIED ${line}`)
+for (const item of unresolved) {
+  tally(item.doc).unresolved++
+  console.log(`UNVERIFIED ${item.doc}:${item.line}  ${item.message}`)
+}
 for (const line of violations) console.error(`VIOLATION ${line}`)
+
+if (flags.perDoc) {
+  for (const [doc, row] of [...perDoc.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
+    console.log(`check-anchors: doc ${doc} anchors=${row.anchors} verified=${row.verified} range=${row.range} whole=${row.whole} failed=${row.failed} unresolved=${row.unresolved}`)
+  }
+}
 
 // Every anchor that was examined, so the count cannot fall when a check
 // fails: a violating anchor used to be left out of the total, which made a run
 // with violations look like it had inspected fewer anchors than the document
-// contains. `unresolved` spans are reported separately (partial verification,
-// not a violation).
+// contains. `verified` counts only the anchors that were actually PROVED —
+// ranges get their own bucket because an in-bounds range proves nothing about
+// which statement it points at, no matter that it used to be counted as
+// resolved.
 const failed = violations.length
-const totalChecked = buckets.declaration + buckets.literal + buckets.token + buckets.range + buckets.whole + failed
+const unresolvedCount = unresolved.length
+const verified = buckets.declaration + buckets.literal + buckets.token + buckets.whole
+const totalChecked = verified + buckets.range + failed
 if (!flags.quiet) {
   console.log(
-    `check-anchors: ${DOCS.length} doc(s), ${totalChecked} anchor(s) resolved — `
-    + `${buckets.declaration} declaration-verified, `
-    + `${buckets.literal} literal-verified (unique quoted text located), `
-    + `${buckets.token} token-verified (unique identifier located), `
+    `check-anchors: ${DOCS.length} doc(s), ${totalChecked} anchor(s) examined — `
+    + `${verified} verified (${buckets.declaration} declaration, ${buckets.literal} literal, ${buckets.token} token, ${buckets.whole} whole-file), `
     + `${buckets.range} range-checked only (in-bounds; a wrong-code range is not auto-detectable), `
-    + `${buckets.whole} whole-file (existence only), `
-    + `${failed} failed`,
+    + `${failed} failed, ${unresolvedCount} unparsable span(s)`,
   )
-  if (unresolved.length > 0) console.log(`check-anchors: ${unresolved.length} span(s) only partially verified (listed above)`)
-  console.log(violations.length > 0 ? `check-anchors: ${violations.length} violation(s)` : 'check-anchors: ok')
+  console.log(failed === 0 && unresolvedCount === 0
+    ? 'check-anchors: ok'
+    : `check-anchors: ${failed} violation(s) and ${unresolvedCount} unparsable span(s)`)
 }
 
-if (flags.check && violations.length > 0) process.exit(1)
+if (flags.check && (failed > 0 || unresolvedCount > 0)) process.exit(1)
 process.exit(0)

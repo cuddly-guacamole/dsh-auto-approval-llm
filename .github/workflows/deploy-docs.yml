@@ -24,6 +24,10 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # The site publishes hand-written source anchors. Gate them before the
+      # build: a stale anchor that aims at the wrong statement renders fine, so
+      # without this step it ships to the pages site unseen.
+      - run: node scripts/check-anchors.mjs
       - run: npm run docs:build
       - uses: actions/upload-pages-artifact@v3
         with:

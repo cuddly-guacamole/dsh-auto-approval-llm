@@ -1,17 +1,28 @@
 /**
  * The docs site's source anchors must still point at real code.
  *
- * Every `docs/*.md` page names source lines by hand, and nothing checked them:
- * `docs/03-static-engine.md` had drifted by up to 47 lines (a whole section's
- * anchors aimed at unrelated statements) with no signal at all. The anchor forms
- * that cannot drift quietly are now symbol/literal anchors, and
+ * Every `docs/*.md` page names source locations by hand, and nothing checked
+ * them: `docs/03-static-engine.md` had drifted by up to 47 lines (a whole
+ * section's anchors aimed at unrelated statements) with no signal at all. The
+ * anchor forms that cannot drift quietly are symbol/literal anchors, and
  * `scripts/check-anchors.mjs` resolves each one against the working tree.
  *
- * This test runs that checker over the page it was built for, so the gate lives
- * in `npm test` instead of depending on someone remembering to run it. The
- * checker's own honesty rules are pinned too: a violating anchor must be
- * reported as a violation rather than silently dropped from the count, and an
- * anchor that can only be range-checked must not be reported as verified.
+ * This test runs that checker over the WHOLE docs tree, so the gate lives in
+ * `npm test` instead of depending on someone remembering to run it. Gating a
+ * single page was not a weaker guarantee, it was a different one: ~68% of the
+ * anchors sat outside the gate, and that is exactly where every stale anchor
+ * was found.
+ *
+ * The checker's own honesty rules are pinned too:
+ *   - a violating anchor is reported as a violation and counted, never dropped;
+ *   - an anchor that can only be range-checked is never reported as verified,
+ *     and the batch that made this gate honest left ZERO of them — a bare range
+ *     proves only that the number is inside the file, so it is not allowed back;
+ *   - a span the checker cannot fully parse FAILS the run. It used to print
+ *     `UNVERIFIED` and still exit 0, which meant an anchor naming nothing could
+ *     sit in a page forever;
+ *   - a page cannot silently lose all of its anchors: the pages with none are
+ *     listed explicitly below.
  *
  * Run: node --test tests/docs-anchors.test.mjs
  */
@@ -25,10 +36,32 @@ import { fileURLToPath } from 'node:url'
 const root = fileURLToPath(new URL('..', import.meta.url))
 const checker = join(root, 'scripts', 'check-anchors.mjs')
 
+/**
+ * Pages that legitimately carry no source anchor: they describe concepts,
+ * self-tests, quality gates or the platform matrix, and point at no statement.
+ * Listing them is the point — a page that HAD anchors and lost them all is a
+ * silent regression, and this set is what makes that detectable.
+ */
+const PAGES_WITHOUT_ANCHORS = new Set([
+  'docs/09-defense-in-depth.md',
+  'docs/14-code-map.md',
+  'docs/15-quality.md',
+  'docs/16-axioms.md',
+  'docs/19-platform-support.md',
+  'docs/index.md',
+])
+
 /** Run the checker and return {status, stdout, stderr} without throwing. */
 function runChecker(args) {
   try {
-    const stdout = execFileSync(process.execPath, [checker, ...args], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+    const stdout = execFileSync(process.execPath, [checker, ...args], {
+      cwd: root,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      // Without a timeout a hung checker hangs this whole test file: node:test
+      // applies no default per-test timeout, so the suite would simply stop.
+      timeout: 60_000,
+    })
     return { status: 0, stdout, stderr: '' }
   } catch (error) {
     return {
@@ -39,38 +72,70 @@ function runChecker(args) {
   }
 }
 
-test('docs/03: every anchor resolves against the current source', () => {
-  const result = runChecker(['--check', 'docs/03-static-engine.md'])
-  assert.equal(result.status, 0, `the anchor check must pass:\n${result.stdout}\n${result.stderr}`)
-  assert.match(result.stdout, /check-anchors: ok/, 'a clean run reports ok')
-  // The page must actually carry anchors: a page with none would pass trivially.
-  assert.match(result.stdout, /(\d+) anchor\(s\) resolved/)
-  const resolved = Number(/(\d+) anchor\(s\) resolved/.exec(result.stdout)[1])
-  assert.ok(resolved >= 30, `expected the page's anchors to be checked, got ${resolved}`)
+/** The full-tree run, parsed into the numbers the assertions below use. */
+function fullRun() {
+  const result = runChecker(['--per-doc'])
+  const docs = Number(/(\d+) doc\(s\)/.exec(result.stdout)?.[1] ?? Number.NaN)
+  const examined = Number(/(\d+) anchor\(s\) examined/.exec(result.stdout)?.[1] ?? Number.NaN)
+  const verified = Number(/— (\d+) verified/.exec(result.stdout)?.[1] ?? Number.NaN)
+  const range = Number(/(\d+) range-checked only/.exec(result.stdout)?.[1] ?? Number.NaN)
+  const unresolved = Number(/(\d+) unparsable span\(s\)/.exec(result.stdout)?.[1] ?? Number.NaN)
+  const perDoc = new Map()
+  for (const line of result.stdout.split('\n')) {
+    const m = /check-anchors: doc (\S+) anchors=(\d+) verified=(\d+) range=(\d+) whole=(\d+) failed=(\d+) unresolved=(\d+)/.exec(line)
+    if (m) perDoc.set(m[1].split('\\').join('/'), { anchors: Number(m[2]), verified: Number(m[3]), range: Number(m[4]) })
+  }
+  return { result, docs, examined, verified, range, unresolved, perDoc }
+}
+
+test('the whole docs tree passes the anchor check', () => {
+  const run = fullRun()
+  assert.equal(run.result.status, 0, `the repo-wide anchor check must pass:\n${run.result.stdout}\n${run.result.stderr}`)
+  assert.match(run.result.stdout, /check-anchors: ok/, 'a clean run reports ok')
+  assert.ok(run.docs >= 15, `expected the whole docs tree to be checked, got ${run.docs} doc(s)`)
+  assert.ok(run.verified >= 100, `expected every page's anchors to be verified, got ${run.verified}`)
 })
 
-test('the whole docs tree is gated, not just one page', () => {
-  // Gating a single page leaves every other page's anchors unchecked — and a
-  // drifted anchor is silent by nature, so "some pages are checked" is not a
-  // weaker guarantee, it is a different one. The default run (no path
-  // arguments) covers docs/*.md.
-  const result = runChecker([])
-  assert.equal(result.status, 0, `the repo-wide anchor check must pass:\n${result.stdout}\n${result.stderr}`)
-  const docs = Number(/(\d+) doc\(s\)/.exec(result.stdout)[1])
-  assert.ok(docs >= 15, `expected the whole docs tree to be checked, got ${docs} doc(s)`)
-  const resolved = Number(/(\d+) anchor\(s\) resolved/.exec(result.stdout)[1])
-  assert.ok(resolved >= 100, `expected every page's anchors to be examined, got ${resolved}`)
-  // The run must not be reporting an all-verified story: most remaining anchors
-  // are bare ranges, and the summary has to say so rather than fold them into
-  // the verified count.
-  assert.match(result.stdout, /range-checked only/, 'bare ranges keep their own bucket')
+test('no bare range anchors remain anywhere in the docs tree', () => {
+  // The batch that built this gate converted the whole tree to symbol/literal
+  // anchors. A range only proves the line number is in bounds — it cannot catch
+  // a pointer aimed at the wrong statement, which is the drift this gate exists
+  // for. Zero is therefore a ratchet, not a coincidence.
+  const run = fullRun()
+  assert.equal(run.range, 0, `bare range anchors must not come back, found ${run.range}:\n${run.result.stdout}`)
+  assert.match(run.result.stdout, /0 range-checked only/, 'the summary keeps the range bucket visible so it cannot grow silently')
+})
+
+test('no unparsable spans: a span the checker cannot resolve fails the run', () => {
+  const run = fullRun()
+  assert.equal(run.unresolved, 0, `every span must parse:\n${run.result.stdout}`)
+})
+
+test('checker: an unparsable span is a failure, not a silent skip', () => {
+  // Negative control for the false-green this gate was built to kill. Node 22
+  // is likely, but do not assert the exit code alone: the run must also SAY it
+  // failed, so a future refactor cannot pass by exiting 1 for an unrelated
+  // reason.
+  const probe = join(root, `probe-anchor-unparsed-${process.pid}.md`)
+  try {
+    writeFileSync(probe, [
+      '# probe',
+      '',
+      'no parsable anchor: <span class="lnum">src/auto/trust.ts</span>',
+      '',
+      'good: <span class="lnum">policy.ts:LassessTool</span>',
+      '',
+    ].join('\n'))
+    const result = runChecker(['--check', `probe-anchor-unparsed-${process.pid}.md`])
+    assert.equal(result.status, 1, 'a span with no parsable anchor must fail the check')
+    assert.match(result.stdout, /UNVERIFIED/, 'the offending span is named')
+    assert.match(result.stdout, /1 unparsable span\(s\)/, 'the summary counts it')
+  } finally {
+    rmSync(probe, { force: true })
+  }
 })
 
 test('checker: a broken anchor is a violation, not a silent skip', () => {
-  // Negative control. The probe document lives at the repo root — the one place
-  // `.gitignore` (`/*` whitelist) already ignores, which is where this repo's
-  // scratch probes conventionally go — because the checker resolves document
-  // paths relative to the repo root. It is removed in `finally`.
   const probe = join(root, `probe-anchor-negative-${process.pid}.md`)
   try {
     writeFileSync(probe, [
@@ -90,11 +155,24 @@ test('checker: a broken anchor is a violation, not a silent skip', () => {
     assert.match(result.stderr, /definitelyNotASymbolXYZ/, 'the unknown symbol is named')
     // The count must include the failures: a report that shrinks when checks
     // fail would understate how much was examined.
-    const resolved = Number(/(\d+) anchor\(s\) resolved/.exec(result.stdout)[1])
-    assert.equal(resolved, 3, `all three anchors must be counted, got ${resolved}`)
+    const examined = Number(/(\d+) anchor\(s\) examined/.exec(result.stdout)[1])
+    assert.equal(examined, 3, `all three anchors must be counted, got ${examined}`)
     assert.match(result.stdout, /2 failed/, 'the failure count is part of the summary')
   } finally {
     rmSync(probe, { force: true })
+  }
+})
+
+test('no page silently loses all of its anchors', () => {
+  const { perDoc } = fullRun()
+  assert.ok(perDoc.size >= 15, `expected a per-doc tally for every page, got ${perDoc.size}`)
+  for (const [doc, row] of perDoc) {
+    if (PAGES_WITHOUT_ANCHORS.has(doc)) continue
+    assert.ok(
+      row.anchors > 0,
+      `${doc} carries no anchors; either restore them or add the page to PAGES_WITHOUT_ANCHORS`,
+    )
+    assert.equal(row.range, 0, `${doc} still holds bare range anchors`)
   }
 })
 
