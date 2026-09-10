@@ -60,6 +60,17 @@ async function call(method, { host = 'localhost:3080', remoteAddress = '127.0.0.
 }
 
 /**
+ * Read a live runtime file, or null when it is absent.
+ *
+ * After the move to `runtime/`, the live files need not exist yet — the running
+ * host only creates them on its next write — so a snapshot helper must treat
+ * "absent" as a state rather than an error.
+ */
+function snapshot(path) {
+  return existsSync(path) ? readFileSync(path, 'utf8') : null
+}
+
+/**
  * Run `body` with BOTH runtime paths redirected into a scratch directory, and
  * assert afterwards that the live files were not touched. Fails loudly if
  * either plane escaped the redirect.
@@ -70,19 +81,19 @@ async function isolated(body) {
   const scratchAudit = join(dir, 'audit.jsonl')
   const liveHistory = historyFilePath()
   const liveAudit = auditFilePath()
-  const beforeHistory = readFileSync(liveHistory, 'utf8')
-  const beforeAudit = existsSync(liveAudit) ? readFileSync(liveAudit, 'utf8') : null
+  const beforeHistory = snapshot(liveHistory)
+  const beforeAudit = snapshot(liveAudit)
   writeFileSync(scratchHistory, '')
   writeFileSync(scratchAudit, '')
   try {
     setHistoryFilePathForTests(scratchHistory)
     setAuditFilePathForTests(scratchAudit)
     const result = await body({ dir, scratchHistory, scratchAudit })
-    assert.equal(readFileSync(liveHistory, 'utf8'), beforeHistory, 'the LIVE history.jsonl must be byte-identical')
+    assert.equal(snapshot(liveHistory), beforeHistory, 'the LIVE history file must be byte-identical')
     assert.equal(
-      existsSync(liveAudit) ? readFileSync(liveAudit, 'utf8') : null,
+      snapshot(liveAudit),
       beforeAudit,
-      'the LIVE audit.jsonl must be byte-identical — a half-isolated DELETE tombstones the real ledger',
+      'the LIVE audit file must be byte-identical — a half-isolated DELETE tombstones the real ledger',
     )
     return result
   } finally {
@@ -92,11 +103,11 @@ async function isolated(body) {
   }
 }
 
-test('history: the default paths are the plugin-root files', () => {
+test('history: the default paths are the runtime/ files', () => {
   // The seams must not change production behaviour: with no override (the only
-  // state production is ever in) both effective paths are the plugin-root files.
-  assert.equal(historyFilePath(), join(REPO_ROOT, 'history.jsonl'))
-  assert.equal(auditFilePath(), join(REPO_ROOT, 'audit.jsonl'))
+  // state production is ever in) both effective paths are the runtime location.
+  assert.equal(historyFilePath(), join(REPO_ROOT, 'runtime', 'history.jsonl'))
+  assert.equal(auditFilePath(), join(REPO_ROOT, 'runtime', 'audit.jsonl'))
 })
 
 test('history DELETE: truncates the configured file, writes the tombstone to the configured audit', async () => {

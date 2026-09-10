@@ -8,17 +8,12 @@
  * main model can never read it back as an injection channel.
  */
 import { appendFileSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { AUDIT_FILENAME, resolveRuntimeWritePath, runtimeFilePath } from './runtime-paths.js'
 
 export const MAX_AUDIT_LINES = 5_000
 
 /** Byte cap for audit rotation (must match the stat trigger in appendAuditLine). */
 export const MAX_AUDIT_BYTES = 5 * 1024 * 1024
-
-// Compiled to lib/auto/audit.js, so two levels up is the plugin root
-// (the same directory that holds history.jsonl).
-const AUDIT_FILE = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'audit.jsonl')
 
 /**
  * Test-only redirection of the audit file.
@@ -34,9 +29,9 @@ const AUDIT_FILE = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'au
  * replace the approval audit trail with an almost empty file.
  *
  * This override exists so those tests can operate on a scratch path instead.
- * Nothing in production sets it, so the default stays the plugin-root
- * audit.jsonl — `auditFilePath()` reports the effective path so a contract test
- * can pin that default without relying on the caller's cooperation.
+ * Nothing in production sets it, so the default stays the canonical runtime
+ * location — `auditFilePath()` reports that path so a contract test can pin it
+ * without relying on the caller's cooperation.
  */
 let auditFileOverride: string | undefined
 
@@ -45,9 +40,36 @@ export function setAuditFilePathForTests(path: string | undefined): void {
   auditFileOverride = path
 }
 
-/** The audit file this process is actually appending to. */
+/**
+ * The audit file this process is considered to be appending to.
+ *
+ * Deliberately reports the CANONICAL path and performs no side effect: asking
+ * where the audit goes must not create a directory. The path actually appended
+ * to can differ in one case only — when `runtime/` cannot be created at all, in
+ * which case `appendAuditLine` falls back to the pre-move root path and warns.
+ * Callers that need the literal target should use that write path instead.
+ */
 function auditPath(): string {
-  return auditFileOverride ?? AUDIT_FILE
+  return auditFileOverride ?? runtimeFilePath(AUDIT_FILENAME)
+}
+
+/**
+ * The path an append should go to: the canonical location once `runtime/`
+ * exists, otherwise the pre-move root path with a warning.
+ *
+ * The fallback matters most here. `appendAuditLine` is the fail-closed commit
+ * gate, so a directory that cannot be created must not turn into "every verdict
+ * is unauditable" — a still-writable root keeps receiving the audit, and the
+ * warning says so.
+ *
+ * Scope, stated honestly: this rescues the case where the DIRECTORY cannot be
+ * created while the root can be written. It does not rescue a root that is
+ * itself unwritable, and a `runtime/` that exists but rejects writes is not
+ * detected here at all — that path fails the append, and the gate then fails
+ * closed as designed.
+ */
+function auditWritePath(): string {
+  return auditFileOverride ?? resolveRuntimeWritePath(AUDIT_FILENAME)
 }
 
 /** Rotate by keeping only the tail (append-mostly; never edits in place). */
@@ -96,7 +118,7 @@ export function auditRotateContent(content: string, maxBytes = MAX_AUDIT_BYTES, 
  * would only add a TOCTOU window between check and write).
  */
 export function appendAuditLine(line: string): boolean {
-  const file = auditPath()
+  const file = auditWritePath()
   try {
     appendFileSync(file, `${line}\n`)
     if (statSync(file).size > MAX_AUDIT_BYTES) {

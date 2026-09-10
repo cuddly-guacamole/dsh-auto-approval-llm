@@ -3512,7 +3512,14 @@ test('learning-store route: host exposes a trusted read/revoke surface with an a
   assert.ok(src.includes('learning-store route'), 'route must be registered with the web server')
   assert.ok(src.includes('revokeLearning'), 'host must consume revokeLearning')
   assert.ok(src.includes("type: 'learning-revoked'"), 'revoke must leave an audit trail')
-  assert.ok(src.includes('persistLearning(LEARNING_FILE'), 'revoke must persist the store')
+  // The revoke must persist, and it must persist through the guarded writer the
+  // other learners use. Anchoring the revoke CALL SITE rather than a file-path
+  // argument keeps the claim tied to the route instead of to how the store's
+  // location happens to be spelled.
+  const revokeAt = src.indexOf('revokeLearning(learningStore')
+  assert.ok(revokeAt > 0, 'the revoke handler calls revokeLearning on the module store')
+  const revokeScope = src.slice(revokeAt, revokeAt + 400)
+  assert.ok(revokeScope.includes('persistLearningGuarded()'), 'revoke must persist the store through the guarded writer')
   const client = readFileSync(new URL('../src/client/index.ts', import.meta.url), 'utf8')
   assert.ok(client.includes("LEARNING_STORE_ROUTE = '/_dsh/auto-approval-llm/learning-store'"), 'client must know the route')
   assert.ok(client.includes('settings.learning.revoke'), 'client must render a revoke control')

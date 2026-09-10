@@ -958,7 +958,11 @@ test('LP12: the learning layer is byte-inert while disabled', () => {
   const reviewIdx = body.indexOf('reviewWithLLM(')
   assert.ok(guardIdx !== -1, 'the query opens with the switch guard')
   assert.ok(reviewIdx !== -1 && guardIdx < reviewIdx, 'nothing (not even a lookup) runs while the switch is off')
-  assert.equal([...HOST_SRC.matchAll(/loadLearning\(LEARNING_FILE\)/g)].length, 1, 'the store loads once per process, module-level')
+  assert.equal(
+    [...HOST_SRC.matchAll(/loadLearning\(resolveRuntimeReadPath\(LEARNING_FILENAME\)\)/g)].length,
+    1,
+    'the store loads once per process, module-level',
+  )
   const disposedAt = HOST_SRC.indexOf("anyCtx.on('session/disposed'")
   const disposedBlock = HOST_SRC.slice(disposedAt, disposedAt + 1600)
   assert.ok(disposedBlock.includes('sessionLearnedAllows.delete(key)'), 'disposal clears the per-session allowance')

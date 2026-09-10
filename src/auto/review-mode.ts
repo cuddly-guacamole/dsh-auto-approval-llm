@@ -10,8 +10,7 @@
  */
 
 import { readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { resolveRuntimeReadPath, resolveRuntimeWritePath, REVIEW_MODE_FILENAME } from './runtime-paths.js'
 
 export type ReviewMode = 'manual' | 'smart' | 'unattended'
 
@@ -21,13 +20,14 @@ export function normalizeReviewMode(value: unknown): ReviewMode {
   return MODES.includes(value as ReviewMode) ? (value as ReviewMode) : 'smart'
 }
 
-// Compiled to lib/auto/review-mode.js → two levels up is the plugin root.
-const REVIEW_MODE_FILE = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'review-mode.json')
-
+// The runtime location, shared with the other persisted files (see
+// ./runtime-paths.ts). The load prefers the canonical path and falls back to the
+// pre-move root file, so an upgraded install keeps its per-session modes until
+// the snapshot is next written.
 export function loadReviewModes(): Map<string, ReviewMode> {
   const map = new Map<string, ReviewMode>()
   try {
-    const obj = JSON.parse(readFileSync(REVIEW_MODE_FILE, 'utf8'))
+    const obj = JSON.parse(readFileSync(resolveRuntimeReadPath(REVIEW_MODE_FILENAME), 'utf8'))
     for (const [key, value] of Object.entries(obj)) {
       map.set(key, normalizeReviewMode(value))
     }
@@ -43,9 +43,10 @@ export function persistReviewModes(map: Map<string, ReviewMode>): void {
     for (const [key, mode] of map) {
       if (mode !== 'smart') obj[key] = mode // default not stored
     }
-    const tmp = `${REVIEW_MODE_FILE}.tmp`
+    const file = resolveRuntimeWritePath(REVIEW_MODE_FILENAME)
+    const tmp = `${file}.tmp`
     writeFileSync(tmp, JSON.stringify(obj, null, 2))
-    renameSync(tmp, REVIEW_MODE_FILE)
+    renameSync(tmp, file)
   } catch (error) {
     // Persistence is best-effort (the mode still applies for the current
     // process), but total silence meant a read-only DSH_HOME or a corrupt

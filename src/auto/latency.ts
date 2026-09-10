@@ -20,8 +20,7 @@
  *   the latency statistics.
  */
 import { appendFileSync, existsSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { LATENCY_FILENAME, resolveRuntimeReadPath, resolveRuntimeWritePath } from './runtime-paths.js'
 
 export interface LatencySample {
   at: number
@@ -51,9 +50,16 @@ export interface LatencySummary {
 export const MAX_LATENCY_SAMPLES = 200
 export const LATENCY_SUMMARY_WINDOW = 100
 
-// Compiled to lib/auto/latency.js, so two levels up is the plugin root
-// (the same directory that holds history.jsonl and audit.jsonl).
-const LATENCY_FILE = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'llm-latency.jsonl')
+// The runtime location, shared with the other persisted files (see
+// ./runtime-paths.ts). Reads prefer the canonical path and fall back to the
+// pre-move root path; writes create the runtime directory first.
+function latencyReadPath(): string {
+  return resolveRuntimeReadPath(LATENCY_FILENAME)
+}
+
+function latencyWritePath(): string {
+  return resolveRuntimeWritePath(LATENCY_FILENAME)
+}
 
 /**
  * Aggregate the trailing `window` samples (by array order, which callers keep
@@ -87,8 +93,8 @@ export function summarizeLatency(samples: readonly LatencySample[], window = LAT
 export function loadLatencySamples(): LatencySample[] {
   const samples: LatencySample[] = []
   try {
-    if (!existsSync(LATENCY_FILE)) return samples
-    const lines = readFileSync(LATENCY_FILE, 'utf8').split('\n').filter(Boolean)
+    if (!existsSync(latencyReadPath())) return samples
+    const lines = readFileSync(latencyReadPath(), 'utf8').split('\n').filter(Boolean)
     for (const line of lines) {
       try {
         const parsed = JSON.parse(line) as Partial<LatencySample>
@@ -112,15 +118,15 @@ export function pushLatencySample(samples: LatencySample[], sample: LatencySampl
   samples.push(sample)
   if (samples.length > MAX_LATENCY_SAMPLES) samples.shift()
   try {
-    appendFileSync(LATENCY_FILE, `${JSON.stringify(sample)}\n`)
-    if (statSync(LATENCY_FILE).size > 1_048_576) {
+    appendFileSync(latencyWritePath(), `${JSON.stringify(sample)}\n`)
+    if (statSync(latencyWritePath()).size > 1_048_576) {
       // Mirror of atomicWriteFile in ../index.ts: temp file + rename so a
       // crash mid-rotation cannot truncate the JSONL; original preserved on
       // failure (fail-closed).
-      const tmp = `${LATENCY_FILE}.tmp.${process.pid}`
+      const tmp = `${latencyWritePath()}.tmp.${process.pid}`
       try {
         writeFileSync(tmp, `${samples.map((s) => JSON.stringify(s)).join('\n')}\n`)
-        renameSync(tmp, LATENCY_FILE)
+        renameSync(tmp, latencyWritePath())
       } catch (error) {
         try {
           if (existsSync(tmp)) unlinkSync(tmp)
@@ -143,7 +149,7 @@ export function pushLatencySample(samples: LatencySample[], sample: LatencySampl
  * in-memory window is authoritative for the UI either way. `file` is a test
  * seam (defaults to the real latency file; contract tests pass a temp path).
  */
-export function clearLatencySamples(samples: LatencySample[], file = LATENCY_FILE): void {
+export function clearLatencySamples(samples: LatencySample[], file = latencyWritePath()): void {
   samples.length = 0
   try {
     writeFileSync(file, '')

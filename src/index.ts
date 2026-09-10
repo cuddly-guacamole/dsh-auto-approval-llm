@@ -21,8 +21,7 @@ import z from '@deepseek-ai/schemastery'
 import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { appendFileSync, existsSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { networkInterfaces, homedir } from 'node:os'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
 import { ArtifactRegistry } from './auto/artifacts.js'
 import { appendAuditLine, recordAuditClear } from './auto/audit.js'
 import { AGGRESSIVE_BUILTIN, applyCategoryDirective, CATEGORY_KEYS, categoryDirectiveFor, type CategoryKey, HARD_LOCKED_CATEGORIES, LOCKED_CATEGORIES, realpathCriticalReason, sensitiveBasenameAt } from './auto/category.js'
@@ -61,6 +60,14 @@ import { redactResultValue } from './auto/redact.js'
 import { agentKind, evaluateRules, parseRulesText, summarizeRulesParseErrors, type RuleParseError } from './auto/rules.js'
 import { isReviewRetryable, retryAfterMs, retryReviewLoop, toLlmFailure, type RetryAttempt, type ReviewFailure } from './auto/retry.js'
 import { type ReviewMode, loadReviewModes, normalizeReviewMode, persistReviewModes } from './auto/review-mode.js'
+import {
+  DEBUG_FILENAME,
+  HISTORY_FILENAME,
+  LEARNING_FILENAME,
+  resolveRuntimeReadPath,
+  resolveRuntimeWritePath,
+  runtimeFilePath,
+} from './auto/runtime-paths.js'
 import { runtimeStateReadHits } from './auto/shell.js'
 import { isLoopbackHostname, isTrustedRequest, resolvePublicReviewerTarget, reviewerProbeTargetAllowed, validateReviewerBaseUrl } from './auto/trust.js'
 import { aggregateToolStats } from './auto/tool-stats.js'
@@ -1372,8 +1379,6 @@ export interface HistoryRecord {
 }
 
 const approvalHistory: HistoryRecord[] = []
-const HISTORY_FILE = join(dirname(fileURLToPath(import.meta.url)), '..', 'history.jsonl')
-const DEBUG_FILE = join(dirname(fileURLToPath(import.meta.url)), '..', 'approval-debug.jsonl')
 
 /**
  * Test-only redirect for history persistence.
@@ -1383,7 +1388,7 @@ const DEBUG_FILE = join(dirname(fileURLToPath(import.meta.url)), '..', 'approval
  * history test could assert the GET response shape, so a DELETE that truncated
  * the live file — and tombstoned the live audit — was invisible to the suite.
  * Mirrors `setAuditFilePathForTests` in `src/auto/audit.ts`: nothing in
- * production sets it, so the default stays the plugin-root file and
+ * production sets it, so the default stays the runtime location and
  * `historyFilePath()` reports the effective path so a contract test can pin
  * that default without relying on the caller's cooperation.
  */
@@ -1394,14 +1399,19 @@ export function setHistoryFilePathForTests(path: string | undefined): void {
   historyFileOverride = path
 }
 
-/** The history file this process is actually appending to. */
-function historyPath(): string {
-  return historyFileOverride ?? HISTORY_FILE
+/** Where history is read from: the canonical path, falling back to the pre-move root file. */
+function historyReadPath(): string {
+  return historyFileOverride ?? resolveRuntimeReadPath(HISTORY_FILENAME)
+}
+
+/** Where history is written to: the runtime directory, falling back when it cannot be created. */
+function historyWritePath(): string {
+  return historyFileOverride ?? resolveRuntimeWritePath(HISTORY_FILENAME)
 }
 
 /** The history file this process is actually appending to. */
 export function historyFilePath(): string {
-  return historyPath()
+  return historyFileOverride ?? runtimeFilePath(HISTORY_FILENAME)
 }
 
 // ── atomic JSONL rotation + tolerant history parse ─────────────────────────
@@ -1458,11 +1468,12 @@ let configError: string | null = null
 function debugLog(entry: Record<string, unknown>): void {
   if (!debugOn) return
   try {
-    if (existsSync(DEBUG_FILE) && statSync(DEBUG_FILE).size > 1_048_576) {
-      const lines = readFileSync(DEBUG_FILE, 'utf8').split('\n').filter(Boolean)
-      atomicWriteFile(DEBUG_FILE, `${lines.slice(-2000).join('\n')}\n`)
+    const file = resolveRuntimeWritePath(DEBUG_FILENAME)
+    if (existsSync(file) && statSync(file).size > 1_048_576) {
+      const lines = readFileSync(file, 'utf8').split('\n').filter(Boolean)
+      atomicWriteFile(file, `${lines.slice(-2000).join('\n')}\n`)
     }
-    appendFileSync(DEBUG_FILE, `${JSON.stringify({ at: Date.now(), ...entry })}\n`)
+    appendFileSync(file, `${JSON.stringify({ at: Date.now(), ...entry })}\n`)
   } catch {
     // Debug is best-effort; never affects the approval outcome.
   }
@@ -1508,8 +1519,8 @@ function reportRulesParseErrors(plane: 'pre-execute' | 'answerer', errors: RuleP
 
 function loadHistory(): void {
   try {
-    if (!existsSync(historyPath())) return
-    const lines = readFileSync(historyPath(), 'utf8').split('\n').filter(Boolean)
+    if (!existsSync(historyReadPath())) return
+    const lines = readFileSync(historyReadPath(), 'utf8').split('\n').filter(Boolean)
     const { records, badCount } = parseHistoryLines(lines)
     approvalHistory.push(...records)
     if (badCount > 0) {
@@ -1536,11 +1547,11 @@ function pushHistory(entry: Omit<HistoryRecord, 'id' | 'at'>): boolean {
   approvalHistory.push(record)
   if (approvalHistory.length > 200) approvalHistory.shift()
   try {
-    appendFileSync(historyPath(), `${JSON.stringify(record)}\n`)
+    appendFileSync(historyWritePath(), `${JSON.stringify(record)}\n`)
     // Rotate the on-disk log once it grows past 1 MB so it cannot grow without
     // bound (the in-memory window is already capped at 200 records).
-    if (statSync(historyPath()).size > 1_048_576) {
-      atomicWriteFile(historyPath(), `${approvalHistory.map((r) => JSON.stringify(r)).join('\n')}\n`)
+    if (statSync(historyWritePath()).size > 1_048_576) {
+      atomicWriteFile(historyWritePath(), `${approvalHistory.map((r) => JSON.stringify(r)).join('\n')}\n`)
     }
   } catch {
     // History persistence is best-effort.
@@ -1598,8 +1609,11 @@ const llmLatency: LatencySample[] = loadLatencySamples()
 // the per-signature keyed mutex with a synchronous persist, so the on-disk
 // snapshot can trail by at most one finished critical section. Corrupt or
 // poisoned files degrade to an empty store = everything stays with a human.
-const LEARNING_FILE = join(dirname(fileURLToPath(import.meta.url)), '..', 'learning.json')
-const learningStore: LearningStore = loadLearning(LEARNING_FILE)
+// The learning store lives at the shared runtime location. The LOAD prefers the
+// canonical path but falls back to the pre-move root file, so an install that
+// upgrades keeps the entries it already earned; the persister then writes the
+// merged store to `runtime/`, which is where the next boot reads it from.
+const learningStore: LearningStore = loadLearning(resolveRuntimeReadPath(LEARNING_FILENAME))
 
 // Out-of-process tamper tripwire. The store is overwritten wholesale on the
 // next persist, so a runtime divergence between the in-memory copy and the
@@ -1607,15 +1621,19 @@ const learningStore: LearningStore = loadLearning(LEARNING_FILE)
 // on-disk file after boot and validation still rejects poisoned entries on
 // the next load — this is observational only: one audit line + one warning
 // per divergence, never a decision change.
-let learningDiskFingerprint = learningFileFingerprint(LEARNING_FILE)
+function learningPersistPath(): string {
+  return resolveRuntimeWritePath(LEARNING_FILENAME)
+}
+
+let learningDiskFingerprint = learningFileFingerprint(resolveRuntimeReadPath(LEARNING_FILENAME))
 const persistLearningGuarded = (): void => {
-  const current = learningFileFingerprint(LEARNING_FILE)
+  const current = learningFileFingerprint(resolveRuntimeReadPath(LEARNING_FILENAME))
   if (!sameLearningFingerprint(current, learningDiskFingerprint)) {
     console.warn('[dsh-auto-approval-llm] learning.json changed outside the plugin process; the in-memory store overwrites it on this persist (audit trail: learning-tamper).')
     appendAuditLine(JSON.stringify({ type: 'learning-tamper', at: Date.now(), seen: current ?? null, expected: learningDiskFingerprint ?? null }))
   }
-  persistLearning(LEARNING_FILE, learningStore)
-  learningDiskFingerprint = learningFileFingerprint(LEARNING_FILE)
+  persistLearning(learningPersistPath(), learningStore)
+  learningDiskFingerprint = learningFileFingerprint(resolveRuntimeReadPath(LEARNING_FILENAME))
 }
 
 // ── same-origin feedback route ────────────────────────────────────────────
@@ -2138,7 +2156,7 @@ export function installHistoryRoute(ctx: any): void {
         const clearedCount = approvalHistory.length
         approvalHistory.length = 0
         try {
-          writeFileSync(historyPath(), '')
+          writeFileSync(historyWritePath(), '')
         } catch {
           // Best-effort clear.
         }
