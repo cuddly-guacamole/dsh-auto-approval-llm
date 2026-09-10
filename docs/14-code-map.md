@@ -45,8 +45,8 @@ tests/
 ├─ contract.test.mjs / category.test.mjs / classifier.test.mjs / redact.test.mjs
 ├─ editdiff.test.mjs / probe.test.mjs / history-robust.test.mjs / audit.test.mjs
 ├─ approvals-protocol.test.mjs / contract-devloop.test.mjs / trusted-dsh-subpaths.test.mjs / posix-platform.test.mjs
-├─ friction-report.test.mjs / audit-query-format.test.mjs
-└─ 合计 915 例（node --test 全绿基线）
+├─ friction-report.test.mjs / audit-query-format.test.mjs / permission-change.test.mjs
+└─ 合计 926 例（node --test 全绿基线）
 scripts/
 ├─ build.sh             （DSH 源码仓库布局）tsc 编译 src→lib
 ├─ audit-query.mjs      审计查询 CLI（decision 行 + 按 type 渲染的观测事件行）
