@@ -182,7 +182,7 @@ test('opaque fuse: the recovery runs before the opaque early return', () => {
   const source = readFileSync(fileURLToPath(new URL('../lib/auto/shell.js', import.meta.url)), 'utf8')
   const opaqueBranch = source.indexOf("if (decomposition.kind === 'opaque')")
   assert.notEqual(opaqueBranch, -1, 'the opaque branch is present in the compiled module')
-  const call = source.indexOf('opaqueRedirectDenyReason(compact, shell, decomposition.reason, roots)')
+  const call = source.indexOf('opaqueHardDenyReason(compact, shell, roots)')
   assert.notEqual(call, -1, 'the opaque branch calls the recovery helper')
   assert.ok(call > opaqueBranch, 'the recovery is inside the opaque branch')
   assert.ok(
@@ -191,16 +191,74 @@ test('opaque fuse: the recovery runs before the opaque early return', () => {
   )
 })
 
+test('opaque fuse: a redirect attached to the preceding word is judged too', () => {
+  // Shell allows `printf x>file` with no space, which is the idiomatic spelling.
+  // An earlier version of the recovery required a separator before `>`, so the
+  // whole fix was bypassable by deleting one space.
+  const failures = []
+  for (const command of [
+    String.raw`printf x>package.json; (:)`,
+    String.raw`printf x>>package.json; (:)`,
+    String.raw`printf x2>package.json; (:)`,
+    String.raw`printf x "a">package.json; (:)`,
+  ]) {
+    const reason = hardDenyShellReason(command, 'bash', roots)
+    if (reason === undefined || !reason.includes(CONTRACT_FILE_REASON)) failures.push(`${command}: ${reason}`)
+  }
+  assert.deepEqual(failures, [], `attached-redirect spellings that escaped:\n${failures.join('\n')}`)
+})
+
+test('opaque fuse: the deletion and write-operand fuses are reachable too', () => {
+  // The redirect scan alone covers only `>` targets. Deleting a critical tree or
+  // truncating a runtime-state file is hard-denied when written plainly, so the
+  // opaque spelling must not lose those verdicts.
+  const failures = []
+  for (const command of [
+    String.raw`rm -rf /etc; (:)`,
+    String.raw`tee history.jsonl < /dev/null; (:)`,
+    String.raw`truncate -s 0 audit.jsonl; (:)`,
+  ]) {
+    const plain = command.replace('; (:)', '')
+    assert.notEqual(hardDenyShellReason(plain, 'bash', roots), undefined, `control: ${plain} is fused when written plainly`)
+    const reason = hardDenyShellReason(command, 'bash', roots)
+    if (reason === undefined) failures.push(`${command}: no hard-deny reason (plain spelling is denied)`)
+  }
+  assert.deepEqual(failures, [], `opaque spellings that lost a non-redirect fuse:\n${failures.join('\n')}`)
+})
+
+test('opaque fuse: a here-document body is exempt even when the lexer blames another cause', () => {
+  // The exemption used to be keyed to the lexer's message string, so a command
+  // that is opaque for a different reason (a command substitution wrapping a
+  // heredoc) kept its BODY in the scan. Commit messages in this repo name fuse
+  // targets, so that showed up as a false refusal on ordinary `git commit`.
+  const commit = `git commit -m "$(cat <<'EOF'\nfix: mention > package.json in the body\nEOF\n)"`
+  assert.equal(
+    hardDenyShellReason(commit, 'bash', roots),
+    undefined,
+    'a redirect spelled inside a here-document body must not be judged',
+  )
+  // The same line with a real redirect after the body must still be caught: the
+  // old first-line-only truncation made anything after a heredoc invisible.
+  const afterBody = `cat <<'EOF'\nx\nEOF\nprintf x > package.json`
+  assert.ok(
+    hardDenyShellReason(afterBody, 'bash', roots) !== undefined,
+    'a fused redirect after a here-document must still be judged',
+  )
+})
+
 test('opaque fuse: the recovery reuses the shared fuse owners, not a private copy', () => {
   // A second, parallel re-derivation of DSH_HOME / credential targets would
   // drift from the `allowedDshSubpaths` openings the shared predicates honour.
   const source = readFileSync(fileURLToPath(new URL('../lib/auto/shell.js', import.meta.url)), 'utf8')
   const body = source.slice(
-    source.indexOf('function opaqueRedirectDenyReason'),
+    source.indexOf('function stripHeredocBodies'),
     source.indexOf('export function hardDenyShellReason'),
   )
-  assert.ok(body.length > 0, 'the recovery helper is present')
-  for (const shared of ['hardDestructiveTargetReason(', 'runtimeStateWriteReason(', 'shellWriteToDshHomeDenied(']) {
+  assert.ok(body.length > 0, 'the recovery helpers are present')
+  // The redirect half applies the three shared predicates; the non-redirect
+  // half delegates to the decomposed path's own per-segment fuse rather than
+  // restating deletion/write-operand rules.
+  for (const shared of ['hardDestructiveTargetReason(', 'runtimeStateWriteReason(', 'shellWriteToDshHomeDenied(', 'segmentHardDenyReason(']) {
     assert.ok(body.includes(shared), `${shared} is reused instead of re-implemented`)
   }
 })

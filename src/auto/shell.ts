@@ -1197,8 +1197,15 @@ function effectiveCwdAfter(segment, shell, roots) {
  * redirect target, so a match is a plausible target rather than a parsed one:
  * this is a best-effort recovery, not a second lexer. The clobber form (`>|`)
  * is included because the lexer's operator table accepts it everywhere else.
+ *
+ * The leading class is deliberately "any single character that cannot itself be
+ * part of a redirect operator" rather than a whitespace/separator list. Shell
+ * allows a redirect to be attached directly to the preceding word
+ * (`printf x>file`, `printf x2>file`, `printf "a">file`), which is the idiomatic
+ * spelling; requiring a separator made the whole recovery bypassable by
+ * removing one space.
  */
-const OPAQUE_REDIRECT_TARGET = /(?:^|[\s;&|(])(?:\d*&?>{1,2}\|?)\s*("[^"]*"|'[^']*'|[^\s;&|()<>]+)/g;
+const OPAQUE_REDIRECT_TARGET = /(?:^|[^;&|()<>])(?:\d*&?>{1,2}\|?)\s*("[^"]*"|'[^']*'|[^\s;&|()<>]+)/g;
 
 /**
  * The redirect-target fuse applied to a command line `decomposeCommandLine`
@@ -1233,10 +1240,97 @@ const OPAQUE_REDIRECT_TARGET = /(?:^|[\s;&|(])(?:\d*&?>{1,2}\|?)\s*("[^"]*"|'[^'
  *   accepted: a needless human-visible refusal is the failure mode this plugin
  *   prefers over a silent allowance.
  */
-function opaqueRedirectDenyReason(source, shell, opaqueReason, roots) {
-    const scan = opaqueReason === 'here-document input cannot be read statically'
-        ? source.split(/\r?\n/, 1)[0]
-        : source;
+/**
+ * Drop here-document BODIES from a raw command line, keeping the lines that are
+ * actually shell syntax.
+ *
+ * A here-document body is data handed to a command's stdin: a `>` inside it is
+ * literal text, so judging it as a redirect is a false positive (`git commit -m
+ * "$(cat <<'EOF' … > package.json …)"` is the shape that bites this repo, whose
+ * commit messages name fuse targets).
+ *
+ * The bodies are removed by walking the lines and matching each introducer
+ * (`<<` / `<<-`, an optional `-`, a delimiter that may be quoted) against the
+ * line that closes it — NOT by testing the lexer's message for the word
+ * `here-document`. That string coupling was wrong twice over: rewording the
+ * lexer message silently flipped bodies back into the scanned region, and
+ * because the lexer reports only the FIRST reason it hit, a command that is
+ * opaque for another reason (a command substitution wrapping a heredoc) kept
+ * its body in the scan.
+ *
+ * Best effort by construction: an unterminated body consumes the rest of the
+ * input, which is the conservative reading (those lines are body, not syntax).
+ */
+function stripHeredocBodies(source) {
+    const lines = source.split(/\r?\n/);
+    const out = [];
+    let pending = [];
+    for (const line of lines) {
+        if (pending.length > 0) {
+            const stripped = line.replace(/^\t+/, '');
+            if (pending[0].stripTabs ? stripped === pending[0].delimiter : line === pending[0].delimiter) {
+                pending.shift();
+            }
+            continue;
+        }
+        out.push(line);
+        for (const introducer of line.matchAll(/<<(-?)\s*(?:"([^"]*)"|'([^']*)'|([A-Za-z_][A-Za-z0-9_]*))/g)) {
+            const delimiter = introducer[2] ?? introducer[3] ?? introducer[4];
+            if (delimiter !== undefined && delimiter !== '') {
+                pending.push({ delimiter, stripTabs: introducer[1] === '-' });
+            }
+        }
+    }
+    return out.join('\n');
+}
+
+/**
+ * Best-effort word split of an opaque line, one chunk per shell segment.
+ *
+ * Used by the opaque recovery to reach the fuses that are NOT about redirect
+ * targets: deletion targets (`rm -rf /etc; (:)`) and write operands (`tee
+ * history.jsonl < /dev/null; (:)`) are hard-denied when written plainly, and
+ * skipping them for opaque lines left the same degradation the redirect
+ * recovery exists to remove.
+ *
+ * This is a deliberately coarse split, not a second lexer: separators and
+ * grouping characters split the line, whitespace splits the words, surrounding
+ * quotes are stripped, and `$`/`%VAR%`/glob markers are carried so the
+ * downstream fuses fail closed on dynamic or globbed targets. A quoted string
+ * that merely spells a command is therefore judged as one — the same accepted
+ * false positive as a quoted redirect target, in the same fail-closed
+ * direction.
+ */
+function opaqueSegmentWords(source) {
+    const segments = [];
+    for (const chunk of stripHeredocBodies(source).split(/[\n;&|(){}]+/)) {
+        const words = [];
+        for (const raw of chunk.split(/\s+/)) {
+            if (raw === '')
+                continue;
+            let text = raw;
+            let quoted = false;
+            if (text.length > 1 && ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'")))) {
+                text = text.slice(1, -1);
+                quoted = true;
+            }
+            words.push({ text, dynamic: /[$]|%[A-Za-z_]+%/.test(text), glob: /[*?]/.test(text), quoted });
+        }
+        if (words.length > 0)
+            segments.push({ words, writeTargets: [], readTargets: [] });
+    }
+    return segments;
+}
+
+function opaqueHardDenyReason(source, shell, roots) {
+    const scan = stripHeredocBodies(source);
+    // Non-redirect fuses first: they cover deletion and write operands, which
+    // the redirect scan below cannot see.
+    for (const segment of opaqueSegmentWords(source)) {
+        const reason = segmentHardDenyReason(segment, shell, roots);
+        if (reason !== undefined)
+            return reason;
+    }
     for (const match of scan.matchAll(OPAQUE_REDIRECT_TARGET)) {
         const raw = match[1];
         const target = raw.length > 1 && ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'")))
@@ -1294,7 +1388,7 @@ export function hardDenyShellReason(source, shell, roots) {
         // target every other vector hard-denies. Recovering just that much (and
         // nothing else) keeps the strongest verdict reachable on opaque lines
         // while a line whose writes are ordinary paths keeps its `ask`.
-        return opaqueRedirectDenyReason(compact, shell, decomposition.reason, roots);
+        return opaqueHardDenyReason(compact, shell, roots);
     }
     // Fuses resolve relative targets against the directory the segment really
     // sees. A changer only moves that base inside an `&&` chain: there, reaching
