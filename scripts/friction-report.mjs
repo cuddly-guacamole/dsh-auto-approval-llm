@@ -33,13 +33,29 @@
  *   node scripts/friction-report.mjs [--file <audit.jsonl>]
  *     [--latency <llm-latency.jsonl>] [--since YYYY-MM-DD] [--window N] [--json]
  */
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
-const DEFAULT_AUDIT = join(HERE, '..', 'audit.jsonl')
-const DEFAULT_LATENCY = join(HERE, '..', 'llm-latency.jsonl')
+
+/**
+ * The plugin's runtime files live in `runtime/`; the pre-move root file is read
+ * for one upgrade window. Prefer whichever exists, and report the canonical path
+ * when neither does — a read-only report must not depend on the plugin's build
+ * output, so the rule is repeated here rather than imported.
+ */
+function runtimeOrDefault(name) {
+  const root = join(HERE, '..')
+  const runtime = join(root, 'runtime', name)
+  if (existsSync(runtime)) return runtime
+  const legacy = join(root, name)
+  if (existsSync(legacy)) return legacy
+  return runtime
+}
+
+const DEFAULT_AUDIT = runtimeOrDefault('audit.jsonl')
+const DEFAULT_LATENCY = runtimeOrDefault('llm-latency.jsonl')
 
 /** Mirrors src/auto/audit.ts MAX_AUDIT_BYTES — the only rotation trigger. */
 export const AUDIT_BYTE_LIMIT = 5 * 1024 * 1024

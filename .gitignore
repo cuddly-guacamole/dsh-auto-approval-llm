@@ -1,6 +1,8 @@
 # 白名单模式：默认忽略仓库内一切，仅放行必要文件（源码 / 配置 / 构建输入）。
 # 未放行项自动排除：node_modules、lib（构建产物）、*.jsonl（history/audit/approval-debug 运行时日志）、
 # review-mode.json（运行态）、*.tgz、*.tsbuildinfo 等。
+# runtime/ 是插件运行态文件的归置目录（history/audit/approval-debug/llm-latency/
+# learning/review-mode），同样由 `/*` 默认忽略，无需单独放行或排除。
 /*
 !/src/
 !/tests/

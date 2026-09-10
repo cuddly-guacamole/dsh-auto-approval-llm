@@ -17,7 +17,7 @@
  *     [--source human-allow|llm-deny|timeout-deny|... ] [--since 2026-08-18]
  *     [--file <path>] [--json]
  */
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -111,6 +111,21 @@ export function parseArgs(argv) {
   return { ok: true, options: out }
 }
 
+/**
+ * The plugin's runtime files live in `runtime/`; the pre-move root file is read
+ * for one upgrade window. Prefer whichever exists, and report the canonical
+ * path when neither does — a read-only diagnostic must not depend on the
+ * plugin's build output, so the rule is repeated here rather than imported.
+ */
+function runtimeOrDefault(name) {
+  const root = join(dirname(fileURLToPath(import.meta.url)), '..')
+  const runtime = join(root, 'runtime', name)
+  if (existsSync(runtime)) return runtime
+  const legacy = join(root, name)
+  if (existsSync(legacy)) return legacy
+  return runtime
+}
+
 export function main(argv) {
   const parsed = parseArgs(argv)
   if (!parsed.ok) {
@@ -118,7 +133,7 @@ export function main(argv) {
     return USAGE_EXIT_CODE
   }
   const opts = parsed.options
-  const file = opts.file ?? join(dirname(fileURLToPath(import.meta.url)), '..', 'audit.jsonl')
+  const file = opts.file ?? runtimeOrDefault('audit.jsonl')
 
   let raw
   try {

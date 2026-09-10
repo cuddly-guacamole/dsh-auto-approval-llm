@@ -23,10 +23,26 @@ const SETTINGS_ROUTE = '/_dsh/auto-approval-llm/settings'
 const CREDENTIAL_ROUTE = '/_dsh/auto-approval-llm/reviewer-credential'
 const here = dirname(fileURLToPath(import.meta.url))
 const MOCK_REVIEWER = join(here, 'mock-reviewer.mjs')
+
+/**
+ * The plugin's runtime files live in `runtime/`; the pre-move root file is read
+ * for one upgrade window. Prefer whichever exists, and report the canonical path
+ * when neither does — a verification helper must not depend on the plugin's
+ * build output, so the rule is repeated here rather than imported.
+ */
+function runtimeOrDefault(name) {
+  const root = join(here, '..')
+  const runtime = join(root, 'runtime', name)
+  if (existsSync(runtime)) return runtime
+  const legacy = join(root, name)
+  if (existsSync(legacy)) return legacy
+  return runtime
+}
+
 // The learning store is plugin runtime state just like history/audit; the
 // verification writes real confirmations, so back it up and restore it no
 // matter how the run ends.
-const LEARNING_FILE = join(dirname(here), 'learning.json')
+const LEARNING_FILE = runtimeOrDefault('learning.json')
 // Mock reviewer must be reachable by the online-reviewer path, which requires
 // the configured credential (three-piece gate: baseUrl+model+key). The key is
 // written to the credential store for the mock round and deleted on restore.
