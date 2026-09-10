@@ -213,6 +213,13 @@ const AGENT_TEAMS_CONTROL_TOOLS = new Set([
     'agent_teams_status',
     // The verified implementation archives team state instead of erasing it.
     'agent_teams_delete',
+    // Scoped Agent Teams shared-task board: in-memory/journal coordination
+    // state only (no filesystem, no shell, no network). `write_scopes` is
+    // advisory metadata the service never resolves to a path.
+    'team_task_create',
+    'team_task_get',
+    'team_task_list',
+    'team_task_update',
 ]);
 /**
  * Plugin-owned approval/audit state files. They live inside the trusted
@@ -410,7 +417,7 @@ export function assessTool(exec: ExecLike, roots: Roots, artifacts: unknown): To
     if (['web_search', 'web_fetch', 'time', 'weather'].includes(exec.name)) {
         return { decision: 'allow', reason: 'read-only external information lookup', classifierEligible: false };
     }
-    if (['subagent', 'workflow', 'ralph', 'spawn_agent', 'send_message', 'wait_agent', 'list_agents', 'interrupt_agent', 'read_thread', 'wait_threads'].includes(exec.name)) {
+    if (['subagent', 'workflow', 'ralph', 'spawn_agent', 'spawn_teammate', 'send_message', 'wait_agent', 'list_agents', 'interrupt_agent', 'read_thread', 'wait_threads'].includes(exec.name)) {
         return { decision: 'allow', reason: 'orchestration call; child tool actions remain independently checked', classifierEligible: false };
     }
     if (['git_push', 'deploy', 'publish', 'send_email', 'create_issue', 'create_pull_request'].includes(exec.name)) {

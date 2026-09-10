@@ -238,9 +238,10 @@ const AGENT_TEAMS_CONTROL_TOOLS = new Set([
   'agent_teams_create', 'agent_teams_add_member', 'agent_teams_remove_member',
   'agent_teams_create_task', 'agent_teams_claim_task', 'agent_teams_update_task',
   'agent_teams_send_message', 'agent_teams_status', 'agent_teams_delete',
+  'team_task_create', 'team_task_get', 'team_task_list', 'team_task_update',
 ])
 const ORCHESTRATION_TOOLS = new Set([
-  'subagent', 'workflow', 'ralph', 'spawn_agent', 'send_message', 'wait_agent',
+  'subagent', 'workflow', 'ralph', 'spawn_agent', 'spawn_teammate', 'send_message', 'wait_agent',
   'list_agents', 'interrupt_agent', 'read_thread', 'wait_threads',
 ])
 
