@@ -32,6 +32,7 @@ import { fileURLToPath } from 'node:url'
 import { DEFAULT_ALLOW_TOOL_GROUPS, DEFAULT_ALLOW_TOOLS } from '../lib/auto/constants.js'
 import { assessTool } from '../lib/auto/policy.js'
 import { categorizeTool, categoryDirective } from '../lib/auto/category.js'
+import { RISK_NAME_PATTERN } from '../lib/auto/risk-tokens.js'
 
 const roots = { workspace: 'C:/ws', home: 'C:/Users/u', dshHome: 'C:/Users/u/.dsh', tempRoots: [] }
 const artifacts = { has: () => false }
@@ -63,16 +64,69 @@ function groupMembers(source, label_) {
   return [...source.slice(open, close).matchAll(/'([^']+)'/g)].map((m) => m[1])
 }
 
-/** Same, for the inline orchestration array in policy.ts (an `if ([...])`). */
-function inlineOrchestrationMembers(source) {
-  const at = source.indexOf("if (['subagent', 'workflow', 'ralph'")
-  assert.notEqual(at, -1, 'inline orchestration array present in the compiled policy')
-  const open = source.indexOf('[', at)
-  const close = source.indexOf(']', open)
-  return [...source.slice(open, close).matchAll(/'([^']+)'/g)].map((m) => m[1])
+/** Same, for an inline `if ([...])` array in the compiled policy. */
+function inlineMembers(source, firstMember) {
+  const at = source.indexOf(`['${firstMember}'`)
+  assert.notEqual(at, -1, `inline array starting with ${firstMember} present in the compiled policy`)
+  const close = source.indexOf(']', at)
+  return [...source.slice(at, close).matchAll(/'([^']+)'/g)].map((m) => m[1])
 }
 
 const sorted = (names) => [...names].sort()
+
+/**
+ * The allow plane, enumerated from the module that decides it. Reading the
+ * compiled policy rather than the catalog is deliberate: the catalog is the
+ * display mirror, and this file exists to make the two impossible to drift
+ * apart.
+ */
+function allowPlaneNames(policySrc) {
+  return [...new Set([
+    ...setMembers(policySrc, 'SESSION_STATE_TOOLS'),
+    ...setMembers(policySrc, 'HARNESS_READ_TOOLS'),
+    ...setMembers(policySrc, 'OWNER_CONTROL_TOOLS'),
+    ...setMembers(policySrc, 'AGENT_TEAMS_CONTROL_TOOLS'),
+    ...inlineMembers(policySrc, 'web_search'),
+    ...inlineMembers(policySrc, 'subagent'),
+  ])]
+}
+
+/**
+ * Families whose members the category layer labels harnessInternal, paired with
+ * the policy carrier and the catalog group that must agree on them.
+ */
+const HARNESS_FAMILIES = [
+  { group: 'Session & control', policySet: 'SESSION_STATE_TOOLS', categorySet: 'SESSION_STATE_TOOLS' },
+  { group: 'Read-only Harness', policySet: 'HARNESS_READ_TOOLS', categorySet: 'HARNESS_READ_TOOLS' },
+  { group: 'Owner lifecycle control', policySet: 'OWNER_CONTROL_TOOLS', categorySet: 'OWNER_CONTROL_TOOLS' },
+  { group: 'AgentTeams coordination', policySet: 'AGENT_TEAMS_CONTROL_TOOLS', categorySet: 'AGENT_TEAMS_CONTROL_TOOLS' },
+  { group: 'Orchestration', policySet: null, categorySet: 'ORCHESTRATION_TOOLS' },
+]
+
+/**
+ * The read-only external lookup family is the documented exception: it has no
+ * category set, and its members get their labels from explicit branches. Pinned
+ * here so the exception stays intentional rather than drifting into "forgotten".
+ */
+const EXTERNAL_LOOKUP_LABELS = new Map([
+  ['web_search', 'networkExec'],
+  ['web_fetch', 'networkExec'],
+  ['time', 'readOnly'],
+  ['weather', 'readOnly'],
+])
+
+/**
+ * Names whose membership in the allow plane is evaluated BEFORE the name-based
+ * risk escalation, so the escalation can never fire for them. Existing entries
+ * are acknowledged exceptions; a new one must be added here on purpose, with a
+ * reason, instead of silently inheriting the suppression.
+ */
+const RISK_TOKEN_EXCEPTIONS = new Map([
+  ['send_message', 'the token is the verb "send"; the tool posts to the durable peer mailbox, not to an external service'],
+  ['agent_teams_send_message', 'same mailbox semantics under the retired agent_teams_* spelling'],
+  ['agent_teams_remove_member', 'removes a member from the in-memory roster, not a file or an account'],
+  ['agent_teams_delete', 'archives team state instead of erasing it (upstream tombstone)'],
+])
 
 /** The nine tools the installed Agent Teams package actually registers. */
 const REGISTERED_TEAM_TOOLS = [
@@ -152,34 +206,76 @@ test('settings catalog: the team tools live in the AgentTeams coordination group
   assert.ok(orchestration.tools.includes('spawn_teammate'), 'spawn_teammate listed under Orchestration')
 })
 
-test('cross-copy: policy, category and the display catalog carry identical members', () => {
+test('cross-copy: every family agrees across policy, category and the display catalog', () => {
   // The three copies are hand-maintained, so drift in either direction is a
   // real defect: allowed-but-invisible (policy -> catalog) or
   // visible-but-unknown (catalog -> policy). Comparing the compiled modules
-  // keeps the check honest for names added after this change.
+  // keeps the check honest for names added after this change. Every family is
+  // covered, not only the two this change touched: a family that is skipped is
+  // exactly where the next silent drift would hide.
   const policySrc = libSource('auto/policy.js')
   const categorySrc = libSource('auto/category.js')
   const constantsSrc = libSource('auto/constants.js')
 
-  const agentTeams = {
-    policy: setMembers(policySrc, 'AGENT_TEAMS_CONTROL_TOOLS'),
-    category: setMembers(categorySrc, 'AGENT_TEAMS_CONTROL_TOOLS'),
-    catalog: groupMembers(constantsSrc, 'AgentTeams coordination'),
-  }
-  assert.deepEqual(sorted(agentTeams.policy), sorted(agentTeams.category), 'policy vs category: AGENT_TEAMS_CONTROL_TOOLS')
-  assert.deepEqual(sorted(agentTeams.policy), sorted(agentTeams.catalog), 'policy vs catalog: AgentTeams coordination group')
+  for (const family of HARNESS_FAMILIES) {
+    const policy = family.policySet === null
+      ? inlineMembers(policySrc, 'subagent')
+      : setMembers(policySrc, family.policySet)
+    const category = setMembers(categorySrc, family.categorySet)
+    const catalog = groupMembers(constantsSrc, family.group)
 
-  const orchestration = {
-    policy: inlineOrchestrationMembers(policySrc),
-    category: setMembers(categorySrc, 'ORCHESTRATION_TOOLS'),
-    catalog: groupMembers(constantsSrc, 'Orchestration'),
-  }
-  assert.deepEqual(sorted(orchestration.policy), sorted(orchestration.category), 'policy vs category: orchestration')
-  assert.deepEqual(sorted(orchestration.policy), sorted(orchestration.catalog), 'policy vs catalog: Orchestration group')
+    assert.ok(policy.length > 0, `${family.group}: policy members were parsed`)
+    assert.deepEqual(sorted(policy), sorted(category), `${family.group}: policy vs category`)
+    assert.deepEqual(sorted(policy), sorted(catalog), `${family.group}: policy vs catalog`)
 
-  // The comparison must actually be looking at populated regions.
-  assert.ok(agentTeams.policy.length >= NEWLY_ALLOWED_TEAM_TOOLS.length, 'agent-teams members were parsed')
-  assert.ok(orchestration.policy.length > 5, 'orchestration members were parsed')
+    for (const name of catalog) {
+      assert.equal(label(name), 'harnessInternal', `${family.group}: ${name} carries the harnessInternal label`)
+    }
+  }
+
+  // The read-only external lookup family is the one deliberate exception: the
+  // category layer has no set for it, and its members are labelled by explicit
+  // branches. Pin the labels so "no set" cannot quietly become "no coverage".
+  const externalPolicy = inlineMembers(policySrc, 'web_search')
+  const externalCatalog = groupMembers(constantsSrc, 'Read-only external lookup')
+  assert.deepEqual(sorted(externalPolicy), sorted(externalCatalog), 'Read-only external lookup: policy vs catalog')
+  assert.deepEqual(sorted(externalPolicy), sorted([...EXTERNAL_LOOKUP_LABELS.keys()]), 'the pinned exception list is current')
+  // The six families together must account for the entire declared plane: a
+  // name that lives in no family would be invisible to every check above.
+  assert.deepEqual(sorted(allowPlaneNames(policySrc)), sorted(DEFAULT_ALLOW_TOOLS), 'the families cover the whole allow plane')
+  for (const [name, expected] of EXTERNAL_LOOKUP_LABELS) {
+    assert.equal(label(name), expected, `${name} keeps its documented non-harnessInternal label`)
+  }
+})
+
+test('allow plane: a name the risk escalation would catch is an explicit exception, not a silent one', () => {
+  // Set membership is evaluated BEFORE the name-based risk escalation, so a
+  // member matching DESTRUCTIVE_TOOL / EXTERNAL_WRITE_TOOL / SECURITY_CHANGE_TOOL
+  // never escalates: adding such a name silently disables that channel for it.
+  // The exceptions below are the ones already in the plane; anything new has to
+  // be added here deliberately, with a reason, or this test fails.
+  const plane = allowPlaneNames(libSource('auto/policy.js'))
+  assert.ok(plane.length > 40, 'the allow plane was parsed')
+
+  const suppressed = plane.filter((name) => RISK_NAME_PATTERN.test(name))
+  const unacknowledged = suppressed.filter((name) => !RISK_TOKEN_EXCEPTIONS.has(name))
+  assert.deepEqual(
+    unacknowledged,
+    [],
+    `these names inherit the allow plane before the risk escalation can fire: ${unacknowledged.join(', ')}. `
+      + 'Add each to RISK_TOKEN_EXCEPTIONS with the reason its effect is still confined, or the escalation is silently off for it.',
+  )
+
+  const stale = [...RISK_TOKEN_EXCEPTIONS.keys()].filter((name) => !plane.includes(name))
+  assert.deepEqual(stale, [], `exceptions that no longer name a real allow-plane tool: ${stale.join(', ')}`)
+})
+
+test('allow plane: the risk escalation itself still works for names outside the plane', () => {
+  // Guards the test above from passing because the pattern went dead: a name the
+  // escalation is supposed to catch must still match it.
+  for (const name of ['team_task_delete', 'delete_agent', 'publish_release', 'update_credential']) {
+    assert.ok(RISK_NAME_PATTERN.test(name), `${name} must still be caught by the name-based escalation`)
+  }
 })
 
 test('trigger condition: the allow is exact-name membership, not a substring or family match', () => {
