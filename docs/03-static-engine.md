@@ -9,7 +9,7 @@ host 编排在 `src/index.ts`，真正「长脑子」的静态规则引擎在 `s
 | `risk-tokens.ts` | 13 | HIGH 风险正则（NAME/REASON），供分类器与 policy 共用，防漂移 |
 | `paths.ts` | 213 | 路径规范化（Windows 命名空间/NT 别名折叠、~ 展开、win32 小写）、受保护/关键路径判定、运行态文件名单 |
 | `shell.ts` | 1016 | Bash/PowerShell 词法分解（sticky 正则状态机）＋ 整行熔断 ＋ 逐段静态分类 |
-| `policy.ts` | 401 | 每次工具调用的确定性第一遍分类 `assessTool`（推断型、保留类型检查） |
+| `policy.ts` | 443 | 每次工具调用的确定性第一遍分类 `assessTool`（推断型、保留类型检查） |
 | `rules.ts` | 370 | Claude-Code 风格声明规则解析/求值（纯函数，host 与浏览器共用） |
 | `classifier.ts` | 75 | 预分类提示词、参数脱敏、严格响应解析 |
 | `dsh-classifier.ts` | 94 | 复用 `ctx.llm` 做低 token 分类请求（temperature 0） |
@@ -21,9 +21,9 @@ host 编排在 `src/index.ts`，真正「长脑子」的静态规则引擎在 `s
 
 > 同层的其余模块（类别层 `category.ts`、学习层 `learning.ts`、diff 预览 `editdiff.ts`、耗时遥测 `latency.ts`、上下文探针 `probe.ts`、结果脱敏 `redact.ts`、重试 `retry.ts`）各有专章或见 [§14](./14-code-map) 全量清单。
 
-## 3.1　assessTool —— 每一次调用的 18 步判定 <span class="lnum">policy.ts:L225-402</span>
+## 3.1　assessTool —— 每一次调用的 18 步判定 <span class="lnum">policy.ts:L266-443</span>
 
-下面 18 个分支与 `policy.ts:L225-402` 的判定顺序一一对应。一级分支数没有变，但读/写/补丁/编辑四步内部各自长出了**子闸**（受保护读、敏感名熔丝、插件运行态无条件拒）：
+下面 18 个分支与 `policy.ts:L266-443` 的判定顺序一一对应。一级分支数没有变，但读/写/补丁/编辑四步内部各自长出了**子闸**（受保护读、敏感名熔丝、插件运行态无条件拒）：
 
 ```mermaid
 flowchart TD
@@ -34,13 +34,13 @@ flowchart TD
     A4 --> A5["⑤ write/edit：插件开发目录→放行；**插件运行态文件（history/audit/learning 等）→ 无条件 deny，不进分类器（L272）**；工作区外/受保护→交人工；常规→放行 [write]"]
     A5 --> A6["⑥ apply_patch：目标藏在 patches 各项的 file_path；运行态目标→无条件 deny（L294）；任一不可读→ask（fail-closed）；全部常规→放行，否则交人工 [patch]"]
     A6 --> A7["⑦ str_replace_editor：command∈view/create/str_replace/insert 才认；view=读语义（受保护 L324 / 敏感名 L326 子闸同④），其余=写语义；运行态目标→无条件 deny（L319） [editor]"]
-    A7 --> A8["⑧ SESSION_STATE_TOOLS（8：ask_user_question/todo_write/get_goal/…）→ 放行 [allow]"]
+    A7 --> A8["⑧ SESSION_STATE_TOOLS（7：ask_user_question/todo_write/get_goal/…）→ 放行 [allow]"]
     A8 --> A9["⑨ HARNESS_READ_TOOLS（13：job_output/job_list/session_search/cordis_inspect_*…）→ 放行 [allow]"]
-    A9 --> A10["⑩ AGENT_TEAMS_CONTROL_TOOLS（9）→ 放行（只动工作区本地协作状态） [allow]"]
+    A9 --> A10["⑩ AGENT_TEAMS_CONTROL_TOOLS（13：agent_teams_* 9 个 + team_task_* 4 个）→ 放行（只动工作区本地协作状态） [allow]"]
     A10 --> A11["⑪ OWNER_CONTROL_TOOLS（3：job_kill/terminal_signal/terminal_close）→ 放行 [allow]"]
     A11 --> A12["⑫ terminal_open / terminal_send → 一律 ask（持久终端保有 cwd/env/别名状态，不可快路径） [ask]"]
     A12 --> A13["⑬ web_search/web_fetch/time/weather → 放行（只读外查） [allow]"]
-    A13 --> A14["⑭ 编排类 subagent/workflow/ralph/send_message/list_agents/interrupt_agent/… → 放行（子工具独立被查） [allow]"]
+    A13 --> A14["⑭ 编排类 subagent/workflow/ralph/spawn_agent/spawn_teammate/send_message/list_agents/interrupt_agent/… → 放行（子工具独立被查） [allow]"]
     A14 --> A15["⑮ git_push/deploy/publish/send_email/create_issue/create_pull_request → 交人工 [ask]"]
     A15 --> A16["⑯ 工具名命中风险正则（delete/upload/credential/auth …）→ 交人工 [ask]"]
     A16 --> A17["⑰ dsa_request_user（DIRECT_HUMAN_TOOL）→ 一律 ask、不进 LLM 分类器（agent 正是想绕开它）[ask]"]
