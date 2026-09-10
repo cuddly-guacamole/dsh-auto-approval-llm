@@ -7,7 +7,7 @@
 ```text
 src/
 ├─ index.ts              宿主编排：apply()、四挂点接线、14 路由、命令、评审器、审计、学习接线  4534 行
-├─ auto/                 静态评估纯函数层（24 文件，按字母序）
+├─ auto/                 静态评估纯函数层（25 文件，按字母序）
 │    ├─ artifacts.ts     104  本会话成功创建路径登记（删除豁免依据）
 │    ├─ audit.ts         94   append-only 审批审计（清空留墓碑、5MiB 保尾）
 │    ├─ category.ts      751  11 类三态开关层：归类/优先级合并/指令钳制/信任目录模式
@@ -21,6 +21,7 @@ src/
 │    ├─ learning.ts      566  确认制学习：签名、计数、回收、查找、消费闸
 │    ├─ model-channel.ts 119  模型通道路由与 provider 选择
 │    ├─ paths.ts         257  路径规范化、受保护/关键路径判定、运行态文件名单
+│    ├─ permission-change.ts 130  权限平面变更观测：逐平面基线门控 + 被拒 decision 指针
 │    ├─ policy.ts        401  assessTool 确定性第一遍分类（17 步）
 │    ├─ probe.ts         72   工作区事实只读探针（reviewerContextFacts 的元数据来源）
 │    ├─ redact.ts        207  秘密脱敏器（token/AWS/PEM/Bearer…，供参数/评审理由/骨架/结果共用）
