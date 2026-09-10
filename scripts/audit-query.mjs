@@ -25,7 +25,7 @@ import { fileURLToPath } from 'node:url'
  * Observation payload fields, in a stable order. Derived from the emitters in
  * src/index.ts (result-redacted / mask-failed / rules-parse-error /
  * learning-tamper / learning-revoked / learning-cap-reached /
- * runtime-state-read / rules-context-missing).
+ * runtime-state-read / rules-context-missing / permission-change).
  */
 export const OBSERVATION_FIELDS = [
   'callId',
@@ -41,6 +41,10 @@ export const OBSERVATION_FIELDS = [
   'allows',
   'seen',
   'expected',
+  'scope',
+  'to',
+  'actor',
+  'recentRejectedIds',
 ]
 
 /** Long observation values are trimmed so one line stays one screen row. */

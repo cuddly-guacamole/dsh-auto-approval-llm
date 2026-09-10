@@ -132,6 +132,23 @@ test('formatAuditLine: learning-tamper fingerprints survive the whitelist', () =
   assert.ok(!line.includes('expected'))
 })
 
+test('formatAuditLine: permission-change records render their payload', () => {
+  const line = formatAuditLine({
+    type: 'permission-change',
+    at,
+    sessionId: 'session-1',
+    scope: 'policy',
+    to: 'never',
+    actor: 'user',
+    recentRejectedIds: ['h1', 'h2'],
+  })
+  assert.ok(line.startsWith('[permission-change] '))
+  assert.ok(line.includes('scope=policy'))
+  assert.ok(line.includes('to=never'))
+  assert.ok(line.includes('actor=user'))
+  assert.ok(line.includes('recentRejectedIds=["h1","h2"]'))
+})
+
 test('main: a readable file with no parseable records reports the skipped lines', () => {
   const lines = []
   const original = console.log
