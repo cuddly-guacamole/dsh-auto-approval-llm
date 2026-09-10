@@ -2845,10 +2845,15 @@ export function apply(ctx: Context, rawConfig: Config): void {
   // always locked; privilege is locked unless privilegeAutoReview is on, and
   // protected unless protectedAutoReview is on (both then follow the ordinary
   // pipeline).
-  const isLockedCategory = (category: string | undefined): boolean => {
+  const isLockedCategory = (category: string | undefined, provenArtifactDeletion = false): boolean => {
     if (category === undefined) return false
     if (category === 'privilege' && config.privilegeAutoReview === true) return false
     if (category === 'protected' && config.protectedAutoReview === true) return false
+    // A deletion the policy plane proved targets only session-created paths keeps
+    // its honest `delete` label but must not take the locked countdown. Both
+    // planes read the same structured flag, so the label and the clamp cannot
+    // disagree the way the protected read once did.
+    if (category === 'delete' && provenArtifactDeletion) return false
     return LOCKED_CATEGORIES.includes(category as (typeof LOCKED_CATEGORIES)[number])
   }
   // Root authority session (walks the parent chain for subagents that inherit
@@ -4318,7 +4323,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       // handle is wired, and no learnable context is passed — after
       // highRiskSeconds with no response the ask settles as timeout-deny so
       // unattended sessions cannot hang forever on a dangerous command.
-      if (isLockedCategory(classified.category)) {
+      if (isLockedCategory(classified.category, classified.assessment?.sessionArtifactDeletion === true)) {
         const lockedStatus: ReviewStatus = {
           risk: 'HIGH',
           phase: 'countdown',

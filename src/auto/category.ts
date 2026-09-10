@@ -679,7 +679,7 @@ export function categorizeCommand(source: string, shell: string, roots: Category
 export function categoryDirective(
   config: CategoryConfig,
   category: string,
-  assessment: { decision?: string; classifierEligible?: boolean },
+  assessment: { decision?: string; classifierEligible?: boolean; sessionArtifactDeletion?: boolean },
 ): CategoryDirective {
   if (category === 'unknown' || category === 'harnessInternal') return 'inherit'
   const mode = config.categoryMode === 'aggressive' ? 'aggressive' : 'standard'
@@ -694,7 +694,15 @@ export function categoryDirective(
   // Unlocking therefore hands all of those to the ordinary pipeline (classifier
   // / reviewer / countdown), which is why it ships off.
   const protectedUnlocked = category === 'protected' && config.protectedAutoReview === true
-  if (locked && !privilegeUnlocked && !protectedUnlocked) {
+  // A deletion the policy plane proved targets only paths this session created
+  // carries that provenance as a structured flag. Labelling it `delete` is still
+  // honest (it is one), but the LOCKED clamp must not swallow it: the static
+  // allow the provenance produced is the intended outcome, and a locked ask
+  // would turn it into a countdown nobody can answer. The flag cannot be
+  // forged through arguments — it is set only where the artifact registry was
+  // consulted and every operand matched.
+  const provenArtifactDeletion = category === 'delete' && assessment.sessionArtifactDeletion === true
+  if (locked && !privilegeUnlocked && !protectedUnlocked && !provenArtifactDeletion) {
     if (explicit !== undefined) return 'ask'
     return mode === 'aggressive' ? 'ask' : 'inherit'
   }

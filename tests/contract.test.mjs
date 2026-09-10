@@ -2948,7 +2948,11 @@ test('category ask on LOCKED categories: hard-reject countdown, never auto-allow
   // to 'reject' (timeoutAction can never flip it), no takeover handle, and no
   // learnable context.
   const src = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
-  assert.ok(src.includes('if (isLockedCategory(classified.category))'), 'LOCKED detection must gate the locked countdown ask')
+  // The call gained an argument: a deletion the policy plane proved targets only
+  // paths this session created carries a structured flag that lifts the clamp.
+  // The gate itself must remain the locked predicate deciding the countdown ask.
+  assert.ok(src.includes('if (isLockedCategory(classified.category'), 'LOCKED detection must gate the locked countdown ask')
+  assert.ok(src.includes('classified.assessment?.sessionArtifactDeletion === true'), 'the provenance flag must be threaded into the predicate, not parsed from text')
   assert.ok(src.includes("phase: 'countdown'"), 'the locked ask must publish a countdown')
   assert.ok(src.includes("action: 'reject'"), 'the locked countdown action must be pinned to reject')
   assert.ok(src.includes('isLockedCategory'), 'isLockedCategory helper must exist in the compiled host')

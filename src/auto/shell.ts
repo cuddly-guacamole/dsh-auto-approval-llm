@@ -1256,7 +1256,16 @@ function classifyEffectiveCommand(name, words, segment, shell, roots, artifacts,
         const paths = deletion.targets.map(target => normalizePath(target.text, roots.workspace, roots.home));
         if (deletion.targets.every(target => !target.glob)
             && paths.every(path => artifacts.has(owner, path, roots) && isArtifactArea(path, roots))) {
-            return allowed(`delete exact session-created artifact${paths.length === 1 ? '' : 's'}: ${paths.join(', ')}`);
+            // `sessionArtifactDeletion` is a structured signal, not a hint in the
+            // reason text: the category layer locks every `delete`, which would
+            // otherwise intercept this call and hand it to a countdown a
+            // reviewer can never answer — making the provenance exemption
+            // unreachable in aggressive mode. Consumers read the flag; nothing
+            // parses the message.
+            return {
+                ...allowed(`delete exact session-created artifact${paths.length === 1 ? '' : 's'}: ${paths.join(', ')}`),
+                sessionArtifactDeletion: true,
+            };
         }
         return semanticReview(`deleting pre-session or unobserved data requires specific user authorization: ${paths.join(', ')}`);
     }
@@ -1384,9 +1393,15 @@ export function assessShell(source, shell, roots, artifacts, owner) {
         return blocked;
     if (assessments.every(assessment => assessment.decision === 'allow')) {
         const creates = assessments.flatMap(assessment => assessment.plannedCreates ?? []);
-        return allowed(assessments.length === 1
+        // Provenance survives the line-level rebuild. Reaching this branch at
+        // all means no segment was an unproven deletion (that would have come
+        // back as an ask), so one flagged segment is enough to state that every
+        // deletion in the line targeted a path this session created.
+        const provenArtifactDeletion = assessments.some(assessment => assessment.sessionArtifactDeletion === true);
+        const merged = allowed(assessments.length === 1
             ? assessments[0].reason
             : `every command in this ${shell} line is a recognized routine operation`, creates);
+        return provenArtifactDeletion ? { ...merged, sessionArtifactDeletion: true } : merged;
     }
     const reasons = assessments.filter(assessment => assessment.decision !== 'allow').map(assessment => assessment.reason);
     return semanticReview([...new Set(reasons)].join('; ').slice(0, 800));
