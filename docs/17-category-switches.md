@@ -25,7 +25,7 @@
 
 | 值 | 语义 | 关键边界 |
 |---|---|---|
-| `auto` | ≡ 按 LOW 档走，LLM 复审仍是最后一关 | 只对「本来就要进语义分类器」的调用生效（ask + classifierEligible，<span class="lnum">category.ts:L692-699</span>）；降档**不越 HIGH**——原判 HIGH/DENY 原地不动（<span class="lnum">category.ts:L744-751</span>） |
+| `auto` | ≡ 按 LOW 档走，LLM 复审仍是最后一关 | 只对「本来就要进语义分类器」的调用生效（ask + classifierEligible，<span class="lnum">category.ts:L"only applies to an ask-classified, classifier-eligible call"</span>）；降档**不越 HIGH**——原判 HIGH/DENY 原地不动（<span class="lnum">category.ts:LapplyCategoryDirective</span>） |
 | `ask` | 无条件转人工；普通类别 = status-less 无倒计时；**LOCKED 类 = 恒拒倒计时**（默认 10s，超时自动拒绝，绝不因 timeoutAction 放行） | pre-execute 快径直接返回，LLM 分类器**永远没机会**回答一次类别 ask；answerer 侧 LOCKED 类带 `action:'reject'` 的 countdown status（index.ts:isLockedCategory 判定），普通类别仍直达无状态人工 |
 | `deny` | 绝对拒绝，提权重试不可绕过 | 与 denyList 同构的终端拒绝（<span class="lnum">decision.ts:L388</span>）；`applyCategoryDirective` 里 DENY 是地板，任何配置都压不住它（<span class="lnum">category.ts:L738-739</span>） |
 
@@ -44,7 +44,7 @@ flowchart TD
     A -->|"auto"| AL["applyCategoryDirective 降档后进正常分派<br/>LOW/MEDIUM/HIGH 各自兜底不变 [gated]"]
 ```
 
-两个接点各自调 `categoryDirectiveFor` 从零重算类别与指令，**无任何状态跨越**（函数注释明言，<span class="lnum">category.ts:L716-731</span>）；同一次调用被两层检查，但不存在「上层记住下层结论」的耦合。guard 层只做硬拒，从不参与类别判定。
+两个接点各自调 `categoryDirectiveFor` 从零重算类别与指令，**无任何状态跨越**（函数注释明言，<span class="lnum">category.ts:LcategoryDirectiveFor</span>）；同一次调用被两层检查，但不存在「上层记住下层结论」的耦合。guard 层只做硬拒，从不参与类别判定。
 
 ## 17.4　LOCKED 类与三重保险（privilege 可解锁）
 
@@ -52,13 +52,17 @@ delete / protected / privilege / disk 四类在配置面上默认**只能收 `as
 
 1. **schema 层**：`categoryPolicy` 的 zod 定义只允许 `auto|ask|deny` 三值字典（<span class="lnum">index.ts:L268</span>）；
 2. **resolveConfig 层**：未知键 warn+丢弃，LOCKED 类别收到非 ask 值一律钳回丢弃并告警（<span class="lnum">index.ts:L308-330</span>）；
-3. **决策层常量兜底**：即便有漏网配置进了运行时，`categoryDirective` 对 locked 类别的分支也只会给出 `ask` 或 `inherit`，绝无 auto/deny（<span class="lnum">category.ts:L685-693</span>）。
+3. **决策层常量兜底**：即便有漏网配置进了运行时，`categoryDirective` 对 locked 类别的分支也只会给出 `ask` 或 `inherit`，绝无 auto/deny（<span class="lnum">category.ts:L"if (locked && !privilegeUnlocked && !protectedUnlocked && !provenArtifactDeletion)"</span>）。
 
 **两档锁定分层**：`LOCKED_CATEGORIES`（delete/protected/privilege/disk，L40）之上还有更硬的 `HARD_LOCKED_CATEGORIES = ['delete','disk']`（<span class="lnum">category.ts:L50</span>）——后两者**任何按名授权的通道都不得预先放行**：allowlist、pre-execute 镜像、显式配置一律无效，delete/disk 的批准只能来自人工逐次确认（带恒拒倒计时），绝不静默自动允许；protected/privilege 保留显式 operator override（分别由 `protectedAutoReview` / `privilegeAutoReview` 解锁）。理由：delete/disk 的破坏在大规模上不可逆。
 
-**例外一：`privilegeAutoReview`（默认关，fail-closed）**。开启后 `privilege` 类别从 LOCKED 名单中剔除（delete / protected / disk 仍锁死）：配置面上 privilege 可设 auto/ask/deny，未配置时走 `inherit`——类别层不再强制转人，命令进入正常评审管线（classifier + LLM 评审 + 倒计时）。三层改动：schema 新键（<span class="lnum">index.ts:L275</span>）、resolveConfig 解锁分支（<span class="lnum">index.ts:L329</span>）、categoryDirective 解锁判定（<span class="lnum">category.ts:L686-693</span>）；client 设置卡「分类开关与信任模式」子卡新增同名开关（locale 键 `settings.category.privilegeAutoReview`），开启后 privilege 行的下拉才出现 自动/拒绝 选项。
+**例外一：`privilegeAutoReview`（默认关，fail-closed）**。开启后 `privilege` 类别从 LOCKED 名单中剔除（delete / protected / disk 仍锁死）：配置面上 privilege 可设 auto/ask/deny，未配置时走 `inherit`——类别层不再强制转人，命令进入正常评审管线（classifier + LLM 评审 + 倒计时）。三层改动：schema 新键（<span class="lnum">index.ts:L"privilegeAutoReview: z.boolean().default(false)"</span>）、resolveConfig 解锁分支（<span class="lnum">index.ts:L"key === 'privilege' && raw.privilegeAutoReview === true"</span>）、categoryDirective 解锁判定（<span class="lnum">category.ts:L"const privilegeUnlocked = category === 'privilege'"</span>）；client 设置卡「分类开关与信任模式」子卡新增同名开关（locale 键 `settings.category.privilegeAutoReview`），开启后 privilege 行的下拉才出现 自动/拒绝 选项。
 
-**例外二：`protectedAutoReview`（默认关，fail-closed）**。解除 `protected` 的锁定钳制，但**不改变它仍是敏感类别**：解除后未显式配置的受保护调用落到**普通询问**（`directive='ask'`），评审器因此可以作答——这正是本项存在的理由（锁定态那条询问由倒计时恒拒，LLM 无接管句柄，谁也答不了）。要自动放行必须再把 `categoryPolicy.protected` 显式设为 `auto`；直接 `inherit` 会让策略层的静态放行**无任何评审**地生效，故不采用。**解锁面比名字听起来的宽，务必看清**：`protected` 不只涵盖工作区敏感文件与受保护元数据（`.env` / `.npmrc` / `.git/*` / `.vscode/*` 等），**还涵盖凭据树的读取**——`~/.ssh/id_rsa`、`~/.aws/credentials` 这类目标的**读**在策略层本就是 `ask` + `classifierEligible:true`（硬拒闸门只管**写**：`hardDestructiveReason` 的 mutation 分支与 shell 写向量），所以开启本键意味着**这些读取也可以由分类器/评审器作答**；对它们的**写入**依旧硬拒，不受本键影响。解锁判定读 `category.ts` 的 `protectedUnlocked`，answerer 的锁定谓词（`index.ts` 的 `isLockedCategory`）同读，两平面一致；设置卡开关（`settings.category.protectedAutoReview`）随分类卡一起保存。
+**例外二：`protectedAutoReview`（默认关，fail-closed）**。解除 `protected` 的**非凭据**锁定钳制，但**不改变它仍是敏感类别**。先说清开关的实际效果：类别 ask 在 pre-execute 处即返回（`index.ts` 的 `directive === 'ask'` 分支，分类器快径不执行），所以**评审器始终不会被问到**；开启本键只是把原来那条「倒计时恒拒、无人能答」的询问换成**常驻人工询问**（status-less，不再自动拒绝），仍须人工作答。要自动放行必须再把 `categoryPolicy.protected` 显式设为 `auto`；直接 `inherit` 会让策略层的静态放行**无任何评审**地生效，故不采用。
+
+**凭据读取地板（本键不适用）**：`protected` 同时涵盖工作区敏感文件与受保护元数据（`.env` / `.npmrc` / `.git/*` / `.vscode/*` 等）**以及凭据树的读取**。这两半的风险不同，因此策略层把后者标成结构化字段 `credentialRead`（`sensitiveBasenameAt` 或 `isCriticalPath` 命中即置位），`categoryDirective` 与 answerer 的 `isLockedCategory` 都对它保持锁定——`~/.npmrc`、`~/.ssh/…`、`~/.aws/credentials` 这类凭据读取**在本开关开启时也不解锁**。启用本键真正解锁的只有**非凭据**的工作区元数据（`.git/`、`.vscode/` 等）。解锁判定读 `category.ts` 的 `protectedUnlocked`，answerer 的锁定谓词（`index.ts` 的 `isLockedCategory`）同读同一字段，两平面一致；设置卡开关（`settings.category.protectedAutoReview`）随分类卡一起保存。
+
+**地板的三条边界（如实写明）**：①**写头读源**（`cp <凭据> out`、`tee out < <凭据>`、`dd if=<凭据>`）不落 write 快径（走语义评审，非静态放行），且同样置位地板；②地板按**类别层视角**生效——它只对类别为 `protected` 的调用起作用，`tee out < <凭据>` 这类被类别层判为 `fileEdit` 的命令由上面的「不落快径」保护，而非由本键的锁定谓词保护；③**opaque 行**（含 `(`/`{`/`$(`/heredoc 等无法静态分解的行）在类别层落到 `unknown`，因此既不受本键解锁、也不进地板——这类行的凭据读取是一次普通倒计时询问（`timeoutAction=allow` 下可被超时结算）。该残余面与 shell 面 junction 逃逸（见 docs/03「已知未覆盖」）均已登记 backlog，不在本键语义内。
 
 **例外三：已证实的会话自建物删除（无需配置，始终生效）**。`delete` 仍是 LOCKED，但策略层对「删除目标全部是本会话成功创建过的路径」有不依赖配置的出处豁免（`shell.ts` 的 artifact 分支 → `allowed('delete exact session-created artifacts')`）。该豁免以**结构化字段** `sessionArtifactDeletion` 带出，类别层的锁定钳制与 answerer 的锁定谓词都读它——否则类别层看不到 artifact 注册表，会把这条静态放行拦成锁定询问，使豁免在 aggressive 模式下**永远不可达**（修复见 commit `cb02a3d`）。红线遵守：授权性信号走结构化通道，**不从 reason 文本解析**。
 

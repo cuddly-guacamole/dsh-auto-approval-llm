@@ -17,7 +17,7 @@
 | `/llm-latency` | DELETE | 清空 LLM 延迟遥测窗口 + 文件（不动审批历史；与 history DELETE 互不清） | trustedHosts |
 | `/tool-stats` | GET | 精确名单页签的候选工具统计（最近工具 chips） | trustedHosts |
 | `/learning-store` | GET/DELETE | 已学习条目列表（键哈希+脱敏骨架+计数）/ 吊销单条（即时生效，落 `learning-revoked` 审计） | trustedHosts |
-| `/review-status` | GET | 单审批 countdown/follow 状态；callId 走 `x-auto-approval-call-id` 头（防 URL/devtools 泄漏） | trustedHosts |
+| `/review-status` | GET | 单审批 countdown/follow 状态；callId 走 `x-auto-approval-call-id` 头（防 URL/devtools 泄漏）。状态对象可选带 `category?`（类别层闭集标签，供该 ask 的终局审计记录署名；客户端不消费，无该字段时行为不变） | trustedHosts |
 | `/session-mode` | GET | 查会话权限 preset（mode） | trustedHosts |
 | `/stats` | GET | 会话统计 {mode, reviewMode, counts{total,allow,deny,timeout,breaker}, breaker{…tripped}}；sessionId 走 `x-auto-approval-session-id` 头 | trustedHosts |
 

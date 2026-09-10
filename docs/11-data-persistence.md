@@ -14,7 +14,7 @@
  "at":1787305877691}
 ```
 
-字段全集（<span class="lnum">index.ts:L949-968</span>）：`id` / `at` / `sessionId` / `toolName` / `outcome` / `source` / `llmDecision?` / `llmRisk?` / `llmReason?`（先脱敏）/ `reason?`（非 LLM 决定的原因，如 pre-execute 硬拒，同一脱敏路径）/ `attempts?`（重试时逐次失败轨迹）/ `breaker?` / `breakerReasons?` / 类别三字段 `category?` · `categoryDecision?` · `mode?`。写入走 `pushHistory`（<span class="lnum">index.ts:L1055-1085</span>）：llmReason / reason 先过脱敏 → 内存窗口 200 条 → `history.jsonl` 追加、>1MB 用内存窗口重写轮转；同一条再以 `type:'decision'` 落进审计。启动时 loadHistory 恢复。pre-execute 快路径（不经 approval/request）也落记录：`hard-deny`（策略硬拒，携带 `reason`）、`classifier-allow` / `classifier-deny`（LLM 预分类器自主裁决，携带 `llmDecision` / `llmRisk` / `llmReason`）。
+字段全集（<span class="lnum">index.ts:LHistoryRecord</span>）：`id` / `at` / `sessionId` / `toolName` / `outcome` / `source` / `llmDecision?` / `llmRisk?` / `llmReason?`（先脱敏）/ `reason?`（非 LLM 决定的原因，如 pre-execute 硬拒，同一脱敏路径）/ `attempts?`（重试时逐次失败轨迹）/ `breaker?` / `breakerReasons?` / 类别三字段 `category?` · `categoryDecision?` · `mode?`。`category` 的值域是类别层闭集（`CATEGORY_KEYS` ∪ `unknown` / `harnessInternal`），**永不携带路径或命令原文**；它出现在「类别层参与了该裁决」的记录上——包括 answerer 终局的拒绝记录（`timeout-deny` / `human-deny` / `llm-deny` / `llm-failed`），那些记录由 `askHuman` 写出、作用域里看不到 `classifyStaticRisk`，故标签经 `ReviewStatus.category` 传递；`hard-deny` / `guard` 这类**类别层未参与**的裁决刻意不带该字段，不按判决名反推类别。写入走 `pushHistory`（<span class="lnum">index.ts:LpushHistory</span>）：llmReason / reason 先过脱敏 → 内存窗口 200 条 → `history.jsonl` 追加、>1MB 用内存窗口重写轮转；同一条再以 `type:'decision'` 落进审计。启动时 loadHistory 恢复。pre-execute 快路径（不经 approval/request）也落记录：`hard-deny`（策略硬拒，携带 `reason`）、`classifier-allow` / `classifier-deny`（LLM 预分类器自主裁决，携带 `llmDecision` / `llmRisk` / `llmReason`）。
 
 ### 11.1.2 audit.jsonl（append-only，清空留墓碑）
 
