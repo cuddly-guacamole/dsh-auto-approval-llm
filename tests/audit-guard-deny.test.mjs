@@ -101,12 +101,20 @@ test('tool-stats: the guard line is a rejection, never a second allowed-once (no
     { toolName: 'read', outcome: 'allowed-once', source: 'allowlist-allow' },
     { toolName: 'read', outcome: 'rejected', source: 'guard' },
   ]
-  assert.equal(pair.filter((r) => r.outcome === 'allowed-once').length, 1)
-  assert.equal(pair.filter((r) => r.outcome === 'rejected').length, 1)
   assert.equal(pair[pair.length - 1].outcome, 'rejected', 'the later guard line is the terminal state')
-  // Allowlist-allow and guard are both non-adjudicated fuse-plane sources, so
-  // even the historical line cannot inflate the allow chips.
+  // Both lines sit on the fuse plane, so neither may enter any chips bucket.
+  // Asserted through the production predicates and the production aggregator,
+  // not by counting the fixture literals above (which could only ever restate
+  // the fixture — `assert.equal(1, 1)`): if the guard line ever leaves the
+  // fuse-source whitelist, this reddens.
+  for (const tab of ['allow', 'deny', 'human']) {
+    for (const record of pair) {
+      assert.equal(recordInBucket(record, tab), false, `${record.source} stays outside the ${tab} chips`)
+    }
+  }
   const stats = aggregateToolStats(pair)
-  assert.deepEqual(stats.allow, [])
-  assert.deepEqual(stats.deny, [])
+  assert.deepEqual(stats.allow, [], 'the allowlist-allow line never surfaces alone')
+  assert.deepEqual(stats.deny, [], 'a fused guard rejection is never counted as a deny chip')
+  assert.deepEqual(stats.human, [], 'the fused call is not a human decision')
+  assert.deepEqual(stats.humanDenied, [], 'the guard line is not a human denial')
 })

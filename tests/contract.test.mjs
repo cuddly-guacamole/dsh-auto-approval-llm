@@ -36,6 +36,25 @@ import { buildAskReason, buildEditDiffText } from '../lib/auto/editdiff.js'
 import { Config, resolveConfig, sessionModelRoute, buildReviewSnapshot, markFirstAutoSessionNotice, onboardingTimeoutLabel, onboardingNoticeText, extractProbeErrorSummary, extractReviewerKeyLine, installFeedbackRoute, installReviewerCredentialRoute, sessionEventList, currentPreset, trustedUserMessages, questionAnswerMessages, officialRejectionIn } from '../lib/index.js'
 import { categorizeCommand } from '../lib/auto/category.js'
 
+/**
+ * Slice from a start marker to the end marker that FOLLOWS it.
+ *
+ * A counted window (`slice(at, at + N)`) silently stops covering the code it
+ * names once the region grows, and a NEGATIVE assertion inside such a window
+ * turns that into a false pass rather than a failure: the assertion cannot see
+ * the thing it forbids any more, so it reports clean. Both markers are
+ * mandatory here — a renamed anchor fails loudly instead of producing an empty
+ * slice that satisfies every `!includes` check.
+ */
+function region(src, startMarker, endMarker, from = 0) {
+  const a = src.indexOf(startMarker, from)
+  assert.notEqual(a, -1, `source marker missing: ${startMarker}`)
+  const b = src.indexOf(endMarker, a + startMarker.length)
+  assert.notEqual(b, -1, `region end missing after ${startMarker}: ${endMarker}`)
+  assert.ok(b > a, `region end must follow its start: ${startMarker}`)
+  return src.slice(a, b)
+}
+
 test('parseClassifierDecision: valid allow/ask/deny', () => {
   assert.deepEqual(parseClassifierDecision({ decision: 'allow', reason: 'ok' }), { decision: 'allow', reason: 'ok' })
   assert.deepEqual(parseClassifierDecision({ decision: 'deny', reason: 'no' }), { decision: 'deny', reason: 'no' })
@@ -342,7 +361,15 @@ test('frameReviewerInput: no context summary stays byte-identical to the frozen 
     inWorkspace: true,
   }
   const frozen = '{"tool_name":"write","description":"Write a file","arguments":{"file_path":"C:/ws/a.txt"},"trusted_user_messages":["please create the file"],"workspace":{"root":"C:/ws","target_relative":"C:/ws/a.txt","in_workspace":true}}'
-  assert.equal(frameReviewerInput(input), frozen)
+  // Byte-identity is the documented cross-version freeze for this payload
+  // (src/auto/decision.ts: "with no context the payload stays byte-identical to
+  // the previous five-key workspace shape"), so it stays exact — but the
+  // comparison is split so a failure names the contract that broke instead of
+  // dumping two serialized blobs.
+  const actual = frameReviewerInput(input)
+  assert.deepEqual(JSON.parse(actual), JSON.parse(frozen), 'the payload content (values and keys) drifted')
+  assert.deepEqual(Object.keys(JSON.parse(actual)), Object.keys(JSON.parse(frozen)), 'the payload key order drifted — the reviewer-facing bytes are frozen cross-version')
+  assert.equal(actual, frozen, 'the payload serialization drifted (whitespace or compaction)')
 })
 
 test('frameReviewerInput: context_summary keeps the 5-key top level and snake_case anchors', () => {
@@ -3085,7 +3112,14 @@ test('denial log: the recent-denial cap is independent of the breaker thresholds
   assert.ok(lib.includes('const DENIAL_LOG_CAP = 10'), 'the independent display cap exists')
   const shiftAt = lib.indexOf('if (log.length > DENIAL_LOG_CAP)')
   assert.ok(shiftAt > 0, 'the shift uses the display cap')
-  assert.ok(!lib.slice(shiftAt - 300, shiftAt + 100).includes('maxConsecutiveDenials'), 'the threshold no longer caps the log')
+  // The denial-log maintenance branch, delimited by its own read and write. The
+  // old ±300 window was a counted budget: once the branch grew past it the
+  // NEGATIVE assertion below stopped covering the shift and reported clean.
+  const branchStart = lib.lastIndexOf('const log = denialLog.get(key)', shiftAt)
+  assert.notEqual(branchStart, -1, 'the denial-log branch reads the per-session log')
+  const branch = region(lib, 'const log = denialLog.get(key)', 'denialLog.set(key, log)', branchStart)
+  assert.ok(branch.includes('if (log.length > DENIAL_LOG_CAP)'), 'the extracted region is the denial-log cap site')
+  assert.ok(!branch.includes('maxConsecutiveDenials'), 'the threshold no longer caps the log')
 })
 test('/approval-reset command pair: optional registration, session-scoped reset, zero-argument global hatch', () => {
   // User decision (2026-09-05): one session's escape hatch must not silently
@@ -3110,7 +3144,11 @@ test('/approval-reset command pair: optional registration, session-scoped reset,
   assert.ok(allScope.includes('resetAllSessions()'), 'the global command delegates to the shared helper')
   const handlerAt = lib.indexOf("name: 'approval-reset'")
   assert.ok(handlerAt > allCmdAt, 'the session-scoped command is registered after the global one')
-  const scope = lib.slice(handlerAt, handlerAt + 2000)
+  // The session-scoped command object, delimited by its name and the
+  // registration label that closes it. The old +2000 window grew past the
+  // command as soon as later siblings were added, at which point the NEGATIVE
+  // assertion below stopped seeing the session handler at all.
+  const scope = region(lib, "name: 'approval-reset',", "'dsh-auto-approval-llm: /approval-reset command'")
   assert.ok(scope.includes("slashCommandsLive()"), 'the session handler carries the live switch guard')
   assert.ok(scope.includes("denials.delete("), 'the bare form deletes only the session key')
   assert.ok(scope.includes('Cannot resolve the calling session'), 'an unresolvable session gets pointed at the global command')

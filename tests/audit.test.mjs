@@ -50,10 +50,17 @@ test('auditFilePath: the default is the plugin-root audit.jsonl (redirection is 
   // The override exists only for this file's rotation fixtures. If the default
   // ever stopped being the plugin-root path, the writing plugin and the durable
   // trail would silently diverge.
-  setAuditFilePathForTests(undefined)
-  const defaultPath = auditFilePath()
-  setAuditFilePathForTests(AUDIT_FILE)
-  assert.equal(defaultPath, join(REPO_ROOT, 'audit.jsonl'))
+  try {
+    setAuditFilePathForTests(undefined)
+    const defaultPath = auditFilePath()
+    assert.equal(defaultPath, join(REPO_ROOT, 'audit.jsonl'))
+  } finally {
+    // The restore must run even when the assertion above throws. A cleared
+    // override surviving this test sends every later rotation test in this file
+    // at the LIVE audit.jsonl — the real accident this scratch path exists to
+    // prevent.
+    setAuditFilePathForTests(AUDIT_FILE)
+  }
   assert.equal(auditFilePath(), AUDIT_FILE, 'the explicit override wins while it is set')
 })
 

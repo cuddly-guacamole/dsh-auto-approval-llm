@@ -36,8 +36,15 @@ import { fileURLToPath } from 'node:url'
 import { assessShell, hardDenyShellReason } from '../lib/auto/shell.js'
 import { normalizePath, resolveRoots } from '../lib/auto/paths.js'
 
-const PLUGIN_REPO = 'C:/Users/Administrator/.dsh/plugins/dsh-auto-approval-llm'
-const TEMP = 'C:/Users/Administrator/AppData/Local/Temp'
+// Derived from THIS file's location, never hardcoded: the plugin-zone fuse keys
+// off the compiled module's own zone root (lib/auto/paths.js), so a constant
+// naming one absolute checkout makes the `FUSED` vectors point at a tree that
+// is not the one under test. `../` from this file is the plugin root. The
+// forward-slash spelling is deliberate — normalizePath keeps the separator
+// style of its input, and a workspace whose separators disagree with the
+// command's makes the target unreadable to the fuse.
+const toSlash = (path) => path.replaceAll('\\', '/')
+const PLUGIN_REPO = toSlash(fileURLToPath(new URL('..', import.meta.url)).replace(/[\\/]$/, ''))
 
 function makeRoots(workspace = PLUGIN_REPO) {
   const roots = resolveRoots(workspace, {})

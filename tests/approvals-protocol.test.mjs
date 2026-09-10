@@ -34,6 +34,37 @@ async function until(cond, what, timeout = 2000) {
 }
 
 const originalFetch = globalThis.fetch
+
+// Per-test isolation. `dispose()` reaching every poller through the success
+// path alone is not enough: an `until()` timeout throws out of the test body,
+// and the still-live interval then polls into whatever fetch stub the NEXT
+// test installs — one flake surfaces as two or three misleading failures.
+// Every poller a test arms is therefore released from that test's own
+// teardown, and the fetch stub is restored with it. Both run on failure too
+// (verified: node:test runs after() hooks for failing tests).
+function perTest(t) {
+  const pollers = []
+  t.after(() => {
+    for (const poller of pollers.splice(0)) poller.dispose()
+    globalThis.fetch = originalFetch
+  })
+  return {
+    // Arm one poller under this test's teardown. Returns it unchanged so call
+    // sites keep reading naturally: `const poller = poll(...)`. Mount helpers
+    // that return void (the watcher) are tolerated, so `poll(fn(x))` is safe.
+    poll(poller) {
+      if (poller && typeof poller.dispose === 'function') pollers.push(poller)
+      return poller
+    },
+    // Plain teardown for work with no handle to release (the watcher mounts its
+    // own pollers and exposes no disposer; its ctx.effect cleanup does).
+    onCleanup(fn) {
+      pollers.push({ dispose: fn })
+    },
+  }
+}
+
+// Belt and braces at file scope: no fetch stub may outlive the file.
 beforeEach(() => {
   answeredApprovals.clear()
   globalThis.fetch = originalFetch
@@ -222,23 +253,25 @@ test('answerOnce: respond rejection is swallowed; no retry and no second FEEDBAC
 
 // ── startReviewPolling (state machine, injected timing) ────────────────────
 
-test('startReviewPolling: status-less handle (no callId) never polls', async () => {
+test('startReviewPolling: status-less handle (no callId) never polls', async (t) => {
+  const { poll } = perTest(t)
   const fetchLog = []
   globalThis.fetch = routeFetch({ fetchLog })
-  const poller = startReviewPolling({ sessionId: 's1', key: null }, () => true, { pollMs: 10 })
+  const poller = poll(startReviewPolling({ sessionId: 's1', key: null }, () => true, { pollMs: 10 }))
   await sleep(80)
   poller.dispose()
   assert.equal(fetchLog.length, 0, 'a status-less ask must never spawn a poller')
 })
 
-test('startReviewPolling: review-status is polled per callId via header; countdown → llm follow answers', async () => {
+test('startReviewPolling: review-status is polled per callId via header; countdown → llm follow answers', async (t) => {
+  const { poll } = perTest(t)
   const statuses = { c1: { phase: 'countdown', action: 'allow', seconds: 30 } }
   const feedbackLog = []
   const fetchLog = []
   globalThis.fetch = routeFetch({ statusByCallId: statuses, feedbackLog, fetchLog })
   const responds = []
   const handle = { sessionId: 's1', key: 's1:c1', callId: 'c1', respond: async (o) => { responds.push(o) } }
-  const poller = startReviewPolling(handle, () => true, { pollMs: 10 })
+  const poller = poll(startReviewPolling(handle, () => true, { pollMs: 10 }))
   await until(() => fetchLog.length >= 1, 'first poll fired')
   assert.equal(fetchLog[0].init?.headers?.['x-auto-approval-call-id'], 'c1', 'call id travels in the header')
   await sleep(40)
@@ -250,13 +283,14 @@ test('startReviewPolling: review-status is polled per callId via header; countdo
   poller.dispose()
 })
 
-test('startReviewPolling: human follow only detaches — no answer, no FEEDBACK, poller stops', async () => {
+test('startReviewPolling: human follow only detaches — no answer, no FEEDBACK, poller stops', async (t) => {
+  const { poll } = perTest(t)
   const fetchLog = []
   const feedbackLog = []
   globalThis.fetch = routeFetch({ statusByCallId: { c1: { phase: 'follow', source: 'human', action: 'reject', seconds: 0 } }, feedbackLog, fetchLog })
   const responds = []
   const handle = { sessionId: 's1', key: 's1:c1', callId: 'c1', respond: async (o) => { responds.push(o) } }
-  const poller = startReviewPolling(handle, () => true, { pollMs: 10 })
+  const poller = poll(startReviewPolling(handle, () => true, { pollMs: 10 }))
   await sleep(60)
   poller.dispose()
   assert.equal(responds.length, 0)
@@ -264,13 +298,14 @@ test('startReviewPolling: human follow only detaches — no answer, no FEEDBACK,
   assert.equal(fetchLog.length, 1, 'the immediate poll observed the human follow and detached')
 })
 
-test('startReviewPolling: abort follow never answers (host already settled the ask)', async () => {
+test('startReviewPolling: abort follow never answers (host already settled the ask)', async (t) => {
+  const { poll } = perTest(t)
   const statuses = { c1: { phase: 'countdown', action: 'allow', seconds: 30 } }
   const feedbackLog = []
   globalThis.fetch = routeFetch({ statusByCallId: statuses, feedbackLog })
   const responds = []
   const handle = { sessionId: 's1', key: 's1:c1', callId: 'c1', respond: async (o) => { responds.push(o) } }
-  const poller = startReviewPolling(handle, () => true, { pollMs: 10 })
+  const poller = poll(startReviewPolling(handle, () => true, { pollMs: 10 }))
   await sleep(40)
   statuses.c1 = { phase: 'follow', source: 'abort', action: 'reject', seconds: 0 }
   await sleep(60)
@@ -279,12 +314,13 @@ test('startReviewPolling: abort follow never answers (host already settled the a
   assert.equal(feedbackLog.length, 0)
 })
 
-test('startReviewPolling: countdown action maps to the right outcome per source action', async () => {
+test('startReviewPolling: countdown action maps to the right outcome per source action', async (t) => {
+  const { poll } = perTest(t)
   const statuses = { ca: { phase: 'countdown', action: 'reject', seconds: 30 }, cb: { phase: 'countdown', action: 'allow', seconds: 30 } }
   globalThis.fetch = routeFetch({ statusByCallId: statuses })
   const responds = []
-  const pollerA = startReviewPolling({ sessionId: 's1', key: 's1:ca', callId: 'ca', respond: async (o) => responds.push(['ca', o]) }, () => true, { pollMs: 10 })
-  const pollerB = startReviewPolling({ sessionId: 's1', key: 's1:cb', callId: 'cb', respond: async (o) => responds.push(['cb', o]) }, () => true, { pollMs: 10 })
+  const pollerA = poll(startReviewPolling({ sessionId: 's1', key: 's1:ca', callId: 'ca', respond: async (o) => responds.push(['ca', o]) }, () => true, { pollMs: 10 }))
+  const pollerB = poll(startReviewPolling({ sessionId: 's1', key: 's1:cb', callId: 'cb', respond: async (o) => responds.push(['cb', o]) }, () => true, { pollMs: 10 }))
   await sleep(30)
   statuses.ca = { phase: 'follow', source: 'timeout', action: 'reject', seconds: 0 }
   statuses.cb = { phase: 'follow', source: 'timeout', action: 'allow', seconds: 0 }
@@ -294,13 +330,14 @@ test('startReviewPolling: countdown action maps to the right outcome per source 
   pollerB.dispose()
 })
 
-test('startReviewPolling: status vanishes after countdown → grace fallback answers with the recorded action', async () => {
+test('startReviewPolling: status vanishes after countdown → grace fallback answers with the recorded action', async (t) => {
+  const { poll } = perTest(t)
   const statuses = { c1: { phase: 'countdown', action: 'reject', seconds: 30 } }
   const feedbackLog = []
   globalThis.fetch = routeFetch({ statusByCallId: statuses, feedbackLog })
   const responds = []
   const handle = { sessionId: 's1', key: 's1:c1', callId: 'c1', respond: async (o) => { responds.push(o) } }
-  const poller = startReviewPolling(handle, () => true, { pollMs: 10, graceMs: 60 })
+  const poller = poll(startReviewPolling(handle, () => true, { pollMs: 10, graceMs: 60 }))
   await sleep(50) // countdown observed; then the host stops publishing
   statuses.c1 = undefined
   const start = Date.now()
@@ -312,14 +349,15 @@ test('startReviewPolling: status vanishes after countdown → grace fallback ans
   poller.dispose()
 })
 
-test('startReviewPolling: grace fallback skips answering when the approval already left pending', async () => {
+test('startReviewPolling: grace fallback skips answering when the approval already left pending', async (t) => {
+  const { poll } = perTest(t)
   const statuses = { c1: { phase: 'countdown', action: 'allow', seconds: 30 } }
   const feedbackLog = []
   globalThis.fetch = routeFetch({ statusByCallId: statuses, feedbackLog })
   const responds = []
   const handle = { sessionId: 's1', key: 's1:c1', callId: 'c1', respond: async (o) => { responds.push(o) } }
   let stillPending = true
-  const poller = startReviewPolling(handle, () => stillPending, { pollMs: 10, graceMs: 30 })
+  const poller = poll(startReviewPolling(handle, () => stillPending, { pollMs: 10, graceMs: 30 }))
   await sleep(50)
   stillPending = false
   statuses.c1 = undefined
@@ -329,13 +367,14 @@ test('startReviewPolling: grace fallback skips answering when the approval alrea
   assert.equal(feedbackLog.length, 0)
 })
 
-test('startReviewPolling: a re-published same countdown cancels the armed grace (F2/M9)', async () => {
+test('startReviewPolling: a re-published same countdown cancels the armed grace (F2/M9)', async (t) => {
+  const { poll } = perTest(t)
   const statuses = { c1: { phase: 'countdown', action: 'reject', seconds: 30 } }
   const feedbackLog = []
   globalThis.fetch = routeFetch({ statusByCallId: statuses, feedbackLog })
   const responds = []
   const handle = { sessionId: 's1', key: 's1:c1', callId: 'c1', respond: async (o) => { responds.push(o) } }
-  const poller = startReviewPolling(handle, () => true, { pollMs: 10, graceMs: 60 })
+  const poller = poll(startReviewPolling(handle, () => true, { pollMs: 10, graceMs: 60 }))
   await sleep(40) // countdown observed → meta = countdown:reject:30
   statuses.c1 = undefined // status-window gap → grace armed
   await sleep(30)
@@ -351,26 +390,31 @@ test('startReviewPolling: a re-published same countdown cancels the armed grace 
   assert.equal(feedbackLog.length, 0)
 })
 
-test('startReviewPolling: transient server errors keep observing and never resolve', async () => {
+test('startReviewPolling: transient server errors keep observing and never resolve', async (t) => {
+  const { poll } = perTest(t)
   const fetchLog = []
   globalThis.fetch = routeFetch({ statusByCallId: { c1: 'down' }, fetchLog })
   const responds = []
   const handle = { sessionId: 's1', key: 's1:c1', callId: 'c1', respond: async (o) => { responds.push(o) } }
-  const poller = startReviewPolling(handle, () => true, { pollMs: 10 })
-  await sleep(80)
-  poller.dispose()
+  const poller = poll(startReviewPolling(handle, () => true, { pollMs: 10 }))
+  // A count floor must not be asserted inside a fixed sleep: a single event-loop
+  // stall shorter than the old budget reddened this while nothing was wrong.
+  // Wait for the observation count instead, which is what the assertion means.
+  await until(() => fetchLog.length >= 3, 'poller kept observing through the errors')
   assert.ok(fetchLog.length >= 3, 'poller keeps observing while the server is sick')
   assert.equal(responds.length, 0)
+  poller.dispose()
 })
 
-test('startReviewPolling: onDetach fires exactly once and late dispose is a no-op', async () => {
+test('startReviewPolling: onDetach fires exactly once and late dispose is a no-op', async (t) => {
+  const { poll } = perTest(t)
   const statuses = { c1: { phase: 'follow', source: 'human', action: 'reject', seconds: 0 } }
   globalThis.fetch = routeFetch({ statusByCallId: statuses })
   const detached = []
-  const poller = startReviewPolling({ sessionId: 's1', key: 's1:c1', callId: 'c1', respond: async () => {} }, () => true, {
+  const poller = poll(startReviewPolling({ sessionId: 's1', key: 's1:c1', callId: 'c1', respond: async () => {} }, () => true, {
     pollMs: 10,
     onDetach: (k) => detached.push(k),
-  })
+  }))
   await until(() => detached.length === 1, 'detach notified the watcher')
   poller.dispose()
   poller.dispose()
@@ -380,32 +424,48 @@ test('startReviewPolling: onDetach fires exactly once and late dispose is a no-o
 
 // ── F4 in-flight guard (slow responses must never stack polls) ─────────────
 
-test('startReviewPolling: F4 — slow responses never stack concurrent polls (pollNow burst + fast ticks)', async () => {
+test('startReviewPolling: F4 — a pollNow burst is debounced and slow responses never stack concurrent polls', async (t) => {
+  const { poll } = perTest(t)
   // Pre-fix: every pollNow() and every 10ms interval tick entered poll() and
   // awaited the 50ms fetch concurrently — a multi-request storm for one
   // callId. The in-flight guard caps it at exactly one outstanding request.
   const { fn, probe } = slowReviewFetch({ statusByCallId: {}, delayMs: 50 })
   globalThis.fetch = fn
-  const poller = startReviewPolling({ sessionId: 's1', key: 's1:c1', callId: 'c1', respond: async () => {} }, () => true, { pollMs: 10 })
+  const poller = poll(startReviewPolling({ sessionId: 's1', key: 's1:c1', callId: 'c1', respond: async () => {} }, () => true, { pollMs: 10 }))
+  // What the burst actually exercises: pollNow() is gated by MIN_POLL_GAP_MS
+  // (200ms) and the construction poll set lastPollAt, so all 20 calls are
+  // no-ops here. The bound below pins that debounce contract — a burst that
+  // amplified would show ~20 requests instead — while the interval driven polls
+  // further down are what exercise the in-flight guard. A real pollNow()
+  // through the gate is covered by the resync tests, which wait out the gap.
   for (let i = 0; i < 20; i++) poller.pollNow()
-  await sleep(250) // several interval ticks land while responses are still slow
+  await sleep(20)
+  const afterBurst = probe.calls.length
+  // The construction poll is the only request so far; at most one interval tick
+  // can land in 20ms. Without the MIN_POLL_GAP_MS gate each of the 20 calls
+  // would add a request, so this bound is what pins "the burst is a no-op".
+  assert.ok(afterBurst <= 2, `a pollNow burst must not amplify requests under the 200ms gap, got ${afterBurst}`)
+  // Several interval ticks land while responses are still slow; wait for the
+  // observations to accumulate rather than trusting a fixed sleep.
+  await until(() => probe.calls.length >= 4, 'the poller kept observing while the guard serialized it')
   poller.dispose()
   assert.equal(probe.peak, 1, 'never more than one in-flight review-status request')
   assert.ok(probe.calls.length >= 4, 'the poller kept observing (guard did not stall it)')
   assert.ok(probe.calls.length < 20, 'requests were serialized, not amplified')
 })
 
-test('startReviewPolling: F4 regression — fast responses keep polling normally and the countdown → llm-follow chain answers once', async () => {
+test('startReviewPolling: F4 regression — fast responses keep polling normally and the countdown → llm-follow chain answers once', async (t) => {
+  const { poll } = perTest(t)
   const statuses = { c1: { phase: 'countdown', action: 'allow', seconds: 30 } }
   const feedbackLog = []
   const { fn, probe } = slowReviewFetch({ statusByCallId: statuses, delayMs: 0, feedbackLog })
   globalThis.fetch = fn
   const responds = []
   const handle = { sessionId: 's1', key: 's1:c1', callId: 'c1', respond: async (o) => { responds.push(o) } }
-  const poller = startReviewPolling(handle, () => true, { pollMs: 10 })
+  const poller = poll(startReviewPolling(handle, () => true, { pollMs: 10 }))
   await until(() => probe.calls.length >= 1, 'first poll fired')
   const countBefore = probe.calls.length
-  await sleep(60)
+  await until(() => probe.calls.length > countBefore, 'fast polling continues at the interval rate')
   assert.ok(probe.calls.length > countBefore, 'fast polling continues at the interval rate')
   statuses.c1 = { phase: 'follow', source: 'llm', action: 'allow', seconds: 0 }
   await until(() => responds.length === 1, 'follow answered')
@@ -419,7 +479,8 @@ test('startReviewPolling: F4 regression — fast responses keep polling normally
 
 // ── remote watcher (alpha.1 pendingInteractions) ───────────────────────────
 
-test('remote watcher: pendingInteractions countdown → llm follow answers via pending.answer', async () => {
+test('remote watcher: pendingInteractions countdown → llm follow answers via pending.answer', async (t) => {
+  const { onCleanup } = perTest(t)
   const statuses = { c9: { phase: 'countdown', action: 'reject', seconds: 30 } }
   const feedbackLog = []
   globalThis.fetch = routeFetch({ statusByCallId: statuses, feedbackLog })
@@ -436,6 +497,7 @@ test('remote watcher: pendingInteractions countdown → llm follow answers via p
   const env = fakeRemoteEnv()
   const { ctx, cleanup } = fakeCtx({ uiSession: env.uiSession })
   watchRemoteApprovals(ctx, { pollMs: 10 })
+  onCleanup(cleanup)
   env.setMap(new Map([['s1', item]]))
   await sleep(40)
   statuses.c9 = { phase: 'follow', source: 'llm', action: 'reject', seconds: 0 }
@@ -445,7 +507,8 @@ test('remote watcher: pendingInteractions countdown → llm follow answers via p
   cleanup()
 })
 
-test('remote watcher: answer() rejection is silently swallowed (already settled); no retry', async () => {
+test('remote watcher: answer() rejection is silently swallowed (already settled); no retry', async (t) => {
+  const { onCleanup } = perTest(t)
   const statuses = { c9: { phase: 'countdown', action: 'allow', seconds: 30 } }
   const feedbackLog = []
   globalThis.fetch = routeFetch({ statusByCallId: statuses, feedbackLog })
@@ -464,6 +527,7 @@ test('remote watcher: answer() rejection is silently swallowed (already settled)
   const env = fakeRemoteEnv()
   const { ctx, cleanup } = fakeCtx({ uiSession: env.uiSession })
   watchRemoteApprovals(ctx, { pollMs: 10 })
+  onCleanup(cleanup)
   env.setMap(new Map([['s1', item]]))
   await sleep(40)
   statuses.c9 = { phase: 'follow', source: 'llm', action: 'allow', seconds: 0 }
@@ -474,7 +538,8 @@ test('remote watcher: answer() rejection is silently swallowed (already settled)
   cleanup()
 })
 
-test('remote watcher: item leaving the snapshot detaches the poller; re-add re-arms (tombstone lifecycle)', async () => {
+test('remote watcher: item leaving the snapshot detaches the poller; re-add re-arms (tombstone lifecycle)', async (t) => {
+  const { onCleanup } = perTest(t)
   const statuses = { c9: { phase: 'countdown', action: 'allow', seconds: 30 } }
   const fetchLog = []
   globalThis.fetch = routeFetch({ statusByCallId: statuses, fetchLog })
@@ -489,6 +554,7 @@ test('remote watcher: item leaving the snapshot detaches the poller; re-add re-a
   const env = fakeRemoteEnv()
   const { ctx, cleanup } = fakeCtx({ uiSession: env.uiSession })
   watchRemoteApprovals(ctx, { pollMs: 10 })
+  onCleanup(cleanup)
   env.setMap(new Map([['s1', item]]))
   await until(() => fetchLog.length >= 1, 'armed')
   env.setMap(new Map()) // interaction removed by the host
@@ -500,7 +566,8 @@ test('remote watcher: item leaving the snapshot detaches the poller; re-add re-a
   cleanup()
 })
 
-test('remote watcher: per-entry arming by the item callId it carries (no map.get singletons)', async () => {
+test('remote watcher: per-entry arming by the item callId it carries (no map.get singletons)', async (t) => {
+  const { onCleanup } = perTest(t)
   const statuses = {
     ca: { phase: 'countdown', action: 'allow', seconds: 30 },
     cb: { phase: 'countdown', action: 'reject', seconds: 30 },
@@ -513,6 +580,7 @@ test('remote watcher: per-entry arming by the item callId it carries (no map.get
   const env = fakeRemoteEnv()
   const { ctx, cleanup } = fakeCtx({ uiSession: env.uiSession })
   watchRemoteApprovals(ctx, { pollMs: 10 })
+  onCleanup(cleanup)
   env.setMap(new Map([['s1', itemA], ['s2', itemB]]))
   await until(() => fetchLog.length >= 2, 'both entries armed')
   await sleep(30)
@@ -523,7 +591,8 @@ test('remote watcher: per-entry arming by the item callId it carries (no map.get
   cleanup()
 })
 
-test('remote watcher: replacing the same-session entry disposes the old poller (precedence overshadows)', async () => {
+test('remote watcher: replacing the same-session entry disposes the old poller (precedence overshadows)', async (t) => {
+  const { onCleanup } = perTest(t)
   const statuses = { cOld: { phase: 'countdown', action: 'allow', seconds: 30 }, cNew: { phase: 'countdown', action: 'allow', seconds: 30 } }
   const fetchLog = []
   globalThis.fetch = routeFetch({ statusByCallId: statuses, fetchLog })
@@ -532,6 +601,7 @@ test('remote watcher: replacing the same-session entry disposes the old poller (
   const env = fakeRemoteEnv()
   const { ctx, cleanup } = fakeCtx({ uiSession: env.uiSession })
   watchRemoteApprovals(ctx, { pollMs: 10 })
+  onCleanup(cleanup)
   env.setMap(new Map([['s1', oldItem]]))
   await until(() => fetchLog.length >= 1, 'old entry armed')
   const cOldFetches = fetchLog.filter((f) => f.init?.headers?.['x-auto-approval-call-id'] === 'cOld').length
@@ -562,7 +632,8 @@ function toggleableFetch(inner) {
   return fn
 }
 
-test('remote watcher: disconnected→connected resync answers a follow the offline window missed', async () => {
+test('remote watcher: disconnected→connected resync answers a follow the offline window missed', async (t) => {
+  const { onCleanup } = perTest(t)
   const statuses = { c9: { phase: 'countdown', action: 'reject', seconds: 30 } }
   const fetchLog = []
   const answers = []
@@ -575,6 +646,7 @@ test('remote watcher: disconnected→connected resync answers a follow the offli
   const conn = fakeConnectionEnv('connected')
   const { ctx, cleanup } = fakeCtx({ uiSession: env.uiSession, ...conn })
   watchRemoteApprovals(ctx, { pollMs: 60000 }) // standing interval far slower than resync
+  onCleanup(cleanup)
   env.setMap(new Map([['s1', item]]))
   await until(() => fetchLog.length >= 1, 'armed')
   await sleep(300) // let the pollNow gap (200ms) lapse so resync polls can fire
@@ -590,7 +662,8 @@ test('remote watcher: disconnected→connected resync answers a follow the offli
   cleanup()
 })
 
-test('remote watcher: steady-state and first-connect never resync; connecting→connected resyncs', async () => {
+test('remote watcher: steady-state and first-connect never resync; connecting→connected resyncs', async (t) => {
+  const { onCleanup } = perTest(t)
   const statuses = { c9: { phase: 'countdown', action: 'allow', seconds: 30 } }
   const fetchLog = []
   globalThis.fetch = routeFetch({ statusByCallId: statuses, fetchLog })
@@ -602,6 +675,7 @@ test('remote watcher: steady-state and first-connect never resync; connecting→
   const conn = fakeConnectionEnv('connected')
   const { ctx, cleanup } = fakeCtx({ uiSession: env.uiSession, ...conn })
   watchRemoteApprovals(ctx, { pollMs: 60000 }) // standing interval far slower than resync
+  onCleanup(cleanup)
   env.setMap(new Map([['s1', item]]))
   await until(() => fetchLog.length >= 1, 'armed')
   await sleep(300) // pollNow gap lapses, so any later resync can actually poll
@@ -617,11 +691,13 @@ test('remote watcher: steady-state and first-connect never resync; connecting→
   cleanup()
 })
 
-test('remote watcher: no uiSession service → idle watcher, no subscriptions', async () => {
+test('remote watcher: no uiSession service → idle watcher, no subscriptions', async (t) => {
+  const { onCleanup } = perTest(t)
   const fetchLog = []
   globalThis.fetch = routeFetch({ fetchLog })
   const { ctx, cleanup } = fakeCtx({})
   watchRemoteApprovals(ctx)
+  onCleanup(cleanup)
   await sleep(50)
   assert.equal(fetchLog.length, 0)
   cleanup()

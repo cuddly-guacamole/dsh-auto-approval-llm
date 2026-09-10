@@ -66,6 +66,46 @@ test('summarize: real parseRulesText errors pass through with their lines', () =
 
 // ── host wiring anchors (src/index.ts) ───────────────────────────────────
 
+/**
+ * The parse-error arm of one plane's `if (declared.errors.length > 0) { … }
+ * else { … }` statement.
+ *
+ * A counted window (`slice(idx - 80, idx + 160)`) only reaches the arm while
+ * nothing grows around it — a single inserted comment line between the guard
+ * and the report pushes the anchor out of the window and reddens the test for
+ * a reason unrelated to the wiring. The arm is delimited structurally instead:
+ * anchor on the reporter call, walk back to its guard, brace-balance the arm,
+ * and require the else arm that follows. Every marker is guarded, so a rename
+ * fails loudly instead of slicing an empty region.
+ *
+ * The arm carries no braces of its own (the caller's assertions below prove the
+ * extracted extent), so brace counting is safe here.
+ */
+function parseErrorArm(host, plane) {
+  const callAt = host.indexOf(`reportRulesParseErrors('${plane}', declared.errors)`)
+  assert.notEqual(callAt, -1, `the ${plane} plane references the shared reporter`)
+  const ifAt = host.lastIndexOf('if (declared.errors.length > 0) {', callAt)
+  assert.notEqual(ifAt, -1, `the ${plane} plane arms the reporter on parse errors`)
+  const open = host.indexOf('{', ifAt)
+  let depth = 0
+  let close = -1
+  for (let i = open; i < host.length; i++) {
+    if (host[i] === '{') depth++
+    else if (host[i] === '}') {
+      depth--
+      if (depth === 0) {
+        close = i
+        break
+      }
+    }
+  }
+  assert.notEqual(close, -1, `the ${plane} parse-error arm is brace-balanced`)
+  assert.match(host.slice(close), /^\}\s*else\s*\{/, `the ${plane} keeps the enforcement arm as the healthy path`)
+  const arm = host.slice(open + 1, close)
+  assert.ok(arm.includes(`reportRulesParseErrors('${plane}', declared.errors)`), `the ${plane} report sits inside the parse-error arm, not the healthy path`)
+  return arm
+}
+
 test('host: pre-execute and answerer planes call the same shared reporter', () => {
   const host = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
   const pre = host.indexOf("reportRulesParseErrors('pre-execute', declared.errors)")
@@ -79,11 +119,10 @@ test('host: pre-execute and answerer planes call the same shared reporter', () =
 test('host: the old silent skip and ad-hoc console.error are gone from both planes', () => {
   const host = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
   assert.ok(!host.includes("console.error('[dsh-auto-approval-llm] rulesText 解析错误"), 'no plane keeps the ad-hoc parse-error console.error')
-  const preBlock = host.slice(host.indexOf("reportRulesParseErrors('pre-execute', declared.errors)") - 80, host.indexOf("reportRulesParseErrors('pre-execute', declared.errors)") + 160)
-  assert.match(preBlock, /if \(declared\.errors\.length > 0\) \{/, 'pre-execute arms the reporter on parse errors')
-  assert.match(preBlock, /\} else \{/, 'pre-execute keeps the enforcement arm as the healthy path')
-  const ansBlock = host.slice(host.indexOf("reportRulesParseErrors('answerer', declared.errors)") - 80, host.indexOf("reportRulesParseErrors('answerer', declared.errors)") + 160)
-  assert.match(ansBlock, /if \(declared\.errors\.length > 0\) \{/, 'the answerer arms the reporter on parse errors')
+  const preArm = parseErrorArm(host, 'pre-execute')
+  assert.match(preArm, /reportRulesParseErrors\('pre-execute', declared\.errors\)/, 'pre-execute arms the reporter on parse errors')
+  const ansArm = parseErrorArm(host, 'answerer')
+  assert.match(ansArm, /reportRulesParseErrors\('answerer', declared\.errors\)/, 'the answerer arms the reporter on parse errors')
 })
 
 test('host: repeated identical reports are suppressed per plane (content-keyed, bounded)', () => {

@@ -16,6 +16,51 @@ import { assessTool } from '../lib/auto/policy.js'
 const roots = { workspace: 'C:/ws', home: 'C:/Users/u', dshHome: 'C:/Users/u/.dsh', tempRoots: [] }
 const artifacts = { has: () => false }
 
+/**
+ * The brace-balanced body that starts at `openIdx`.
+ *
+ * Indentation is the formatter's business, so an end marker written as "\n  }"
+ * matches this source file and misses the compiled bundle (which uses tabs).
+ * Counting braces is agnostic to both, and it pins the whole definition rather
+ * than a character budget. Braces inside string literals are not modelled, so
+ * the caller asserts the extracted extent (description + execute present) —
+ * that precondition is what proves the region is the tool definition.
+ */
+function blockAt(src, openIdx) {
+  assert.notEqual(openIdx, -1, 'block opener missing')
+  assert.equal(src[openIdx], '{', 'block opener must be a brace')
+  let depth = 0
+  for (let i = openIdx; i < src.length; i++) {
+    if (src[i] === '{') depth++
+    else if (src[i] === '}') {
+      depth--
+      if (depth === 0) return src.slice(openIdx + 1, i)
+    }
+  }
+  return assert.fail('unbalanced block')
+}
+
+/**
+ * The registered direct-human tool definition.
+ *
+ * The old fixed window (`slice(regStart, regStart + N)`) had to be handed a
+ * character budget guessed from the description's current length, so one added
+ * description sentence silently pushed `render` out of the slice. The
+ * definition object is delimited by its own braces instead, with the anchor
+ * guarded so a rename cannot produce an empty region.
+ */
+function directHumanToolBlock() {
+  const host = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
+  const regStart = host.indexOf('name: DIRECT_HUMAN_TOOL,')
+  assert.notEqual(regStart, -1, 'the direct-human tool definition is registered')
+  const open = host.lastIndexOf('{', regStart)
+  assert.notEqual(open, -1, 'the registered tool definition opens before its name')
+  const block = blockAt(host, open)
+  assert.ok(block.includes('description:'), 'the extracted block is the registered tool definition')
+  assert.ok(block.includes('execute: async'), 'the extracted block covers the execute body')
+  return block
+}
+
 // ── policy layer: the tool is pinned to the pure-human ask plane ──────────
 
 test('assessTool: dsa_request_user is a classifier-ineligible ask (never the LLM)', () => {
@@ -92,11 +137,9 @@ test('static anchors: parameters are a full JSON Schema object (register stores 
   // with a top-level `type: "object"`. Shipping the shorthand shape produced
   // a live 400 ("Invalid schema ... got 'type: null'") when the model API
   // consumed the tool.
-  const host = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
-  const regStart = host.indexOf('name: DIRECT_HUMAN_TOOL,')
-  // Slice must cover the full description block plus the parameters schema
-  // (the description is a five-sentence block, so keep the window generous).
-  const regBlock = host.slice(regStart, regStart + 2400)
+  // The slice must cover the full description block plus the parameters
+  // schema, so it is taken from the definition's own braces.
+  const regBlock = directHumanToolBlock()
   assert.match(regBlock, /parameters: \{\s*\n\s*type: 'object',/, 'parameters declares a top-level JSON Schema object type')
   assert.match(regBlock, /required: \['toolName'\]/, 'parameters declares the required target toolName')
   assert.match(regBlock, /additionalProperties: false/, 'parameters rejects unknown keys')
@@ -106,9 +149,7 @@ test('static anchors: render returns a ContentBlock array, never a bare string',
   // Official render contract is ContentBlock[] ({type:'text',...}); a bare
   // string made the host call .some() on it and crash at runtime
   // ("content.some is not a function").
-  const host = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
-  const regStart = host.indexOf('name: DIRECT_HUMAN_TOOL,')
-  const regBlock = host.slice(regStart, regStart + 2600)
+  const regBlock = directHumanToolBlock()
   assert.match(regBlock, /return \[\{ type: 'text', text: /, 'render returns a text ContentBlock array')
 })
 
@@ -127,7 +168,9 @@ test('static anchors: execute refuses non-Auto sessions with a direct-execute er
   // clear "execute directly" error instead of returning a fake grant the
   // agent would mistake for a human pre-approval.
   const host = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
-
+  assert.match(host, /execute the target operation directly/, 'the error tells the agent to execute directly')
+  assert.match(host, /do not request escalation/, 'the error forbids further escalation attempts')
+})
 
 test('static anchors: the schema comment and the settings copy state the two-layer truth', () => {
   // The schema comment used to claim "the tool stays registered … no
@@ -144,9 +187,6 @@ test('static anchors: the schema comment and the settings copy state the two-lay
   assert.ok(locale.includes('Registering the tool needs a restart'), 'en copy: registration needs a restart')
   assert.ok(locale.includes('follows the switch live'), 'en copy: the channel follows the switch live')
   assert.ok(!locale.includes('Takes effect after restart.'), 'the one-sided restart-only copy must be gone')
-})
-  assert.match(host, /execute the target operation directly/, 'the error tells the agent to execute directly')
-  assert.match(host, /do not request escalation/, 'the error forbids further escalation attempts')
 })
 
 test('static anchors: the tool was renamed to dsa_request_user (no stale old name)', () => {

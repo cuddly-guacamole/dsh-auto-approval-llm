@@ -25,6 +25,43 @@ const PLUGIN_ZONE = 'C:/Users/u/.dsh/plugins/dsh-auto-approval-llm'
 const SRC = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
 const HOST = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
 
+/**
+ * Slice from a start marker to the end marker that FOLLOWS it.
+ *
+ * A counted window (`slice(at, at + N)`) silently stops covering the code it
+ * names once the region grows, and a NEGATIVE assertion inside such a window
+ * turns that into a false pass rather than a failure: the assertion can no
+ * longer see the thing it forbids, so it reports clean. Both markers are
+ * mandatory here — a renamed anchor fails loudly instead of producing an empty
+ * slice that satisfies every `!includes` check.
+ */
+function region(src, startMarker, endMarker, from = 0) {
+  const a = src.indexOf(startMarker, from)
+  assert.notEqual(a, -1, `source marker missing: ${startMarker}`)
+  const b = src.indexOf(endMarker, a + startMarker.length)
+  assert.notEqual(b, -1, `region end missing after ${startMarker}: ${endMarker}`)
+  assert.ok(b > a, `region end must follow its start: ${startMarker}`)
+  return src.slice(a, b)
+}
+
+/**
+ * The whole audit record emitted for a runtime-state read, delimited by its own
+ * append call and the `}))` that closes that same call.
+ *
+ * The record is the extent the negative assertions below talk about (no
+ * verdict/statistics fields), so it is pinned structurally: the event type is
+ * the anchor, the enclosing append call plus its balanced tail is the region.
+ * A renamed event type reddens through the anchor guard instead of returning an
+ * empty slice.
+ */
+function runtimeStateReadEvent(src) {
+  const at = src.indexOf("type: 'runtime-state-read',")
+  assert.notEqual(at, -1, "the audit event type 'runtime-state-read' is wired")
+  const start = src.lastIndexOf('appendAuditLine(JSON.stringify({', at)
+  assert.notEqual(start, -1, 'the durable append wraps the event type')
+  return region(src, 'appendAuditLine(JSON.stringify({', '}))', start)
+}
+
 // ── shared basename judgment (src/auto/paths.ts) ──────────────────────────
 
 test('runtimeStateBasename: every canonical basename matches, ordinary files never do', () => {
@@ -87,9 +124,8 @@ test('host: pre-execute emits a durable appendAuditLine for runtime-state reads'
   // Old code only debugLogged the read; a `type`-keyed appendAuditLine event
   // with sessionId/toolName/files is the new persistent record.
   assert.ok(SRC.includes("appendAuditLine(JSON.stringify({"), 'the durable append exists in the host')
-  const at = SRC.indexOf("type: 'runtime-state-read',")
-  assert.ok(at !== -1, "the audit event type 'runtime-state-read' is wired")
-  const event = SRC.slice(at - 60, at + 320)
+  const event = runtimeStateReadEvent(SRC)
+  assert.ok(event.includes("type: 'runtime-state-read',"), 'the record carries the read event type')
   assert.match(event, /appendAuditLine/, 'the event is written through the appendAuditLine gate')
   assert.ok(event.includes("sessionId: authorityKeyFor(exec),"), 'event carries the session key')
   assert.ok(event.includes("toolName: exec.name,"), 'event carries the tool name')
@@ -119,8 +155,7 @@ test('host: one unified probe covers the shell plane and the structured plane', 
 })
 
 test('host: the event stays observational (no history/verdict fields)', () => {
-  const at = SRC.indexOf("type: 'runtime-state-read',")
-  const event = SRC.slice(at, SRC.indexOf('}))', at) + 3)
+  const event = runtimeStateReadEvent(SRC)
   assert.ok(!event.includes('outcome:'), 'no verdict outcome is attached to the event')
   assert.ok(!event.includes('source:'), 'no history source is fabricated for the read')
   assert.ok(!event.includes("type: 'decision'"), 'the event is not a decision record')

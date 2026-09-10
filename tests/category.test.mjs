@@ -774,6 +774,52 @@ test('T146: the learning query sits between the terminal policy-deny and risk ap
   assert.ok(learnedIdx < routeIdx, 'the learning query comes BEFORE the risk branches consume the decision')
 })
 
+/**
+ * Every `askHuman(...)` call in the compiled host, as its normalized argument
+ * list. Parentheses are balanced so a nested call (learnableContextFor) stays
+ * inside its own site's text, and whitespace is collapsed so the comparison is
+ * insensitive to the bundler's line breaks.
+ */
+function askHumanSites(src) {
+  const opener = 'askHuman('
+  const sites = []
+  for (let at = src.indexOf(opener); at !== -1; at = src.indexOf(opener, at + 1)) {
+    let depth = 1
+    let i = at + opener.length
+    for (; i < src.length && depth > 0; i++) {
+      if (src[i] === '(') depth++
+      else if (src[i] === ')') depth--
+    }
+    assert.equal(depth, 0, `unbalanced askHuman( call at offset ${at}`)
+    sites.push(src.slice(at + opener.length, i - 1).replace(/\s+/g, ' ').trim())
+  }
+  return sites
+}
+
+/**
+ * The closed ask-site enum, one entry per expected site SHAPE.
+ *
+ * The old assertion counted `askHuman(` occurrences in the whole compiled
+ * bundle: a legitimate site added or removed reddened it with a bare number and
+ * no drift point, and a site that matched no expectation could not be told
+ * apart from a typo. Here every site must match exactly one label, and each
+ * label's count is pinned, so a drift names the shape that moved.
+ * Textually identical sites (the four status-less fallbacks) share a label with
+ * their count — nothing outside their argument list tells them apart.
+ */
+const ASK_SITE_ENUM = [
+  { label: 'low-countdown (learnable)', count: 1, matches: (a) => a.endsWith("classified, 'low-countdown')") },
+  { label: 'low-llm-countdown (learnable)', count: 1, matches: (a) => a.endsWith("classified, 'low-llm-countdown')") },
+  { label: 'medium-countdown (learnable)', count: 1, matches: (a) => a.endsWith("classified, 'medium-countdown')") },
+  { label: 'medium-llm-countdown (learnable)', count: 1, matches: (a) => a.endsWith("classified, 'medium-llm-countdown')") },
+  { label: 'high-countdown (learnable)', count: 1, matches: (a) => a.endsWith("classified, 'high-countdown')") },
+  { label: 'locked countdown (hard-reject + hard-locked allowlist gate)', count: 2, matches: (a) => a === 'req, undefined, next, false, lockedStatus' },
+  { label: 'category-ask (audit label, status-less)', count: 1, matches: (a) => a === 'req, undefined, next, false, undefined, undefined, undefined, undefined, classified.category' },
+  { label: 'breaker trip', count: 1, matches: (a) => a === 'req, undefined, next, true' },
+  { label: 'direct-human target', count: 1, matches: (a) => a === 'req, undefined, next, false, undefined, undefined, false, undefined' },
+  { label: 'status-less fallbacks', count: 4, matches: (a) => a === 'req, undefined, next' },
+]
+
 test('LP3: exactly the registered learnable sites construct a learnable context', () => {
   // 2026-09-04 contract extension (user-approved): the direct-human-approval
   // channel (dsa_request_user) builds ONE target learnable in the answerer
@@ -819,7 +865,18 @@ test('LP3: exactly the registered learnable sites construct a learnable context'
   // human / humanOnly / category-ask non-locked / manual / breaker /
   // status-less fallbacks), and the direct-human channel ask (2026-09-04,
   // learns the target explicitly after resolution).
-  assert.equal([...HOST_SRC.matchAll(/askHuman\(/g)].length, 14, 'closed ask-site enum: 7 countdown + 6 status-less + 1 direct-human')
+  const sites = askHumanSites(HOST_SRC)
+  assert.equal(sites.length, 14, 'closed ask-site enum: 7 countdown + 6 status-less + 1 direct-human')
+  const perLabel = new Map()
+  for (const site of sites) {
+    const hits = ASK_SITE_ENUM.filter((entry) => entry.matches(site))
+    assert.equal(hits.length, 1, `askHuman site matches exactly one registered label (got ${hits.length}): ${site}`)
+    perLabel.set(hits[0].label, (perLabel.get(hits[0].label) ?? 0) + 1)
+  }
+  for (const entry of ASK_SITE_ENUM) {
+    const found = perLabel.get(entry.label) ?? 0
+    assert.equal(found, entry.count, `askHuman sites labelled '${entry.label}' drifted (expected ${entry.count}, found ${found})`)
+  }
   const hookIndexes = [...postSlot.matchAll(/, learnableContextFor\(/g)].map((m) => m.index)
   // Locate the HIGH branch by its code (the timeout-action call is unique to
   // it), not by a comment that a reformatter or minifier could drop.

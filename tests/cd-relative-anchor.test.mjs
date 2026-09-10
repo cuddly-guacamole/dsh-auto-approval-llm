@@ -22,13 +22,32 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { homedir } from 'node:os'
+import { fileURLToPath } from 'node:url'
 import { hardDenyShellReason } from '../lib/auto/shell.js'
 import { normalizePath, resolveRoots } from '../lib/auto/paths.js'
 
 // The workspace IS the plugin repo in this scenario: it holds the contract
 // files whose names the fuse recognises, which is what made the false positive
-// fire at all.
-const PLUGIN_REPO = 'C:/Users/Administrator/.dsh/plugins/dsh-auto-approval-llm'
+// fire at all. It is derived from THIS file's location, never hardcoded — the
+// fuse keys off the compiled module's own zone root (lib/auto/paths.js), so a
+// constant naming one absolute checkout makes the vectors point at a tree that
+// is not the one under test. `../` from this file is the plugin root. The
+// forward-slash spelling is deliberate: normalizePath keeps the separator style
+// of its input, and a workspace whose separators disagree with the command's
+// makes the changer target unreadable to the fuse.
+const toSlash = (path) => path.replaceAll('\\', '/')
+const PLUGIN_REPO = toSlash(fileURLToPath(new URL('..', import.meta.url)).replace(/[\\/]$/, ''))
+const HOME = toSlash(homedir())
+const TEMP_DIR = `${HOME}/AppData/Local/Temp/probe-bs`
+// Posix spelling of the same tree, so the posix-changer boundary stays real on
+// any machine instead of naming one hardcoded user.
+const posixOf = (path) => `/${path.slice(0, 1).toLowerCase()}${path.slice(path.indexOf('/', 2))}`
+const PLUGIN_REPO_POSIX = posixOf(PLUGIN_REPO)
+// `..` count between the drive root and the temp dir, so the traversal below
+// reaches the drive root whatever the home depth is (a fixed `../../../../`
+// only happens to be right for the two-segment home of this machine).
+const upToDriveRoot = `..${'/..'.repeat(TEMP_DIR.slice(TEMP_DIR.indexOf('/', 2) + 1).split('/').length)}`
 
 function makeRoots(workspace = PLUGIN_REPO) {
   const roots = resolveRoots(workspace, {})
@@ -56,12 +75,12 @@ test('the changer re-anchors the relative target, so the tmp write is allowed th
   // proves the changer ran and succeeded. This is the incident's shape with the
   // win32 spelling (the fixture used a Git-Bash /tmp path, which cannot be
   // compared against a win32 workspace and is refused — see the style test).
-  const command = `mkdir -p C:/Users/Administrator/AppData/Local/Temp/probe-bs && cd C:/Users/Administrator/AppData/Local/Temp/probe-bs && printf '{"name":"probe","private":true}' > package.json`
+  const command = `mkdir -p ${TEMP_DIR} && cd ${TEMP_DIR} && printf '{"name":"probe","private":true}' > package.json`
   assert.equal(deny(command), undefined, 'the write lands in the temp directory, not in the workspace')
 })
 
 test('a pwsh directory changer re-anchors inside an && chain', () => {
-  const command = `Set-Location C:/Users/Administrator/AppData/Local/Temp/probe-bs && Set-Content -Path package.json -Value x`
+  const command = `Set-Location ${TEMP_DIR} && Set-Content -Path package.json -Value x`
   assert.equal(hardDenyShellReason(command, 'pwsh', roots), undefined)
 })
 
@@ -98,11 +117,11 @@ test('boundary: a changer that may have failed does NOT move the base', () => {
 test('boundary: a posix-spelled changer is refused on a win32 workspace', () => {
   // A posix base cannot be compared against the plugin zone, DSH_HOME or the
   // credential trees, so every win32-rooted fuse would silently miss —
-  // `cd /c/Users/.../dsh-auto-approval-llm` names the plugin repo itself.
-  // Refusing the substitution is the fail-closed answer. Do not weaken this
-  // into an expectation of "no hard deny": that is the hole, not the fix.
+  // `cd /c/.../<plugin root>` names the plugin repo itself. Refusing the
+  // substitution is the fail-closed answer. Do not weaken this into an
+  // expectation of "no hard deny": that is the hole, not the fix.
   for (const command of [
-    String.raw`cd /c/Users/Administrator/.dsh/plugins/dsh-auto-approval-llm && printf x > package.json`,
+    `cd ${PLUGIN_REPO_POSIX} && printf x > package.json`,
     String.raw`cd /tmp/probe-backslash && printf x > package.json`,
   ]) {
     const reason = deny(command)
@@ -152,7 +171,11 @@ test('boundary: a win32 traversal re-anchors to its true destination and still d
   // This is why the fix substitutes the base instead of skipping the fuse:
   // `..` from the temp directory resolves to the real path, so a traversal back
   // into the plugin tree is still caught rather than waved through.
-  const command = `cd C:/Users/Administrator/AppData/Local/Temp/probe-bs && printf x > ../../../../.dsh/plugins/dsh-auto-approval-llm/package.json`
+  // The relative spelling is derived too, so this stays the real tree after a
+  // checkout move: walking up to the drive root and back down through the
+  // workspace's own path (minus its drive prefix).
+  const traversal = `${upToDriveRoot}/${PLUGIN_REPO.slice(PLUGIN_REPO.indexOf('/', 2) + 1)}/package.json`
+  const command = `cd ${TEMP_DIR} && printf x > ${traversal}`
   const reason = deny(command)
   assert.ok(reason !== undefined && reason.includes(CONTRACT_FILE_REASON), `got: ${reason}`)
 })
@@ -163,7 +186,10 @@ test('known limit: a posix changer target cannot be seen as the same tree', () =
   // under DSH_HOME — denied, but for the workspace reading rather than for the
   // contract file. Pinning "denied" (not the exact reason) keeps the assertion
   // honest without freezing which fuse happens to fire.
-  const command = String.raw`cd /tmp && printf x > ../Administrator/.dsh/plugins/dsh-auto-approval-llm/package.json`
+  // The relative spelling is derived without trusting a hardcoded home depth or
+  // user name: `..` + the posix plugin path is exactly the traversal the fixed
+  // `../Administrator/.dsh/...` spelling spelled for the original checkout.
+  const command = `cd /tmp && printf x > ..${posixOf(PLUGIN_REPO)}/package.json`
   assert.ok(deny(command) !== undefined, 'the traversal must stay denied')
 })
 
@@ -178,7 +204,7 @@ test('boundary: a changer placed after the write does not re-anchor it', () => {
 test('boundary: an absolute target is judged by itself under a changer', () => {
   // Re-anchoring is only about resolving relative names; an absolute target
   // means the same thing wherever the line is standing.
-  const command = String.raw`cd /tmp && printf x > C:/Users/Administrator/.dsh/plugins/dsh-auto-approval-llm/package.json`
+  const command = `cd /tmp && printf x > ${PLUGIN_REPO}/package.json`
   const reason = deny(command)
   assert.ok(reason !== undefined && reason.includes(CONTRACT_FILE_REASON), `got: ${reason}`)
 })
@@ -195,5 +221,5 @@ test('chained changers compose the way a shell would', () => {
   // resolved against the first, not against the workspace — a build that
   // re-anchored only the first would leave `deeper` pointing into the plugin
   // tree and deny this line.
-  assert.equal(deny(`cd C:/Users/Administrator/AppData/Local/Temp/probe-bs && cd deeper && printf x > package.json`), undefined)
+  assert.equal(deny(`cd ${TEMP_DIR} && cd deeper && printf x > package.json`), undefined)
 })

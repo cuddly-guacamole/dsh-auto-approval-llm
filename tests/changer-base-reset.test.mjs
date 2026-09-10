@@ -25,12 +25,25 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { hardDenyShellReason } from '../lib/auto/shell.js'
 import { normalizePath, resolveRoots } from '../lib/auto/paths.js'
 
-const PLUGIN_REPO = 'C:/Users/Administrator/.dsh/plugins/dsh-auto-approval-llm'
-const OTHER = 'C:/Users/Administrator/AppData/Local/Temp/dsa-other-dir'
+// The plugin tree is derived from THIS file's location, never hardcoded: the
+// fuses under test key off the compiled module's own zone root
+// (lib/auto/paths.ts) and off os.homedir(), so a constant naming one absolute
+// checkout makes the vectors point at nothing the moment the repo is cloned,
+// CI-checked out or placed in a git worktree. `../` from this file is the
+// plugin root; the forward-slash spelling is deliberate — normalizePath keeps
+// the separator style of its input, and a workspace whose separators disagree
+// with the command's makes the changer target unreadable to the fuse (it then
+// reports the DSH_HOME rule instead of the contract-file rule this file is
+// about). OS-native is converted once here so the whole file stays consistent.
+const toSlash = (path) => path.replaceAll('\\', '/')
+const PLUGIN_REPO = toSlash(fileURLToPath(new URL('..', import.meta.url)).replace(/[\\/]$/, ''))
+const HOME = toSlash(homedir())
+const OTHER = `${HOME}/AppData/Local/Temp/dsa-other-dir`
 const CONTRACT_FILE_REASON = "the plugin's own contract/build file"
 
 function makeRoots(workspace = PLUGIN_REPO) {
