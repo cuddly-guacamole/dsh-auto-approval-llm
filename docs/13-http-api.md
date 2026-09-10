@@ -2,7 +2,7 @@
 
 > *Client ↔ Host 的唯一通道*
 
-**没有 RPC**：客户端是静态 bundle（非动态 Cordis Package），无法用 `host.call`，全部走同源 fetch。统一 `responseJson`（no-store + nosniff），body 强制 application/json ≤64KB，写操作全部带 `expectedRevision` 乐观并发。全站共 **14 条 `/_dsh/auto-approval-llm/*` 路由**（host 常量 <span class="lnum">index.ts:L1555-1572</span>；client 引用 <span class="lnum">client/index.ts:L16-26</span>、<span class="lnum">client/approvals/shared.ts:L8-9</span>），每条入口第一行都过 `isTrustedRequest` 闸门，不存在无设防的「普通」路由。
+**没有 RPC**：客户端是静态 bundle（非动态 Cordis Package），无法用 `host.call`，全部走同源 fetch。统一 `responseJson`（no-store + nosniff），body 强制 application/json ≤64KB，写操作全部带 `expectedRevision` 乐观并发。全站共 **14 条 `/_dsh/auto-approval-llm/*` 路由**（host 常量 <span class="lnum">index.ts:LFEEDBACK_ROUTE</span>；client 引用 <span class="lnum">client/index.ts:LSETTINGS_ROUTE</span>、<span class="lnum">client/approvals/shared.ts:LFEEDBACK_ROUTE</span>），每条入口第一行都过 `isTrustedRequest` 闸门，不存在无设防的「普通」路由。
 
 | 路由 | 方法 | 用途 | 信任平面 |
 |---|---|---|---|
@@ -22,5 +22,5 @@
 | `/stats` | GET | 会话统计 {mode, reviewMode, counts{total,allow,deny,timeout,breaker}, breaker{…tripped}}；sessionId 走 `x-auto-approval-session-id` 头 | trustedHosts |
 
 ::: tip 「特权平面」是什么意思
-settings / reviewer-credential / feedback / test 与模型目录三路由（providers / llm-models / reasoning-efforts）传 `[]`（空白名单）→ 强制**仅回环同源**（Host 头须回环 + TCP 对端须真回环）。前四者是「能改状态或驱动 host 发请求」的配置域——LAN 用户即使进了白名单也**不能**改配置、读密钥或把 host 当 SSRF 探针；后三者与消费它们的设置卡同处回环平面，LAN 设备不可读取模型目录。其余 7 条查询路由走 `trustedHosts`（webRuntime 配置 → `--trusted-host` → 绑定 0.0.0.0 时枚举的 LAN IPv4）。早前文档列过的 `/models` 已退役（代码注释 <span class="lnum">index.ts:L1566</span>「Named llm-models (not /models) so the retired /models route…」→ 拆为 providers + llm-models）、`/history/export` 从未实现，均不在上表。
+settings / reviewer-credential / feedback / test 与模型目录三路由（providers / llm-models / reasoning-efforts）传 `[]`（空白名单）→ 强制**仅回环同源**（Host 头须回环 + TCP 对端须真回环）。前四者是「能改状态或驱动 host 发请求」的配置域——LAN 用户即使进了白名单也**不能**改配置、读密钥或把 host 当 SSRF 探针；后三者与消费它们的设置卡同处回环平面，LAN 设备不可读取模型目录。其余 7 条查询路由走 `trustedHosts`（webRuntime 配置 → `--trusted-host` → 绑定 0.0.0.0 时枚举的 LAN IPv4）。早前文档列过的 `/models` 已退役（代码注释 <span class="lnum">index.ts:LLLM_MODELS_ROUTE</span>「Named llm-models (not /models) so the retired /models route…」→ 拆为 providers + llm-models）、`/history/export` 从未实现，均不在上表。
 :::

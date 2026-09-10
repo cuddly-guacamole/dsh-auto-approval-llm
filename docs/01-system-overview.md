@@ -42,8 +42,8 @@
 | `llm-latency.jsonl` | LLM 评审耗时遥测（环形缓冲 200 条，>1MB 轮转；与审批历史分离） | 宿主 pushLatencySample |
 | `learning.json` | 确认制学习条目（SHA-256 键、TTL 30 天/100 条上限，原子 tmp+rename） | 宿主 persistLearning |
 
-以上六个文件同属运行态保护名单（<span class="lnum">paths.ts:L246</span>），任何工具调用都改不了它们。
+以上六个文件同属运行态保护名单（<span class="lnum">paths.ts:LRUNTIME_STATE_BASENAMES</span>），任何工具调用都改不了它们。
 
 ::: tip 唯一终结者
-`approval/request` 以 `{prepend:true, global:true}` 注册（<span class="lnum">index.ts:L3778</span>，options 行 <span class="lnum">index.ts:L4394</span>）—— 对命中的 ask，本插件就是最终裁决，不会开第二个弹窗、不会双写、不会让审计断裂。
+`approval/request` 以 `{prepend:true, global:true}` 注册（<span class="lnum">index.ts:L"anyCtx.on('approval/request', async"</span>，options 行 <span class="lnum">index.ts:L"{ prepend: true, global: true }"</span>）—— 对命中的 ask，本插件就是最终裁决，不会开第二个弹窗、不会双写、不会让审计断裂。
 :::

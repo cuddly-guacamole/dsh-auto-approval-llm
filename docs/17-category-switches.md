@@ -1,9 +1,9 @@
 # 17 · 类别开关与信任目录
 > *Tri-state category switches & trusted directories*
 
-静态引擎（§03）回答「**这一次调用**危不危险」，类别层回答「**这一类操作**要不要问」。工具与 shell 命令被归入 11 个类别，每类可配 `auto / ask / deny` 三态；未配置 = `inherit`，行为与没有这层时完全一致。全部实现是纯函数（<span class="lnum">src/auto/category.ts</span>，751 行），宿主在两个接线点各自从零调用。
+静态引擎（§03）回答「**这一次调用**危不危险」，类别层回答「**这一类操作**要不要问」。工具与 shell 命令被归入 11 个类别，每类可配 `auto / ask / deny` 三态；未配置 = `inherit`，行为与没有这层时完全一致。全部实现是纯函数（<span class="lnum">src/auto/category.ts#</span>，786 行），宿主在两个接线点各自从零调用。
 
-## 17.1　十一个类别与优先级 <span class="lnum">category.ts:L57-69</span>
+## 17.1　十一个类别与优先级 <span class="lnum">category.ts:LCATEGORY_PRECEDENCE</span>
 
 | 优先级 | 类别 | 典型内容 | 配置约束 |
 |---|---|---|---|
@@ -19,7 +19,7 @@
 | 2 | `build` | 构建/测试/包管理例行命令 | 三态可配 |
 | 1 | `readOnly` | 只读查询 | 三态可配 |
 
-类别清单 `CATEGORY_KEYS`（L33-37）、锁定名单 `LOCKED_CATEGORIES = ['delete','protected','privilege','disk']`（L40）。另有 `harnessInternal` 与 `unknown` 两个非类别归宿：它们**没有配置键、恒为 inherit**（<span class="lnum">category.ts:L681</span>）——看不懂的东西不给你开自动。
+类别清单 `CATEGORY_KEYS`（<span class="lnum">category.ts:LCATEGORY_KEYS</span>）、锁定名单 `LOCKED_CATEGORIES = ['delete','protected','privilege','disk']`（<span class="lnum">category.ts:LLOCKED_CATEGORIES</span>）。另有 `harnessInternal` 与 `unknown` 两个非类别归宿：它们**没有配置键、恒为 inherit**（<span class="lnum">category.ts:L"if (category === 'unknown' || category === 'harnessInternal') return 'inherit'"</span>）——看不懂的东西不给你开自动。
 
 ## 17.2　三态语义
 
@@ -27,18 +27,18 @@
 |---|---|---|
 | `auto` | ≡ 按 LOW 档走，LLM 复审仍是最后一关 | 只对「本来就要进语义分类器」的调用生效（ask + classifierEligible，<span class="lnum">category.ts:L"only applies to an ask-classified, classifier-eligible call"</span>）；降档**不越 HIGH**——原判 HIGH/DENY 原地不动（<span class="lnum">category.ts:LapplyCategoryDirective</span>） |
 | `ask` | 无条件转人工；普通类别 = status-less 无倒计时；**LOCKED 类 = 恒拒倒计时**（默认 10s，超时自动拒绝，绝不因 timeoutAction 放行） | pre-execute 快径直接返回，LLM 分类器**永远没机会**回答一次类别 ask；answerer 侧 LOCKED 类带 `action:'reject'` 的 countdown status（index.ts:isLockedCategory 判定），普通类别仍直达无状态人工 |
-| `deny` | 绝对拒绝，提权重试不可绕过 | 与 denyList 同构的终端拒绝（<span class="lnum">decision.ts:L388</span>）；`applyCategoryDirective` 里 DENY 是地板，任何配置都压不住它（<span class="lnum">category.ts:L738-739</span>） |
+| `deny` | 绝对拒绝，提权重试不可绕过 | 与 denyList 同构的终端拒绝（<span class="lnum">decision.ts:L"{ kind: 'reject', source: 'denyList-deny' }"</span>）；`applyCategoryDirective` 里 DENY 是地板，任何配置都压不住它（<span class="lnum">category.ts:LapplyCategoryDirective</span>） |
 
 ## 17.3　双接点机制
 
 ```mermaid
 flowchart TD
     T["一次 Auto 档工具调用"] --> G["tools.guard 同步硬拒闸门<br/>永不挂类别分类"]
-    G --> P["接线点① tools/pre-execute · 收紧层<br/>index.ts:L2915（只收紧、不产放行）"]
+    G --> P["接线点① tools/pre-execute · 收紧层<br/>index.ts（只收紧、不产放行）"]
     P -->|"deny"| PD["完整拒绝对话：<br/>feedback + history(source='category-deny') → rejected [deny]"]
     P -->|"ask"| PA["立即返回 kind:'ask'<br/>跳过 classifier 快径 [ask]"]
     P -->|"auto / inherit"| N["继续原路：classifier 或静态放行 [normal]"]
-    G --> A["接线点② approval/request answerer<br/>index.ts:L3778 · 全三态（deny 终端 / ask 转人 / auto 降档）"]
+    G --> A["接线点② approval/request answerer<br/>index.ts · 全三态（deny 终端 / ask 转人 / auto 降档）"]
     A -->|"deny"| AD["rejected(category-deny) 终端拒绝 [deny]"]
     A -->|"ask"| AA["status-less 转人工 [ask]"]
     A -->|"auto"| AL["applyCategoryDirective 降档后进正常分派<br/>LOW/MEDIUM/HIGH 各自兜底不变 [gated]"]
@@ -50,11 +50,11 @@ flowchart TD
 
 delete / protected / privilege / disk 四类在配置面上默认**只能收 `ask`**。保险有三道：
 
-1. **schema 层**：`categoryPolicy` 的 zod 定义只允许 `auto|ask|deny` 三值字典（<span class="lnum">index.ts:L268</span>）；
-2. **resolveConfig 层**：未知键 warn+丢弃，LOCKED 类别收到非 ask 值一律钳回丢弃并告警（<span class="lnum">index.ts:L308-330</span>）；
+1. **schema 层**：`categoryPolicy` 的 zod 定义只允许 `auto|ask|deny` 三值字典（<span class="lnum">index.ts:L"categoryPolicy: z.dict(z.union(['auto', 'ask', 'deny'] as const), z.string()).default({})"</span>）；
+2. **resolveConfig 层**：未知键 warn+丢弃，LOCKED 类别收到非 ask 值一律钳回丢弃并告警（<span class="lnum">index.ts:LresolveConfig</span>）；
 3. **决策层常量兜底**：即便有漏网配置进了运行时，`categoryDirective` 对 locked 类别的分支也只会给出 `ask` 或 `inherit`，绝无 auto/deny（<span class="lnum">category.ts:L"if (locked && !privilegeUnlocked && !protectedUnlocked && !provenArtifactDeletion)"</span>）。
 
-**两档锁定分层**：`LOCKED_CATEGORIES`（delete/protected/privilege/disk，L40）之上还有更硬的 `HARD_LOCKED_CATEGORIES = ['delete','disk']`（<span class="lnum">category.ts:L50</span>）——后两者**任何按名授权的通道都不得预先放行**：allowlist、pre-execute 镜像、显式配置一律无效，delete/disk 的批准只能来自人工逐次确认（带恒拒倒计时），绝不静默自动允许；protected/privilege 保留显式 operator override（分别由 `protectedAutoReview` / `privilegeAutoReview` 解锁）。理由：delete/disk 的破坏在大规模上不可逆。
+**两档锁定分层**：`LOCKED_CATEGORIES`（delete/protected/privilege/disk，<span class="lnum">category.ts:LLOCKED_CATEGORIES</span>）之上还有更硬的 `HARD_LOCKED_CATEGORIES = ['delete','disk']`（<span class="lnum">category.ts:LHARD_LOCKED_CATEGORIES</span>）——后两者**任何按名授权的通道都不得预先放行**：allowlist、pre-execute 镜像、显式配置一律无效，delete/disk 的批准只能来自人工逐次确认（带恒拒倒计时），绝不静默自动允许；protected/privilege 保留显式 operator override（分别由 `protectedAutoReview` / `privilegeAutoReview` 解锁）。理由：delete/disk 的破坏在大规模上不可逆。
 
 **例外一：`privilegeAutoReview`（默认关，fail-closed）**。开启后 `privilege` 类别从 LOCKED 名单中剔除（delete / protected / disk 仍锁死）：配置面上 privilege 可设 auto/ask/deny，未配置时走 `inherit`——类别层不再强制转人，命令进入正常评审管线（classifier + LLM 评审 + 倒计时）。三层改动：schema 新键（<span class="lnum">index.ts:L"privilegeAutoReview: z.boolean().default(false)"</span>）、resolveConfig 解锁分支（<span class="lnum">index.ts:L"key === 'privilege' && raw.privilegeAutoReview === true"</span>）、categoryDirective 解锁判定（<span class="lnum">category.ts:L"const privilegeUnlocked = category === 'privilege'"</span>）；client 设置卡「分类开关与信任模式」子卡新增同名开关（locale 键 `settings.category.privilegeAutoReview`），开启后 privilege 行的下拉才出现 自动/拒绝 选项。
 
@@ -70,7 +70,7 @@ delete / protected / privilege / disk 四类在配置面上默认**只能收 `as
 
 ## 17.5　复合命令：类别取先、指令取严
 
-一条 bash 可能串了多段命令。`categorizeCommandSegments` 先做词法分解再逐段归类；**读不懂的整行（opaque）退化为单个 unknown 段**——不瞎判（<span class="lnum">category.ts:L646-660</span>）。合并规则 `mergeCommandDecisions`（<span class="lnum">category.ts:L623-639</span>）双轨取值：
+一条 bash 可能串了多段命令。`categorizeCommandSegments` 先做词法分解再逐段归类；**读不懂的整行（opaque）退化为单个 unknown 段**——不瞎判（<span class="lnum">category.ts:LcategorizeCommandSegments</span>）。合并规则 `mergeCommandDecisions`（<span class="lnum">category.ts:LmergeCommandDecisions</span>）双轨取值：
 
 - **类别取先**：按 §17.1 优先级表，最高优先级类别的标签胜出（`git push && rm x` 归 gitPush？不——delete 10 > gitPush 6，归 delete）;
 - **directive 取严**：`deny > ask > auto > inherit`，任一段最严的指令决定整行待遇。
@@ -82,22 +82,22 @@ delete / protected / privilege / disk 四类在配置面上默认**只能收 `as
 
 ## 17.6　信任目录模式 `categoryMode` 与敏感名熔丝
 
-位置谓词 `isEffectiveRoutine(target, roots)`（<span class="lnum">category.ts:L159-164</span>）决定「工作区内的例行放行」认哪些地方：
+位置谓词 `isEffectiveRoutine(target, roots)`（<span class="lnum">category.ts:LisEffectiveRoutine</span>）决定「工作区内的例行放行」认哪些地方：
 
 | 模式 | 判定 |
 |---|---|
-| `standard`（默认） | workspace ∪ trustedDirs 内才认（<span class="lnum">category.ts:L162-163</span>） |
-| `aggressive` | 直接 `return true`——位置不限（<span class="lnum">category.ts:L161</span>） |
+| `standard`（默认） | workspace ∪ trustedDirs 内才认（<span class="lnum">category.ts:L"(roots.trustedDirs ?? []).some((root) => isWithin(normalizePath(root, roots.workspace, roots.home), normalized))"</span>；<span class="lnum">category.ts:L"return isWithin(roots.workspace, normalized)"</span>） |
+| `aggressive` | 直接 `return true`——位置不限（<span class="lnum">category.ts:L"if (roots.mode === 'aggressive') return true"</span>） |
 
-aggressive 下三个内置类别 `['networkExec','gitPush','publish']`（`AGGRESSIVE_BUILTIN`，<span class="lnum">category.ts:L75</span>）在**未显式配置**时隐式取 `auto`（<span class="lnum">category.ts:L691</span>）——这就是「切激进会自动放行网络读写/git push/发布」的出处；显式配置过则听你的。
+aggressive 下三个内置类别 `['networkExec','gitPush','publish']`（`AGGRESSIVE_BUILTIN`，<span class="lnum">category.ts:LAGGRESSIVE_BUILTIN</span>）在**未显式配置**时隐式取 `auto`（<span class="lnum">category.ts:L"AGGRESSIVE_BUILTIN.includes(category as CategoryKey) && mode === 'aggressive' ? 'auto' : 'inherit'"</span>）——这就是「切激进会自动放行网络读写/git push/发布」的出处；显式配置过则听你的。
 
-**危险度门全部不动**：敏感名熔丝 `sensitiveBasenameAt`（<span class="lnum">category.ts:L142-151</span>）对任意位置的 `.gitconfig/.netrc/.npmrc/.pypirc/.mcp.json/.bash*/.env(非 example)` 与 `.ssh/.gnupg/.aws/.azure/.kube` 目录段生效（名单 <span class="lnum">category.ts:L122-132</span>，含 `.gitmodules` 与 `.config/gcloud` 双级标记）——换什么模式都拦着；插件运行态文件硬拒、symlink realpath 复检同样与模式无关（§3.2/§3.4）。
+**危险度门全部不动**：敏感名熔丝 `sensitiveBasenameAt`（<span class="lnum">category.ts:LsensitiveBasenameAt</span>）对任意位置的 `.gitconfig/.netrc/.npmrc/.pypirc/.mcp.json/.bash*/.env(非 example)` 与 `.ssh/.gnupg/.aws/.azure/.kube` 目录段生效（名单 <span class="lnum">category.ts:LSENSITIVE_BASE</span>，含 `.gitmodules` 与 `.config/gcloud` 双级标记）——换什么模式都拦着；插件运行态文件硬拒、symlink realpath 复检同样与模式无关（§3.2/§3.4）。
 
 ## 17.7　trustedDirs 配置面
 
-- **校验**：仅收绝对路径；凭据树（.ssh/.gnupg/.aws/.azure/.kube）、home、dshHome、critical 路径内的条目 warn+丢弃，余下归一化入库（resolveConfig，<span class="lnum">index.ts:L336-362</span>）。
-- **host-only**：11 员 host-only 键之一（<span class="lnum">decision.ts:L275-287</span>）——只能写在 settings.yaml / patch，设置卡保存不会抹掉它，也没有它的控件。
-- **复检扩区**：symlink 守卫把 trustedDirs 并入受信复检区（workspace ∪ 插件区 ∪ trustedDirs，<span class="lnum">symlink.ts:L73-74</span>）——文本上落进信任目录的目标照样做真实路径逃逸检查（realpath 逃逸硬拒，<span class="lnum">symlink.ts:L107</span>）。
+- **校验**：仅收绝对路径；凭据树（.ssh/.gnupg/.aws/.azure/.kube）、home、dshHome、critical 路径内的条目 warn+丢弃，余下归一化入库（resolveConfig，<span class="lnum">index.ts:LresolveConfig</span>）。
+- **host-only**：11 员 host-only 键之一（<span class="lnum">decision.ts:LHOST_ONLY_KEYS</span>）——只能写在 settings.yaml / patch，设置卡保存不会抹掉它，也没有它的控件。
+- **复检扩区**：symlink 守卫把 trustedDirs 并入受信复检区（workspace ∪ 插件区 ∪ trustedDirs，<span class="lnum">symlink.ts:L"const trustedZone: string[] = [...(roots.allowedDshSubpaths ?? []), ...(roots.trustedDirs ?? [])]"</span>）——文本上落进信任目录的目标照样做真实路径逃逸检查（realpath 逃逸硬拒，<span class="lnum">symlink.ts:L"const escape = realpathCriticalReason(textual, normalized, roots, roots.trustedDirs, realWsNormalized)"</span>）。
 
 ### 配置示例（默认零变化）
 

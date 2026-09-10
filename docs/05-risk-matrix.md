@@ -2,13 +2,13 @@
 
 > *Risk tiers × timeout actions*
 
-## 5.1　静态风险分档 `classifyStaticRisk` <span class="lnum">index.ts:L2693</span>
+## 5.1　静态风险分档 `classifyStaticRisk` <span class="lnum">index.ts:LclassifyStaticRisk</span>
 
 | 档位 | 判定 | 含义 |
 |---|---|---|
 | LOW | `assessTool(...).decision === 'allow'` | 静态评估认为安全（工作区内读/写、只读查询、常规命令） |
 | HIGH | reason 命中 `RISK_REASON_PATTERN` 或 工具名命中 `RISK_NAME_PATTERN` | destructive / external write / credential / security-boundary… |
-| DENY | `assessTool(...).decision === 'deny'`（`riskFromAssessment`，<span class="lnum">decision.ts:L518</span>） | 静态引擎判死（凭据/受保护/插件运行态目标），走策略层终端拒绝 |
+| DENY | `assessTool(...).decision === 'deny'`（`riskFromAssessment`，<span class="lnum">decision.ts:LriskFromAssessment</span>） | 静态引擎判死（凭据/受保护/插件运行态目标），走策略层终端拒绝 |
 | MEDIUM | 其余一律 | 「需要语义判断」的模糊区（含评估为 ask 的全部） |
 
 返回形状除 `risk` 外可携带 `reason? / assessment? / category? / directive? / mode?`——类别标签与指令随风险一次算出，供决策序的类别层与审计字段复用。
@@ -27,7 +27,7 @@
 倒计时（5/8/10）、熔断（3/20）、截断（4000）等数值默认值**唯一**集中在 `src/auto/constants.ts` 的 `THRESHOLD_DEFAULTS`；host schema、host 回退、客户端草稿/重置均引用同一常量。查默认值以代码（constants.ts）为准，README 仅为速查（已同步 5/8/10）。
 :::
 
-## 5.3　超时动作矩阵 `riskTimedOutAction` <span class="lnum">index.ts:L517</span>
+## 5.3　超时动作矩阵 `riskTimedOutAction` <span class="lnum">index.ts:LriskTimedOutAction</span>
 
 「没人回答，倒计时走完」之后做什么，由 **timeoutAction × 风险档 × 是否 unattended** 三方决定：
 

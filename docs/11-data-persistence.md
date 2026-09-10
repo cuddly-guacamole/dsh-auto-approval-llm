@@ -1,7 +1,7 @@
 # 11 · 数据与持久化
 > *What lands on disk*
 
-插件运行态共**六个文件**（<span class="lnum">paths.ts:L202</span> RUNTIME_STATE_BASENAMES 六员：`history.jsonl / audit.jsonl / approval-debug.jsonl / review-mode.json / llm-latency.jsonl / learning.json`）——这名单同时是保护对象：任何工具调用改写它们都会被静态引擎无条件硬拒。
+插件运行态共**六个文件**（<span class="lnum">paths.ts:LRUNTIME_STATE_BASENAMES</span> RUNTIME_STATE_BASENAMES 六员：`history.jsonl / audit.jsonl / approval-debug.jsonl / review-mode.json / llm-latency.jsonl / learning.json`）——这名单同时是保护对象：任何工具调用改写它们都会被静态引擎无条件硬拒。
 
 ## 11.1 四条 JSONL 的真实形态（取自本仓库现网样例）
 
@@ -30,7 +30,7 @@ pushHistory 每次附带写一条 `type:'decision'`；UI 清历史只清内存+h
 
 #### 非决策观测事件
 
-除 `decision` / `clear` 外，audit.jsonl 还承载**非决策观测事件**——只记观测事实、不改任何裁决、不进审批历史窗口与统计（`type` 见 <span class="lnum">index.ts</span> 各 `appendAuditLine` 处）：
+除 `decision` / `clear` 外，audit.jsonl 还承载**非决策观测事件**——只记观测事实、不改任何裁决、不进审批历史窗口与统计（`type` 见 <span class="lnum">index.ts#</span> 各 `appendAuditLine` 处）：
 
 - `result-redacted` / `mask-failed`：成功工具结果过脱敏器的命中 / 失败记录（post-execute 侧），只带 callId/toolName，永不落被掩码的原料；
 - `learning-cap-reached` / `learning-revoked` / `learning-tamper`：学习放行到达会话上限告警 / 设置卡吊销单条（learning-store DELETE）/ 进程外改写 learning.json 的检测；
@@ -73,7 +73,7 @@ pushHistory 每次附带写一条 `type:'decision'`；UI 清历史只清内存+h
 {"at":…,"tookMs":8011,"settled":false,"attempts":2}
 ```
 
-独立于审批历史：历史记「裁决事实」，耗时是性能遥测——被打断的调用（倒计时超时/网络失败/解析失败/无路由）没有历史记录可挂，回写就会伪造裁决。所以它住自己的环形缓冲（内存 200 条，<span class="lnum">latency.ts:L47</span>）+ 同款 append+轮转文件（>1MB 重写，<span class="lnum">latency.ts:L109</span>），损坏行跳过。样本二分：`settled=true` 才是真响应时间；`aborted` 是等待上限，**永不混入 MIN/AVG/MAX**（UI 汇总窗口最近 100 条，单列「超时/无响应」计数）。
+独立于审批历史：历史记「裁决事实」，耗时是性能遥测——被打断的调用（倒计时超时/网络失败/解析失败/无路由）没有历史记录可挂，回写就会伪造裁决。所以它住自己的环形缓冲（内存 200 条，<span class="lnum">latency.ts:LMAX_LATENCY_SAMPLES</span>）+ 同款 append+轮转文件（>1MB 重写，<span class="lnum">latency.ts:LpushLatencySample</span>），损坏行跳过。样本二分：`settled=true` 才是真响应时间；`aborted` 是等待上限，**永不混入 MIN/AVG/MAX**（UI 汇总窗口最近 100 条，单列「超时/无响应」计数）。
 
 ## 11.2 learning.json（确认制学习条目）
 
@@ -84,11 +84,11 @@ pushHistory 每次附带写一条 `type:'decision'`；UI 清历史只清内存+h
    "count":3,"firstAt":…,"lastAt":…}}}
 ```
 
-- **键**：SHA-256(`sigVersion|kind|workspace|signature`)（<span class="lnum">learning.ts:L248-250</span>）——签名是确定性整行模板（[§18](./18-confirm-learning)），不含任何原始值。
-- **骨架卫生**：模板先过 `redactSecrets` 再落盘（<span class="lnum">learning.ts:L225/L242</span>），且只允许字符白名单、长度 ≤512（`SKELETON_MAX`，<span class="lnum">learning.ts:L68</span>）。
-- **回收**：TTL 默认 30 天、上限默认 100 条，按 `lastAt` LRU 逐出（`evictLearning`，<span class="lnum">learning.ts:L387-397</span>）；关闭开关不清数据。
-- **写入**：同步 `tmp + rename` 原子替换（`persistLearning`，<span class="lnum">learning.ts:L423</span>），best-effort，进程内副本兜底。
-- **隔离**：查找要求 `entry.workspace === 当前工作区` 精确相等（lookupLearning 门，<span class="lnum">learning.ts:L514-522</span>）——一个项目学到的放行资格不会带到另一个项目。
+- **键**：SHA-256(`sigVersion|kind|workspace|signature`)（<span class="lnum">learning.ts:LlearningKey</span>）——签名是确定性整行模板（[§18](./18-confirm-learning)），不含任何原始值。
+- **骨架卫生**：模板先过 `redactSecrets` 再落盘（<span class="lnum">learning.ts:L"redactSecrets(template)"</span>、<span class="lnum">learning.ts:L"redactSecrets(line)"</span>），且只允许字符白名单、长度 ≤512（`SKELETON_MAX`，<span class="lnum">learning.ts:LSKELETON_MAX</span>）。
+- **回收**：TTL 默认 30 天、上限默认 100 条，按 `lastAt` LRU 逐出（`evictLearning`，<span class="lnum">learning.ts:LevictLearning</span>）；关闭开关不清数据。
+- **写入**：同步 `tmp + rename` 原子替换（`persistLearning`，<span class="lnum">learning.ts:LpersistLearning</span>），best-effort，进程内副本兜底。
+- **隔离**：查找要求 `entry.workspace === 当前工作区` 精确相等（lookupLearning 门，<span class="lnum">learning.ts:LlookupLearning</span>）——一个项目学到的放行资格不会带到另一个项目。
 
 ::: tip
 审计刻意存普通文件而非会话 user/message 事件：**主模型永远无法把它读回来当成提示注入通道**，同时保证「清空可恢复」。
