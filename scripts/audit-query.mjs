@@ -45,6 +45,8 @@ export const OBSERVATION_FIELDS = [
   'to',
   'actor',
   'recentRejectedIds',
+  'phase',
+  'paths',
 ]
 
 /** Long observation values are trimmed so one line stays one screen row. */

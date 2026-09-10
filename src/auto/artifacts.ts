@@ -21,24 +21,36 @@ export class ArtifactRegistry {
         const normalized = normalizePath(path, roots.workspace, roots.home);
         return isArtifactArea(normalized, roots) && this.created.get(owner)?.has(normalized) === true;
     }
-    /** Record planned exact creations for settlement-time promotion. */
+    /**
+     * Record planned exact creations for settlement-time promotion.
+     * @returns the paths actually recorded (empty when none qualified), so the
+     * caller can leave an audit trace of the chain — the exemption this feeds
+     * has no other observable trace, which is how it stayed dead unnoticed.
+     */
     plan(exec, paths, roots) {
         const owner = exec.agent?.session;
         if (owner === undefined)
-            return;
+            return [];
         const eligible = paths
             .map(path => normalizePath(path, roots.workspace, roots.home))
             .filter(path => isArtifactArea(path, roots) && !existsSync(path));
         if (eligible.length > 0)
             this.pending.set(exec.token, { owner, paths: eligible });
+        return eligible;
     }
-    /** Promote successful creates and forget every pending execution. */
+
+    /**
+     * Promote successful creates and forget every pending execution.
+     * @returns the paths promoted to session provenance (empty when the
+     * execution created nothing, failed, or matched no planned create).
+     */
     settle(exec, result, roots) {
         const owner = exec.agent?.session;
         const pending = this.pending.get(exec.token);
         this.pending.delete(exec.token);
+        const promoted = [];
         if (owner === undefined || result.isError)
-            return;
+            return promoted;
         const value = result.value;
         // Shell results carry an exit code and only a zero exit actually
         // produced the planned paths. Structured write-family results have no
@@ -49,16 +61,24 @@ export class ArtifactRegistry {
             && 'exitCode' in value;
         const succeeded = !shellValue || value.exitCode === 0;
         if (pending !== undefined && pending.owner === owner && succeeded) {
-            for (const path of pending.paths)
+            for (const path of pending.paths) {
                 this.add(owner, path, roots);
+                promoted.push(path);
+            }
         }
         if (exec.name === 'write' && typeof value === 'object' && value !== null
             && 'operation' in value && value.operation === 'create'
             && 'path' in value && typeof value.path === 'string') {
             const path = normalizePath(value.path, roots.workspace, roots.home);
-            if (isArtifactArea(path, roots))
+            if (isArtifactArea(path, roots)) {
                 this.add(owner, path, roots);
+                promoted.push(path);
+            }
         }
+        // The two promotion paths can name the same file (a planned write whose
+        // result also reports the create). `add` is idempotent, but the caller
+        // reports what it promoted, so report each path once.
+        return [...new Set(promoted)];
     }
     add(owner, path, roots) {
         const paths = this.created.get(owner) ?? new Set();

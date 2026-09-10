@@ -3125,7 +3125,20 @@ export function apply(ctx: Context, rawConfig: Config): void {
     }
     const roots = rootsFor(exec)
     const assessment = assessTool(exec, roots, artifacts)
-    if (assessment.plannedCreates !== undefined) artifacts.plan(exec, assessment.plannedCreates, roots)
+    if (assessment.plannedCreates !== undefined) {
+      const recorded = artifacts.plan(exec, assessment.plannedCreates, roots)
+      // Observation only (never feeds a verdict): the session-artifact exemption
+      // is an allow layer with no other trace, so without this a broken
+      // provenance chain is invisible — which is exactly how it stayed broken
+      // while every contract test passed.
+      if (recorded.length > 0) {
+        appendAuditLine(JSON.stringify({
+          type: 'artifact-provenance', at: Date.now(), phase: 'plan',
+          callId: exec.callId ?? null, sessionId: authorityKeyFor(exec),
+          toolName: exec.name ?? null, paths: recorded,
+        }))
+      }
+    }
     if (assessment.decision === 'deny') {
       // The code-enforced fuse is the decision users trust most, so it must
       // leave the same durable trace as every other terminal. Until this
@@ -3431,7 +3444,14 @@ export function apply(ctx: Context, rawConfig: Config): void {
 
   anyCtx.on('tools/result', (exec: any, result: any) => {
     if (!isAutoExecution(exec)) return
-    artifacts.settle(exec, result, rootsFor(exec))
+    const promoted = artifacts.settle(exec, result, rootsFor(exec))
+    if (promoted.length > 0) {
+      appendAuditLine(JSON.stringify({
+        type: 'artifact-provenance', at: Date.now(), phase: 'promote',
+        callId: exec.callId ?? null, sessionId: authorityKeyFor(exec),
+        toolName: exec.name ?? null, paths: promoted,
+      }))
+    }
   })
 
   watchNotices(anyCtx, () => config)
