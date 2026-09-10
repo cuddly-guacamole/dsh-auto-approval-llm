@@ -5,28 +5,58 @@
 // every append re-ran a full read→split→slice→join→write (O(n²) amplification).
 // auditRotateContent now converges on BOTH bounds in one backward byte scan,
 // and appendAuditLine replaces the file atomically (tmp + rename).
-import test from 'node:test'
+//
+// These tests write and replace multi-megabyte files, so they run against a
+// scratch path rather than the plugin-root audit.jsonl. The default path is the
+// same file a running dsh process appends to; displacing it made the suite
+// race that process and could leave the live location holding a fresh,
+// near-empty file after a lost restore rename.
+import test, { after } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { appendAuditLine, auditFilePath, auditRotateContent, MAX_AUDIT_BYTES, MAX_AUDIT_LINES } from '../lib/auto/audit.js'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import {
+  appendAuditLine, auditFilePath, auditRotateContent, setAuditFilePathForTests,
+  MAX_AUDIT_BYTES, MAX_AUDIT_LINES,
+} from '../lib/auto/audit.js'
 
-const AUDIT_FILE = auditFilePath()
+const REPO_ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
+const SCRATCH_DIR = mkdtempSync(join(tmpdir(), 'dsh-audit-test-'))
+const AUDIT_FILE = join(SCRATCH_DIR, 'audit.jsonl')
 const AUDIT_TMP = `${AUDIT_FILE}.tmp`
 
-// appendAuditLine writes the real plugin-root audit.jsonl (no injection
-// point), so every test snapshots/restores it and removes any tmp residue.
+setAuditFilePathForTests(AUDIT_FILE)
+after(() => {
+  setAuditFilePathForTests(undefined)
+  rmSync(SCRATCH_DIR, { recursive: true, force: true })
+})
+
+// Give each test a clean scratch file; nothing outside the scratch directory is
+// touched, so a concurrently running plugin is never disturbed.
 function withAuditBackup(fn) {
-  const backup = `${AUDIT_FILE}.bak-test`
-  const had = existsSync(AUDIT_FILE)
-  if (had) renameSync(AUDIT_FILE, backup)
+  rmSync(AUDIT_FILE, { force: true })
+  rmSync(AUDIT_TMP, { force: true })
   try {
     fn()
   } finally {
     rmSync(AUDIT_FILE, { force: true })
     rmSync(AUDIT_TMP, { force: true })
-    if (had) renameSync(backup, AUDIT_FILE)
   }
 }
+
+test('auditFilePath: the default is the plugin-root audit.jsonl (redirection is opt-in)', () => {
+  // The override exists only for this file's rotation fixtures. If the default
+  // ever stopped being the plugin-root path, the writing plugin and the durable
+  // trail would silently diverge.
+  setAuditFilePathForTests(undefined)
+  const defaultPath = auditFilePath()
+  setAuditFilePathForTests(AUDIT_FILE)
+  assert.equal(defaultPath, join(REPO_ROOT, 'audit.jsonl'))
+  assert.equal(auditFilePath(), AUDIT_FILE, 'the explicit override wins while it is set')
+})
+
 
 function longLines(count, width) {
   return Array.from({ length: count }, (_, i) => `${'x'.repeat(width)}${i}`)
@@ -87,7 +117,7 @@ test('appendAuditLine: returns false (fail-closed signal) when the audit path is
     }
   })
 })
-test('appendAuditLine: rotation converges the real file atomically with no tmp residue', () => {
+test('appendAuditLine: rotation converges the file atomically with no tmp residue', () => {
   withAuditBackup(() => {
     const lines = longLines(3000, 2048)
     writeFileSync(AUDIT_FILE, lines.join('\n') + '\n')

@@ -20,6 +20,36 @@ export const MAX_AUDIT_BYTES = 5 * 1024 * 1024
 // (the same directory that holds history.jsonl).
 const AUDIT_FILE = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'audit.jsonl')
 
+/**
+ * Test-only redirection of the audit file.
+ *
+ * The rotation contracts have to fill the file with a multi-megabyte fixture
+ * and then replace it. Aimed at the default path they would displace the file a
+ * running dsh process is appending to: the old snapshot/restore dance removed
+ * the live file and then renamed the backup back over it, so every decision
+ * written during the window was dropped — and when that restore rename lost its
+ * race with the writer (EPERM on Windows), the live path was left holding a
+ * fresh near-empty file while the real trail was stranded in a `.bak-test`
+ * orphan that the next run renamed away. One `npm test` run could therefore
+ * replace the approval audit trail with an almost empty file.
+ *
+ * This override exists so those tests can operate on a scratch path instead.
+ * Nothing in production sets it, so the default stays the plugin-root
+ * audit.jsonl — `auditFilePath()` reports the effective path so a contract test
+ * can pin that default without relying on the caller's cooperation.
+ */
+let auditFileOverride: string | undefined
+
+/** Test-only: point the audit file at `path` (pass undefined to restore the default). */
+export function setAuditFilePathForTests(path: string | undefined): void {
+  auditFileOverride = path
+}
+
+/** The audit file this process is actually appending to. */
+function auditPath(): string {
+  return auditFileOverride ?? AUDIT_FILE
+}
+
 /** Rotate by keeping only the tail (append-mostly; never edits in place). */
 export function trimAuditTail(content: string, maxLines = MAX_AUDIT_LINES): string {
   const lines = content.split('\n').filter(Boolean)
@@ -66,17 +96,18 @@ export function auditRotateContent(content: string, maxBytes = MAX_AUDIT_BYTES, 
  * would only add a TOCTOU window between check and write).
  */
 export function appendAuditLine(line: string): boolean {
+  const file = auditPath()
   try {
-    appendFileSync(AUDIT_FILE, `${line}\n`)
-    if (statSync(AUDIT_FILE).size > MAX_AUDIT_BYTES) {
-      const content = readFileSync(AUDIT_FILE, 'utf8')
+    appendFileSync(file, `${line}\n`)
+    if (statSync(file).size > MAX_AUDIT_BYTES) {
+      const content = readFileSync(file, 'utf8')
       const rotated = auditRotateContent(content)
       if (rotated === content) return true
       // Atomic replace (tmp + rename, same directory) so a crash mid-rotate
       // can never leave a torn audit file; the original survives write errors.
-      const tmp = `${AUDIT_FILE}.tmp`
+      const tmp = `${file}.tmp`
       writeFileSync(tmp, rotated)
-      renameSync(tmp, AUDIT_FILE)
+      renameSync(tmp, file)
     }
     return true
   } catch {
@@ -90,5 +121,5 @@ export function recordAuditClear(cleared: number, at = Date.now()): void {
 }
 
 export function auditFilePath(): string {
-  return AUDIT_FILE
+  return auditPath()
 }
