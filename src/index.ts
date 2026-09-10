@@ -1684,6 +1684,17 @@ interface ReviewStatus {
    * cancelled/aborted ask (no human and no LLM decided) so it is never
    * misread as a human answer. */
   source?: 'human' | 'llm' | 'timeout' | 'abort'
+  /**
+   * The category layer's label for this call, when one was derived. Carried on
+   * the status so the ask's own terminal record can name it: the rejected
+   * records written from `askHuman` (timeout-deny, human-deny, llm-deny,
+   * llm-failed) sit in a scope that cannot see `classifyStaticRisk`'s result,
+   * and without the label a refusal cannot be grouped by category — which is
+   * how a whole class of false refusals stayed uncountable. It is the same
+   * closed-set key the decision records already carry, never a path or a
+   * command string.
+   */
+  category?: string
 }
 
 const reviewStates = new Map<string, ReviewStatus>()
@@ -3748,7 +3759,10 @@ export function apply(ctx: Context, rawConfig: Config): void {
   // approves in different sessions cannot clobber each other's timestamp.
   const requestAtByKey = new Map<string, number>()
 
-  const askHuman = async (req: any, review: ReviewResult | undefined, next: () => Promise<any>, breaker = false, status?: ReviewStatus, handle?: RaceHumanHandle, llmDecided?: boolean, learnable?: LearnableContext): Promise<any> => {
+  // `auditCategory` is a record-only label for asks that deliberately carry no
+  // `status` (a status would give them a countdown and automatic resolution,
+  // which is a different behaviour). It never influences the verdict.
+  const askHuman = async (req: any, review: ReviewResult | undefined, next: () => Promise<any>, breaker = false, status?: ReviewStatus, handle?: RaceHumanHandle, llmDecided?: boolean, learnable?: LearnableContext, auditCategory?: string): Promise<any> => {
     // Delegate to the official ApprovalPanel; the client half parses the
     // countdown marker and adds the visible countdown + auto-answer. Breaker
     // requests intentionally omit the marker so no automatic timeout runs.
@@ -3944,6 +3958,9 @@ export function apply(ctx: Context, rawConfig: Config): void {
       ...llmMeta,
       ...(llmTookMs !== undefined ? { llmTookMs } : {}),
       ...(breaker ? { breaker: true, breakerReasons } : {}),
+      ...(status?.category !== undefined
+        ? { category: status.category }
+        : auditCategory !== undefined ? { category: auditCategory } : {}),
     })
     if (!audited) {
       // Fail closed (APPROVAL-07): no unaudited allow may take effect. The
@@ -4333,6 +4350,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
         phase: 'countdown',
         action: 'reject',
         seconds: Math.max(1, Math.round(config.highRiskSeconds)),
+        category: classified.category,
       }
       return askHuman(req, undefined, next, false, lockedStatus)
     }
@@ -4368,11 +4386,18 @@ export function apply(ctx: Context, rawConfig: Config): void {
           phase: 'countdown',
           action: 'reject',
           seconds: Math.max(1, Math.round(config.highRiskSeconds)),
+          category: classified.category,
         }
         return askHuman(req, undefined, next, false, lockedStatus)
       }
-      // Other category asks remain status-less (explicit human decision).
-      return askHuman(req, undefined, next)
+      // Other category asks remain status-less (explicit human decision). The
+      // category still travels, for the record only: without it the refusals of
+      // exactly the class this unlock exposes (unlocked protected metadata) stay
+      // ungroupable in the audit trail, which is the gap this batch exists to
+      // close. It is passed as an audit label, NOT as a status, so the ask keeps
+      // its status-less "explicit human decision" semantics (no countdown, no
+      // automatic resolution) — changing that would be a behaviour change.
+      return askHuman(req, undefined, next, false, undefined, undefined, undefined, undefined, classified.category)
     }
 
     // B3 per-session review mode.
@@ -4458,6 +4483,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
           action: fallback,
           seconds,
           ...(fallback === 'reject' ? { feedback: REVIEW_TIMEOUT_NOTICE } : {}),
+          category: classified.category,
         }
         return askHuman(req, undefined, next, false, status, undefined, undefined, learnableContextFor(req, args, classified, 'low-countdown'))
       }
@@ -4467,6 +4493,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
         phase: 'countdown',
         action: riskTimedOutAction('LOW', config.timeoutAction, autoUnattended),
         seconds,
+        category: classified.category,
       }
       // LOW runs the human countdown in PARALLEL with the reviewer: while the
       // panel is open the LLM keeps trying (retries stay budget-bound), and a
@@ -4578,6 +4605,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
           action: fallback,
           seconds,
           ...(fallback === 'reject' ? { feedback: REVIEW_TIMEOUT_NOTICE } : {}),
+          category: classified.category,
         }
         return askHuman(req, undefined, next, false, status, undefined, undefined, learnableContextFor(req, args, classified, 'medium-countdown'))
       }
@@ -4588,6 +4616,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
         action: fallbackAction,
         seconds,
         ...(fallbackAction === 'reject' ? { feedback: REVIEW_TIMEOUT_NOTICE } : {}),
+        category: classified.category,
       }
       const mediumHandle: RaceHumanHandle = { claim: () => {} }
       const askPromise = askHuman(req, undefined, next, false, status, mediumHandle, true, learnableContextFor(req, args, classified, 'medium-llm-countdown'))
@@ -4680,6 +4709,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       action: highAction,
       seconds,
       ...(highAction === 'allow' ? {} : { feedback: REVIEW_TIMEOUT_NOTICE }),
+      category: classified.category,
     }
     const askPromise = askHuman(req, undefined, next, false, status, undefined, undefined, learnableContextFor(req, args, classified, 'high-countdown'))
     if (llmReviews) {
