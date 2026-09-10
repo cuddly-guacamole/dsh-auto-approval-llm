@@ -52,7 +52,8 @@ scripts/
 ├─ audit-query.mjs      审计查询 CLI（decision 行 + 按 type 渲染的观测事件行）
 ├─ friction-report.mjs  摩擦报告 CLI（面板介入率 / 倒计时结算率 / 翻案交叉表 / 评审通道落定率 / 无人值守窗口判据 + 退出码）
 ├─ mock-reviewer.mjs    本地 mock 评审器（127.0.0.1:18777，确定性 ALLOW/MEDIUM）
-└─ link-client-packs.cjs
+├─ link-dsh-deps.cjs    把 node_modules/@deepseek-ai/* 重链到已安装 dsh 的同名包（构建期类型与运行期解析同源）
+└─ link-client-packs.cjs  把 client 构建期包（primitives/slots）链到 npm pack 解包目录
 verify-*.mjs            3 个运行时验证脚本（verify-auth / verify-config / verify-runtime）
 ```
 
@@ -64,4 +65,4 @@ verify-*.mjs            3 个运行时验证脚本（verify-auth / verify-config
 
 **bundle 层（patch.yml）**：权限预设（auto = danger-full-access + approval ask，**禁飙到 never**）+ 装包配置覆盖（`autoSwitchPolicyToAsk:true`；`humanOnlyList` 保持代码默认空）。
 
-**exports**：`.`（lib/index.js + types）、`./client`（lib/client.js + types contact）、`./package.json`；peerDeps 全覆盖（cordis ≥4.0.1<5、dsh-llm/dsh-tools ≥0.1.2-rc.1<2、schemastery ^3.18.0）── 0.1.2-rc.1 兼容性已验（0.0.16 起仅支持 rc.1 契约，下限随兼容层移除同步提高）。
+**exports**：`.`（lib/index.js + types）、`./client`（lib/client.js + types contact）、`./package.json`；peerDeps 全覆盖（cordis ≥4.0.1<5、dsh-llm/dsh-tools ≥0.1.5-rc.1<2、schemastery ^3.18.0）── 0.1.5-rc.1 兼容性已验（0.0.16 起只保留 rc.1 契约线，下限随宿主换代同步提高）。
