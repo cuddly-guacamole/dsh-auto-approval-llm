@@ -17,6 +17,7 @@ import {
   AUDIT_LINE_LIMIT,
   USAGE_EXIT_CODE,
   VERDICT_EXIT_CODES,
+  attemptFailureCodes,
   evaluateCriterion,
   isOverturn,
   isOverturnEligible,
@@ -262,6 +263,29 @@ test('the text and --json paths share one verdict and exit code', () => {
   assert.equal(parsed.criterion.exitCode, json.code)
 })
 
+test('attemptFailureCodes: counts codes across decisions and flags unknown ones', () => {
+  const records = [
+    decision({ attempts: [{ n: 1, code: 'EMPTY_RESPONSE' }, { n: 2, code: 'TIMEOUT' }] }),
+    decision({ attempts: [{ n: 1, code: 'EMPTY_RESPONSE' }] }),
+    decision({ attempts: [{ n: 1 }] }),
+    decision({ attempts: [] }),
+    decision({ source: 'static-allow' }),
+    { type: 'runtime-state-read', attempts: [{ n: 1, code: 'IGNORED' }] },
+  ]
+  const result = attemptFailureCodes(records)
+  assert.equal(result.decisionsWithAttempts, 3)
+  assert.deepEqual(result.codes[0], ['EMPTY_RESPONSE', 2])
+  assert.deepEqual(result.codes.find(([code]) => code === 'UNKNOWN'), ['UNKNOWN', 1])
+  assert.equal(result.codes.some(([code]) => code === 'IGNORED'), false)
+  assert.equal(attemptFailureCodes([]).decisionsWithAttempts, 0)
+})
+
+test('attemptFailureCodes: a non-array attempts field is ignored, never thrown on', () => {
+  const result = attemptFailureCodes([decision({ attempts: 'TIMEOUT' }), decision({ attempts: null })])
+  assert.equal(result.decisionsWithAttempts, 0)
+  assert.deepEqual(result.codes, [])
+})
+
 test('renderReport carries the criterion verdict instead of deriving its own', () => {
   const criterion = evaluateCriterion([], { window: 20 })
   const rendered = renderReport({
@@ -269,6 +293,7 @@ test('renderReport carries the criterion verdict instead of deriving its own', (
     latency: settlementByChannel([]),
     criterion,
     overturns: [],
+    attempts: attemptFailureCodes([]),
     since: false,
     badLines: 0,
   })

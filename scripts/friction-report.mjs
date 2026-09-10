@@ -185,6 +185,28 @@ export function overturnTable(records) {
 }
 
 /**
+ * Retry attempt failure codes carried by decision records, most frequent
+ * first. This is the review lanes' own account of why they did not settle:
+ * EMPTY_RESPONSE and TIMEOUT dominate an unhealthy or budget-starved lane,
+ * while NO_ADAPTER / RATE_LIMIT / TRANSPORT point at routing or provider
+ * trouble rather than at the countdown budget.
+ */
+export function attemptFailureCodes(records) {
+  const codes = new Map()
+  let decisionsWithAttempts = 0
+  for (const record of records.filter(isDecision)) {
+    const attempts = Array.isArray(record.attempts) ? record.attempts : []
+    if (attempts.length === 0) continue
+    decisionsWithAttempts += 1
+    for (const attempt of attempts) {
+      const code = typeof attempt?.code === 'string' && attempt.code !== '' ? attempt.code : 'UNKNOWN'
+      codes.set(code, (codes.get(code) ?? 0) + 1)
+    }
+  }
+  return { decisionsWithAttempts, codes: sortedEntries(codes) }
+}
+
+/**
  * Review-lane outcome per channel. Samples without a boolean `settled` are
  * counted once at the top level instead of being dropped silently, so a biased
  * subset cannot masquerade as the whole lane.
@@ -299,7 +321,7 @@ const VERDICT_EXPLANATION = {
   INSUFFICIENT: 'INSUFFICIENT - fewer sessions recorded than the window requires',
 }
 
-export function renderReport({ decisions, latency, criterion, overturns, since, badLines }) {
+export function renderReport({ decisions, latency, criterion, overturns, attempts, since, badLines }) {
   const out = []
   out.push('=== friction report (audit.jsonl) ===')
   out.push(
@@ -357,6 +379,13 @@ export function renderReport({ decisions, latency, criterion, overturns, since, 
     }
     if (latency.samplesWithoutSettled > 0) {
       out.push(`  ${latency.samplesWithoutSettled} sample(s) without a settled flag were excluded`)
+    }
+    out.push('')
+    out.push('review attempt failures (decision.attempts)')
+    if (attempts.decisionsWithAttempts === 0) out.push('  no failed attempt recorded')
+    else {
+      out.push(`  decisions carrying a failed attempt ${attempts.decisionsWithAttempts}`)
+      for (const [code, count] of attempts.codes) out.push(`  ${code.padEnd(22)}${String(count).padStart(6)}`)
     }
     out.push('')
   }
@@ -420,10 +449,11 @@ export function main(argv) {
   const latency = readJsonl(opts.latency)
   const decisions = summarizeDecisions(records, audit.bytes)
   const overturns = overturnTable(records)
+  const attempts = attemptFailureCodes(records)
   const criterion = evaluateCriterion(records, { window: opts.window })
   const lanes = settlementByChannel(latency.records)
   if (opts.json) {
-    console.log(JSON.stringify({ decisions, overturns, latency: lanes, criterion }, null, 2))
+    console.log(JSON.stringify({ decisions, overturns, attempts, latency: lanes, criterion }, null, 2))
     return criterion.exitCode
   }
   const { text, exitCode } = renderReport({
@@ -431,6 +461,7 @@ export function main(argv) {
     latency: lanes,
     criterion,
     overturns,
+    attempts,
     since: opts.since !== null,
     badLines: audit.badLines,
   })
