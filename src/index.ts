@@ -31,6 +31,7 @@ import { DIRECT_HUMAN_TOOL, THRESHOLD_DEFAULTS } from './auto/constants.js'
 import { createDshClassifier, createEndpointClassifier } from './auto/dsh-classifier.js'
 import { type RaceHumanHandle, type ReviewResult, type StaticRisk, REVIEW_TIMEOUT_NOTICE, applyBreaker, approvalSource, assembleReviewerSystem, breakerNote, breakerTripped, countdownNote, createKeyedMutex, DENY_CIRCUMVENTION_GUIDANCE, extractToolPath, followResolution, formatDenyFeedback, frameReviewerInput, lowRiskReviewOutcome, parseReview, unattendedMustFailClosed, preserveHostKeys, raceHumanDecision, reviewSuggestionNote, reviewerAutoAllowBlocked, riskFromAssessment, staticListDecision, type ContextSummary } from './auto/decision.js'
 import { LATENCY_SUMMARY_WINDOW, clearLatencySamples, loadLatencySamples, pushLatencySample, summarizeLatency, type LatencySample } from './auto/latency.js'
+import { RECENT_REJECTION_CAP, baselineFromPermissionState, observePermissionChange, permissionChangeFromEvent, recentRejectionPointers, type PermissionState } from './auto/permission-change.js'
 import { buildAskReason, buildEditDiff, buildEditDiffText, EDIT_DIFF_ARGS_MAX_CHARS, EDIT_DIFF_TOOLS } from './auto/editdiff.js'
 import {
   clampLearningThreshold,
@@ -3497,14 +3498,38 @@ export function apply(ctx: Context, rawConfig: Config): void {
     }
     const timer = setTimeout(() => {
       switchTimers.delete(timer)
+      // The host appends approval/policy synchronously inside setPolicy, which
+      // re-enters the session/event handler; mark the session so that observed
+      // copy is never attributed to the user (the line below is the record).
+      // The guard ran before this timer; re-check here so a double trigger (or
+      // a policy that moved meanwhile) cannot leave a second, fabricated
+      // counter-move record. setPolicy itself early-returns when the policy is
+      // unchanged, so this also keeps the debug trail honest.
+      if (approval?.overrideOf?.(flip.session) !== 'never') return
+      pluginFlipSessions.add(flip.session.id)
       try {
         approval.setPolicy(flip, 'ask')
         // The flip silently rewrites the session's effective policy — leave
         // one debug trail so an operator can see why an Auto session stopped
         // auto-answering (auditability for the guard's second line).
         debugLog({ ev: 'auto-switch-never-to-ask', callId: null, sessionId: flip.session.id })
+        // One durable line as well, so the counter-move is visible without
+        // debug on.
+        appendAuditLine(
+          JSON.stringify({
+            type: 'permission-change',
+            at: Date.now(),
+            sessionId: flip.session.id,
+            scope: 'policy',
+            to: 'ask',
+            actor: 'plugin',
+            recentRejectedIds: recentRejectionPointers(approvalHistory, RECENT_REJECTION_CAP),
+          }),
+        )
       } catch (error) {
         console.error('[dsh-auto-approval-llm] setPolicy failed:', error)
+      } finally {
+        pluginFlipSessions.delete(flip.session.id)
       }
     }, 0)
     switchTimers.add(timer)
@@ -3523,17 +3548,60 @@ export function apply(ctx: Context, rawConfig: Config): void {
   // `approval/policy` on every override change; both ride session/event, which
   // reaches this context. The payload only decides WHEN to re-check — the
   // guard's own conditions still decide WHETHER to flip.
+  // Per-session, per-plane baselines. The host appends a plane event only when
+  // that plane actually moves, and it pins all three planes once at session
+  // creation, so the first value seen per plane is a baseline rather than a
+  // user switch (see observePermissionChange). `pluginFlipSessions` suppresses
+  // the observed copy of this plugin's own counter-move, which records itself.
+  const permissionBaselines = new Map<string, PermissionState>()
+  const pluginFlipSessions = new Set<string>()
+  const rememberPermissionBaseline = (session: any) => {
+    const id = session?.id
+    if (typeof id !== 'string') return
+    permissionBaselines.set(id, baselineFromPermissionState(permissionPresets?.permissionState?.(session)))
+  }
+  anyCtx.on('session/created', (session: any) => rememberPermissionBaseline(session))
   anyCtx.on('session/event', (session: any, event: any) => {
     const enteredAuto = event?.type === 'permission/preset' && event.data?.preset === AUTO_PRESET
     const overrideSet = event?.type === 'approval/policy' && event.data?.policy === 'never'
+    // Observation only: a permission-plane move leaves one durable line with
+    // pointers to the latest rejections, so a switch made right after a block
+    // can be read together with what was blocked. It never feeds a verdict, a
+    // review prompt, or the statistics.
+    const change = permissionChangeFromEvent(event)
+    if (change !== undefined) {
+      const id = typeof session?.id === 'string' ? session.id : undefined
+      const observed = observePermissionChange(
+        id === undefined ? undefined : permissionBaselines.get(id),
+        change,
+        { pluginInitiated: id !== undefined && pluginFlipSessions.has(id) },
+      )
+      if (id !== undefined) permissionBaselines.set(id, observed.baseline)
+      if (observed.record) {
+        appendAuditLine(
+          JSON.stringify({
+            type: 'permission-change',
+            at: Date.now(),
+            sessionId: session?.id ?? null,
+            scope: change.scope,
+            to: change.to,
+            actor: 'user',
+            recentRejectedIds: recentRejectionPointers(approvalHistory, RECENT_REJECTION_CAP),
+          }),
+        )
+      }
+    }
     if (!enteredAuto && !overrideSet) return
     const agent = agents?.get?.(session?.id)
     if (agent !== undefined) ensureAsk(agent)
   })
 
   // Sweep already-live agents on startup so existing auto-preset sessions that
-  // were left with a `never` override also get switched to `ask`.
+  // were left with a `never` override also get switched to `ask`, and fold
+  // their current plane values in as baselines first: a session restored from
+  // disk never re-emits its history.
   if (agents && typeof agents.list === 'function') {
+    for (const agent of agents.list()) rememberPermissionBaseline(agent?.session)
     for (const agent of agents.list()) ensureAsk(agent)
   }
 
@@ -3579,6 +3647,8 @@ export function apply(ctx: Context, rawConfig: Config): void {
   anyCtx.on('session/disposed', (session: any) => {
     const key = session?.id
     if (key === undefined) return
+    permissionBaselines.delete(key)
+    pluginFlipSessions.delete(key)
     // Drop the breaker counters under the same per-key lock as the in-flight
     // approval writes, so a write that is still queued behind us cannot
     // resurrect a stale counter after disposal (reset race). The shared Promise

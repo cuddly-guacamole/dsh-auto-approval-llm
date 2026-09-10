@@ -208,7 +208,7 @@ Session approval stats — the "Auto Approval" header-button popup: totals / all
 | File | Meaning |
 |---|---|
 | `history.jsonl` | Approval history (in-memory window of 200 + on-disk; rotates >1 MB). Deleting the file neither reloads nor clears the memory window; the next decision recreates it |
-| `audit.jsonl` | Append-only audit: `decision` records + a `clear` tombstone + non-decision observation events (`result-redacted` / `mask-failed` / `learning-*` / `rules-context-missing` / `rules-parse-error` / `runtime-state-read` and others) |
+| `audit.jsonl` | Append-only audit: `decision` records + a `clear` tombstone + non-decision observation events (`result-redacted` / `mask-failed` / `learning-*` / `rules-context-missing` / `rules-parse-error` / `runtime-state-read` / `permission-change` and others) |
 | `review-mode.json` | Per-session review-mode snapshot |
 | `llm-latency.jsonl` | Real LLM review/classify response-time stats (latest 100 MIN/AVG/MAX; rotates >1 MB) |
 | `approval-debug.jsonl` | Written only when debug mode is on: review/approval timeline (decision/risk/tookMs/outcome/source), rotated >1 MB |

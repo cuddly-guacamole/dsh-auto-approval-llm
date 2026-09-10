@@ -37,6 +37,7 @@ pushHistory 每次附带写一条 `type:'decision'`；UI 清历史只清内存+h
 - `rules-context-missing`：声明规则含 deny/human 维度作用域但代理上下文（agentKind/workspaceRoot）不可得时降级人工，留一条原因记录；
 - `rules-parse-error`：rulesText 解析错误——pre-execute 与 answerer 两平面 loud 报错（console.error + debugLog），审计事件按平面去重、签名变化才追加；
 - `runtime-state-read`：读取插件运行态文件（结构化读工具与 shell 读）默认落审计，纯观测。
+- `permission-change`：权限平面**真正移动**时落一条（宿主自身只在值变化时才追加 `permission/preset` / `sandbox/mode` / `approval/policy`），带 `actor:'user'|'plugin'`、变更后的值与**最近若干条被拒 decision 的 id 指针**（只记 id，记录本体仍归 audit）。**门控 = 每会话每平面的基线**：宿主在会话创建时会一次性播种三个平面（`pinInitialPermission`），故每个平面的**首个观测值只作基线、不记录**；基线另外在 `session/created`（含 resume 路径）与启动扫描时用 `permissionPresets.permissionState(session)` 预填，因此**恢复/续跑会话的首次切换照样会被记录**。插件自身的 `never→ask` 反制由 `pluginFlipSessions` 抑制那份被观测副本，并由插件自己写 `actor:'plugin'`（写入前复核策略仍为 `never`，早退不记）。**降级行为**：`permissionState` 在官方类型声明里是 private，插件用可选调用规避类型；若宿主改名或移除它，基线预填静默失效——退化为"只按会话内已见事件建基线"（不崩、不伪造，极端情况下少记首次切换）。动机：`approval/policy='never'` 会让官方管线在 waterfall 之前终裁，插件从此不在决策链上，故该转换需要留痕。纯观测：不进裁决、不进评审提示词、不进统计。注记：该事件的 `sessionId` 是**权限变更所属会话**的 id，而 `decision` 按**权威会话**（子代理记父 id）记账——跨表对齐请用 `recentRejectedIds` 指针，不要只按 sessionId 过滤。
 
 `decision` 侧新增：`tools/guard` 熔丝拒绝（硬拒 / symlink 逃逸）也会以 `source:'guard'`、`outcome:'rejected'`（reason 随行）经 pushHistory 落一条终局 decision 记录——审计写入失败不软化拒绝，调用仍被拒。
 
