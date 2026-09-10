@@ -71,6 +71,7 @@ test('schema defaults snapshot: changing a default must be a reviewed diff', () 
       categoryPolicy: {},
       categoryMode: 'standard',
       privilegeAutoReview: false,
+      protectedAutoReview: false,
       trustedDirs: [],
       trustedDshSubpaths: [],
       learningEnabled: false,

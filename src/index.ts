@@ -149,6 +149,15 @@ export interface Config {
   categoryMode: 'standard' | 'aggressive'
   /** Opt-out of the privilege LOCKED clamp: false = privilege stays ask-only. */
   privilegeAutoReview: boolean
+  /**
+   * Opt-out of the protected LOCKED clamp: false = protected paths stay
+   * ask-only with a hard-reject countdown. Turning it on hands protected paths
+   * to the ordinary pipeline. Its width matters: protected covers protected
+   * project metadata (.env, .npmrc, .git/*, …) and reads of credential trees
+   * (~/.ssh, ~/.aws, …) — those reads are protected asks, not hard denies;
+   * only their writes are hard-denied, and that fuse is unaffected here.
+   */
+  protectedAutoReview: boolean
   /** Extra trusted directories for Standard mode (host-only, absolute paths). */
   trustedDirs: string[]
   /**
@@ -275,6 +284,11 @@ export const Config: z<Config> = z.object({
   // categories — auto flows through classifier + LLM review + countdown.
   // delete/protected/disk stay locked regardless.
   privilegeAutoReview: z.boolean().default(false),
+  // Same shape for protected: unlocked, a protected path rides the ordinary
+  // pipeline (classifier + LLM review + countdown) instead of the ask-only
+  // clamp with its hard-reject countdown. Ships off: the default is what keeps
+  // protected project metadata out of an unattended auto-allow.
+  protectedAutoReview: z.boolean().default(false),
   trustedDirs: z.array(z.string()).default([]),
   // DSH_HOME write openings: fail-closed default (empty). resolveConfig drops
   // any entry that is not an absolute path inside DSH_HOME, or that would
@@ -335,7 +349,8 @@ export function resolveConfig(raw: Config): Config {
       continue
     }
     if (LOCKED_CATEGORIES.includes(key as (typeof LOCKED_CATEGORIES)[number]) && value !== 'ask'
-      && !(key === 'privilege' && raw.privilegeAutoReview === true)) {
+      && !(key === 'privilege' && raw.privilegeAutoReview === true)
+      && !(key === 'protected' && raw.protectedAutoReview === true)) {
       console.warn(`[dsh-auto-approval-llm] ignoring ${key}=${String(value)}: locked categories accept only "ask"`)
       continue
     }
@@ -500,6 +515,8 @@ export function resolveConfig(raw: Config): Config {
     // Default-off (fail-closed): only an explicit true unlocks privilege
     // (delete/protected/disk stay locked regardless).
     privilegeAutoReview: raw.privilegeAutoReview === true,
+    // Default-off for the same reason; an explicit true is the only unlock.
+    protectedAutoReview: raw.protectedAutoReview === true,
     trustedDirs,
     trustedDshSubpaths,
     maintenanceDshPaths,
@@ -2824,12 +2841,14 @@ export function apply(ctx: Context, rawConfig: Config): void {
   }
   const authorityFor = (exec: any) => autoPermissionAuthority(exec, parentAgent, permissionPresets, AUTO_PRESET)
   const isAutoExecution = (exec: any) => authorityFor(exec) !== undefined
-  // LOCKED-category predicate honoring the privilege opt-out: delete /
-  // protected / disk are always locked; privilege is locked unless
-  // privilegeAutoReview is on (then it follows the ordinary pipeline).
+  // LOCKED-category predicate honoring the two opt-outs: delete / disk are
+  // always locked; privilege is locked unless privilegeAutoReview is on, and
+  // protected unless protectedAutoReview is on (both then follow the ordinary
+  // pipeline).
   const isLockedCategory = (category: string | undefined): boolean => {
     if (category === undefined) return false
     if (category === 'privilege' && config.privilegeAutoReview === true) return false
+    if (category === 'protected' && config.protectedAutoReview === true) return false
     return LOCKED_CATEGORIES.includes(category as (typeof LOCKED_CATEGORIES)[number])
   }
   // Root authority session (walks the parent chain for subagents that inherit

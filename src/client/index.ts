@@ -368,6 +368,7 @@ interface Draft {
   categoryPolicy: Record<string, 'auto' | 'ask' | 'deny'>
   categoryMode: 'standard' | 'aggressive'
   privilegeAutoReview: 'on' | 'off'
+  protectedAutoReview: 'on' | 'off'
   trustedDirs: string[]
   learningEnabled: 'on' | 'off'
   learningThreshold: string
@@ -422,6 +423,7 @@ function draftOf(value: any): Draft {
       : {},
     categoryMode: value?.categoryMode === 'aggressive' ? 'aggressive' : 'standard',
     privilegeAutoReview: value?.privilegeAutoReview === true ? 'on' : 'off',
+    protectedAutoReview: value?.protectedAutoReview === true ? 'on' : 'off',
     trustedDirs: Array.isArray(value?.trustedDirs) ? [...value.trustedDirs] : [],
     learningEnabled: value?.learningEnabled === true ? 'on' : 'off',
     learningThreshold: String(value?.learningThreshold ?? THRESHOLD_DEFAULTS.learningThreshold),
@@ -468,6 +470,7 @@ function valueOf(draft: Draft): any {
     categoryPolicy: draft.categoryPolicy,
     categoryMode: draft.categoryMode,
     privilegeAutoReview: draft.privilegeAutoReview === 'on',
+    protectedAutoReview: draft.protectedAutoReview === 'on',
     trustedDirs: draft.trustedDirs,
     learningEnabled: draft.learningEnabled === 'on',
     learningThreshold: Math.max(2, Math.min(10, intOr(draft.learningThreshold, THRESHOLD_DEFAULTS.learningThreshold))),
@@ -1101,6 +1104,7 @@ function SettingsSection() {
     JSON.stringify(draft.categoryPolicy) !== JSON.stringify(baseDraft.categoryPolicy ?? {})
     || draft.categoryMode !== baseDraft.categoryMode
     || draft.privilegeAutoReview !== baseDraft.privilegeAutoReview
+    || draft.protectedAutoReview !== baseDraft.protectedAutoReview
   const learningDirty = cardDirty(LEARNING_KEYS)
   const utilityDirty = cardDirty(UTILITY_KEYS)
   const invalidKeys = findInvalidConfigKeys(snapshot.value)
@@ -2064,6 +2068,11 @@ function SettingsSection() {
       options: onOffOptions(),
       onChange: (v: any) => update({ privilegeAutoReview: v as 'on' | 'off' }),
     }), t('settings.category.privilegeAutoReviewHint')),
+    row(t('settings.category.protectedAutoReview'), React.createElement(CapsuleSelect, {
+      value: draft.protectedAutoReview,
+      options: onOffOptions(),
+      onChange: (v: any) => update({ protectedAutoReview: v as 'on' | 'off' }),
+    }), t('settings.category.protectedAutoReviewHint')),
     draft.categoryMode === 'aggressive'
       ? React.createElement('p', { className: 'dsa-hint', style: { margin: 0, color: 'var(--dsw-alias-state-warn-primary)' } }, t('settings.category.aggressiveNotice'))
       : null,

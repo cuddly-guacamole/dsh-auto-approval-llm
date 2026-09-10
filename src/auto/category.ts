@@ -82,6 +82,8 @@ export interface CategoryConfig {
   categoryMode?: 'standard' | 'aggressive'
   /** Unlock the privilege LOCKED clamp (fail-closed off). */
   privilegeAutoReview?: boolean
+  /** Unlock the protected LOCKED clamp (fail-closed off). */
+  protectedAutoReview?: boolean
 }
 
 /** Minimal shapes the category layer consumes (structural, no live objects). */
@@ -685,7 +687,14 @@ export function categoryDirective(
   const explicit = policy[category]
   const locked = LOCKED_CATEGORIES.includes(category as CategoryKey)
   const privilegeUnlocked = category === 'privilege' && config.privilegeAutoReview === true
-  if (locked && !privilegeUnlocked) {
+  // protected covers protected project metadata and sensitive basenames
+  // (.env, .npmrc, .git/*, …) and also *reads* of credential trees, which are
+  // protected asks rather than hard denies — only their writes are hard-denied,
+  // through isCriticalPath, and that fuse is unaffected by this switch.
+  // Unlocking therefore hands all of those to the ordinary pipeline (classifier
+  // / reviewer / countdown), which is why it ships off.
+  const protectedUnlocked = category === 'protected' && config.protectedAutoReview === true
+  if (locked && !privilegeUnlocked && !protectedUnlocked) {
     if (explicit !== undefined) return 'ask'
     return mode === 'aggressive' ? 'ask' : 'inherit'
   }
