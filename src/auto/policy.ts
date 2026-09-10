@@ -341,7 +341,16 @@ export function assessTool(exec: ExecLike, roots: Roots, artifacts: unknown): To
             return { decision: 'allow', reason: 'read-only project inspection', classifierEligible: false };
         const normalized = normalizePath(path, roots.workspace, roots.home);
         if (!isEffectiveRoutine(normalized, roots))
-            return { decision: 'ask', reason: `reading outside the workspace requires semantic review: ${normalized}`, classifierEligible: true };
+            return {
+                decision: 'ask',
+                reason: `reading outside the workspace requires semantic review: ${normalized}`,
+                classifierEligible: true,
+                // The position gate answers before the metadata and sensitive-name
+                // checks, so in standard mode a credential read outside the
+                // workspace would otherwise reach the reviewer without the floor
+                // flag — exactly the material the floor exists to keep locked.
+                ...(credentialReadTarget(normalized, roots) ? { credentialRead: true } : {}),
+            };
         // Protected workspace metadata (.env, .npmrc, .git/*, …) must not be
         // silently read through the `read` tool family. The shell path is gated
         // (`readPathsAreRoutine`), so routing the read *tool* to semantic review
@@ -468,7 +477,14 @@ export function assessTool(exec: ExecLike, roots: Roots, artifacts: unknown): To
         }
         if (command === 'view') {
             if (!isEffectiveRoutine(normalized, roots))
-                return { decision: 'ask', reason: `reading outside the workspace requires semantic review: ${normalized}`, classifierEligible: true };
+                return {
+                    decision: 'ask',
+                    reason: `reading outside the workspace requires semantic review: ${normalized}`,
+                    classifierEligible: true,
+                    // Same reason as the read family above: the position gate
+                    // answers first, so the floor has to be applied here too.
+                    ...(credentialReadTarget(normalized, roots) ? { credentialRead: true } : {}),
+                };
             // Mirror of the read family above: `view` is a read, so protected
             // workspace metadata (.env, .npmrc, .git/*, ...) must not be
             // silently readable through it. Without this the same path was an

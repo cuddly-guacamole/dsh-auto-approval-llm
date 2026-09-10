@@ -41,6 +41,18 @@ const off = cfg({ protectedAutoReview: false, categoryPolicy: { protected: 'auto
 const assess = (name, args) => assessTool({ name, arguments: args }, roots, artifacts)
 const directiveFor = (name, args, config) => categoryDirective(config, categorizeTool({ name, arguments: args }, roots), assess(name, args))
 
+/**
+ * Standard mode is a different code path for reads: the position gate rejects
+ * anything outside the workspace BEFORE the protected-metadata and sensitive-name
+ * checks, so the floor has to be applied on that early branch too. Under
+ * `aggressive` every path is "routine" and the later branches do the work, which
+ * is why this case needs its own roots.
+ */
+const standardRoots = { ...roots, mode: 'standard' }
+const assessStandard = (name, args) => assessTool({ name, arguments: args }, standardRoots, artifacts)
+const directiveForStandard = (name, args, config) => categoryDirective(config, categorizeTool({ name, arguments: args }, standardRoots), assessStandard(name, args))
+const standardUnlocked = { categoryPolicy: { protected: 'auto' }, categoryMode: 'standard', protectedAutoReview: true }
+
 /** Reads that carry real credential material: sensitive names and critical trees. */
 const CREDENTIAL_READS = [
   ['read', { file_path: 'C:/ws/.env' }],
@@ -140,6 +152,35 @@ test('floor: a credential SOURCE on a write head is flagged, so the unlock canno
   }
   assert.ok(protectedCases.length > 0, 'at least one credential source must carry the protected label for this check to bite')
   assert.deepEqual(failures, [], `credential sources the unlock reached:\n${failures.join('\n')}`)
+})
+
+test('floor: standard mode locks out-of-workspace credential reads too', () => {
+  // In standard mode the position gate answers first ("reading outside the
+  // workspace"), which used to leave the credential flag unset — so with the
+  // switch on and an explicit auto policy that read could be answered by the
+  // pipeline. The floor must be applied on that branch as well.
+  const failures = []
+  for (const target of ['C:/Users/u/.npmrc', 'C:/Users/u/.ssh/config', 'C:/Users/u/.aws/credentials', 'C:/ws/.env']) {
+    const result = assessStandard('read', { file_path: target })
+    if (result.credentialRead !== true) failures.push(`${target}: credentialRead=${result.credentialRead}`)
+    const dir = directiveForStandard('read', { file_path: target }, standardUnlocked)
+    if (dir !== 'ask') failures.push(`${target}: unlocked to ${dir}`)
+  }
+  // Control: an ordinary file outside the workspace is still an ask (the
+  // position gate), but it must NOT be flagged as credential material, or the
+  // floor would lock every external read with no way to unlock it.
+  const ordinary = assessStandard('read', { file_path: 'C:/Users/u/notes.txt' })
+  assert.notEqual(ordinary.credentialRead, true, 'an ordinary external read carries no credential flag')
+  assert.equal(ordinary.decision, 'ask', 'and it keeps the position-gate ask')
+  // The `view` reader takes its own position gate, so it needs the same floor.
+  const viaView = assessStandard('str_replace_editor', { command: 'view', path: 'C:/Users/u/.npmrc' })
+  assert.equal(viaView.credentialRead, true, 'view of an out-of-workspace credential file is flagged too')
+  assert.equal(
+    directiveForStandard('str_replace_editor', { command: 'view', path: 'C:/Users/u/.npmrc' }, standardUnlocked),
+    'ask',
+    'and the unlock cannot reach it',
+  )
+  assert.deepEqual(failures, [], `standard-mode credential reads the unlock reached:\n${failures.join('\n')}`)
 })
 
 test('floor: credential reads are flagged by the policy layer', () => {
