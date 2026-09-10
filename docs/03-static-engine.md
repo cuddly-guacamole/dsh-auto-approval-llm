@@ -5,19 +5,19 @@ host 编排在 `src/index.ts`，真正「长脑子」的静态规则引擎在 `s
 
 | 文件 | 行 | 职责 |
 |---|---|---|
-| `constants.ts` | 27 | 数值阈值默认值**唯一事实源**：5/8/10s、3/20、4000、8s/1024，及学习族（阈值 3/TTL 30d/100 条/会话放行帽 50） |
-| `risk-tokens.ts` | 13 | HIGH 风险正则（NAME/REASON），供分类器与 policy 共用，防漂移 |
-| `paths.ts` | 213 | 路径规范化（Windows 命名空间/NT 别名折叠、~ 展开、win32 小写）、受保护/关键路径判定、运行态文件名单 |
-| `shell.ts` | 1016 | Bash/PowerShell 词法分解（sticky 正则状态机）＋ 整行熔断 ＋ 逐段静态分类 |
+| `constants.ts` | 119 | 数值阈值默认值**唯一事实源**：5/8/10s、3/20、4000、8s/1024，及学习族（阈值 3/TTL 30d/100 条/会话放行帽 50）；同时承载设置卡「默认放行工具」显示目录（显示镜像，非放行面） |
+| `risk-tokens.ts` | 24 | HIGH 风险正则（NAME/REASON），供分类器与 policy 共用，防漂移 |
+| `paths.ts` | 264 | 路径规范化（Windows 命名空间/NT 别名折叠、~ 展开、win32 小写）、受保护/关键路径判定、运行态文件名单 |
+| `shell.ts` | 1450 | Bash/PowerShell 词法分解（sticky 正则状态机）＋ 整行熔断 ＋ 逐段静态分类 |
 | `policy.ts` | 443 | 每次工具调用的确定性第一遍分类 `assessTool`（推断型、保留类型检查） |
-| `rules.ts` | 370 | Claude-Code 风格声明规则解析/求值（纯函数，host 与浏览器共用） |
-| `classifier.ts` | 75 | 预分类提示词、参数脱敏、严格响应解析 |
-| `dsh-classifier.ts` | 94 | 复用 `ctx.llm` 做低 token 分类请求（temperature 0） |
-| `decision.ts` | 722 | 纯决策函数：评审解析、人机竞速、来源标注、熔断状态机、静态名单 |
-| `trust.ts` | 101 | web 路由信任平面（loopback/LAN 边界、Host 伪造防护、在线端点 URL 校验） |
-| `artifacts.ts` | 98 | 本会话成功创建路径的内存出处登记（删除豁免依据） |
-| `audit.ts` | 45 | append-only 审批审计（清空留墓碑、5MiB 裁剪） |
-| `review-mode.ts` | 52 | 每会话评审模式持久化快照 |
+| `rules.ts` | 435 | Claude-Code 风格声明规则解析/求值（纯函数，host 与浏览器共用） |
+| `classifier.ts` | 101 | 预分类提示词、参数脱敏、严格响应解析 |
+| `dsh-classifier.ts` | 141 | 复用 `ctx.llm` 做低 token 分类请求（temperature 0） |
+| `decision.ts` | 852 | 纯决策函数：评审解析、人机竞速、来源标注、熔断状态机、静态名单 |
+| `trust.ts` | 272 | web 路由信任平面（loopback/LAN 边界、Host 伪造防护、在线端点 URL 校验） |
+| `artifacts.ts` | 105 | 本会话成功创建路径的内存出处登记（删除豁免依据） |
+| `audit.ts` | 125 | append-only 审批审计（清空留墓碑、5MiB 裁剪；审计路径可被测试接缝重定向） |
+| `review-mode.ts` | 56 | 每会话评审模式持久化快照 |
 
 > 同层的其余模块（类别层 `category.ts`、学习层 `learning.ts`、diff 预览 `editdiff.ts`、耗时遥测 `latency.ts`、上下文探针 `probe.ts`、结果脱敏 `redact.ts`、重试 `retry.ts`）各有专章或见 [§14](./14-code-map) 全量清单。
 
@@ -30,10 +30,10 @@ flowchart TD
     A1["① hardDenyReason：命中即 deny，不弹窗 [deny]"]
     A1 --> A2["② bash/pwsh 且 command 是字符串 → 交给 assessShell（§3.3）[shell]"]
     A2 --> A3["③ bash/pwsh 但 command 缺失/非法 → ask（command argument is missing or invalid）[ask]"]
-    A3 --> A4["④ 读家族 read/read_image/grep/glob/lsp：无路径→放行；受保护项目路径→ask（L254）；工作区外敏感名→ask（L259）；出工作区/其余异常→交人工；否则放行 [read]"]
-    A4 --> A5["⑤ write/edit：插件开发目录→放行；**插件运行态文件（history/audit/learning 等）→ 无条件 deny，不进分类器（L272）**；工作区外/受保护→交人工；常规→放行 [write]"]
-    A5 --> A6["⑥ apply_patch：目标藏在 patches 各项的 file_path；运行态目标→无条件 deny（L294）；任一不可读→ask（fail-closed）；全部常规→放行，否则交人工 [patch]"]
-    A6 --> A7["⑦ str_replace_editor：command∈view/create/str_replace/insert 才认；view=读语义（受保护 L324 / 敏感名 L326 子闸同④），其余=写语义；运行态目标→无条件 deny（L319） [editor]"]
+    A3 --> A4["④ 读家族 read/read_image/grep/glob/lsp：无路径→放行；受保护项目路径→ask（L291）；工作区外敏感名→ask（L296）；出工作区/其余异常→交人工；否则放行 [read]"]
+    A4 --> A5["⑤ write/edit：插件开发目录→放行；**插件运行态文件（history/audit/learning 等）→ 无条件 deny，不进分类器（L308）**；工作区外/受保护→交人工；常规→放行 [write]"]
+    A5 --> A6["⑥ apply_patch：目标藏在 patches 各项的 file_path；运行态目标→无条件 deny（L340）；任一不可读→ask（fail-closed）；全部常规→放行，否则交人工 [patch]"]
+    A6 --> A7["⑦ str_replace_editor：command∈view/create/str_replace/insert 才认；view=读语义（出工作区 L372 / 敏感名 L374 子闸同④），其余=写语义；运行态目标→无条件 deny（L366） [editor]"]
     A7 --> A8["⑧ SESSION_STATE_TOOLS（7：ask_user_question/todo_write/get_goal/…）→ 放行 [allow]"]
     A8 --> A9["⑨ HARNESS_READ_TOOLS（13：job_output/job_list/session_search/cordis_inspect_*…）→ 放行 [allow]"]
     A9 --> A10["⑩ AGENT_TEAMS_CONTROL_TOOLS（13：agent_teams_* 9 个 + team_task_* 4 个）→ 放行（只动工作区本地协作状态） [allow]"]
@@ -44,14 +44,14 @@ flowchart TD
     A14 --> A15["⑮ git_push/deploy/publish/send_email/create_issue/create_pull_request → 交人工 [ask]"]
     A15 --> A16["⑯ 工具名命中风险正则（delete/upload/credential/auth …）→ 交人工 [ask]"]
     A16 --> A17["⑰ dsa_request_user（DIRECT_HUMAN_TOOL）→ 一律 ask、不进 LLM 分类器（agent 正是想绕开它）[ask]"]
-    A17 --> A18["⑱ 兜底 = 未识别注册工具 → **ask，fail-closed**（unrecognized registered plugin tool requires independent classification，<span class="lnum">policy.ts:L400-402</span>）—— 名字里没带风险词不再是放行理由 [ask]"]
+    A17 --> A18["⑱ 兜底 = 未识别注册工具 → **ask，fail-closed**（unrecognized registered plugin tool requires independent classification，<span class="lnum">policy.ts:L442</span>）—— 名字里没带风险词不再是放行理由 [ask]"]
 ```
 
 ::: warning 第⑱步语义
 兜底方向是「拿不准就问人」：一个注册插件工具若没有任何已知形态可对号入座，一律转人工并允许语义分类器介入，**绝不因为「名字无害」而静默放行**。
 :::
 
-## 3.2　硬拒闸门 hardDenyReason <span class="lnum">policy.ts:L193-222</span>
+## 3.2　硬拒闸门 hardDenyReason <span class="lnum">policy.ts:L234-257</span>
 
 - **凭据物质**：`web_fetch/curl/wget` 或外部写工具，参数里含 PEM 私钥、`sk-` / `ghp_` / `github_pat_` / `xox*`、`AKIA[0-9A-Z]{16}`、aws 密钥赋值、`Bearer …`、`.ssh` 路径等 → 拒。
 - **shell 熔断**：bash/pwsh 命令走 `hardDenyShellReason`（见 [§3.3](#33shell-命令分析管线)）。
@@ -88,7 +88,7 @@ flowchart TD
 | Windows 设备/NT 命名空间 | `\\.\` `\device\` `\\?\` `\??\`（非 UNC/X: 变体） | `canonicalizeWindowsNamespace` 折叠后再判包含 |
 | 保留设备名 | `con` `prn` `aux` `nul` `com1-9` `lpt1-9` | 硬拒 |
 
-**symlink 逃逸**：文本层判定无法识破**快捷方式/软链接指向工作区外**（如 `ws/ln → ~/.bashrc`）。宿主侧守卫 `symlinkEscapeReason`（<span class="lnum">symlink.ts:L57-71</span>，宿主调用 <span class="lnum">index.ts:L2829</span>）取 `symlinkGuardTargets` 提取每个工具的真实路径操作数，对「文本上在工作区内/受信区」的目标做 realpath 最深祖先解析，一旦真实路径离开工作区/受信区就硬拒。守卫解析的是**归一化后的文本路径**（`resolveDeepest(textual)`，<span class="lnum">symlink.ts:L30</span>）：若拿原始参数 realpath，相对路径会被锚定到 `process.cwd()` 而非会话工作区，`dsh web` 下会把所有相对路径调用误硬拒（PR #4 修复）。受信区不止插件目录：`trustedDirs` 成员与 allowedDshSubpaths 一并构成复检区；aggressive 模式下「普通出区」是设计目标故放行，但落在 critical 树 / DSH_HOME / 插件运行态文件上的逃逸仍硬拒——运行态文件复检与位置模式无关，改审批/审计/学习状态在任何模式下都不算例行写。
+**symlink 逃逸**：文本层判定无法识破**快捷方式/软链接指向工作区外**（如 `ws/ln → ~/.bashrc`）。宿主侧守卫 `symlinkEscapeReason`（<span class="lnum">symlink.ts:L57-120</span>，宿主调用 <span class="lnum">index.ts:L2987</span>）取 `symlinkGuardTargets` 提取每个工具的真实路径操作数，对「文本上在工作区内/受信区」的目标做 realpath 最深祖先解析，一旦真实路径离开工作区/受信区就硬拒。守卫解析的是**归一化后的文本路径**（`resolveDeepest(textual)`，<span class="lnum">symlink.ts:L30</span>）：若拿原始参数 realpath，相对路径会被锚定到 `process.cwd()` 而非会话工作区，`dsh web` 下会把所有相对路径调用误硬拒（PR #4 修复）。受信区不止插件目录：`trustedDirs` 成员与 allowedDshSubpaths 一并构成复检区；aggressive 模式下「普通出区」是设计目标故放行，但落在 critical 树 / DSH_HOME / 插件运行态文件上的逃逸仍硬拒——运行态文件复检与位置模式无关，改审批/审计/学习状态在任何模式下都不算例行写。
 
 ## 3.5　声明式规则 rulesText <span class="lnum">rules.ts</span> —— 用户写的「最优先纸条」
 
@@ -107,7 +107,7 @@ bash(rm\s+-\s*rf) | deny
 - **首条命中即胜**；`evaluateRules` 先用 `extractRuleTarget` 抽取命令文本（command/script/code/prompt/text/content），防锚定正则（如 `^git push`）被 JSON 信封击穿。
 - ReDoS 防护：长度 ≤2000；拒绝嵌套无界量词 `(a+)+`、交替外套量词、嵌套重复组、`{n,}` 计数重复。
 - **host 与浏览器设置卡共用同一份 `parseRulesText`**（错误逐行红字显示）。
-- 干跑 `rulesDryRun`：只记命中不执法（host 端 <span class="lnum">index.ts:L3000/L3819</span>）。
+- 干跑 `rulesDryRun`：只记命中不执法（host 端 <span class="lnum">index.ts:L3189/L4077</span>）。
 
 ## 3.6　产物登记 ArtifactRegistry <span class="lnum">artifacts.ts</span>
 

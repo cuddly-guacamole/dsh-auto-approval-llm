@@ -216,6 +216,15 @@ const AGENT_TEAMS_CONTROL_TOOLS = new Set([
     // Scoped Agent Teams shared-task board: in-memory/journal coordination
     // state only (no filesystem, no shell, no network). `write_scopes` is
     // advisory metadata the service never resolves to a path.
+    //
+    // team_task_update carries a `delete` action, and these names are allowed
+    // without argument inspection — the destructive regex below matches tool
+    // NAMES, so it cannot see an action buried in the arguments. That is safe
+    // only because the service implements the action as a tombstone (the board
+    // still returns the record, and refuses while a live task depends on it).
+    // If a future version made that action erase, this set membership would
+    // silently auto-approve an erasure: re-check the upstream behaviour before
+    // trusting these four names again.
     'team_task_create',
     'team_task_get',
     'team_task_list',

@@ -30,10 +30,16 @@ export const DIRECT_HUMAN_TOOL = 'dsa_request_user'
  * safety boundary lives in the host fetch provider (public-address +
  * connection-pinning enforcement in dsh-web-fetch-http), not in argument
  * inspection, and denyList / categoryPolicy.networkExec / declared rules
- * remain the operator's tightening knobs. This is the single
- * source of truth for both the policy allow plane and the settings-card
- * display, so the shown list can never drift from what the policy actually
- * allows.
+ * remain the operator's tightening knobs.
+ *
+ * This catalog is a display mirror, NOT the allow plane: the groups below are
+ * what the settings card renders, and they are maintained by hand alongside
+ * the policy sets in policy.ts (which decides the allow) and the label sets in
+ * category.ts (which decide harnessInternal). DEFAULT_ALLOW_TOOLS itself has no
+ * production consumer — it exists for the settings-card contract tests. The
+ * three copies are kept in step by tests/agent-team-tools-allow.test.mjs, which
+ * compares the compiled modules in both directions, so a name the policy allows
+ * can no longer be missing from this display list (or the reverse).
  */
 export const DEFAULT_ALLOW_TOOL_GROUPS: ReadonlyArray<{ label: string; tools: readonly string[] }> = [
   {

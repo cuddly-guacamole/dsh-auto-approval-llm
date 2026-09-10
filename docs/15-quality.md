@@ -23,9 +23,10 @@
 | 并发/一致性 | createKeyedMutex（同键原子无丢失更新/异键并发/异常保链）；exports↔产物一致性 |
 | 摩擦报告/审计渲染 | friction-report.test.mjs：翻案方向（ESCALATE 与 classifier 判定均不可翻案）、空转护栏（无带方向的 LLM 判定 → `VACUOUS`，纯 classifier 窗口不得判通过）、窗口按**最后活动时间**取最近 N 个会话（长命会话不被挤掉）、撤销按时间入窗、失败码直方图（`attempts[].code`，非数组不抛）、参数校验与退出码映射（PASS 0 / FAIL 1 / VACUOUS 2 / INSUFFICIENT 3）；audit-query-format.test.mjs：decision 行形状逐字不变、非决策行按 type 分派并保留真实载荷（`files`/`plane`+`count`+`errors`/`key`/`allows` 等）、`at` 缺失降级为 `?`、参数校验 |
 | 权限变更观测 | permission-change.test.mjs：三种权限平面事件读成 `{scope,to}`（`permission/preset` / `sandbox/mode` / `approval/policy`，含 `never`↔`ask` 双向）、畸形与邻近事件不误判、被拒 decision 的 id 指针（最新优先/上限/仅 rejected）、装配锚钉「每一处 `permission-change` 都落在 `appendAuditLine(` 之后且不在 `pushHistory(` 内」 |
+| 审计轮转与测试隔离 | audit.test.mjs：`auditRotateContent` 双上界收敛（>5000 行取尾、长行再按字节回扫、单超长行整体保留）、原子替换无 tmp 残留、替换被阻断时原文件不受损、以及**默认审计路径锚定**（`auditFilePath()` 默认必须是插件根 `audit.jsonl`）。轮转契约要写多兆字节夹具，故全部经测试接缝跑在 scratch 路径上：一旦指向 live 文件，快照/还原会删掉运行中进程在窗口内追加的行，还原 rename 还可能输给并发写入（Windows EPERM）而让 live 位置留下近乎空文件、真实线索困在 `.bak-test` 孤儿里 —— 跑一次测试即可清空审批审计 |
 | 内置放行面 | agent-team-tools-allow.test.mjs：Agent Teams 九个真实工具全部落静态放行面（`assessTool`→allow 且 `classifierEligible:false`）与 `harnessInternal` 标签（任何 category 键都收紧不了）、三份副本（policy/category/constants）成员一致、**负向**锚定「近似名不得同车放行」（子串/家族/大小写变体）与「包内非工具标识符永不入列」（systemPrompt section id、事件名）；default-allow-catalog.test.mjs 钉 catalog→policy 单向，本文件补 policy→catalog 方向 |
 
-57 个测试文件，合计 **935 例**（node --test 全绿基线）。
+57 个测试文件，合计 **936 例**（node --test 全绿基线）。
 
 ## 15.2　验收命令与运行时证据
 
@@ -34,7 +35,7 @@
 ```bash
 node_modules/.bin/tsc -p tsconfig.json   # 类型（policy/shell/paths 不再 @ts-nocheck）
 node_modules/.bin/tsdown                  # 客户端 bundle
-node --test "tests/**/*.test.mjs"        # 935/935 全绿
+node --test "tests/**/*.test.mjs"        # 936/936 全绿
 ```
 
 :::
