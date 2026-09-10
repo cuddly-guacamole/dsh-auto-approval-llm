@@ -1118,6 +1118,42 @@ function segmentHardDenyReason(segment, shell, roots) {
  * segment of a compound line, so an operator cannot smuggle a protected target
  * past the fuse.
  */
+/**
+ * Commands that rewrite the working directory for every later segment of the
+ * same line.
+ */
+const DIRECTORY_CHANGER_COMMANDS = new Set(['cd', 'pushd', 'chdir', 'set-location', 'sl']);
+
+/**
+ * The working directory a directory-changer segment establishes for the
+ * segments that follow it, or undefined when that cannot be read statically.
+ *
+ * The hard-deny fuses resolve a relative target against `roots.workspace`,
+ * which is the session's directory — right for a plain command, wrong for a
+ * line that first moves elsewhere: `cd /tmp/x && printf … > package.json`
+ * writes /tmp/x/package.json, yet the fuse read the bare name as if it landed
+ * in the workspace and denied the line for touching the plugin's own
+ * package.json.
+ *
+ * Substituting the changer's target as the resolution base fixes that at the
+ * owner: every fuse keeps running, and a relative target is judged by the path
+ * it really names — including a `..` traversal, which resolves to its true
+ * destination instead of being waved through. A dynamic or globbed target
+ * (`cd $DIR`, `cd *`) returns undefined so the caller keeps the workspace
+ * reading: an unreadable changer must never widen what a relative name may
+ * reach.
+ */
+function effectiveCwdAfter(segment, shell, roots) {
+    const unwrapped = unwrapCommand(segment.words);
+    const name = commandName(unwrapped.words[0]?.text ?? '');
+    if (!DIRECTORY_CHANGER_COMMANDS.has(name))
+        return undefined;
+    const target = unwrapped.words.slice(1).find(word => !word.text.startsWith('-'));
+    if (target === undefined || target.dynamic || target.glob)
+        return undefined;
+    return normalizePath(target.text, roots.workspace, roots.home);
+}
+
 export function hardDenyShellReason(source, shell, roots) {
     const compact = source.trim();
     // Newline-flattened copy for the whole-line fuses: `decomposeCommandLine`
@@ -1150,6 +1186,10 @@ export function hardDenyShellReason(source, shell, roots) {
     const decomposition = decomposeCommandLine(compact, shell);
     if (decomposition.kind === 'opaque')
         return undefined;
+    // Fuses run against the directory each segment actually sees: a changer
+    // takes effect only for the segments after it, so the changer itself is
+    // still judged against the incoming workspace.
+    let segmentRoots = roots;
     for (const segment of decomposition.segments) {
         // Per-segment privilege fuse: the whole-line regex above only sees the
         // raw source; a decomposed segment lets us judge the effective command
@@ -1157,9 +1197,14 @@ export function hardDenyShellReason(source, shell, roots) {
         const segName = commandName(unwrapCommand(segment.words).words[0]?.text ?? '');
         if (PRIVILEGE_COMMANDS.has(segName))
             return 'privilege escalation is not permitted by auto mode';
-        const reason = segmentHardDenyReason(segment, shell, roots);
+        const reason = segmentHardDenyReason(segment, shell, segmentRoots);
         if (reason !== undefined)
             return reason;
+        // Resolved against the directory the changer itself runs in, so a
+        // chained `cd a && cd b` composes the way the shell would.
+        const next = effectiveCwdAfter(segment, shell, segmentRoots);
+        if (next !== undefined)
+            segmentRoots = { ...roots, workspace: next };
     }
     return undefined;
 }
