@@ -31,7 +31,13 @@
 - 评审可走**会话模型**（`ctx.llm.stream`）或**在线端点**（OpenAI/Anthropic 兼容）
 - 官方 ApprovalPanel 是唯一的人工交互面
 
-### 数据太平面（所有文件都在插件根目录）
+### 数据太平面（规范位置 `<插件根目录>/runtime/`）
+
+六个运行态文件的规范位置是 `<插件根目录>/runtime/`（插件写入前按需创建）；搬移前的旧位置是插件根目录本身。
+
+- **读**优先 `runtime/<文件名>`，该副本不存在时才回退到旧根文件，两者都在时以 `runtime/` 为准。
+- **写**进 `runtime/`；目录创建失败（如只读的全局安装）时回退旧根路径并打印一条进程内一次性的 `console.warn`，而不是让写入失败——审计是 fail-closed 的提交闸。
+- **搬移**由用户在插件之外完成（guard 拒绝 agent 搬动运行态文件）：停 dsh → 移入 `runtime/` → 启动 dsh；未搬移的安装靠读回退照常工作。
 
 | 文件 | 语义 | 写入方 |
 | --- | --- | --- |
@@ -42,7 +48,7 @@
 | `llm-latency.jsonl` | LLM 评审耗时遥测（环形缓冲 200 条，>1MB 轮转；与审批历史分离） | 宿主 pushLatencySample |
 | `learning.json` | 确认制学习条目（SHA-256 键、TTL 30 天/100 条上限，原子 tmp+rename） | 宿主 persistLearning |
 
-以上六个文件同属运行态保护名单（<span class="lnum">paths.ts:LRUNTIME_STATE_BASENAMES</span>），任何工具调用都改不了它们。
+以上六个文件同属运行态保护名单（<span class="lnum">paths.ts:LRUNTIME_STATE_BASENAMES</span>），任何工具调用都改不了它们——该名单按**文件名**匹配，故移入 `runtime/` 子目录不削弱这条硬拒。
 
 ::: tip 唯一终结者
 `approval/request` 以 `{prepend:true, global:true}` 注册（<span class="lnum">index.ts:L"anyCtx.on('approval/request', async"</span>，options 行 <span class="lnum">index.ts:L"{ prepend: true, global: true }"</span>）—— 对命中的 ask，本插件就是最终裁决，不会开第二个弹窗、不会双写、不会让审计断裂。

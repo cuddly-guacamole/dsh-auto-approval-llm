@@ -204,7 +204,14 @@ Session approval stats — the "Auto Approval" header-button popup: totals / all
 
 ---
 
-## Data files (in the plugin root)
+## Data files (canonical location: `<plugin root>/runtime/`)
+
+All six files are canonically located in the `runtime/` subdirectory of the plugin root (created on demand by the plugin); the pre-move location is the plugin root itself.
+
+- **Reads** prefer `runtime/<name>` and fall back to the old root file only when that runtime copy is absent; when both exist the runtime copy wins — deleting a moved file cannot resurrect the stale root copy.
+- **Writes** go to `runtime/`; when the directory cannot be created (the plugin root is writable but `runtime/` is blocked, for instance) they fall back to the old root path with a one-time-per-process `console.warn` instead of failing. The audit is the fail-closed commit gate (`appendAuditLine` returning false turns verdicts into rejections), so an unwritable path must not make every verdict unauditable. Directory usability caches success but is re-checked on every resolution, so deleting it while the host runs is detected and it is recreated instead of the read and write paths diverging.
+- **Protection is unchanged**: the six files stay on the runtime-state deny list, which matches on **basename**, so moving them into a subdirectory does not weaken the hard deny.
+- **The move** is done by the user outside the plugin (the plugin's own guard refuses an agent relocating its runtime files): stop dsh → move the six files into `runtime/` → start dsh. It is optional — the read fallback keeps an unmoved install working; its old copies simply stay in the plugin root. Append-only files (history/audit/approval-debug/llm-latency) copy their pre-move content into `runtime/` atomically before the first write, so older records do not become unreadable.
 
 | File | Meaning |
 |---|---|
