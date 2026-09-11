@@ -4,6 +4,7 @@ import { normalizeTimeoutAction, hasBreakerNote, REVIEWER_SYSTEM, assembleReview
 import { THRESHOLD_DEFAULTS, DEFAULT_ALLOW_TOOL_GROUPS } from '../auto/constants.js'
 import { parseRulesText } from '../auto/rules.js'
 import { installAutoPermissionIcon } from './auto-icon.js'
+import { createTrailingThrottle, MIN_PANEL_SCAN_INTERVAL_MS } from './throttle.js'
 import { zh, en } from './locale.js'
 import { computeTextNodeRewrites, createBreakerGuard, formatCountdownSuffix, isLinkDown, parseCountdown, shouldWriteCountdownSuffix } from './approvals/shared.js'
 import type { CountdownInfo } from './approvals/shared.js'
@@ -152,9 +153,9 @@ function hijackApprovalButtons(): () => void {
       renderSuffix(remaining, false)
       if (remaining <= 0) {
         // Expired: stop ticking but KEEP the key registered so a later scan
-        // cannot re-arm this panel with the marker's static seconds — the
-        // countdown restarted at its full value on every DOM mutation before
-        // The live-keys sweep in scan() releases the key when the
+        // cannot re-arm this panel with the marker's static seconds — before
+        // that guard, the countdown restarted at its full value on every DOM
+        // mutation. The live-keys sweep in scan() releases the key when the
         // panel actually leaves the DOM. Restore the clean button text so the
         // stale "（0s）" suffix does not linger on a panel the host already
         // resolved.
@@ -309,12 +310,19 @@ function hijackApprovalButtons(): () => void {
     }
   }
 
-  const observer = new g.MutationObserver(scan)
+  // The observer sees every streaming token as a subtree mutation, and this
+  // pass queries the document and serializes each panel's text, so an
+  // unthrottled run per mutation batch is far more work than arming a countdown
+  // needs. The trailing guarantee keeps the last mutation's scan; the initial
+  // scan below stays immediate so a panel present at install is armed at once.
+  const throttledScan = createTrailingThrottle(scan, { minIntervalMs: MIN_PANEL_SCAN_INTERVAL_MS })
+  const observer = new g.MutationObserver(() => throttledScan.trigger())
   observer.observe(doc.body, { childList: true, subtree: true })
   scan()
 
   return () => {
     observer.disconnect()
+    throttledScan.dispose()
     for (const timer of intervals.values()) clearInterval(timer)
     intervals.clear()
     breaker.dispose()

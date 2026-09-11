@@ -16,7 +16,7 @@
 
 - 从面板文本解析 `⏳ will auto-(approve|reject) in Ns` 标记，把 `（Ns）` 倒计时后缀**只贴到「会超时自动执行」的那个按钮**上（timeoutAction=allow → 允许一次；否则 → 拒绝），每 200ms 刷新；后缀串未变化时不写 DOM（写一次会触发 body 级 MutationObserver 的全文档扫描）。
 - 面板文本含「熔断」→ 双按钮禁用 `breakerAntiHijackMs`。
-- 非 UI 轮询器（0.0.12 起拆为 `approvals/` 模块）：`remote` watcher 观察 `uiSession.pendingInteractions`（rc.1 唯一协议源；rc.2 的 `snapshot.pending` 适配器已随 0.0.16 移除）；核心 `shared.startReviewPolling` 以 500ms 为基准 GET `/review-status`（callId 走 `x-auto-approval-call-id` 头，不进 URL），五分支处理 countdown/follow/grace/无状态。路由连续失败时按指数退避到 5s 上限、成功后立即回到 500ms：退避只降低请求频率，观察不停止、也绝不由失败推导裁决。
+- 非 UI 轮询器（0.0.12 起拆为 `approvals/` 模块）：`remote` watcher 观察 `uiSession.pendingInteractions`（rc.1 唯一协议源；rc.2 的 `snapshot.pending` 适配器已随 0.0.16 移除）；核心 `shared.startReviewPolling` 以 500ms 为基准 GET `/review-status`（callId 走 `x-auto-approval-call-id` 头，不进 URL），五分支处理 countdown/follow/grace/无状态。路由连续失败时按指数退避到 5s 上限、成功后立即回到 500ms：退避**只限制定时轮询**，观察不停止、也绝不由失败推导裁决；事件驱动的 `pollNow`（回连/可见性/解冻重对齐）**不受退避限制**，因此链路恢复时不会额外等一个退避周期。
 
 ## 10.1　应答状态机（自动应答的大脑，approvals/ 模块）
 

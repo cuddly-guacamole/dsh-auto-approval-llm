@@ -31,7 +31,9 @@ test('shouldWriteCountdownSuffix: every real change is written', () => {
   // Entering and leaving the offline freeze.
   assert.equal(shouldWriteCountdownSuffix('（8s）', '（8s·断线）'), true)
   assert.equal(shouldWriteCountdownSuffix('（8s·断线）', '（8s）'), true)
-  // Back to the clean label.
+  // Back to the clean label. The expiry branch writes the clean text directly
+  // rather than through this predicate, so this case documents the predicate's
+  // contract ("any change writes") instead of a path the renderer takes.
   assert.equal(shouldWriteCountdownSuffix('（0s）', ''), true)
 })
 

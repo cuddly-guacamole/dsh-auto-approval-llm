@@ -19,10 +19,10 @@ test('static anchors: expired countdown keeps its interval entry (no re-arm), su
   // delete — so the anchor pins the expiry branch text, not a global absence.
   assert.match(client, /\/\/ Expired: stop ticking but KEEP the key registered/, 'the expiry branch documents the no-re-arm contract')
   // Pinned as "the expiry branch does these things", not as one exact statement
-  // sequence: the countdown write-suppression work legitimately inserted
-  // suffix-memory cleanup between the restore and the clearInterval, and an
-  // adjacency anchor would have reported that as a regression. The negative
-  // assertion below is what still holds the no-re-arm contract.
+  // sequence: the branch gained and then shed adjacent work during the
+  // countdown write-suppression batch, and an adjacency anchor turned each
+  // unrelated edit into a false regression. The negative assertion below is
+  // what still holds the no-re-arm contract.
   const expiry = client.match(/\/\/ Expired: stop ticking but KEEP the key registered[\s\S]*?\n {6}\}/)
   assert.ok(expiry, 'the expiry branch must still exist')
   assert.match(expiry[0], /textContent = originalText\(allow\)/, 'expiry restores the clean allow text')
