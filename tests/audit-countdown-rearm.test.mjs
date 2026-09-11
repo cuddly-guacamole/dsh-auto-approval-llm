@@ -18,9 +18,15 @@ test('static anchors: expired countdown keeps its interval entry (no re-arm), su
   // live-keys sweep in scan() may still release the key — that is the legal
   // delete — so the anchor pins the expiry branch text, not a global absence.
   assert.match(client, /\/\/ Expired: stop ticking but KEEP the key registered/, 'the expiry branch documents the no-re-arm contract')
-  assert.match(
-    client,
-    /originalText\(allow\)\r?\n\s*else if \(reject\) reject\.textContent = originalText\(reject\)\r?\n\s*clearInterval\(interval\)/,
-    'expiry restores the clean button text and stops the ticker without deleting the entry',
-  )
+  // Pinned as "the expiry branch does these things", not as one exact statement
+  // sequence: the countdown write-suppression work legitimately inserted
+  // suffix-memory cleanup between the restore and the clearInterval, and an
+  // adjacency anchor would have reported that as a regression. The negative
+  // assertion below is what still holds the no-re-arm contract.
+  const expiry = client.match(/\/\/ Expired: stop ticking but KEEP the key registered[\s\S]*?\n {6}\}/)
+  assert.ok(expiry, 'the expiry branch must still exist')
+  assert.match(expiry[0], /textContent = originalText\(allow\)/, 'expiry restores the clean allow text')
+  assert.match(expiry[0], /reject\.textContent = originalText\(reject\)/, 'expiry restores the clean reject text')
+  assert.match(expiry[0], /clearInterval\(interval\)/, 'expiry stops the ticker')
+  assert.doesNotMatch(expiry[0], /intervals\.delete\(/, 'expiry must not release the key (no re-arm)')
 })

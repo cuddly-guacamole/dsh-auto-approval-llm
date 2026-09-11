@@ -37,6 +37,19 @@ export function formatCountdownSuffix(remainingSeconds: number, offline = false)
   return offline ? `（${remainingSeconds}s·断线）` : `（${remainingSeconds}s）`
 }
 
+/**
+ * Pure: should the countdown suffix be written to the button?
+ *
+ * The display ticks every 200ms but the text only changes once a second, and
+ * every write lands in a document-level MutationObserver that then rescans the
+ * whole document. Skipping the unchanged writes removes that self-triggered
+ * scan without changing what the panel ever shows: any real change — including
+ * the walk back to clean text, and the offline freeze marker — still writes.
+ */
+export function shouldWriteCountdownSuffix(previous: string | undefined, next: string): boolean {
+  return previous !== next
+}
+
 // Grace (ms) during which a countdown approval whose host follow is not yet
 // observable keeps being watched before the client closes the panel with the
 // recorded countdown action. Aligned with the host's follow TTL so the client

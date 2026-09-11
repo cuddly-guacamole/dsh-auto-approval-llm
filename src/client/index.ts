@@ -5,7 +5,7 @@ import { THRESHOLD_DEFAULTS, DEFAULT_ALLOW_TOOL_GROUPS } from '../auto/constants
 import { parseRulesText } from '../auto/rules.js'
 import { installAutoPermissionIcon } from './auto-icon.js'
 import { zh, en } from './locale.js'
-import { computeTextNodeRewrites, createBreakerGuard, formatCountdownSuffix, isLinkDown, parseCountdown } from './approvals/shared.js'
+import { computeTextNodeRewrites, createBreakerGuard, formatCountdownSuffix, isLinkDown, parseCountdown, shouldWriteCountdownSuffix } from './approvals/shared.js'
 import type { CountdownInfo } from './approvals/shared.js'
 import { watchRemoteApprovals } from './approvals/remote.js'
 import { buildToolChips, applyChipToList, type ToolChip, type ToolStatsPayload, type ToolStatsEntry } from './tool-chips.js'
@@ -95,6 +95,13 @@ function hijackApprovalButtons(): () => void {
   const doc = g.document
   const originals = new Map<any, string>()
   const intervals = new Map<string, any>()
+  // Last suffix written to each countdown button. The display ticks every
+  // 200ms while the text only changes once a second, and each write lands in
+  // the body-level MutationObserver that then rescans the whole document — so
+  // the unchanged writes were driving roughly five extra scans per second per
+  // visible countdown. Keyed per button and weak, so a released panel cannot
+  // leak its buttons or inherit a stale "already written".
+  const lastSuffix = new WeakMap<any, string>()
   // Breaker anti-hijack guard, held in the shared core factory so the
   // re-arm/restore logic is unit-testable against the compiled lib. The
   // window read is live: 0 (default) makes the guard a complete no-op.
@@ -127,11 +134,12 @@ function hijackApprovalButtons(): () => void {
       const suffix = formatCountdownSuffix(remaining, offline)
       // Only the button that will auto-execute on timeout carries the
       // countdown; the other button stays clean.
-      if (info.action === 'allow') {
-        if (allow) allow.textContent = `${originalText(allow)}${suffix}`
-      } else if (reject) {
-        reject.textContent = `${originalText(reject)}${suffix}`
-      }
+      const button = info.action === 'allow' ? allow : reject
+      if (!button) return
+      const text = `${originalText(button)}${suffix}`
+      if (!shouldWriteCountdownSuffix(lastSuffix.get(button), text)) return
+      lastSuffix.set(button, text)
+      button.textContent = text
     }
     const apply = () => {
       if (isLinkDown()) {
@@ -152,6 +160,10 @@ function hijackApprovalButtons(): () => void {
         // resolved.
         if (info.action === 'allow' && allow) allow.textContent = originalText(allow)
         else if (reject) reject.textContent = originalText(reject)
+        // The clean text is written past renderSuffix, so the memory has to be
+        // released here too: a stale "（0s）" would suppress a later write.
+        if (allow) lastSuffix.delete(allow)
+        if (reject) lastSuffix.delete(reject)
         clearInterval(interval)
       }
     }
