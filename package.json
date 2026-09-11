@@ -52,6 +52,9 @@
     }
   },
   "license": "BSD-3-Clause",
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
   "peerDependencies": {
     "@deepseek-ai/cordis": ">=4.0.1 <5",
     "@deepseek-ai/dsh-llm": ">=0.1.5-rc.2 <2",

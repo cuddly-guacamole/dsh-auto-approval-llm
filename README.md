@@ -78,6 +78,8 @@
 dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 ```
 
+运行环境：Node `^22.19.0 || >=24.0.0`（与 `package.json` 的 `engines` 同值）。
+
 本地开发构建 / 注入：
 
 ```bash

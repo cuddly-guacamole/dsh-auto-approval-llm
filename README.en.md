@@ -72,6 +72,8 @@ Published to npm (`@quill507/dsh-auto-approval-llm`) — install directly:
 dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 ```
 
+Runtime: Node `^22.19.0 || >=24.0.0` (same value as `engines` in `package.json`).
+
 Local development build / injection:
 
 ```bash
