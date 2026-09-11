@@ -2576,6 +2576,11 @@ export function installLlmCatalogRoutes(ctx: any, llm: any): void {
 export function installSessionModeRoute(ctx: any): void {
   const webServer = ctx.get('webServer')
   if (!webServer) return
+  // Bounded once-per-id note for "this process has no live agent for that id".
+  // The status code no longer carries that fact — it is a normal answer — so
+  // keep it diagnosable behind the debug switch instead of losing it entirely.
+  const unknownSessionLogged = new Set<string>()
+  const UNKNOWN_SESSION_LOG_CAP = 32
   ctx.effect(() => webServer.register({
     kind: 'exact',
     path: SESSION_MODE_ROUTE,
@@ -2602,7 +2607,18 @@ export function installSessionModeRoute(ctx: any): void {
       const permissionPresets = ctx.get('permissionPresets')
       const agent = agents?.get?.(sessionId)
       if (!agent?.session) {
-        responseJson(res, 404, { ok: false, error: 'agent not found' })
+        // No live agent for this id is a normal answer, not a client error: the
+        // client asks about whichever session the sidebar currently selects, and
+        // right after a restart that session is in history while its agent is
+        // not instantiated yet. The success shape already expresses "no mode
+        // known" as `mode: null` — the same answer the session stats route gives
+        // for the same situation — whereas a 404 only produced console noise
+        // that no page can suppress.
+        if (!unknownSessionLogged.has(sessionId) && unknownSessionLogged.size < UNKNOWN_SESSION_LOG_CAP) {
+          unknownSessionLogged.add(sessionId)
+          debugLog({ ev: 'session-mode-unknown', sessionId })
+        }
+        responseJson(res, 200, { ok: true, value: { mode: null } })
         return
       }
       const mode = currentPreset(permissionPresets, agent.session) ?? null
