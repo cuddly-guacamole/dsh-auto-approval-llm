@@ -9,6 +9,7 @@
 //   - /permission tooltip rows and the settings selector carry the label only (official shows no glyph there).
 // The label is localized: zh → 自动审批, everything else → Auto.
 const PLUGIN_ID = 'dsh-auto-approval-llm';
+import { createTrailingThrottle, MIN_DECORATE_INTERVAL_MS } from './throttle.js';
 const ICON_ATTRIBUTE = 'data-dsh-auto-mode-icon';
 const LABEL_ATTRIBUTE = 'data-dsh-auto-mode-label';
 const DIALOG_ATTRIBUTE = 'data-dsh-auto-mode-risk-dialog';
@@ -499,6 +500,15 @@ export function installAutoPermissionIcon(document) {
     document.head.appendChild(style);
     let active = true;
     let queued = false;
+    // The observer below watches `characterData` + `subtree` on the whole
+    // document, so a streaming reply wakes it on every token batch. The microtask
+    // merge collapses a same-task burst; the throttle adds the cross-task floor
+    // that a token stream punches straight through. The trailing run is the part
+    // that matters: a permission menu that appears inside the window must still
+    // get decorated when the last mutation lands.
+    const decorate = createTrailingThrottle(() => decorateAutoPermissionIcons(document), {
+        minIntervalMs: MIN_DECORATE_INTERVAL_MS,
+    });
     const scan = () => {
         if (!active || queued)
             return;
@@ -506,7 +516,7 @@ export function installAutoPermissionIcon(document) {
         queueMicrotask(() => {
             queued = false;
             if (active)
-                decorateAutoPermissionIcons(document);
+                decorate.trigger();
         });
     };
     decorateAutoPermissionIcons(document);
@@ -594,6 +604,7 @@ export function installAutoPermissionIcon(document) {
     return () => {
         active = false;
         observer.disconnect();
+        decorate.dispose();
         document.removeEventListener('click', onClick, true);
         document.removeEventListener('pointerdown', onPointerDown, true);
         document.removeEventListener('keydown', onKeyDown, true);
