@@ -13,7 +13,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { createTrailingThrottle } from '../lib/client/throttle.js'
+import { createTrailingThrottle, MIN_DECORATE_INTERVAL_MS } from '../lib/client/throttle.js'
 
 /** Deterministic clock + scheduler: nothing runs until flush() is called. */
 function harness() {
@@ -110,4 +110,33 @@ test('compiled artifact: @ts-nocheck auto-icon.js really carries the wiring', ()
   assert.match(compiled, /decorate\.trigger\(\)/)
   assert.match(compiled, /decorate\.dispose\(\)/)
   assert.doesNotMatch(compiled, /if \(active\)\s*\n\s*decorateAutoPermissionIcons\(document\);/)
+})
+
+test('the throttle window is a positive interval, not a disabled throttle', () => {
+  // A window of 0 makes `elapsed >= minIntervalMs` always true, i.e. it turns
+  // the throttle back into a direct call while every anchor above still passes.
+  assert.ok(MIN_DECORATE_INTERVAL_MS > 0, `expected a positive window, got ${MIN_DECORATE_INTERVAL_MS}`)
+  assert.ok(Number.isFinite(MIN_DECORATE_INTERVAL_MS))
+  // It must stay small enough that decoration still looks immediate.
+  assert.ok(MIN_DECORATE_INTERVAL_MS <= 200, `window ${MIN_DECORATE_INTERVAL_MS} is too coarse for an icon`)
+})
+
+test('a zero window really does disable the throttle (guards the anchor above)', () => {
+  let runs = 0
+  const throttled = createTrailingThrottle(() => { runs += 1 }, { minIntervalMs: 0 })
+  throttled.trigger()
+  throttled.trigger()
+  throttled.trigger()
+  assert.equal(runs, 3, 'with a zero window every trigger runs — which is what the constant must not be')
+  throttled.dispose()
+})
+
+test('static anchor: the observer routes through the throttle, not straight to scan', () => {
+  const source = readFileSync(new URL('../src/client/auto-icon.ts', import.meta.url), 'utf8')
+  // The observer callback and the observer options together are the part a
+  // unit test cannot see: rebinding the callback to `scan` (or dropping the
+  // observe() call) would silently restore the token-rate scanning.
+  assert.match(source, /new MutationObserver\(scan\)/)
+  assert.match(source, /observer\.observe\(document\.documentElement, \{/)
+  assert.match(source, /characterData: true/)
 })

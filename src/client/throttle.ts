@@ -32,12 +32,28 @@ export interface TrailingThrottle {
  */
 export const MIN_DECORATE_INTERVAL_MS = 50
 
+/**
+ * Window for the approval-panel scan (countdown arming, diff preview, breaker).
+ * Slightly wider than the decoration window because this pass decides when a
+ * countdown gets armed, so it is the more consequential of the two; it still
+ * sits far below anything a person can perceive on a panel that just appeared.
+ */
+export const MIN_PANEL_SCAN_INTERVAL_MS = 100
+
 export function createTrailingThrottle(
   run: () => void,
   options: TrailingThrottleOptions,
 ): TrailingThrottle {
   const minIntervalMs = options.minIntervalMs
-  const now = options.now ?? (() => Date.now())
+  // Monotonic where the platform offers it: a wall-clock step backwards would
+  // make `elapsed` negative and push the trailing run out by the size of the
+  // step, i.e. lose the decoration for that long. `performance.now()` cannot
+  // step backwards.
+  const now = options.now ?? (() => (
+    typeof performance !== 'undefined' && typeof performance.now === 'function'
+      ? performance.now()
+      : Date.now()
+  ))
   const schedule = options.schedule ?? ((fn: () => void, ms: number) => setTimeout(fn, ms))
   const cancel = options.cancel ?? ((handle: any) => clearTimeout(handle))
 
