@@ -95,13 +95,6 @@ function hijackApprovalButtons(): () => void {
   const doc = g.document
   const originals = new Map<any, string>()
   const intervals = new Map<string, any>()
-  // Last suffix written to each countdown button. The display ticks every
-  // 200ms while the text only changes once a second, and each write lands in
-  // the body-level MutationObserver that then rescans the whole document — so
-  // the unchanged writes were driving roughly five extra scans per second per
-  // visible countdown. Keyed per button and weak, so a released panel cannot
-  // leak its buttons or inherit a stale "already written".
-  const lastSuffix = new WeakMap<any, string>()
   // Breaker anti-hijack guard, held in the shared core factory so the
   // re-arm/restore logic is unit-testable against the compiled lib. The
   // window read is live: 0 (default) makes the guard a complete no-op.
@@ -137,8 +130,15 @@ function hijackApprovalButtons(): () => void {
       const button = info.action === 'allow' ? allow : reject
       if (!button) return
       const text = `${originalText(button)}${suffix}`
-      if (!shouldWriteCountdownSuffix(lastSuffix.get(button), text)) return
-      lastSuffix.set(button, text)
+      // The display ticks every 200ms while the text only changes once a
+      // second, and every write lands in the body-level MutationObserver that
+      // then rescans the whole document — so the unchanged writes used to drive
+      // roughly five extra scans per second per visible countdown. Compared
+      // against the LIVE button text rather than a remembered copy: the
+      // official panel owns this DOM and may rewrite the label between ticks,
+      // and a remembered "already written" would then suppress the restore and
+      // drop the countdown entirely. Reading the DOM keeps that self-healing.
+      if (!shouldWriteCountdownSuffix(button.textContent ?? undefined, text)) return
       button.textContent = text
     }
     const apply = () => {
@@ -160,10 +160,6 @@ function hijackApprovalButtons(): () => void {
         // resolved.
         if (info.action === 'allow' && allow) allow.textContent = originalText(allow)
         else if (reject) reject.textContent = originalText(reject)
-        // The clean text is written past renderSuffix, so the memory has to be
-        // released here too: a stale "（0s）" would suppress a later write.
-        if (allow) lastSuffix.delete(allow)
-        if (reject) lastSuffix.delete(reject)
         clearInterval(interval)
       }
     }

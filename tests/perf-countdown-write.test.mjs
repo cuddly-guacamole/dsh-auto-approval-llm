@@ -48,19 +48,21 @@ test('the interval tick writes only when the rendered string changed', () => {
   assert.equal(writes, 2, 'one write per second, not one per tick')
 })
 
-test('static anchor: the countdown renderer suppresses unchanged writes', () => {
+test('static anchor: the countdown renderer compares against the live button text', () => {
   const client = readFileSync(new URL('../src/client/index.ts', import.meta.url), 'utf8')
   assert.match(client, /shouldWriteCountdownSuffix\(/, 'renderSuffix must consult the predicate')
   // The suffix must still come from the single formatting owner.
   assert.match(client, /formatCountdownSuffix\(/, 'the displayed shape must stay centralized')
-  // Whatever remembers the last written string must be cleared when the panel
-  // is released, or a re-armed panel could inherit a stale "already written".
-  const updatePanel = client.match(/const updatePanel = \(panel: any, key: string, info: CountdownInfo\) => \{[\s\S]*?\n {2}\}\r?\n/)
-  assert.ok(updatePanel, 'updatePanel must still exist')
-  assert.match(updatePanel[0], /lastSuffix\.delete\(/, 'the per-button memory must be released')
+  // The "previous" value must be read from the DOM, not remembered: the
+  // official panel owns this button and may rewrite the label between ticks,
+  // and a remembered copy would suppress the restore and drop the countdown.
+  const render = client.match(/const renderSuffix = \(remaining: number, offline: boolean\) => \{[\s\S]*?\n {4}\}/)
+  assert.ok(render, 'renderSuffix must still exist')
+  assert.match(render[0], /shouldWriteCountdownSuffix\(button\.textContent/, 'the comparison must read the DOM')
+  assert.doesNotMatch(render[0], /lastSuffix/, 'no remembered-copy state may gate the write')
 })
 
-test('static anchor: the suffix memory is keyed per button, not per panel', () => {
+test('static anchor: no remembered suffix copy was left behind', () => {
   const client = readFileSync(new URL('../src/client/index.ts', import.meta.url), 'utf8')
-  assert.match(client, /new WeakMap[<(]/, 'the memory must not keep detached buttons alive')
+  assert.doesNotMatch(client, /lastSuffix/, 'the memoized variant must not creep back in')
 })
