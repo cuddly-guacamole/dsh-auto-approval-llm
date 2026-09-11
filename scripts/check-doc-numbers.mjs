@@ -98,20 +98,25 @@ export function check(measured, sources = {}, observed) {
       lines.push(`  MISSING  ${point.file}  (${point.description})`)
       continue
     }
-    const match = point.pattern.exec(source)
-    if (!match) {
+    // Every occurrence is checked, not just the first: a page can carry the
+    // correct sentence in one place and a stale copy of it in another, and a
+    // single-match check would report the page as agreeing.
+    const matches = [...source.matchAll(new RegExp(point.pattern.source, point.pattern.flags.includes('g') ? point.pattern.flags : `${point.pattern.flags}g`))]
+    if (matches.length === 0) {
       problems.push(`${point.file}: ${point.description} not found — the wording moved, so the count is no longer checked`)
       lines.push(`  MISSING  ${point.file}  (${point.description})`)
       continue
     }
-    const values = point.values(match)
-    const wrong = Object.entries(values).filter(([key, value]) => value !== measured[key === 'casesAgain' ? 'cases' : key])
-    const shown = Object.entries(values).map(([key, value]) => `${key}=${value}`).join(' ')
-    if (wrong.length > 0) {
-      problems.push(`${point.file}: ${point.description} says ${shown}; measured ${measured.files}/${measured.cases}`)
-      lines.push(`  STALE    ${point.file}  ${shown}`)
-    } else {
-      lines.push(`  ok       ${point.file}  ${shown}`)
+    for (const match of matches) {
+      const values = point.values(match)
+      const wrong = Object.entries(values).filter(([key, value]) => value !== measured[key === 'casesAgain' ? 'cases' : key])
+      const shown = Object.entries(values).map(([key, value]) => `${key}=${value}`).join(' ')
+      if (wrong.length > 0) {
+        problems.push(`${point.file}: ${point.description} says ${shown}; measured ${measured.files}/${measured.cases}`)
+        lines.push(`  STALE    ${point.file}  ${shown}`)
+      } else {
+        lines.push(`  ok       ${point.file}  ${shown}`)
+      }
     }
   }
   return { problems, lines }

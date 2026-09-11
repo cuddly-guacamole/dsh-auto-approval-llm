@@ -12,9 +12,10 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 
 // Claims that state a suite-wide count. Anything phrased this way must be
 // covered by the checker, otherwise a new sentence reintroduces silent drift.
-// Per-file counts ("12 例" for one test file) are deliberately out of scope.
+// Per-file counts ("12 例" for one test file) are deliberately out of scope, so
+// the bare `N 例` shape only counts when it follows a suite-wide marker.
 const COUNT_CLAIM =
-  /\d+\s*个\s*tests\/\*\.test\.mjs|\d+\s*个测试文件|\d+\s*测试\s*\+|\d+\s*\/\s*\d+\s*(?:全绿|fail 0)|合计\s*\*\*\d+\s*例/
+  /\d+\s*个\s*(?:tests\/\*\.test\.mjs|测试文件|测试)|\d+\s*测试\s*\+|\d+\s*\/\s*\d+\s*(?:全绿|fail 0|通过)|合计\s*\*{0,2}\d+\s*例/
 
 function watchedDocuments() {
   const docs = readdirSync(join(root, 'docs')).filter(name => name.endsWith('.md')).map(name => `docs/${name}`)
@@ -45,6 +46,22 @@ test('a declaration point that disappears is reported', () => {
   const gutted = { 'docs/14-code-map.md': readFileSync(join(root, 'docs/14-code-map.md'), 'utf8').replace(/合计 \d+ 个 tests\/\*\.test\.mjs/, '合计若干测试') }
   const problems = check(measured, gutted).problems
   assert.ok(problems.some(problem => problem.includes('docs/14-code-map.md') && problem.includes('not found')), JSON.stringify(problems))
+})
+
+test('a stale second copy of the same claim is reported', () => {
+  // A page may keep the corrected sentence and an older duplicate; checking only
+  // the first match would call that page consistent.
+  const measured = measuredCounts(root)
+  const honest = readFileSync(join(root, 'docs/index.md'), 'utf8')
+  const duplicated = { 'docs/index.md': `${honest}\n另有 ${measured.cases + 7} 测试 + 运行时验证\n` }
+  assert.deepEqual(check(measured, { 'docs/index.md': honest }).problems, [])
+  const problems = check(measured, duplicated).problems
+  assert.ok(problems.length > 0, 'the stale duplicate must be reported')
+})
+
+test('the uncovered-claim scan recognises the phrasings a page can use', () => {
+  const shapes = ['1195 个测试', '1194/1194 通过', '合计 1194 例', '1194 个测试文件', '1194 测试 + 运行时验证']
+  for (const shape of shapes) assert.ok(COUNT_CLAIM.test(shape), `the scan misses: ${shape}`)
 })
 
 test('no document states a suite count outside the checked set', () => {

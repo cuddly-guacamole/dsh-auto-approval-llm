@@ -20,14 +20,30 @@ const packDir = join(root, '.gate-pack')
 const steps = []
 let skipped = 0
 
-/** Quote one argument for the shell that wraps every step on Windows. */
-function quote(argument) {
-  return /[\s"*?<>|]/.test(argument) ? `"${argument.replaceAll('"', '\\"')}"` : argument
+/**
+ * The npm entry point is a `.cmd` shim on Windows, which could not be spawned
+ * without a shell (Node refuses `.cmd` without one), so every step runs through
+ * a shell. That makes argument quoting the only injection surface, and quoting
+ * is hard to get right: reject anything that a shell could read as syntax
+ * instead of trying to escape it. Every argument this script builds is a fixed
+ * literal or a path derived from the package name, so a rejection means a real
+ * mistake rather than a legitimate input.
+ */
+const SHELL_METACHARACTERS = /[&^%()!;<>|`$'"\r\n]/
+function shellArgument(argument) {
+  if (SHELL_METACHARACTERS.test(argument))
+    throw new Error(`refusing to pass a shell metacharacter through the gate: ${JSON.stringify(argument)}`)
+  return /\s/.test(argument) ? `"${argument}"` : argument
+}
+
+/** Remove the scratch directory, including on a failure path. */
+function cleanup() {
+  rmSync(packDir, { recursive: true, force: true })
 }
 
 function run(label, command, args, options = {}) {
   const started = Date.now()
-  const line = [command, ...args].map(quote).join(' ')
+  const line = [command, ...args].map(shellArgument).join(' ')
   const result = spawnSync(line, {
     cwd: root,
     encoding: 'utf8',
@@ -41,6 +57,7 @@ function run(label, command, args, options = {}) {
     if (result.stderr) process.stderr.write(result.stderr)
   }
   if (!ok) {
+    cleanup()
     steps.push({ label, ok: false, duration, skipped: false })
     console.error(`gate: FAIL at "${label}" (exit ${result.status}, ${duration}ms)`)
     summarize()
@@ -124,10 +141,14 @@ function checkPatch(pkg) {
 
 function assertAssembly() {
   const probe = spawnSync('dsh --profile web --dump-config', { cwd: root, encoding: 'utf8', shell: true, timeout: 300000 })
-  if (probe.error !== undefined || probe.status !== 0) {
-    skip('assert the assembly', probe.error?.message ?? `dsh --dump-config exited ${probe.status}`)
+  // Only a missing CLI is a reason to skip. A CLI that exists but refuses to
+  // dump its config means the assembly is broken — the exact condition this
+  // step exists to catch — so any other failure stays fatal.
+  if (probe.error !== undefined || probe.status === null) {
+    skip('assert the assembly', probe.error?.message ?? 'the dsh CLI could not be spawned')
     return
   }
+  if (probe.status !== 0) throw new Error(`dsh --profile web --dump-config exited ${probe.status}: ${(probe.stderr ?? '').trim().slice(0, 400)}`)
   const output = probe.stdout ?? ''
   for (const expected of ['- id: auto-approval-llm', "name: '@quill507/dsh-auto-approval-llm'"]) {
     if (!output.includes(expected)) throw new Error(`the loader tree does not contain ${expected}`)
@@ -156,6 +177,9 @@ run('the documented counts match', 'node', ['scripts/check-doc-numbers.mjs', '--
 run('the documentation anchors resolve', 'node', ['scripts/check-anchors.mjs'])
 
 function recordFailure(label, error) {
+  // Called from a catch, so clean up here rather than in a `finally`: leaving
+  // the process through process.exit() would skip that block.
+  cleanup()
   steps.push({ label, ok: false, duration: 0, skipped: false })
   console.error(`gate: FAIL at "${label}": ${error instanceof Error ? error.message : String(error)}`)
   summarize()
@@ -166,7 +190,6 @@ let pkg
 try {
   pkg = loadTarball()
 } catch (error) {
-  rmSync(packDir, { recursive: true, force: true })
   recordFailure('pack and extract the tarball', error)
 }
 try {
@@ -175,11 +198,8 @@ try {
   checkPatch(pkg)
 } catch (error) {
   recordFailure('load the packed artifact', error)
-} finally {
-  // The scratch directory is untracked, but a gate run must not leave a tree
-  // that a later "working tree is clean" check trips over.
-  rmSync(packDir, { recursive: true, force: true })
 }
+cleanup()
 assertAssembly()
 
 summarize()
