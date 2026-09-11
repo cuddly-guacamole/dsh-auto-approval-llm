@@ -399,16 +399,20 @@ test('startReviewPolling: transient server errors keep observing and never resol
   const poller = poll(startReviewPolling(handle, () => true, { pollMs: 10 }))
   // A count floor must not be asserted inside a fixed sleep: a single event-loop
   // stall shorter than the old budget reddened this while nothing was wrong.
-  // Wait for the observation count instead, which is what the assertion means.
+  // The waiting is what carries that meaning; a second copy of the same floor
+  // here would be implied by the wait and could never fail.
   await until(() => fetchLog.length >= 3, 'poller kept observing through the errors')
-  assert.ok(fetchLog.length >= 3, 'poller keeps observing while the server is sick')
   // Observing must still mean observing, not spinning: consecutive failures buy
   // an exponential hold-off, so a fixed window adds far fewer requests than the
-  // base cadence would. The floor above pins that observation continues; this
-  // pins that it is no longer a flat 1/pollMs.
+  // base cadence would. The lower bound below is a NEW observation made after
+  // the window (not a re-test of the wait above); the upper bound pins that the
+  // cadence is no longer a flat 1/pollMs.
   const settled = fetchLog.length
   await sleep(300)
-  assert.ok(fetchLog.length >= settled, 'the poller must never stop observing')
+  assert.ok(
+    fetchLog.length > settled,
+    `the poller must keep observing: no request at all in 300ms (stuck at ${settled})`,
+  )
   assert.ok(
     fetchLog.length - settled <= 12,
     `expected failure backoff to slow the cadence, added ${fetchLog.length - settled} in 300ms at pollMs=10`,
@@ -457,11 +461,12 @@ test('startReviewPolling: F4 — a pollNow burst is debounced and slow responses
   // would add a request, so this bound is what pins "the burst is a no-op".
   assert.ok(afterBurst <= 2, `a pollNow burst must not amplify requests under the 200ms gap, got ${afterBurst}`)
   // Several interval ticks land while responses are still slow; wait for the
-  // observations to accumulate rather than trusting a fixed sleep.
+  // observations to accumulate rather than trusting a fixed sleep. The wait is
+  // the assertion (it fails on timeout); repeating its condition afterwards
+  // would be a copy that can never fail.
   await until(() => probe.calls.length >= 4, 'the poller kept observing while the guard serialized it')
   poller.dispose()
   assert.equal(probe.peak, 1, 'never more than one in-flight review-status request')
-  assert.ok(probe.calls.length >= 4, 'the poller kept observing (guard did not stall it)')
   assert.ok(probe.calls.length < 20, 'requests were serialized, not amplified')
 })
 
@@ -476,8 +481,9 @@ test('startReviewPolling: F4 regression — fast responses keep polling normally
   const poller = poll(startReviewPolling(handle, () => true, { pollMs: 10 }))
   await until(() => probe.calls.length >= 1, 'first poll fired')
   const countBefore = probe.calls.length
+  // The wait is the assertion; a duplicate `assert.ok` on the same condition
+  // would be implied by it and could never fail.
   await until(() => probe.calls.length > countBefore, 'fast polling continues at the interval rate')
-  assert.ok(probe.calls.length > countBefore, 'fast polling continues at the interval rate')
   statuses.c1 = { phase: 'follow', source: 'llm', action: 'allow', seconds: 0 }
   await until(() => responds.length === 1, 'follow answered')
   await sleep(40)

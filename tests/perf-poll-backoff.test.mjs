@@ -113,7 +113,6 @@ test('integration: observation continues through a long outage (never gives up)'
   // that observed briefly and then gave up (leaving the approval to the grace
   // timer) would never reach it and would time out here.
   await until(() => log.length >= 8, 'observation continued across several backoff steps', 10_000)
-  assert.ok(log.length >= 8, 'the poller must keep observing while the route stays down')
 })
 
 test('integration: pollNow still realigns during a hold-off', async (t) => {

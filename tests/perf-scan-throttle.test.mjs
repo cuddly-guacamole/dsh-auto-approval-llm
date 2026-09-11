@@ -13,7 +13,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { createTrailingThrottle, MIN_DECORATE_INTERVAL_MS } from '../lib/client/throttle.js'
+import { createTrailingThrottle, MIN_DECORATE_INTERVAL_MS, MIN_PANEL_SCAN_INTERVAL_MS } from '../lib/client/throttle.js'
 
 /** Deterministic clock + scheduler: nothing runs until flush() is called. */
 function harness() {
@@ -139,4 +139,31 @@ test('static anchor: the observer routes through the throttle, not straight to s
   assert.match(source, /new MutationObserver\(scan\)/)
   assert.match(source, /observer\.observe\(document\.documentElement, \{/)
   assert.match(source, /characterData: true/)
+})
+
+test('static anchor: the approval-panel scan is throttled too, and stays immediate on install', () => {
+  // The second document-level observer (body subtree, no characterData) runs the
+  // countdown-arming scan. It got its own window, so it needs the same positive
+  // -value and wiring anchors as the icon one, or `MIN_PANEL_SCAN_INTERVAL_MS = 0`
+  // would restore mutation-rate scanning with the whole suite green.
+  assert.ok(MIN_PANEL_SCAN_INTERVAL_MS > 0, `expected a positive panel window, got ${MIN_PANEL_SCAN_INTERVAL_MS}`)
+  assert.ok(Number.isFinite(MIN_PANEL_SCAN_INTERVAL_MS))
+  assert.ok(MIN_PANEL_SCAN_INTERVAL_MS <= 500, `panel window ${MIN_PANEL_SCAN_INTERVAL_MS} delays arming too far`)
+
+  const client = readFileSync(new URL('../src/client/index.ts', import.meta.url), 'utf8')
+  assert.match(client, /createTrailingThrottle\(scan, \{ minIntervalMs: MIN_PANEL_SCAN_INTERVAL_MS \}\)/)
+  assert.match(client, /new g\.MutationObserver\(\(\) => throttledScan\.trigger\(\)\)/)
+  assert.match(client, /throttledScan\.dispose\(\)/)
+  // The install-time scan must stay immediate: a panel already on screen when
+  // the plugin loads has to be armed at once, not after a throttle window.
+  assert.match(client, /observer\.observe\(doc\.body, \{ childList: true, subtree: true \}\)\r?\n\s*scan\(\)/)
+})
+
+test('a zero panel window really disables that throttle (guards the anchor above)', () => {
+  let runs = 0
+  const throttled = createTrailingThrottle(() => { runs += 1 }, { minIntervalMs: 0 })
+  throttled.trigger()
+  throttled.trigger()
+  assert.equal(runs, 2, 'with a zero window every trigger runs — which is what the constant must not be')
+  throttled.dispose()
 })
