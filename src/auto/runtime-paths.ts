@@ -35,8 +35,14 @@
  *      path (to absorb the transient rename races seen on Windows) and only then
  *      concludes the directory is unusable and degrades. The decision is sticky,
  *      so a rejected directory is not revisited on every append.
- *   3. The canonical copy always wins when it exists, so a stale legacy copy can
- *      never shadow live data.
+ *   3. The canonical copy wins while the canonical directory is usable, so a stale
+ *      legacy copy can never shadow live data. Once writes degrade to the legacy
+ *      chain, the NEWER of the two copies wins instead, because that is where the
+ *      records are going. The two transitions keep "newer" equal to "superset":
+ *      degrading seeds each legacy file from the canonical copy (or leaves a
+ *      legacy copy that is already newer, which can only mean the canonical copy
+ *      was seeded into it earlier), and a later boot with a usable canonical
+ *      directory copies a newer legacy file back (`reconcileRuntimeCopies`).
  *
  * Append-only files additionally carry their legacy content forward on the first
  * write, because a fresh target would otherwise shadow records that are still
@@ -54,7 +60,7 @@
  * the canonical directory. Registered as a backlog row so the removal is not left
  * to memory.
  */
-import { appendFileSync, existsSync, mkdirSync, copyFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, copyFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -105,6 +111,7 @@ export function setRuntimePathsForTests(next: RuntimePathOverrides | undefined):
   stateDirWriteDenied = false
   lastWriteError = undefined
   warnedAboutFallback = false
+  warnedAboutNoLocation = false
 }
 
 /**
@@ -180,6 +187,14 @@ export function legacyRootFilePath(name: string): string {
  */
 let stateDirUsable = false
 let warnedAboutFallback = false
+/**
+ * Warning flags are separate: a deployment where neither location accepted writes
+ * during boot may recover later (a repair, an ACL fixed), and the "records are
+ * moving to X" warning must still be able to fire — sharing one flag let the
+ * first message permanently silence the second, which told the operator the
+ * opposite of what was happening.
+ */
+let warnedAboutNoLocation = false
 
 /**
  * Sticky verdict that the canonical directory REJECTS writes.
@@ -216,9 +231,103 @@ export function isDegradableRuntimeWriteError(error: unknown): boolean {
 }
 
 /**
+ * Error codes worth one immediate retry, whether or not they mean "this location
+ * refuses writes".
+ *
+ * `EBUSY`/`EAGAIN` are the sharing violations a Windows anti-virus scanner or
+ * backup agent produces while it holds the target for a moment; `EINTR` is an
+ * interrupted call. All three are raised while OPENING the target, so a retry
+ * cannot duplicate or truncate a record. `ENOSPC`/`EIO` are deliberately absent:
+ * they can fail after bytes moved, and replaying the line would splice a fragment
+ * and a full line into one corrupt record.
+ */
+const RETRYABLE_WRITE_CODES: ReadonlySet<string> = new Set([
+  ...DEGRADABLE_WRITE_CODES,
+  'EBUSY',
+  'EAGAIN',
+  'EINTR',
+])
+
+/** Pure: may the same write be attempted once more without risking the record? */
+export function isRetryableRuntimeWriteError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code
+  return typeof code === 'string' && RETRYABLE_WRITE_CODES.has(code)
+}
+
+/**
+ * Copy `source` over `target` through a temp sibling in the target's directory.
+ * Returns whether the target now carries the source's content.
+ */
+function copyFileAtomic(source: string, target: string): boolean {
+  if (source === target || !existsSync(source)) return false
+  const tmp = `${target}.merge-${process.pid}`
+  try {
+    copyFileSync(source, tmp)
+    renameSync(tmp, target)
+    return true
+  } catch {
+    try {
+      if (existsSync(tmp)) rmSync(tmp, { force: true })
+    } catch {
+      // Leaving a stray temp file is preferable to failing the caller.
+    }
+    return false
+  }
+}
+
+/**
+ * Make the canonical copy carry the legacy one when the legacy copy is newer.
+ *
+ * The reverse transition of `degradeToLegacy`. A previous process may have
+ * degraded — the state directory refusing writes is not necessarily permanent,
+ * an ACL fix is enough — and appended to the legacy copy for a while. Those
+ * records are newer than anything in the canonical file, and since the legacy
+ * file was SEEDED from the canonical one when the degradation started, "newer"
+ * also means "contains everything the canonical one has". Copying it back is
+ * therefore a union, not a loss, and it keeps the read chain (which prefers the
+ * canonical copy when it is not degraded) from silently hiding the window.
+ *
+ * Best-effort and idempotent: once the canonical copy is the newer one, nothing
+ * happens on later boots.
+ */
+export function reconcileRuntimeCopies(): void {
+  if (!ensureRuntimeDir()) return
+  for (const name of RUNTIME_FILENAMES) {
+    const legacy = legacyRootFilePath(name)
+    if (!existsSync(legacy)) continue
+    const canonical = runtimeFilePath(name)
+    if (!existsSync(canonical)) {
+      copyFileAtomic(legacy, canonical)
+      continue
+    }
+    if (newerCopyIs(legacy, canonical)) copyFileAtomic(legacy, canonical)
+  }
+}
+
+/** Whether `candidate` is strictly newer on disk than `reference`. */
+function newerCopyIs(candidate: string, reference: string): boolean {
+  try {
+    return statSync(candidate).mtimeMs > statSync(reference).mtimeMs
+  } catch {
+    return false
+  }
+}
+
+/**
  * Sticky degradation: every later write goes to the legacy chain.
  *
- * The fallback directory is created here (and the warning emitted once) so the
+ * The canonical copies are about to stop being written, so each one must seed the
+ * location the write chain is moving to — otherwise the read rule would flip onto
+ * a STALE legacy snapshot (the migration copy is never deleted, so a legacy file
+ * routinely exists while being far behind) and every record written since the
+ * migration would silently vanish.
+ *
+ * Seeding follows one rule, which holds because a degradation-seeded legacy file
+ * starts as a copy of the canonical one: **the newer copy is the superset.** If
+ * the canonical copy is newer it is copied over the legacy snapshot; if the
+ * legacy copy is newer, it was seeded from the canonical one and then appended to
+ * (an earlier degradation in a killed process), so it already contains it. The
+ * fallback directory is created here and the warning emitted once, so the
  * operator sees WHERE records are going, not merely that something failed.
  */
 function degradeToLegacy(): void {
@@ -226,19 +335,17 @@ function degradeToLegacy(): void {
   if (stateDirWriteDenied) return
   stateDirWriteDenied = true
   const fallback = legacyRoot()
-  if (tryMakeDir(fallback)) {
-    // The canonical copies are about to go stale: the read rule follows the write
-    // chain, so anything that lives ONLY in the canonical directory would become
-    // unreachable. Append-only files therefore carry their canonical content into
-    // the legacy target before the first legacy append — the mirror image of the
-    // migration carry-forward, and only when the legacy file does not exist.
-    for (const name of APPEND_ONLY_FILENAMES) {
-      carryForwardFile(runtimeFilePath(name), join(fallback, name))
-    }
-    warnFallbackOnce(fallback)
-  } else {
+  if (!tryMakeDir(fallback)) {
     warnNoUsableLocation()
+    return
   }
+  for (const name of RUNTIME_FILENAMES) {
+    const canonical = runtimeFilePath(name)
+    if (!existsSync(canonical)) continue
+    const legacy = join(fallback, name)
+    if (!existsSync(legacy) || newerCopyIs(canonical, legacy)) copyFileAtomic(canonical, legacy)
+  }
+  warnFallbackOnce(fallback)
 }
 
 function tryMakeDir(dir: string): boolean {
@@ -279,10 +386,8 @@ export function ensureRuntimeDir(): boolean {
 export function probeRuntimeDirWritable(): boolean {
   if (!ensureRuntimeDir()) return false
   const probe = join(stateDirPath(), `.write-probe-${process.pid}`)
-  let wrote = false
   try {
     writeFileSync(probe, '')
-    wrote = true
   } catch {
     degradeToLegacy()
     return false
@@ -290,12 +395,10 @@ export function probeRuntimeDirWritable(): boolean {
   // Cleanup happens OUTSIDE the verdict. A probe file that cannot be removed is
   // exactly what the comment above calls harmless, and treating it as "refuses
   // writes" would move six files for a sharing violation on a file nobody reads.
-  if (wrote) {
-    try {
-      rmSync(probe, { force: true })
-    } catch {
-      // Harmless residue: the file is never read and carries a pid suffix.
-    }
+  try {
+    rmSync(probe, { force: true })
+  } catch {
+    // Harmless residue: the file is never read and carries a pid suffix.
   }
   return true
 }
@@ -311,8 +414,8 @@ function warnFallbackOnce(used: string): void {
 
 /** Warn once per process that NO location accepted the runtime files. */
 function warnNoUsableLocation(): void {
-  if (warnedAboutFallback) return
-  warnedAboutFallback = true
+  if (warnedAboutNoLocation) return
+  warnedAboutNoLocation = true
   console.warn(
     `[dsh-auto-approval-llm] neither ${stateDirPath()} nor ${legacyRoot()} accepted writes; `
     + 'the audit is the fail-closed commit gate, so verdicts will be refused until one of them is writable',
@@ -337,12 +440,33 @@ function warnNoUsableLocation(): void {
  * Falls back to the canonical path when neither exists, so a caller reporting
  * the path shows the intended location rather than a historical one.
  */
+/** mtime of `path` when it is a regular file; undefined otherwise (or on error). */
+function fileMtimeMs(path: string): number | undefined {
+  try {
+    const stats = statSync(path)
+    return stats.isFile() ? stats.mtimeMs : undefined
+  } catch {
+    return undefined
+  }
+}
+
 export function resolveRuntimeReadPath(name: string): string {
   const canonical = runtimeFilePath(name)
   const legacy = legacyRootFilePath(name)
-  if (stateDirWriteDenied) return existsSync(legacy) ? legacy : canonical
-  if (existsSync(canonical)) return canonical
-  if (existsSync(legacy)) return legacy
+  if (stateDirWriteDenied) {
+    // Degraded: the write chain appends to the legacy copy, which was seeded from
+    // the canonical one, so that copy carries both. Prefer the newer of the two
+    // READABLE copies anyway: if the seeding copy failed, the canonical file still
+    // holds the records the legacy snapshot predates, and reading past it would
+    // hide them. A directory sitting at either path is not a copy at all.
+    const legacyTime = fileMtimeMs(legacy)
+    if (legacyTime === undefined) return canonical
+    const canonicalTime = fileMtimeMs(canonical)
+    if (canonicalTime === undefined) return legacy
+    return canonicalTime > legacyTime ? canonical : legacy
+  }
+  if (fileMtimeMs(canonical) !== undefined) return canonical
+  if (fileMtimeMs(legacy) !== undefined) return legacy
   return canonical
 }
 
@@ -438,14 +562,15 @@ function tryAppend(file: string, text: string): boolean {
  * size-capped files rotate the very file they appended to.
  *
  * The ladder, in this order for a reason: one retry at the SAME path, but only
- * after the error is known to be one that cannot have written bytes. A retry
- * exists because Windows rename/open races raise `EPERM` transiently, and
- * degrading on a first such failure would move six files for a sharing
- * violation. It must not run for the other errors: `ENOSPC` and friends can fail
- * AFTER a partial write, so replaying the same text would splice a fragment and
- * a full line into one corrupt record — a silently lost audit line. Only after a
- * retry-safe error repeats does the ladder conclude the directory refuses writes
- * and try the legacy path.
+ * after the error is known to be one a retry cannot damage (see
+ * `isRetryableRuntimeWriteError`: it covers the "this location refuses writes"
+ * codes and the transient sharing violations alike, and excludes the errors that
+ * can fail after a partial write). A retry exists because Windows rename/open
+ * races raise `EPERM`/`EBUSY` transiently, and degrading on a first such failure
+ * would move six files for a sharing violation. Only when a DEGRADABLE error
+ * repeats does the ladder conclude the directory refuses writes and try the
+ * legacy path; a transient error that repeats is reported as a failure instead,
+ * leaving the location alone.
  */
 export function appendRuntimeLine(name: string, text: string, fixedPath?: string): string | undefined {
   // An explicit target (the audit test seam) never participates in the ladder:
@@ -453,7 +578,7 @@ export function appendRuntimeLine(name: string, text: string, fixedPath?: string
   if (fixedPath !== undefined) return tryAppend(fixedPath, text) ? fixedPath : undefined
   const primary = resolveRuntimeWritePath(name)
   if (tryAppend(primary, text)) return primary
-  if (!isDegradableRuntimeWriteError(lastWriteError)) return undefined
+  if (!isRetryableRuntimeWriteError(lastWriteError)) return undefined
   if (tryAppend(primary, text)) return primary
   if (!isDegradableRuntimeWriteError(lastWriteError)) return undefined
   degradeToLegacy()
@@ -481,11 +606,9 @@ export function writeRuntimeAtomic(name: string, content: string, tmpSuffix = `.
   }
   const primary = resolveRuntimeWritePath(name)
   if (attempt(primary)) return true
-  // Retry only for an error that cannot have damaged the target: the whole write
-  // is tmp+rename, so a failed rename leaves the target untouched and the retry
-  // is idempotent. A non-degradable failure (a crash mid-tmp-write, ENOSPC) is
-  // reported as-is rather than retried.
-  if (isDegradableRuntimeWriteError(lastWriteError) && attempt(primary)) return true
+  // Retry only for an error a retry cannot damage: the whole write is tmp+rename,
+  // so a failed rename leaves the target untouched and the retry is idempotent.
+  if (isRetryableRuntimeWriteError(lastWriteError) && attempt(primary)) return true
   if (!isDegradableRuntimeWriteError(lastWriteError)) return false
   degradeToLegacy()
   return attempt(resolveRuntimeWritePath(name))

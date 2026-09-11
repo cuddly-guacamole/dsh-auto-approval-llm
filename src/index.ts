@@ -67,6 +67,7 @@ import {
   LEARNING_FILENAME,
   appendRuntimeLine,
   probeRuntimeDirWritable,
+  reconcileRuntimeCopies,
   resolveRuntimeReadPath,
   resolveRuntimeWritePath,
   runtimeFilePath,
@@ -2946,7 +2947,13 @@ export function apply(ctx: Context, rawConfig: Config): void {
   // rejecting every write, and an append failing there makes the audit gate
   // refuse every verdict. A rejection degrades the runtime files to the pre-move
   // root once, with a warning saying where they went.
-  probeRuntimeDirWritable()
+  if (probeRuntimeDirWritable()) {
+    // A previous process may have degraded and appended there for a while. Once
+    // the canonical directory accepts writes again, the newer legacy copy holds
+    // records the canonical one never saw, and the read chain prefers the
+    // canonical copy — so carry it back before anything reads or writes.
+    reconcileRuntimeCopies()
+  }
   // Only now is the state directory known. Loading must happen after this call,
   // never at module load: the directory depends on `config.dshHome`, which does
   // not exist until here, and a load that ran earlier would read one directory

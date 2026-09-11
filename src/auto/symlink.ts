@@ -14,7 +14,7 @@
  * probe.ts already resolve per call; this module keeps the guard on the same
  * discipline.
  */
-import { realpathSync } from 'node:fs'
+import { existsSync, realpathSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { isCriticalPath, isWithin, normalizePath, runtimeStateTargetInZone } from './paths.js'
 import { realpathCriticalReason } from './category.js'
@@ -123,8 +123,14 @@ export function symlinkEscapeReason(
       // `!isWithin(roots.workspace, normalized)` true for every target, and the
       // DSH_HOME clause would then refuse ordinary reads inside the workspace —
       // this repository itself lives under `~/.dsh/plugins/…`.
-      const inWorkspace = isWithin(roots.workspace, normalized) || isWithin(realWsNormalized, normalized)
-      const escapes = !inWorkspace && !trustedZone.some(root => isWithin(root, normalized))
+      //
+      // The resolved anchor is only trusted while the workspace path EXISTS:
+      // `resolveDeepest` returns the deepest existing ancestor, so a deleted
+      // workspace would degrade the anchor into its PARENT and treat sibling
+      // subtrees as "inside the workspace" — a widening, not a guard.
+      const anchoredToWorkspace = existsSync(roots.workspace)
+        && (isWithin(roots.workspace, normalized) || isWithin(realWsNormalized, normalized))
+      const escapes = !anchoredToWorkspace && !trustedZone.some(root => isWithin(root, normalized))
       if (!escapes) continue
       if (isCriticalPath(normalized, roots) || isWithin(roots.dshHome, normalized)) {
         return `shell target resolves outside the workspace into a protected location: ${normalized}`

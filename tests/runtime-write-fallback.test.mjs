@@ -29,15 +29,19 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   AUDIT_FILENAME,
   appendRuntimeLine,
+  HISTORY_FILENAME,
+  LATENCY_FILENAME,
   isDegradableRuntimeWriteError,
+  isRetryableRuntimeWriteError,
   legacyRootFilePath,
+  reconcileRuntimeCopies,
   probeRuntimeDirWritable,
   resolveRuntimeReadPath,
   resolveRuntimeWritePath,
@@ -212,38 +216,104 @@ test('a failure that is NOT "this location refuses writes" keeps failing closed,
   })
 })
 
-test('the ladder checks the error class BEFORE replaying the line', () => {
-  // The same-path retry exists only to absorb a transient sharing violation. It
-  // must not run for an error that can fail AFTER a partial write (ENOSPC and
-  // friends): replaying the same text would splice a fragment and a full line
-  // into one corrupt record, i.e. a silently lost audit line. That ordering is
-  // not constructible with a real filesystem failure on this platform, so it is
-  // pinned against the compiled artifact instead: the first class check must
-  // precede the second attempt at the same path in `appendRuntimeLine`.
+test('the ladder judges the error class BEFORE replaying the line, and only degrades on degradable codes', () => {
+  // The same-path retry exists to absorb a transient sharing violation, and must
+  // not run for an error that can fail AFTER a partial write (ENOSPC and friends):
+  // replaying the same text would splice a fragment and a full line into one
+  // corrupt record, i.e. a silently lost audit line. Neither that ordering nor the
+  // retry/degrade split is constructible with a real filesystem failure on this
+  // platform, so it is pinned against the compiled artifact instead: the retry
+  // guard must precede the second attempt, which must precede the degradation.
   const lib = readFileSync(fileURLToPath(new URL('../lib/auto/runtime-paths.js', import.meta.url)), 'utf8')
   const body = lib.slice(lib.indexOf('export function appendRuntimeLine'), lib.indexOf('export function writeRuntimeAtomic'))
-  const firstCheck = body.indexOf('isDegradableRuntimeWriteError(lastWriteError)')
-  const secondAttempt = body.indexOf('tryAppend(primary, text)', body.indexOf('tryAppend(primary, text)') + 1)
-  assert.ok(firstCheck >= 0, 'the ladder must consult the error class')
-  assert.ok(secondAttempt >= 0, 'the ladder must keep its single same-path retry')
-  assert.ok(firstCheck < secondAttempt, 'the error class must be judged before the retry, not after')
+  const firstAttempt = body.indexOf('tryAppend(primary, text)')
+  const retryGuard = body.indexOf('isRetryableRuntimeWriteError')
+  const secondAttempt = body.indexOf('tryAppend(primary, text)', firstAttempt + 1)
+  const degradeGuard = body.indexOf('isDegradableRuntimeWriteError')
+  const degrade = body.indexOf('degradeToLegacy()')
+  assert.ok(firstAttempt >= 0 && retryGuard >= 0 && secondAttempt >= 0, 'the ladder keeps its single same-path retry')
+  assert.ok(degradeGuard >= 0 && degrade >= 0, 'the ladder keeps its degradation step')
+  assert.ok(firstAttempt < retryGuard && retryGuard < secondAttempt, 'the retry guard must precede the retry')
+  assert.ok(secondAttempt < degradeGuard && degradeGuard < degrade, 'only a degradable code may relocate the files')
 })
 
-test('the degradable set is exactly the "location refuses writes" codes', () => {
-  // Pins the whitelist in both directions. The negative side is the safety
-  // property: ENOSPC/EIO/EMFILE mean bytes may already have moved, so a silent
-  // relocation would trade a loud failure for a quiet one.
+test('degradation seeds the new location from the canonical copy, even when a legacy copy exists', () => {
+  sandbox(undefined, ({ legacyRoot, stateDir }) => {
+    // The post-migration steady state: migration never deletes the legacy copy, so
+    // a stale legacy file is the NORM while the canonical file has kept growing.
+    const legacyAudit = join(legacyRoot, AUDIT_FILENAME)
+    writeFileSync(legacyAudit, '{"row":"pre-migration"}\n')
+    utimesSync(legacyAudit, new Date(Date.now() - 120_000), new Date(Date.now() - 120_000))
+    writeFileSync(join(stateDir, AUDIT_FILENAME), '{"row":"pre-migration"}\n{"row":"canonical-period"}\n')
+    // Degradation is directory-level: trigger it through a DIFFERENT broken file so
+    // the audit canonical copy stays readable.
+    mkdirSync(join(stateDir, LATENCY_FILENAME), { recursive: true })
+
+    captureWarnings(() => {
+      assert.equal(appendRuntimeLine(LATENCY_FILENAME, '{"s":1}\n'), join(legacyRoot, LATENCY_FILENAME))
+      assert.equal(appendRuntimeLine(AUDIT_FILENAME, '{"row":"degraded-window"}\n'), legacyAudit)
+    })
+    // Both periods must survive: the seeding copy is what stops the read chain
+    // from flipping onto the frozen pre-migration snapshot.
+    const content = readFileSync(resolveRuntimeReadPath(AUDIT_FILENAME), 'utf8')
+    assert.match(content, /canonical-period/, 'records written before the degradation stay reachable')
+    assert.match(content, /degraded-window/)
+  })
+})
+
+test('a later boot carries the degraded-window records back into the canonical copy', () => {
+  sandbox(undefined, ({ legacyRoot, stateDir }) => {
+    // Simulate a previous process that degraded and appended there: the legacy
+    // copy is newer than the canonical one (it was seeded from it, then written).
+    writeFileSync(join(stateDir, AUDIT_FILENAME), '{"row":"pre-migration"}\n')
+    utimesSync(join(stateDir, AUDIT_FILENAME), new Date(Date.now() - 120_000), new Date(Date.now() - 120_000))
+    writeFileSync(join(legacyRoot, AUDIT_FILENAME), '{"row":"pre-migration"}\n{"row":"degraded-window"}\n')
+
+    reconcileRuntimeCopies()
+
+    // Without this, the next write to the canonical copy would make it the newer
+    // one and the degraded window would be orphaned forever.
+    const content = readFileSync(resolveRuntimeReadPath(AUDIT_FILENAME), 'utf8')
+    assert.match(content, /degraded-window/)
+    assert.equal(resolveRuntimeReadPath(AUDIT_FILENAME), join(stateDir, AUDIT_FILENAME))
+  })
+})
+
+test('reconciliation leaves a normal install alone', () => {
+  sandbox(undefined, ({ legacyRoot, stateDir }) => {
+    // Canonical copy is newer (the normal case): the stale legacy snapshot must
+    // never be copied over live data.
+    writeFileSync(join(legacyRoot, HISTORY_FILENAME), '{"stale":true}\n')
+    utimesSync(join(legacyRoot, HISTORY_FILENAME), new Date(Date.now() - 120_000), new Date(Date.now() - 120_000))
+    writeFileSync(join(stateDir, HISTORY_FILENAME), '{"live":true}\n')
+    captureWarnings(() => {
+      reconcileRuntimeCopies()
+    })
+    assert.equal(readFileSync(join(stateDir, HISTORY_FILENAME), 'utf8'), '{"live":true}\n')
+  })
+})
+
+test('the degradable and retryable error sets are pinned separately', () => {
+  // Degradable = "this location refuses writes", and every member is raised while
+  // OPENING the target, so relocating the files is safe. Retryable additionally
+  // covers the transient sharing violations; the errors that can fail AFTER bytes
+  // moved must be in neither set.
   for (const code of ['EACCES', 'EPERM', 'EROFS', 'EISDIR', 'ENOTDIR']) {
     assert.equal(isDegradableRuntimeWriteError({ code }), true, `${code} should degrade`)
+    assert.equal(isRetryableRuntimeWriteError({ code }), true, `${code} should be retryable`)
   }
-  for (const code of ['ENOSPC', 'EIO', 'EMFILE', 'ENOENT', 'ERR_INVALID_ARG_TYPE', 'ENAMETOOLONG']) {
+  for (const code of ['EBUSY', 'EAGAIN', 'EINTR']) {
+    assert.equal(isRetryableRuntimeWriteError({ code }), true, `${code} should be retryable`)
+    assert.equal(isDegradableRuntimeWriteError({ code }), false, `${code} must not relocate`)
+  }
+  for (const code of ['ENOSPC', 'EIO', 'EMFILE', 'ERR_INVALID_ARG_TYPE', 'ENAMETOOLONG']) {
+    assert.equal(isRetryableRuntimeWriteError({ code }), false, `${code} must not be retried`)
     assert.equal(isDegradableRuntimeWriteError({ code }), false, `${code} must stay fail-closed`)
   }
-  // A plain Error and a thrown string carry no verdict and must not degrade.
-  assert.equal(isDegradableRuntimeWriteError(new Error('boom')), false)
-  assert.equal(isDegradableRuntimeWriteError('boom'), false)
-  assert.equal(isDegradableRuntimeWriteError(undefined), false)
+  assert.equal(isRetryableRuntimeWriteError(new Error('boom')), false)
+  assert.equal(isRetryableRuntimeWriteError(undefined), false)
 })
+
 
 test('a re-aligned state directory starts with a clean verdict', () => {
   sandbox(({ stateDir }) => {

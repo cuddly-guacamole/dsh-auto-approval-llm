@@ -782,9 +782,10 @@ function operandPathSpelling(text) {
     if (text === '')
         return '';
     if (text.startsWith('-')) {
-        // `-Flag:value` and `--flag=value` spellings (the pwsh inline colon is a
-        // real gap: `Get-Content -Path:ext\id_rsa` has no separated operand).
-        const colon = /^-[A-Za-z][A-Za-z0-9-]*(?::|=)(.+)$/.exec(text);
+        // `-Flag:value`, `-Flag=value`, `--flag=value` and `--flag:value`. The
+        // inline colon is a real gap (pwsh carries no separated operand), and the
+        // long forms put the value after `=`.
+        const colon = /^-{1,2}[A-Za-z][A-Za-z0-9-]*(?::|=)(.+)$/.exec(text);
         if (colon !== null)
             return colon[1];
         return '';
