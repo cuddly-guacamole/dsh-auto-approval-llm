@@ -32,7 +32,10 @@ for (const rewrite of REWRITES) {
     console.error(`sync-doc-numbers: ${rewrite.file} does not match ${rewrite.pattern} — the wording moved`)
     process.exit(1)
   }
-  writeFileSync(full, source.replace(rewrite.pattern, rewrite.to))
+  // Every occurrence, so a page that kept a duplicate cannot end up half
+  // rewritten with the checker still complaining about the copy left behind.
+  const global = new RegExp(rewrite.pattern.source, `${rewrite.pattern.flags.replace('g', '')}g`)
+  writeFileSync(full, source.replace(global, (...args) => rewrite.to(args)))
 }
 
 const { problems } = check(measured)

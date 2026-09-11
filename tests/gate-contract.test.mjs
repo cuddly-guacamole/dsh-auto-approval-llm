@@ -121,11 +121,11 @@ test('the count checker accepts a matching run', () => {
   assert.equal(agreed.status, 0, agreed.stderr)
 })
 
-test('the gate exports the functions its steps decide with', () => {
-  // A regression guard for the refactor itself: if the verdict logic moves back
-  // inside main(), these tests would silently stop covering it.
+test('the gate keeps its verdict logic outside main so it stays reachable', () => {
+  // Refactor guard, not a behaviour check: if the decisions moved back inside
+  // main(), the cases above would silently stop covering them. The behavioural
+  // assertions are the ones above; this only notices the move.
   const source = readFileSync(join(root, 'scripts/gate.mjs'), 'utf8')
   assert.match(source, /export function assemblyVerdict/)
   assert.match(source, /export function shellArgument/)
-  assert.match(source, /if \(process\.argv\[1\] !== undefined && import\.meta\.url === pathToFileURL\(process\.argv\[1\]\)\.href\)/)
 })

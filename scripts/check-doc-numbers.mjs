@@ -143,6 +143,13 @@ export function watchedDocuments(root = ROOT) {
   return [...docs, 'README.md', 'README.en.md', 'AGENTS.md'].filter(name => existsSync(join(root, name)))
 }
 
+/** Contents of every watched document, keyed by path. */
+export function watchedDocumentSources(root = ROOT) {
+  const sources = {}
+  for (const file of watchedDocuments(root)) sources[file] = readFileSync(join(root, file), 'utf8')
+  return sources
+}
+
 /**
  * Count claims in a document that no declaration point checks.
  *
@@ -171,6 +178,46 @@ export function uncoveredClaims(sources, root = ROOT) {
   return found
 }
 
+/**
+ * Per-file counts a page states inline, e.g. "category.test.mjs 108 例". These
+ * drifted silently because nothing tied them to the file they name: the suite
+ * total is checked, but one file's share of it is not the same number and moves
+ * on its own.
+ */
+export const PER_FILE_CLAIM = /([a-z0-9-]+)\.test\.mjs`?\s*[，,：:]?\s*(\d+)\s*例/g
+
+/** Count the cases a single test file declares. */
+export function countCasesInFile(root, name) {
+  const source = readFileSync(join(root, 'tests', `${name}.test.mjs`), 'utf8')
+  return [...source.matchAll(/^(?:test|it)\(/gm)].length
+}
+
+/** Every inline per-file count in the watched documents, with what it claims and what the file holds. */
+export function checkPerFileClaims(sources, root = ROOT) {
+  const problems = []
+  const lines = []
+  for (const [file, source] of Object.entries(sources)) {
+    for (const match of source.matchAll(new RegExp(PER_FILE_CLAIM.source, 'g'))) {
+      const [, name, claimedText] = match
+      const claimed = Number(claimedText)
+      let actual
+      try {
+        actual = countCasesInFile(root, name)
+      } catch {
+        problems.push(`${file}: "${match[0]}" names a test file that does not exist`)
+        continue
+      }
+      if (claimed !== actual) {
+        problems.push(`${file}: "${match[0]}" but tests/${name}.test.mjs declares ${actual}`)
+        lines.push(`  STALE    ${file}  ${name}=${claimed} (actual ${actual})`)
+      } else {
+        lines.push(`  ok       ${file}  ${name}=${claimed}`)
+      }
+    }
+  }
+  return { problems, lines }
+}
+
 function parseArguments(argv) {
   const options = { observed: undefined, observedPass: undefined }
   for (let index = 0; index < argv.length; index += 1) {
@@ -187,11 +234,11 @@ export function main(argv = process.argv.slice(2)) {
   const measured = measuredCounts()
   const observed = options.observed === undefined ? undefined : { tests: options.observed, pass: options.observedPass }
   const { problems, lines } = check(measured, {}, observed)
+  const perFile = checkPerFileClaims(watchedDocumentSources())
   for (const line of lines) console.log(line)
-  if (problems.length > 0) {
-    for (const problem of problems) console.error(`check-doc-numbers: ${problem}`)
-    return 1
-  }
+  for (const line of perFile.lines) console.log(line)
+  for (const problem of [...problems, ...perFile.problems]) console.error(`check-doc-numbers: ${problem}`)
+  if (problems.length + perFile.problems.length > 0) return 1
   console.log('check-doc-numbers: all declaration points agree')
   return 0
 }

@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { COUNT_CLAIM, DECLARATION_POINTS, check, measuredCounts, uncoveredClaims, watchedDocuments } from '../scripts/check-doc-numbers.mjs'
+import { COUNT_CLAIM, DECLARATION_POINTS, check, checkPerFileClaims, measuredCounts, uncoveredClaims, watchedDocumentSources, watchedDocuments } from '../scripts/check-doc-numbers.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -85,6 +85,20 @@ test('the uncovered-claim scan recognises the phrasings a page can use', () => {
   for (const shape of ['1195 个测试', '1194/1194 通过', '合计 1194 例', '1194 个测试文件', '1194 测试 + 运行时验证', '用例总数 1194', '测试 1194 例', '1209 tests'])
     assert.ok(COUNT_CLAIM.test(shape), `the scan misses: ${shape}`)
   assert.equal(COUNT_CLAIM.test('12 例'), false, 'a per-file count is not a suite-wide claim')
+})
+
+test('an inline per-file count is checked against the file it names', () => {
+  // Per-file counts drift on their own: the suite total can stay right while one
+  // file's share is stale, which is exactly what happened to three of them.
+  const sources = watchedDocumentSources(root)
+  assert.deepEqual(checkPerFileClaims(sources).problems, [], 'the real tree must state per-file counts correctly')
+
+  const stale = { 'docs/index.md': `${sources['docs/index.md']}\n见 category.test.mjs 3 例\n` }
+  const problems = checkPerFileClaims(stale).problems
+  assert.ok(problems.some(problem => problem.includes('category.test.mjs')), `expected a complaint, got ${JSON.stringify(problems)}`)
+
+  const missing = { 'docs/index.md': '见 no-such-suite.test.mjs 3 例\n' }
+  assert.ok(checkPerFileClaims(missing).problems.some(problem => problem.includes('does not exist')))
 })
 
 test('every declaration point names a real document', () => {

@@ -42,10 +42,10 @@ export function shellArgument(argument) {
  * The difficult case is telling "this machine has no dsh" apart from "dsh is
  * installed and its loader tree is broken", because only the first may pass
  * silently. With a shell in between, a missing command and a failing command
- * both come back as a non-zero exit on Windows, and a hung command comes back as
- * a timeout with no exit at all — so the caller probes for the CLI separately
- * and this function never has to guess. A timeout is always fatal: a dump-config
- * that never returns is a broken assembly, not an absent tool.
+ * both come back as a non-zero exit on Windows, so the caller probes for the CLI
+ * separately and this function never has to guess. When the CLI is present, a
+ * timeout is fatal: a dump-config that never returns is a broken assembly, not
+ * an absent tool.
  *
  * @returns {{kind: 'skip'|'fail'|'ok', reason?: string}}
  */
