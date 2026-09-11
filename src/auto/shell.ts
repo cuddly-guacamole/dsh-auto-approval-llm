@@ -720,6 +720,90 @@ export function shellReadsCredentialMaterial(source, shell, roots) {
     }
     return false;
 }
+/**
+ * Path operands a shell command line hands to a command, as NORMALIZED absolute
+ * paths, for the host symlink/escape guard.
+ *
+ * The guard's whole premise is "whoever is missing from the target list has no
+ * realpath re-check", and `bash` / `pwsh` were missing from `symlinkGuardTargets`
+ * — so `cat ext/id_rsa`, with `ext` a workspace junction onto a credential tree,
+ * was statically allowed with no panel, no classifier and no countdown, while
+ * the same path through the `read` tool was hard-denied.
+ *
+ * Deliberately reuses the single lexer (`decomposeCommandLine`), the single path
+ * normalizer (`normalizePath`) and the single changer-base owner
+ * (`effectiveCwdAfter`) instead of growing a second command parser or a second
+ * notion of "which directory does this segment see". It differs from
+ * `explicitPaths` in ONE respect: a bare relative operand (`ext/id_rsa`,
+ * `history.jsonl`) counts as a candidate too. Filtering those out is what made
+ * the guard miss the very shape it exists to catch, and a token that is not a
+ * path at all resolves to the deepest existing ancestor of the workspace and
+ * triggers nothing — the resolution, not a spelling heuristic, decides.
+ *
+ * The changer base follows the `&&`-only rule the hard-deny fuse already uses,
+ * and it is here for a second reason: it makes `cd ~/.ssh && cat id_rsa` a hit
+ * (the relative operand resolves against the directory the segment really sees)
+ * rather than a miss against the workspace.
+ *
+ * Absolute spellings are ALSO recovered straight from the raw line, and that
+ * recovery is load-bearing rather than belt-and-braces: the bash lexer treats
+ * `\` as an escape, so an unquoted `cat C:\Users\u\.ssh\id_rsa` reaches the
+ * operand list as `C:Usersu.sshid_rsa` — the drive-letter form of exactly the
+ * read this guard exists to stop. Every other spelling of the same read
+ * (quoted, forward-slash, pwsh) survives the lexer. This is still not a second
+ * lexer: it scans only for literal drive-letter / UNC spellings, adds them as
+ * candidates, and lets the same resolution decide.
+ *
+ * Returns `undefined` when no candidate at all was found, including a command
+ * line that cannot be decomposed statically (opaque: `$(...)`, `(...)`,
+ * heredocs, unbalanced quotes) and carries no literal absolute spelling. An
+ * opaque line's operands are unknown, and guessing them would turn the guard
+ * into a source of false denials; such a line keeps exactly today's behaviour.
+ */
+const RAW_ABSOLUTE_PATH = /(?:^|[^A-Za-z0-9_])((?:[A-Za-z]:[\\/]|\\\\[^\s"'|&;<>()]+)[^\s"'|&;<>()]*)/g;
+
+export function shellGuardTargets(source, shell, roots) {
+    if (typeof source !== 'string' || source.length === 0)
+        return undefined;
+    const out = [];
+    const decomposition = decomposeCommandLine(source, shell);
+    if (decomposition.kind === 'segments') {
+        let changerBase;
+        for (const segment of decomposition.segments) {
+            if (segment.precededBy !== '' && segment.precededBy !== '&&')
+                changerBase = undefined;
+            const segmentRoots = changerBase !== undefined ? { ...roots, workspace: changerBase } : roots;
+            const unwrapped = unwrapCommand(segment.words);
+            // Leading `VAR=value cmd` prefixes and any wrapper words consumed by
+            // unwrapCommand are dropped; the effective command name heads what is
+            // left and is not an operand.
+            const stripped = segment.words.slice(0, segment.words.length - unwrapped.words.length);
+            const operands = [...unwrapped.words.slice(1), ...segment.readTargets, ...segment.writeTargets];
+            for (const word of operands) {
+                if (word === undefined || stripped.includes(word))
+                    continue;
+                const text = typeof word.text === 'string' ? word.text : '';
+                if (text === '' || text.startsWith('-'))
+                    continue;
+                // Environment assignments (`VAR=value`) are not paths, and their
+                // value may legitimately name something outside the workspace.
+                if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(text))
+                    continue;
+                out.push(normalizePath(text, segmentRoots.workspace, segmentRoots.home));
+            }
+            const next = effectiveCwdAfter(segment, shell, segmentRoots);
+            if (next !== undefined)
+                changerBase = next;
+        }
+    }
+    for (const match of source.matchAll(RAW_ABSOLUTE_PATH)) {
+        const raw = match[1];
+        if (raw !== undefined && raw !== '')
+            out.push(normalizePath(raw, roots.workspace, roots.home));
+    }
+    const unique = [...new Set(out)];
+    return unique.length === 0 ? undefined : unique;
+}
 /** Every redirection target must be a discard sink or ordinary project content. */
 function writeTargetsAreRoutine(segment, shell, roots) {
     return segment.writeTargets.every((target) => {

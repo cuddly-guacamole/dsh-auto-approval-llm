@@ -19,6 +19,7 @@ import { dirname } from 'node:path'
 import { isCriticalPath, isWithin, normalizePath, runtimeStateTargetInZone } from './paths.js'
 import { realpathCriticalReason } from './category.js'
 import { symlinkGuardTargets } from './policy.js'
+import { shellGuardTargets } from './shell.js'
 
 /**
  * Realpath of the deepest existing ancestor of `input` (probe.ts-style).
@@ -62,7 +63,14 @@ export function symlinkEscapeReason(
   const args = (typeof exec.arguments === 'object' && exec.arguments !== null && !Array.isArray(exec.arguments)) ? exec.arguments : undefined
   if (args === undefined) return undefined
   const name = String(exec.name ?? '')
-  const targets = symlinkGuardTargets(name, args)
+  // A shell command line carries its targets inside a string, not in a path
+  // argument, so it gets its own operand extraction (one lexer, one normalizer,
+  // one changer-base owner — see shellGuardTargets). Everything downstream is
+  // shared, but the VERDICT for shell is narrowed: see the shell branch below.
+  const shellTool = name === 'bash' || name === 'pwsh'
+  const targets = shellTool
+    ? shellGuardTargets(typeof (args as any).command === 'string' ? (args as any).command : '', name, roots)
+    : symlinkGuardTargets(name, args)
   if (targets === undefined || targets.length === 0) return undefined
   const workspaceReal = resolve(roots.workspace)
   if (workspaceReal === undefined) return undefined
@@ -83,6 +91,47 @@ export function symlinkEscapeReason(
     // Under aggressive the position gate is relaxed, so the realpath re-check
     // covers every textual target — the remaining credential/system fence.
     const inTrustedZone = trustedZone.some(root => isWithin(root, textual))
+    if (shellTool) {
+      // Narrowed, mode-independent shell verdict.
+      //
+      // Mode-INDEPENDENT because the position gate below would skip every
+      // textually-external target outside aggressive mode, leaving an absolute
+      // spelling of a protected path (`cat <DSH_HOME>/credentials.json`)
+      // unguarded under the standard preset — the same command would then be
+      // judged by two different rules depending on one settings key.
+      //
+      // Narrowed because aligning shell with the structured readers outright
+      // would hard-deny every ordinary read through a junction (this repository
+      // links its own `node_modules` that way), i.e. it would buy the credential
+      // case at the price of routine work. So a shell operand relocates the
+      // decision only when its realpath leaves the workspace/trusted zone AND
+      // lands on a credential tree, DSH_HOME, or plugin runtime state — the same
+      // three clauses the aggressive branch above already uses, from the same
+      // single-point owners. Everything else keeps today's behaviour.
+      const resolved = resolve(textual)
+      if (resolved === undefined) continue
+      const normalized = normalizePath(resolved, roots.workspace, roots.home)
+      // Matches the structured branch below: mutating or reading the plugin's
+      // own approval/audit/learning state is never routine, whatever the
+      // position mode and wherever the configured state directory sits.
+      if (runtimeStateTargetInZone(normalized, roots.allowedDshSubpaths)) {
+        return `shell target resolves into plugin runtime state: ${normalized}`
+      }
+      const escapes = !isWithin(roots.workspace, normalized) && !trustedZone.some(root => isWithin(root, normalized))
+      if (!escapes) continue
+      if (isCriticalPath(normalized, roots) || isWithin(roots.dshHome, normalized) || runtimeStateTargetInZone(normalized, roots.allowedDshSubpaths)) {
+        return `shell target resolves outside the workspace into a protected location: ${normalized}`
+      }
+      continue
+    }
+    // Only a target that is textually inside the workspace (or inside a
+    // trusted plugin-development path, which the policy auto-allows) is this
+    // guard's business: a realpath escaping it is worth hard-denying only
+    // when the textual target pretended to be local/trusted. Any other
+    // textually-external target is judged by the normal hard-deny / 'ask'
+    // escalation instead of being turned into an unconditional hard deny.
+    // Under aggressive the position gate is relaxed, so the realpath re-check
+    // covers every textual target — the remaining credential/system fence.
     if (!isWithin(roots.workspace, textual) && !inTrustedZone && !aggressive) continue
     // Resolve the NORMALIZED path, never the raw argument: `resolve` ends in
     // realpathSync, which anchors a relative spelling ('hello.txt', '.') to
