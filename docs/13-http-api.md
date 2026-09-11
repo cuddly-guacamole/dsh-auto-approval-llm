@@ -18,7 +18,7 @@
 | `/tool-stats` | GET | 精确名单页签的候选工具统计（最近工具 chips） | trustedHosts |
 | `/learning-store` | GET/DELETE | 已学习条目列表（键哈希+脱敏骨架+计数）/ 吊销单条（即时生效，落 `learning-revoked` 审计） | trustedHosts |
 | `/review-status` | GET | 单审批 countdown/follow 状态；callId 走 `x-auto-approval-call-id` 头（防 URL/devtools 泄漏）。状态对象可选带 `category?`（类别层闭集标签，供该 ask 的终局审计记录署名；客户端不消费，无该字段时行为不变） | trustedHosts |
-| `/session-mode` | GET | 查会话权限 preset（mode） | trustedHosts |
+| `/session-mode` | GET | 查会话权限 preset（mode）；本进程无该会话 live agent 时同样返 **200 + `mode: null`**（会话在历史里但 agent 尚未实例化属正常状态，不以错误状态表达——与 `/stats` 同口径，也避免浏览器对失败请求的不可抑制记录） | trustedHosts |
 | `/stats` | GET | 会话统计 {mode, reviewMode, counts{total,allow,deny,timeout,breaker}, breaker{…tripped}}；sessionId 走 `x-auto-approval-session-id` 头 | trustedHosts |
 
 ::: tip 「特权平面」是什么意思

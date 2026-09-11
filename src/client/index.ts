@@ -2567,7 +2567,10 @@ function SessionApprovalPanel(props: any) {
       .then((r: any) => r.json())
       .then((data: any) => {
         if (disposed || !data?.ok) return
-        setSessionMode(data.value.mode)
+        // The host reports "no mode known" as `mode: null` (an uninstantiated
+        // agent is a normal state, not an error), while this state is typed
+        // `string | undefined`. Normalize rather than widen the type.
+        setSessionMode(data.value.mode ?? undefined)
       })
       .catch(() => {})
     return () => { disposed = true }
@@ -2583,7 +2586,7 @@ function SessionApprovalPanel(props: any) {
       })
         .then((r: any) => r.json())
         .then((data: any) => {
-          if (data?.ok) setSessionMode(data.value.mode)
+          if (data?.ok) setSessionMode(data.value.mode ?? undefined)
         })
         .catch(() => {})
     }
@@ -2844,7 +2847,7 @@ function installFloatingApprovalButton(ctx: any): () => void {
           headers: { 'x-auto-approval-session-id': currentSessionId },
         })
         const data = await res.json()
-        sessionMode = data?.ok ? data.value.mode : undefined
+        sessionMode = data?.ok ? (data.value.mode ?? undefined) : undefined
       } catch {
         sessionMode = undefined
       }
