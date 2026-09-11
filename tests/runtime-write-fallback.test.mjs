@@ -482,6 +482,30 @@ test('a failed carry-back is reported, not left as a silent orphan', () => {
   })
 })
 
+test('an already occupied superseded slot stops the adoption instead of overwriting the older backup', () => {
+  sandbox(undefined, ({ legacyRoot, stateDir }) => {
+    const canonical = join(stateDir, LEARNING_FILENAME)
+    const legacy = join(legacyRoot, LEARNING_FILENAME)
+    // A first generation is already backed up: it may be the only copy of an entry
+    // that the newer snapshots have each dropped in turn, so a second adoption must
+    // not overwrite it.
+    writeFileSync(`${canonical}.superseded`, '{"version":1,"entries":{"a":1,"b":2}}')
+    writeFileSync(canonical, '{"version":1,"entries":{"a":1}}')
+    utimesSync(canonical, new Date(Date.now() - 120_000), new Date(Date.now() - 120_000))
+    writeFileSync(legacy, '{"version":1,"entries":{}}')
+    const warnings = captureWarnings(() => {
+      reconcileRuntimeCopies()
+    })
+    assert.equal(readFileSync(canonical, 'utf8'), '{"version":1,"entries":{"a":1}}', 'nothing is adopted')
+    assert.equal(
+      readFileSync(`${canonical}.superseded`, 'utf8'),
+      '{"version":1,"entries":{"a":1,"b":2}}',
+      'the older backup survives intact',
+    )
+    assert.match(warnings.join('\n'), /diverged/)
+  })
+})
+
 test('the degradable and retryable error sets are pinned separately', () => {
   // Degradable = "this location refuses writes", and every member is raised while
   // OPENING the target, so relocating the files is safe. Retryable additionally

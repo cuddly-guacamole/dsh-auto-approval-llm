@@ -444,15 +444,34 @@ function adoptNewerOverwriteStore(name: string, canonical: string, legacy: strin
   }
   const canonicalJson = readJsonIfFile(canonical)
   const dropsEntries = canonicalJson === undefined || !jsonCovers(canonicalJson, legacyJson)
+  let backup: string | undefined
   if (dropsEntries) {
+    // The backup is single-slot, and replacing it would destroy the previous
+    // generation — which may by then be the only copy of an entry the newer
+    // snapshots have each dropped in turn. An occupied slot therefore means "stop
+    // and let a human merge": the newer snapshot is NOT adopted, so nothing is
+    // lost by waiting, and the operator already has this file to look at.
+    backup = `${canonical}.superseded`
+    if (existsSync(backup)) {
+      markDiverged(name, `a newer legacy copy drops entries and ${name}.superseded already holds a superseded copy`)
+      return
+    }
     try {
-      copyFileSync(canonical, `${canonical}.superseded`)
+      copyFileSync(canonical, backup)
     } catch {
       markDiverged(name, 'a newer legacy copy drops entries and the superseded copy could not be preserved')
       return
     }
   }
   if (!copyFileAtomic(legacy, canonical)) {
+    // Do not leave a backup behind for an adoption that did not happen.
+    if (backup !== undefined) {
+      try {
+        rmSync(backup, { force: true })
+      } catch {
+        // A stray backup is harmless; it is never read by the plugin.
+      }
+    }
     markDiverged(name, 'the newer legacy copy could not be copied back')
     return
   }
