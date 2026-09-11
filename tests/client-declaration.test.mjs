@@ -24,6 +24,26 @@ const DECLARED_INTENT = [
   '@deepseek-ai/dsh-client-ui-primitives',
 ]
 
+/**
+ * Bare specifiers the web boot facade supplies to every client bundle. Read from
+ * the platform's own seed table, not inferred from our bundler configuration:
+ * `<dsh>/@deepseek-ai/dsh-web-frontend/dist/assets/index-BKQ_L1z6.js` defines
+ * `function by(){ return { react: …, "react/jsx-runtime": …, … } }` and hands it
+ * to `__ModuleLoader__.create({ staticModules: by() })`. A specifier that is
+ * neither here nor in the declaration is one the browser cannot resolve.
+ */
+const PLATFORM_SEED_MODULES = [
+  'react',
+  'react/jsx-runtime',
+  'react-dom',
+  'react-dom/client',
+  '@deepseek-ai/cordis',
+  '@deepseek-ai/dsh-client-store',
+  '@deepseek-ai/dsh-client-ui-slots',
+  '@deepseek-ai/dsh-client-ui-primitives',
+  '@deepseek-ai/dsh-client-ui-dockkit',
+]
+
 function literalArray(source, name) {
   const match = new RegExp(`const ${name} = \\[([^\\]]*)\\]`).exec(source)
   assert.ok(match, `${name} not found`)
@@ -35,12 +55,12 @@ function requiredSpecifiers(bundle) {
 }
 
 /** Specifiers the platform must supply but that the plugin does not declare. */
-function undeclaredRequests(specifiers, declared, platformProvided) {
-  return specifiers.filter(spec => !spec.startsWith('.') && !declared.includes(spec) && !platformProvided.includes(spec))
+function unresolvableRequests(specifiers, declared, seedModules) {
+  return specifiers.filter(spec => !spec.startsWith('.') && !declared.includes(spec) && !seedModules.includes(spec))
 }
 
 const declared = packageJson.dsh?.client?.inject ?? []
-const platformProvided = literalArray(tsdownSource, 'CLIENT_EXTERNALS')
+const externals = literalArray(tsdownSource, 'CLIENT_EXTERNALS')
 const specifiers = requiredSpecifiers(clientJs)
 
 test('the client entry declares itself as a web bundle with a bundle export', () => {
@@ -61,9 +81,24 @@ test('the bundle never reaches for a relative module', () => {
   assert.deepEqual(relative, [], 'the tsdown bundle must be self-contained')
 })
 
-test('every absolute request is either platform provided or declared', () => {
-  const undeclared = undeclaredRequests(specifiers, declared, platformProvided)
-  assert.deepEqual(undeclared, [], 'a required module that is neither provided by the platform nor declared')
+test('every absolute request is either supplied by the boot facade or declared', () => {
+  const unresolvable = unresolvableRequests(specifiers, declared, PLATFORM_SEED_MODULES)
+  assert.deepEqual(unresolvable, [], 'a required module that is neither seeded by the platform nor declared')
+})
+
+test('every externalised module the bundle actually requests is resolvable', () => {
+  // Internals of the bundler and of the platform can disagree without any
+  // symptom: a module the bundle inlines still works, but one it externalises
+  // without the platform supplying it breaks at load time. Only requested
+  // specifiers matter — externalising a module the bundle never imports is inert.
+  const requestedExternals = externals.filter(spec => specifiers.includes(spec))
+  assert.ok(requestedExternals.length > 0, 'the bundle is expected to request at least one externalised module')
+  for (const spec of requestedExternals) {
+    assert.ok(
+      PLATFORM_SEED_MODULES.includes(spec) || declared.includes(spec),
+      `${spec} is requested and externalised but neither seeded by the platform nor declared`,
+    )
+  }
 })
 
 test('a request the plugin actually makes is declared, not merely assumed', () => {
@@ -78,5 +113,5 @@ test('the check flags an undeclared official request', () => {
   // Reverse direction: without this the contract above could pass on a list
   // that simply happens to contain everything.
   const synthetic = ['react', '@deepseek-ai/dsh-client-ui-primitives', '@deepseek-ai/dsh-client-ui-unlisted']
-  assert.deepEqual(undeclaredRequests(synthetic, declared, platformProvided), ['@deepseek-ai/dsh-client-ui-unlisted'])
+  assert.deepEqual(unresolvableRequests(synthetic, declared, PLATFORM_SEED_MODULES), ['@deepseek-ai/dsh-client-ui-unlisted'])
 })
