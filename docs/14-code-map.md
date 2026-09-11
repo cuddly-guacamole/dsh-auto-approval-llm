@@ -10,7 +10,7 @@ src/
 ├─ auto/                 静态评估纯函数层（26 文件，按字母序）
 │    ├─ artifacts.ts     124  本会话成功创建路径登记（删除豁免依据）
 │    ├─ audit.ts         141  append-only 审批审计（清空留墓碑、5MiB 保尾）
-│    ├─ category.ts      786  11 类三态开关层：归类/优先级合并/指令钳制/信任目录模式
+│    ├─ category.ts      801  11 类三态开关层：归类/优先级合并/指令钳制/信任目录模式
 │    ├─ classifier.ts    100  预分类提示词、参数脱敏、严格响应解析
 │    ├─ constants.ts     116  数值默认唯一事实源（倒计时/熔断/截断/学习族阈值）
 │    ├─ decision.ts      852  纯决策函数：评审解析、人机竞速、来源标注、熔断、静态名单、host-only 键
@@ -20,7 +20,7 @@ src/
 │    ├─ latency.ts       159  LLM 评审耗时环形缓冲（settled/aborted 二分、1MB 轮转）
 │    ├─ learning.ts      566  确认制学习：签名、计数、回收、查找、消费闸
 │    ├─ model-channel.ts 119  模型通道路由与 provider 选择
-│    ├─ paths.ts         263  路径规范化、受保护/关键路径判定、运行态文件名单
+│    ├─ paths.ts         310  路径规范化、受保护/关键路径判定、受保护读取例外（Git ref 元数据）、运行态文件名单
 │    ├─ permission-change.ts 130  权限平面变更观测：逐平面基线门控 + 被拒 decision 指针
 │    ├─ policy.ts        574  assessTool 确定性第一遍分类（17 步）
 │    ├─ probe.ts         72   工作区事实只读探针（reviewerContextFacts 的元数据来源）

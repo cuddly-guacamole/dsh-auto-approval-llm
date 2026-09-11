@@ -116,6 +116,8 @@ flowchart TD
 | 工作区元数据首段 | `.git` `.vscode` `.idea` `.husky` `.dsh` | isProtectedProjectPath → 读/写都交人工 |
 | 秘密文件 basename | `.gitconfig` `.gitmodules` `.bashrc` `.bash_profile` `.zshrc` `.zprofile` `.profile` `.mcp.json` `.netrc` `.npmrc` `.pypirc` | isProtectedProjectPath |
 | 环境密钥文件 | `.env` / `.env.*`（**.env.example 例外**） | isProtectedProjectPath |
+| Git 元数据（读取） | `.git/HEAD`、`.git/refs/**` | **`isGitRefReadPath` 打开的固定例外**（无凭据内容，四种读者 + shell 读命令都放行） |
+| Git 元数据（其余 / 一切写入） | `.git/config`、`.git/hooks/**`、`.git/objects/**`、`.gitmodules` 等 | 仍 `protected`（`isProtectedReadMetadata` 只减去 HEAD/refs 的**读取**） |
 | Windows 设备/NT 命名空间 | `\\.\` `\device\` `\\?\` `\??\`（非 UNC/X: 变体） | `canonicalizeWindowsNamespace` 折叠后再判包含 |
 | 保留设备名 | `con` `prn` `aux` `nul` `com1-9` `lpt1-9` | 硬拒 |
 

@@ -225,7 +225,7 @@ npx tsdown                 # 构建 client bundle → lib/client.js
 | 文件 | 语义 |
 |---|---|
 | `history.jsonl` | 审批历史（内存窗口 200 条 + 落盘；>1MB 轮转）。删除文件不触发重载、不清内存窗口，下一条裁决会自动重建 |
-| `audit.jsonl` | append-only 审计：`decision` 记录 + `clear` 墓碑 + 非决策观测事件（`result-redacted` / `mask-failed` / `learning-*` / `rules-context-missing` / `rules-parse-error` / `runtime-state-read` / `permission-change` 等） |
+| `audit.jsonl` | append-only 审计：`decision` 记录 + `clear` 墓碑 + 非决策观测事件（`result-redacted` / `mask-failed` / `learning-*` / `rules-context-missing` / `rules-parse-error` / `runtime-state-read` / `trusted-intents` / `permission-change` 等） |
 | `review-mode.json` | 每会话评审模式快照 |
 | `llm-latency.jsonl` | LLM 评审/分类真实响应耗时统计（最近 100 次 MIN/AVG/MAX；>1MB 轮转） |
 | `approval-debug.jsonl` | 仅调试模式开启时写入：评审/审批时序（decision/risk/tookMs/outcome/source），>1MB 轮转 |
