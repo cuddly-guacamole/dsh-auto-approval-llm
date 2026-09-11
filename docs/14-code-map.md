@@ -55,7 +55,8 @@ tests/
 ├─ guard-deny-decision.test.mjs / feedback-route-write.test.mjs / history-route-clear.test.mjs
 ├─ runtime-write-fallback.test.mjs（目录存在但拒绝写入：启动探针、写失败阶梯、粘滞降级、非白名单错误仍 fail-closed）
 ├─ audit-shell-symlink-guard.test.mjs（shell 操作数提取 + 收窄型逃逸裁定 + 等价拼写族 + 负向控制）
-└─ 合计 74 个 tests/*.test.mjs（node --test 全绿基线）
+├─ perf-settings-rules-parse.test.mjs / perf-poll-backoff.test.mjs / perf-scan-throttle.test.mjs / perf-countdown-write.test.mjs（客户端开销：单次解析、轮询退避、扫描节流、倒计时条件写）
+└─ 合计 80 个 tests/*.test.mjs（node --test 全绿基线）
 scripts/
 ├─ build.sh             （DSH 源码仓库布局）tsc 编译 src→lib
 ├─ check-anchors.mjs    docs 源码锚点校验器（符号/字面量锚；无法解析的 span 亦判失败，默认只读）

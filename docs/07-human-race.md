@@ -51,4 +51,4 @@
 | `RESOLVED_TTL_MS` | 30 s |
 | `feedback 表 TTL / 上限` | 60 s / 256 条 |
 | `followSweep 周期` | 1 s |
-| `客户端 poll 频率` | 500 ms |
+| `客户端 poll 频率` | 500 ms（连续失败指数退避、上限 5 s；恢复后回到 500 ms；退避只降频，观察与裁决路径不变） |
