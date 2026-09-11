@@ -620,6 +620,20 @@ export function ensureRuntimeDir(): boolean {
 }
 
 /**
+ * One probe attempt. Records the error for the shared classification, the same
+ * way the append path records it (`tryAppend`).
+ */
+function probeRuntimeWrite(file: string): boolean {
+  try {
+    writeFileSync(file, '')
+    return true
+  } catch (error) {
+    lastWriteError = error
+    return false
+  }
+}
+
+/**
  * Boot probe: prove the canonical directory accepts writes before the session
  * starts serving verdicts.
  *
@@ -629,14 +643,20 @@ export function ensureRuntimeDir(): boolean {
  * degradation is decided and announced up front instead of being discovered by
  * the first audited verdict. The probe file is removed on the way out; a failure
  * to remove it is harmless (it is never read).
+ *
+ * The failure is classified exactly as the write ladder classifies one (see
+ * `appendRuntimeLine`): one retry at the same path when a retry cannot damage
+ * anything (the probe file is empty), and relocation only for an error that means
+ * "this location refuses writes". A non-degradable error (`ENOSPC`/`EIO`/`EMFILE`)
+ * therefore leaves the runtime files where they are, exactly as the ladder does —
+ * degrading there would move the audit for an error that says nothing about
+ * whether the location accepts writes.
  */
 export function probeRuntimeDirWritable(): boolean {
   if (!ensureRuntimeDir()) return false
   const probe = join(stateDirPath(), `.write-probe-${process.pid}`)
-  try {
-    writeFileSync(probe, '')
-  } catch {
-    degradeToLegacy()
+  if (!probeRuntimeWrite(probe) && !(isRetryableRuntimeWriteError(lastWriteError) && probeRuntimeWrite(probe))) {
+    if (isDegradableRuntimeWriteError(lastWriteError)) degradeToLegacy()
     return false
   }
   // Cleanup happens OUTSIDE the verdict. A probe file that cannot be removed is
