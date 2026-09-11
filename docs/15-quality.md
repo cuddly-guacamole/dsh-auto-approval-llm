@@ -32,6 +32,16 @@
 
 ## 15.2　验收命令与运行时证据
 
+::: tip 发布前门禁（单命令）
+
+```bash
+npm run gate   # 清构建产物 → 类型 → 构建 → 全量测试 → 数字/锚点 → 打包冒烟 → 装配断言
+```
+
+`scripts/gate.mjs` 在类型/构建/全量测试之外再加三步：把打包出的 tarball 解到临时目录，按 dsh 的方式加载 `lib/index.js` 与 `lib/client.js`（断言注册 id 与 factory）；用刚跑完的实跑用例数核对文档数字；跑 `dsh --profile web --dump-config` 断言 loader 树里仍有本插件 entry（dsh 不可用时该步 WARN 跳过而非失败）。任一步失败即非零退出并打印失败步骤。
+
+:::
+
 ::: tip 本地验收（npm 全局 dsh、无源码仓库布局时）
 
 ```bash

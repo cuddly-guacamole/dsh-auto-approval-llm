@@ -59,7 +59,10 @@ tests/
 └─ 合计 85 个 tests/*.test.mjs（node --test 全绿基线）
 scripts/
 ├─ build.sh             （DSH 源码仓库布局）tsc 编译 src→lib
+├─ clean-lib.mjs        构建前清空 lib/（tsc 不删除已删源的旧产物）
+├─ gate.mjs             本地发布前门禁（类型/构建/全量测试/数字/锚点/打包冒烟/dsh 装配断言）
 ├─ check-anchors.mjs    docs 源码锚点校验器（符号/字面量锚；无法解析的 span 亦判失败，默认只读）
+├─ check-doc-numbers.mjs 文档里的测试文件数与用例数核对器（默认只读；--observed 接实跑值）
 ├─ audit-query.mjs      审计查询 CLI（decision 行 + 按 type 渲染的观测事件行）
 ├─ friction-report.mjs  摩擦报告 CLI（面板介入率 / 倒计时结算率 / 翻案交叉表 / 评审通道落定率 / 无人值守窗口判据 + 退出码）
 ├─ mock-reviewer.mjs    本地 mock 评审器（127.0.0.1:18777，确定性 ALLOW/MEDIUM）
