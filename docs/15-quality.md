@@ -1,6 +1,6 @@
 # 15 · 质量保障体系
 
-> *935 tests · runtime proofs*
+> *1212 tests · runtime proofs*
 
 ## 15.1　契约测试覆盖地图（按主题归纳）
 
@@ -28,7 +28,7 @@
 
 | 客户端开销 | perf-settings-rules-parse.test.mjs（声明规则每次渲染只解析一次）/ perf-poll-backoff.test.mjs（`nextPollDelayMs` 表驱动 + 阳性上界封顶 + 故障期次线性增长 + 恢复即回基准 + 负向「延迟恒正」）/ perf-scan-throttle.test.mjs（可注入时钟的 trailing 节流：合并、**尾随不丢**、dispose 取消、锚定 `@ts-nocheck` 的 auto-icon 编译产物真带接线）/ perf-countdown-write.test.mjs（后缀串未变不写；**任何真实变化必须写**，含离线冻结标记与回到净文本） |
 
-86 个测试文件，合计 **1203 例**（node --test 全绿基线）。
+86 个测试文件，合计 **1212 例**（node --test 全绿基线）。
 
 ## 15.2　验收命令与运行时证据
 
@@ -38,7 +38,7 @@
 npm run gate   # 清构建产物 → 类型 → 构建 → 全量测试 → 数字/锚点 → 打包冒烟 → 装配断言
 ```
 
-`scripts/gate.mjs` 在类型/构建/全量测试之外再加三步：把打包出的 tarball 解到临时目录，按 dsh 的方式加载 `lib/index.js` 与 `lib/client.js`（断言注册 id 与 factory）；用刚跑完的实跑用例数核对文档数字；跑 `dsh --profile web --dump-config` 断言 loader 树里仍有本插件 entry（dsh 不可用时该步 WARN 跳过而非失败）。任一步失败即非零退出并打印失败步骤。
+`scripts/gate.mjs` 在类型/构建/全量测试之外再加三步：把打包出的 tarball 解到临时目录，按 dsh 的方式加载 `lib/index.js` 与 `lib/client.js`（断言注册 id 与 factory）；用刚跑完的实跑用例数核对文档数字；跑 `dsh --profile web --dump-config` 断言 loader 树里仍有本插件 entry。**只有"本机没装 dsh"才 WARN 跳过该步；dsh 在但 dump-config 失败或挂死（装配坏）仍判失败**。任一步失败即非零退出并打印失败步骤。
 
 :::
 
@@ -47,7 +47,7 @@ npm run gate   # 清构建产物 → 类型 → 构建 → 全量测试 → 数�
 ```bash
 node_modules/.bin/tsc -p tsconfig.json   # 类型（policy/shell/paths 不再 @ts-nocheck）
 node_modules/.bin/tsdown                  # 客户端 bundle
-node --test "tests/**/*.test.mjs"        # 1203/1203 全绿
+node --test "tests/**/*.test.mjs"        # 1212/1212 全绿
 ```
 
 :::

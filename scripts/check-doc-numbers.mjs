@@ -31,6 +31,12 @@ export const DECLARATION_POINTS = [
     values: match => ({ cases: Number(match[1]), casesAgain: Number(match[2]) }),
   },
   {
+    file: 'docs/15-quality.md',
+    description: 'page subtitle',
+    pattern: /\*(\d+) tests · runtime proofs\*/,
+    values: match => ({ cases: Number(match[1]) }),
+  },
+  {
     file: 'docs/index.md',
     description: 'documentation landing page',
     pattern: /(\d+) 测试 \+ 运行时验证/,
@@ -120,6 +126,49 @@ export function check(measured, sources = {}, observed) {
     }
   }
   return { problems, lines }
+}
+
+/**
+ * Phrasings that state a suite-wide count. Used by the coverage test to notice a
+ * new sentence that no declaration point watches. A per-file count ("12 例" for
+ * one test file) is deliberately out of scope, so a bare `N 例` never matches on
+ * its own — it needs a suite-wide marker next to it.
+ */
+export const COUNT_CLAIM =
+  /\d+\s*个\s*(?:tests\/\*\.test\.mjs|测试文件|测试)|\d+\s*测试\s*(\+|例|\d)|测试\s*\d+\s*例|\d+\s*\/\s*\d+\s*(?:全绿|fail 0|通过|passing)|\d+\s+tests?\b|合计\s*\*{0,2}\d+\s*例|用例总数\s*\d+/
+
+/** Documents whose count claims must be covered by a declaration point. */
+export function watchedDocuments(root = ROOT) {
+  const docs = readdirSync(join(root, 'docs')).filter(name => name.endsWith('.md')).map(name => `docs/${name}`)
+  return [...docs, 'README.md', 'README.en.md', 'AGENTS.md'].filter(name => existsSync(join(root, name)))
+}
+
+/**
+ * Count claims in a document that no declaration point checks.
+ *
+ * Coverage is decided per position rather than per file: a page under watch may
+ * still carry a sentence the patterns do not match, and skipping every watched
+ * file wholesale would hide exactly the drift this is meant to catch.
+ */
+export function uncoveredClaims(sources, root = ROOT) {
+  const found = []
+  const files = Object.keys(sources)
+  for (const file of files) {
+    const source = sources[file]
+    const covered = []
+    for (const point of DECLARATION_POINTS) {
+      if (point.file !== file) continue
+      for (const match of source.matchAll(new RegExp(point.pattern.source, `${point.pattern.flags.replace('g', '')}g`)))
+        covered.push([match.index, match.index + match[0].length])
+    }
+    for (const match of source.matchAll(new RegExp(COUNT_CLAIM.source, 'g'))) {
+      const start = match.index
+      const end = start + match[0].length
+      if (covered.some(([from, to]) => start < to && end > from)) continue
+      found.push({ file, text: match[0], line: source.slice(0, start).split('\n').length })
+    }
+  }
+  return found
 }
 
 function parseArguments(argv) {

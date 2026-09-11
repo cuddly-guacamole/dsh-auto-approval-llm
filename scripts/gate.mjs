@@ -24,21 +24,74 @@ let skipped = 0
  * The npm entry point is a `.cmd` shim on Windows, which could not be spawned
  * without a shell (Node refuses `.cmd` without one), so every step runs through
  * a shell. That makes argument quoting the only injection surface, and quoting
- * is hard to get right: reject anything that a shell could read as syntax
- * instead of trying to escape it. Every argument this script builds is a fixed
- * literal or a path derived from the package name, so a rejection means a real
- * mistake rather than a legitimate input.
+ * is hard to get right: reject anything a shell could read as syntax instead of
+ * trying to escape it. Arguments are the fixed literals below plus the checkout
+ * path and the archive name npm generates, so a rejection is a real mistake
+ * rather than a legitimate input.
  */
-const SHELL_METACHARACTERS = /[&^%()!;<>|`$'"\r\n]/
-function shellArgument(argument) {
+export const SHELL_METACHARACTERS = /[&^%()!;<>|`$'"\r\n]/
+export function shellArgument(argument) {
   if (SHELL_METACHARACTERS.test(argument))
     throw new Error(`refusing to pass a shell metacharacter through the gate: ${JSON.stringify(argument)}`)
   return /\s/.test(argument) ? `"${argument}"` : argument
 }
 
+/**
+ * Decide what the assembly step should do with the CLI probe.
+ *
+ * The difficult case is telling "this machine has no dsh" apart from "dsh is
+ * installed and its loader tree is broken", because only the first may pass
+ * silently. With a shell in between, a missing command and a failing command
+ * both come back as a non-zero exit on Windows, and a hung command comes back as
+ * a timeout with no exit at all — so the caller probes for the CLI separately
+ * and this function never has to guess. A timeout is always fatal: a dump-config
+ * that never returns is a broken assembly, not an absent tool.
+ *
+ * @returns {{kind: 'skip'|'fail'|'ok', reason?: string}}
+ */
+export function assemblyVerdict({ cliPresent, status, error, stdout }) {
+  if (!cliPresent) return { kind: 'skip', reason: 'the dsh CLI is not installed on this machine' }
+  if (error?.code === 'ETIMEDOUT') return { kind: 'fail', reason: 'dsh --profile web --dump-config timed out' }
+  if (typeof status !== 'number')
+    return { kind: 'fail', reason: `dsh --profile web --dump-config could not be run (${error?.code ?? 'no exit status'})` }
+  if (status !== 0) return { kind: 'fail', reason: `dsh --profile web --dump-config exited ${status}` }
+  const output = stdout ?? ''
+  for (const expected of ['- id: auto-approval-llm', "name: '@quill507/dsh-auto-approval-llm'"]) {
+    if (!output.includes(expected)) return { kind: 'fail', reason: `the loader tree does not contain ${expected}` }
+  }
+  return { kind: 'ok' }
+}
+
 /** Remove the scratch directory, including on a failure path. */
-function cleanup() {
+export function cleanup() {
   rmSync(packDir, { recursive: true, force: true })
+}
+
+/**
+ * Make an interrupted run leave nothing behind. `target` is shaped like
+ * `process` so the behaviour can be exercised without signalling the real one.
+ */
+export function installSignalCleanup(target) {
+  for (const signal of ['SIGINT', 'SIGTERM']) {
+    target.on(signal, () => {
+      cleanup()
+      target.exit(130)
+    })
+  }
+}
+
+function recordFailure(label, detail) {
+  // Called from a catch, so clean up here rather than in a `finally`: leaving
+  // the process through process.exit() would skip that block.
+  cleanup()
+  steps.push({ label, ok: false, duration: 0, skipped: false })
+  console.error(`gate: FAIL at "${label}": ${detail}`)
+  summarize()
+  process.exit(1)
+}
+
+function fail(label, error) {
+  recordFailure(label, error instanceof Error ? error.message : String(error))
 }
 
 function run(label, command, args, options = {}) {
@@ -77,6 +130,12 @@ function summarize() {
   const failed = steps.filter(step => !step.ok).length
   const done = steps.filter(step => step.ok && !step.skipped).length
   console.log(`gate: pass ${done} steps / fail ${failed} / skipped ${skipped}`)
+}
+
+/** Is there a dsh executable on PATH? Asked separately from running it. */
+function dshPresent() {
+  const probe = spawnSync(process.platform === 'win32' ? 'where dsh' : 'command -v dsh', { encoding: 'utf8', shell: true })
+  return probe.status === 0
 }
 
 function loadTarball() {
@@ -141,65 +200,72 @@ function checkPatch(pkg) {
 
 function assertAssembly() {
   const probe = spawnSync('dsh --profile web --dump-config', { cwd: root, encoding: 'utf8', shell: true, timeout: 300000 })
-  // Only a missing CLI is a reason to skip. A CLI that exists but refuses to
-  // dump its config means the assembly is broken — the exact condition this
-  // step exists to catch — so any other failure stays fatal.
-  if (probe.error !== undefined || probe.status === null) {
-    skip('assert the assembly', probe.error?.message ?? 'the dsh CLI could not be spawned')
+  const verdict = assemblyVerdict({
+    cliPresent: dshPresent(),
+    status: probe.status,
+    error: probe.error,
+    stdout: probe.stdout,
+  })
+  if (verdict.kind === 'skip') {
+    skip('assert the assembly', verdict.reason)
     return
   }
-  if (probe.status !== 0) throw new Error(`dsh --profile web --dump-config exited ${probe.status}: ${(probe.stderr ?? '').trim().slice(0, 400)}`)
-  const output = probe.stdout ?? ''
-  for (const expected of ['- id: auto-approval-llm', "name: '@quill507/dsh-auto-approval-llm'"]) {
-    if (!output.includes(expected)) throw new Error(`the loader tree does not contain ${expected}`)
+  if (verdict.kind === 'fail') {
+    const detail = (probe.stderr ?? '').trim().slice(0, 400)
+    throw new Error(detail === '' ? verdict.reason : `${verdict.reason}: ${detail}`)
   }
   process.stdout.write('gate: the loader tree contains the plugin entry\n')
 }
 
-run('clean stale build output', 'node', ['scripts/clean-lib.mjs'])
-run('typecheck', 'npx', ['tsc', '-p', 'tsconfig.json', '--noEmit'])
-run('build the host', 'npx', ['tsc', '-p', 'tsconfig.json'])
-run('build the client bundle', 'npx', ['tsdown'])
-
-// The suite is the authority on how many cases ran: capture its TAP output, then
-// hand the observed numbers to the document checker so the published counts
-// cannot disagree with a real run.
-const suite = run('contract tests', 'node', ['--test', '--test-reporter=tap', 'tests/**/*.test.mjs'], { capture: true })
-const count = (text, key) => Number(new RegExp(`^# ${key} (\\d+)$`, 'm').exec(text)?.[1] ?? NaN)
-const observed = { tests: count(suite.stdout, 'tests'), pass: count(suite.stdout, 'pass'), fail: count(suite.stdout, 'fail') }
-if (Number.isNaN(observed.tests) || Number.isNaN(observed.pass) || Number.isNaN(observed.fail))
-  throw new Error('could not read the TAP summary')
-if (observed.fail !== 0) throw new Error(`the suite reported ${observed.fail} failures`)
-process.stdout.write(`gate: suite reported ${observed.pass}/${observed.tests}\n`)
-
-run('the packed tarball is complete', 'node', ['--test', 'tests/pack-contents.test.mjs'])
-run('the documented counts match', 'node', ['scripts/check-doc-numbers.mjs', '--observed', String(observed.tests), '--observed-pass', String(observed.pass)])
-run('the documentation anchors resolve', 'node', ['scripts/check-anchors.mjs'])
-
-function recordFailure(label, error) {
-  // Called from a catch, so clean up here rather than in a `finally`: leaving
-  // the process through process.exit() would skip that block.
+export async function main() {
+  // A gate run owns a scratch directory. Clear anything a previous run left and
+  // register the interruption path before the first step touches the tree.
   cleanup()
-  steps.push({ label, ok: false, duration: 0, skipped: false })
-  console.error(`gate: FAIL at "${label}": ${error instanceof Error ? error.message : String(error)}`)
+  installSignalCleanup(process)
+
+  run('clean stale build output', 'node', ['scripts/clean-lib.mjs'])
+  run('typecheck', 'npx', ['tsc', '-p', 'tsconfig.json', '--noEmit'])
+  run('build the host', 'npx', ['tsc', '-p', 'tsconfig.json'])
+  run('build the client bundle', 'npx', ['tsdown'])
+
+  // The suite is the authority on how many cases ran: capture its TAP output,
+  // then hand the observed numbers to the document checker so the published
+  // counts cannot disagree with a real run.
+  const suite = run('contract tests', 'node', ['--test', '--test-reporter=tap', 'tests/**/*.test.mjs'], { capture: true })
+  const count = (text, key) => Number(new RegExp(`^# ${key} (\\d+)$`, 'm').exec(text)?.[1] ?? NaN)
+  const observed = { tests: count(suite.stdout, 'tests'), pass: count(suite.stdout, 'pass'), fail: count(suite.stdout, 'fail') }
+  if (Number.isNaN(observed.tests) || Number.isNaN(observed.pass) || Number.isNaN(observed.fail))
+    fail('contract tests', new Error('could not read the TAP summary'))
+  if (observed.fail !== 0) fail('contract tests', new Error(`the suite reported ${observed.fail} failures`))
+  process.stdout.write(`gate: suite reported ${observed.pass}/${observed.tests}\n`)
+
+  run('the packed tarball is complete', 'node', ['--test', 'tests/pack-contents.test.mjs'])
+  run('the documented counts match', 'node', ['scripts/check-doc-numbers.mjs', '--observed', String(observed.tests), '--observed-pass', String(observed.pass)])
+  run('the documentation anchors resolve', 'node', ['scripts/check-anchors.mjs'])
+
+  let pkg
+  try {
+    pkg = loadTarball()
+  } catch (error) {
+    fail('pack and extract the tarball', error)
+  }
+  try {
+    await smokeHostEntry(pkg)
+    smokeClientBundle(pkg)
+    checkPatch(pkg)
+  } catch (error) {
+    fail('load the packed artifact', error)
+  }
+  cleanup()
+  try {
+    assertAssembly()
+  } catch (error) {
+    fail('assert the assembly', error)
+  }
+
   summarize()
-  process.exit(1)
 }
 
-let pkg
-try {
-  pkg = loadTarball()
-} catch (error) {
-  recordFailure('pack and extract the tarball', error)
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await main()
 }
-try {
-  await smokeHostEntry(pkg)
-  smokeClientBundle(pkg)
-  checkPatch(pkg)
-} catch (error) {
-  recordFailure('load the packed artifact', error)
-}
-cleanup()
-assertAssembly()
-
-summarize()

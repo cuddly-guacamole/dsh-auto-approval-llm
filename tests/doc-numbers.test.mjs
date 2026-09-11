@@ -3,24 +3,23 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { DECLARATION_POINTS, check, measuredCounts } from '../scripts/check-doc-numbers.mjs'
+import { COUNT_CLAIM, DECLARATION_POINTS, check, measuredCounts, uncoveredClaims, watchedDocuments } from '../scripts/check-doc-numbers.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 
-// Claims that state a suite-wide count. Anything phrased this way must be
-// covered by the checker, otherwise a new sentence reintroduces silent drift.
-// Per-file counts ("12 例" for one test file) are deliberately out of scope, so
-// the bare `N 例` shape only counts when it follows a suite-wide marker.
-const COUNT_CLAIM =
-  /\d+\s*个\s*(?:tests\/\*\.test\.mjs|测试文件|测试)|\d+\s*测试\s*\+|\d+\s*\/\s*\d+\s*(?:全绿|fail 0|通过)|合计\s*\*{0,2}\d+\s*例/
-
-function watchedDocuments() {
-  const docs = readdirSync(join(root, 'docs')).filter(name => name.endsWith('.md')).map(name => `docs/${name}`)
-  const tracked = [...docs, 'README.md', 'README.en.md', 'AGENTS.md']
-  return tracked.filter(name => existsSync(join(root, name)))
+function sourcesOf(files) {
+  const sources = {}
+  for (const file of files) {
+    try {
+      sources[file] = readFileSync(join(root, file), 'utf8')
+    } catch {
+      // A file the checkout does not have cannot state anything.
+    }
+  }
+  return sources
 }
 
 test('the documentation counts match the test suite', () => {
@@ -59,21 +58,40 @@ test('a stale second copy of the same claim is reported', () => {
   assert.ok(problems.length > 0, 'the stale duplicate must be reported')
 })
 
-test('the uncovered-claim scan recognises the phrasings a page can use', () => {
-  const shapes = ['1195 个测试', '1194/1194 通过', '合计 1194 例', '1194 个测试文件', '1194 测试 + 运行时验证']
-  for (const shape of shapes) assert.ok(COUNT_CLAIM.test(shape), `the scan misses: ${shape}`)
+test('no document states a suite count outside the checked set', () => {
+  // Positions, not whole files: a watched page can still carry a sentence none of
+  // the patterns match, which is how the page subtitle drifted unnoticed.
+  const uncovered = uncoveredClaims(sourcesOf(watchedDocuments(root)))
+  assert.deepEqual(uncovered, [], 'count claims with no declaration point')
 })
 
-test('no document states a suite count outside the checked set', () => {
-  // A new sentence in an uncovered page would drift exactly like the ones this
-  // task repaired, so require every count-shaped claim to belong to a checked
-  // declaration point.
-  const covered = new Set(DECLARATION_POINTS.map(point => point.file))
-  const uncovered = []
-  for (const file of watchedDocuments()) {
-    if (covered.has(file)) continue
-    const source = readFileSync(join(root, file), 'utf8')
-    if (COUNT_CLAIM.test(source)) uncovered.push(file)
+test('an unchecked claim inside a watched page is reported', () => {
+  // Reverse direction for the coverage scan, on the shape that escaped before:
+  // a suite-wide sentence in a page that otherwise only has watched declaration
+  // points. The injected wording has no declaration point, so the scan must
+  // report it even though the page itself is watched.
+  const sources = sourcesOf(watchedDocuments(root))
+  const injected = { ...sources, 'docs/15-quality.md': `${sources['docs/15-quality.md']}\n> 用例总数 42\n` }
+  const uncovered = uncoveredClaims(injected)
+  assert.ok(
+    uncovered.some(entry => entry.file === 'docs/15-quality.md'),
+    `the scan must report the injected claim, got ${JSON.stringify(uncovered)}`,
+  )
+  assert.deepEqual(uncoveredClaims(sources), [], 'the real tree must have no uncovered claims')
+})
+
+test('the uncovered-claim scan recognises the phrasings a page can use', () => {
+  // Per-file counts stay out of scope on purpose; everything else is suite-wide.
+  for (const shape of ['1195 个测试', '1194/1194 通过', '合计 1194 例', '1194 个测试文件', '1194 测试 + 运行时验证', '用例总数 1194', '测试 1194 例', '1209 tests'])
+    assert.ok(COUNT_CLAIM.test(shape), `the scan misses: ${shape}`)
+  assert.equal(COUNT_CLAIM.test('12 例'), false, 'a per-file count is not a suite-wide claim')
+})
+
+test('every declaration point names a real document', () => {
+  const sources = sourcesOf(DECLARATION_POINTS.map(point => point.file))
+  for (const point of DECLARATION_POINTS) {
+    if (point.optional && sources[point.file] === undefined) continue
+    assert.ok(sources[point.file] !== undefined, `${point.file} is declared but missing`)
+    assert.ok(point.pattern.test(sources[point.file]), `${point.file} does not contain ${point.description}`)
   }
-  assert.deepEqual(uncovered, [], 'these files state a test count but are not checked')
 })
