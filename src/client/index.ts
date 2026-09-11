@@ -524,8 +524,12 @@ function normalizeShowSessionPanel(value: any): 'on' | 'auto' | 'off' {
 /**
  * Single source of truth for session-panel visibility, shared by the header
  * button (React branch) and the floating button (DOM branch) — both must
- * evaluate the same flags or the two modes drift apart. Pure; the behavior
- * is pinned by the compiled-client anchor below.
+ * evaluate the same flags or the two modes drift apart. Pure.
+ *
+ * Note: `sessionMode` can arrive as `null` from the host (an unknown session or
+ * an unresolvable preset are both reported as a null mode). This predicate only
+ * compares, so `null` and `undefined` land on the same answer by construction;
+ * callers normalize to `undefined` to match the declared state type.
  */
 function computePanelVisible(panelMode: 'on' | 'auto' | 'off', sessionMode: string | undefined): boolean {
   if (panelMode === 'off') return false
