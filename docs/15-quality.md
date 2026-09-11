@@ -26,7 +26,7 @@
 | 审计轮转与测试隔离 | audit.test.mjs：`auditRotateContent` 双上界收敛（>5000 行取尾、长行再按字节回扫、单超长行整体保留）、原子替换无 tmp 残留、替换被阻断时原文件不受损、以及**默认审计路径锚定**（`auditFilePath()` 默认必须是 `runtime/audit.jsonl`）。轮转契约要写多兆字节夹具，故全部经测试接缝跑在 scratch 路径上：一旦指向 live 文件，快照/还原会删掉运行中进程在窗口内追加的行，还原 rename 还可能输给并发写入（Windows EPERM）而让 live 位置留下近乎空文件、真实线索困在 `.bak-test` 孤儿里 —— 跑一次测试即可清空审批审计 |
 | 内置放行面 | agent-team-tools-allow.test.mjs：Agent Teams 九个真实工具全部落静态放行面（`assessTool`→allow 且 `classifierEligible:false`）与 `harnessInternal` 标签（任何 category 键都收紧不了）；**全六族**跨副本不变式（读取编译后的 policy/category/constants，逐族比对成员，故任何一族新增名字都被覆盖，只有这两个族被覆盖时会漏掉其余四族）；**负向**锚定「近似名不得同车放行」（子串/家族/大小写变体）与「包内非工具标识符永不入列」（systemPrompt section id、事件名）；以及「**风险升级显式例外表**」——集合成员在风险正则之前返回，故命中 `RISK_NAME_PATTERN` 的名字其升级通道被静默关闭，新名字必须显式登记理由否则测试失败（另配一条反向用例防止正则本身失效）；default-allow-catalog.test.mjs 钉 catalog→policy 单向，本文件补 policy→catalog 方向 |
 
-74 个测试文件，合计 **1121 例**（node --test 全绿基线）。
+74 个测试文件，合计 **1124 例**（node --test 全绿基线）。
 
 ## 15.2　验收命令与运行时证据
 
@@ -35,7 +35,7 @@
 ```bash
 node_modules/.bin/tsc -p tsconfig.json   # 类型（policy/shell/paths 不再 @ts-nocheck）
 node_modules/.bin/tsdown                  # 客户端 bundle
-node --test "tests/**/*.test.mjs"        # 1121/1121 全绿
+node --test "tests/**/*.test.mjs"        # 1124/1124 全绿
 ```
 
 :::

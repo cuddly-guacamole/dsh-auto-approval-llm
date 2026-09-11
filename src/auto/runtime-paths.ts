@@ -38,15 +38,16 @@
  *   3. The canonical copy wins while the canonical directory is usable, so a stale
  *      legacy copy can never shadow live data. Once writes degrade to the legacy
  *      chain, the NEWER of the two readable copies wins — but only while the two
- *      are VERIFIED to contain one another: append-only files by byte prefix, the
- *      overwrite-style stores by recursive entry coverage. "Newer" is never taken as
- *      proof of "superset" — a legacy file can be refreshed by a backup restore, a
- *      hand copy, or an older process still writing the package root — so the check
- *      runs BEFORE any write, in both directions, and a negative verdict means the
- *      canonical copy is kept, the pair is marked as diverged, and one warning is
- *      printed. The read chain then reads the canonical copy instead of following a
- *      timestamp, and a verified superset outranks a refreshed timestamp; the two
- *      copies stay split until a human resolves them.
+ *      checked, not assumed. Append-only files are byte sequences, so they are
+ *      carried over only when one really is a prefix of the other (before any write);
+ *      a failed check keeps the canonical copy, marks the pair and warns, and the
+ *      read chain then reads the canonical copy instead of a timestamp. A verified
+ *      superset outranks a refreshed timestamp. The overwrite-style stores are
+ *      whole-file snapshots that legitimately SHRINK (`review-mode.json` omits the
+ *      default mode; `learning.json` evicts on TTL, cap and revoke), so neither a
+ *      union nor a containment requirement is right there: the newer snapshot wins
+ *      and, when it no longer holds every canonical entry, the superseded copy is
+ *      preserved as `<name>.superseded` with one warning — visible and reversible.
  *
  * Append-only files additionally carry their legacy content forward on the first
  * write, because a fresh target would otherwise shadow records that are still
@@ -118,9 +119,9 @@ export function setRuntimePathsForTests(next: RuntimePathOverrides | undefined):
   lastWriteError = undefined
   warnedAboutFallback = false
   warnedAboutNoLocation = false
-  warnedAboutDivergence = false
   divergedNames.clear()
   verifiedSupersetNames.clear()
+  warnedSupersededNames.clear()
 }
 
 /**
@@ -144,6 +145,9 @@ export function setRuntimeStateDir(dir: string | undefined): void {
   // different one: `apply()` sets the directory and then probes it.
   stateDirWriteDenied = false
   lastWriteError = undefined
+  divergedNames.clear()
+  verifiedSupersetNames.clear()
+  warnedSupersededNames.clear()
 }
 
 /** The canonical directory all six files belong in. */
@@ -351,12 +355,10 @@ const divergedNames = new Set<string>()
  * silently hide the records only the legacy copy holds.
  */
 const verifiedSupersetNames = new Set<string>()
-let warnedAboutDivergence = false
 
 function markDiverged(name: string, detail: string): void {
+  if (divergedNames.has(name)) return
   divergedNames.add(name)
-  if (warnedAboutDivergence) return
-  warnedAboutDivergence = true
   console.warn(
     `[dsh-auto-approval-llm] the runtime copies of ${name} diverged (${detail}); `
     + 'the canonical copy is kept as the audit trail and the packages remain split until it is resolved by hand',
@@ -385,41 +387,87 @@ function markDiverged(name: string, detail: string): void {
 export function reconcileRuntimeCopies(): void {
   if (!ensureRuntimeDir()) return
   for (const name of RUNTIME_FILENAMES) {
-    const legacy = legacyRootFilePath(name)
-    if (!existsSync(legacy)) continue
-    const canonical = runtimeFilePath(name)
-    if (!existsSync(canonical)) {
-      copyFileAtomic(legacy, canonical)
-      continue
+    try {
+      reconcileOne(name)
+    } catch (error) {
+      // Never let one file's failure escape: this runs at plugin startup, so an
+      // uncaught error (a deeply nested snapshot exhausting the stack in the
+      // containment check, for instance) would fail registration and leave the
+      // session without its guard. The file is marked instead.
+      markDiverged(name, `the copy check failed (${error instanceof Error ? error.message : String(error)})`)
     }
-    if (!newerCopyIs(legacy, canonical)) continue
-    if (APPEND_ONLY_FILENAMES.has(name)) {
-      const outcome = extendAppendOnlyFile(legacy, canonical)
-      if (outcome === 'diverged') markDiverged(name, 'a newer legacy copy is not a superset')
-      else if (outcome !== 'failed') verifiedSupersetNames.add(name)
-      // A 'failed' outcome must be as loud as a divergence: the degraded window
-      // would otherwise stay stranded in the legacy file with nobody told, and the
-      // next canonical write makes it unreachable for good.
-      else if (outcome === 'failed') markDiverged(name, 'the newer legacy copy could not be carried back')
-      continue
-    }
-    // Overwrite-style stores: the newer file carries the state a degraded process
-    // wrote, but "valid JSON" is not "superset" — a store refreshed by a backup
-    // restore is valid JSON and would silently drop every entry the canonical copy
-    // has. Require the canonical keys to be present in the newer file before it
-    // replaces them.
-    const legacyJson = readJsonIfFile(legacy)
-    if (legacyJson === undefined) {
-      markDiverged(name, 'a newer legacy copy is not valid JSON')
-      continue
-    }
-    const canonicalJson = readJsonIfFile(canonical)
-    if (!jsonCovers(canonicalJson, legacyJson)) {
-      markDiverged(name, 'a newer legacy copy does not contain the canonical entries')
-      continue
-    }
-    if (!copyFileAtomic(legacy, canonical)) markDiverged(name, 'the newer legacy copy could not be copied back')
   }
+}
+
+function reconcileOne(name: string): void {
+  const legacy = legacyRootFilePath(name)
+  if (!existsSync(legacy)) return
+  const canonical = runtimeFilePath(name)
+  if (!existsSync(canonical)) {
+    copyFileAtomic(legacy, canonical)
+    return
+  }
+  if (!newerCopyIs(legacy, canonical)) return
+  if (APPEND_ONLY_FILENAMES.has(name)) {
+    const outcome = extendAppendOnlyFile(legacy, canonical)
+    if (outcome === 'diverged') markDiverged(name, 'a newer legacy copy is not a superset')
+    // A 'failed' outcome must be as loud as a divergence: the degraded window
+    // would otherwise stay stranded in the legacy file with nobody told, and the
+    // next canonical write makes it unreachable for good.
+    else if (outcome === 'failed') markDiverged(name, 'the newer legacy copy could not be carried back')
+    else if (outcome === 'copied' || outcome === 'extended') verifiedSupersetNames.add(name)
+    return
+  }
+  adoptNewerOverwriteStore(name, canonical, legacy)
+}
+
+/**
+ * Carry a newer legacy snapshot of an overwrite-style store back into the
+ * canonical file without ever destroying the copy it supersedes.
+ *
+ * These stores are whole-file snapshots of the in-memory state, and their
+ * contents legitimately SHRINK: `review-mode.json` omits the default `smart`, and
+ * `learning.json` drops entries on revoke, on the 30-day TTL and at the 100-entry
+ * cap. A union is therefore wrong (it would resurrect a revoked learned entry and
+ * the very session mode the user just reset), and requiring containment is wrong
+ * in the other direction (it would discard every change made during a degraded
+ * window, which IS the newer state). The newest snapshot wins — that is where the
+ * write chain was appending — and a superseded copy that no longer contains every
+ * canonical entry is preserved beside it as `<name>.superseded` with a warning, so
+ * the decision is both visible and reversible.
+ */
+function adoptNewerOverwriteStore(name: string, canonical: string, legacy: string): void {
+  const legacyJson = readJsonIfFile(legacy)
+  if (legacyJson === undefined) {
+    markDiverged(name, 'a newer legacy copy is not valid JSON')
+    return
+  }
+  const canonicalJson = readJsonIfFile(canonical)
+  const dropsEntries = canonicalJson === undefined || !jsonCovers(canonicalJson, legacyJson)
+  if (dropsEntries) {
+    try {
+      copyFileSync(canonical, `${canonical}.superseded`)
+    } catch {
+      markDiverged(name, 'a newer legacy copy drops entries and the superseded copy could not be preserved')
+      return
+    }
+  }
+  if (!copyFileAtomic(legacy, canonical)) {
+    markDiverged(name, 'the newer legacy copy could not be copied back')
+    return
+  }
+  if (dropsEntries) warnSupersededOnce(name)
+}
+
+/** Warn once per NAME that a newer snapshot replaced one with entries it lacks. */
+const warnedSupersededNames = new Set<string>()
+function warnSupersededOnce(name: string): void {
+  if (warnedSupersededNames.has(name)) return
+  warnedSupersededNames.add(name)
+  console.warn(
+    `[dsh-auto-approval-llm] the newer ${name} snapshot does not contain every entry of the canonical copy; `
+    + `the superseded copy is kept as ${name}.superseded`,
+  )
 }
 
 /**
@@ -505,7 +553,8 @@ function degradeToLegacy(): void {
       // Verify, do not assume: `newerCopyIs` alone would leave a legacy snapshot
       // that is newer but NOT a superset as the read chain's chosen history.
       if (!existsSync(legacy)) {
-        if (!copyFileAtomic(canonical, legacy)) markDiverged(name, 'the canonical copy could not be seeded into the legacy location')
+        if (copyFileAtomic(canonical, legacy)) verifiedSupersetNames.add(name)
+        else markDiverged(name, 'the canonical copy could not be seeded into the legacy location')
         continue
       }
       const outcome = extendAppendOnlyFile(canonical, legacy)

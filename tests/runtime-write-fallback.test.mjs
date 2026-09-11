@@ -38,6 +38,8 @@ import {
   appendRuntimeLine,
   HISTORY_FILENAME,
   LATENCY_FILENAME,
+  REVIEW_MODE_FILENAME,
+  DEBUG_FILENAME,
   LEARNING_FILENAME,
   isDegradableRuntimeWriteError,
   isRetryableRuntimeWriteError,
@@ -374,20 +376,79 @@ test('a verified superset keeps the read even when the shorter copy looks newer'
   })
 })
 
-test('an overwrite-style store is not replaced by a newer file that lacks canonical entries', () => {
+test('an overwrite-style store adopts the newer snapshot and preserves the superseded copy', () => {
   sandbox(undefined, ({ legacyRoot, stateDir }) => {
     const canonical = join(stateDir, LEARNING_FILENAME)
     const legacy = join(legacyRoot, LEARNING_FILENAME)
     writeFileSync(canonical, '{"version":1,"entries":{"a":1,"b":2}}')
     utimesSync(canonical, new Date(Date.now() - 120_000), new Date(Date.now() - 120_000))
-    // Valid JSON, newer, and missing entries the canonical copy has.
+    // Valid JSON, newer, and missing an entry the canonical copy has.
     writeFileSync(legacy, '{"version":1,"entries":{"a":9}}')
     const warnings = captureWarnings(() => {
       reconcileRuntimeCopies()
     })
-    assert.equal(readFileSync(canonical, 'utf8'), '{"version":1,"entries":{"a":1,"b":2}}')
+    // The newer snapshot wins (that is where the degraded window was writing)...
+    assert.equal(readFileSync(canonical, 'utf8'), '{"version":1,"entries":{"a":9}}')
+    // ...but the copy it supersedes is preserved, and the operator is told.
+    assert.equal(readFileSync(`${canonical}.superseded`, 'utf8'), '{"version":1,"entries":{"a":1,"b":2}}')
     assert.equal(warnings.length, 1)
-    assert.match(warnings[0], /diverged/)
+    assert.match(warnings[0], /superseded/)
+  })
+})
+
+test('a legitimately shrinking store is carried back without being called a divergence', () => {
+  sandbox(undefined, ({ legacyRoot, stateDir }) => {
+    // `review-mode.json` omits the default mode on purpose, so a session reset to
+    // `smart` during a degraded window persists `{}`. Requiring containment would
+    // discard exactly that change; a union would resurrect the mode the user reset.
+    const canonical = join(stateDir, REVIEW_MODE_FILENAME)
+    const legacy = join(legacyRoot, REVIEW_MODE_FILENAME)
+    writeFileSync(canonical, '{"session-a":"manual"}')
+    utimesSync(canonical, new Date(Date.now() - 120_000), new Date(Date.now() - 120_000))
+    writeFileSync(legacy, '{}')
+    const warnings = captureWarnings(() => {
+      reconcileRuntimeCopies()
+    })
+    assert.equal(readFileSync(canonical, 'utf8'), '{}')
+    assert.match(warnings.join('\n'), /superseded/)
+    // Reading the store back yields the default, not the stale manual mode.
+    assert.equal(readFileSync(resolveRuntimeReadPath(REVIEW_MODE_FILENAME), 'utf8'), '{}')
+  })
+})
+
+test('a store that lost entries is not adopted when the superseded copy cannot be preserved', () => {
+  sandbox(undefined, ({ legacyRoot, stateDir }) => {
+    const canonical = join(stateDir, LEARNING_FILENAME)
+    const legacy = join(legacyRoot, LEARNING_FILENAME)
+    writeFileSync(canonical, '{"version":1,"entries":{"a":1}}')
+    utimesSync(canonical, new Date(Date.now() - 120_000), new Date(Date.now() - 120_000))
+    writeFileSync(legacy, '{"version":1,"entries":{}}')
+    // A directory where the superseded copy would go makes preservation fail.
+    mkdirSync(`${canonical}.superseded`, { recursive: true })
+    const warnings = captureWarnings(() => {
+      reconcileRuntimeCopies()
+    })
+    assert.equal(readFileSync(canonical, 'utf8'), '{"version":1,"entries":{"a":1}}', 'nothing is dropped')
+    assert.match(warnings.join('\n'), /diverged/)
+  })
+})
+
+test('the seeding branch records the verified superset for the read chain', () => {
+  sandbox(({ stateDir }) => {
+    // No legacy copy exists for the audit file, and the latency file is broken, so
+    // appending to latency degrades the chain and seeds the audit copy.
+    writeFileSync(join(stateDir, AUDIT_FILENAME), '{"row":1}\n')
+    mkdirSync(join(stateDir, LATENCY_FILENAME), { recursive: true })
+  }, ({ legacyRoot, stateDir }) => {
+    captureWarnings(() => {
+      assert.ok(appendRuntimeLine(LATENCY_FILENAME, '{"s":1}\n') !== undefined)
+    })
+    assert.ok(existsSync(join(legacyRoot, AUDIT_FILENAME)), 'the canonical content was seeded')
+    // The read must stay on the copy that now holds the records even if the
+    // canonical file later looks newer.
+    utimesSync(join(stateDir, AUDIT_FILENAME), new Date(), new Date())
+    utimesSync(join(legacyRoot, AUDIT_FILENAME), new Date(Date.now() - 120_000), new Date(Date.now() - 120_000))
+    assert.equal(resolveRuntimeReadPath(AUDIT_FILENAME), join(legacyRoot, AUDIT_FILENAME))
   })
 })
 
