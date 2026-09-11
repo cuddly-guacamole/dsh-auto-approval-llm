@@ -38,6 +38,7 @@ import {
   appendRuntimeLine,
   HISTORY_FILENAME,
   LATENCY_FILENAME,
+  LEARNING_FILENAME,
   isDegradableRuntimeWriteError,
   isRetryableRuntimeWriteError,
   legacyRootFilePath,
@@ -346,6 +347,77 @@ test('a diverged pair is read from the canonical copy, not from the newer timest
     // The legacy copy is the newer one; a timestamp must not hand it the read.
     assert.equal(resolveRuntimeReadPath(AUDIT_FILENAME), canonical)
     assert.ok(readFileSync(legacy, 'utf8').includes('legacy-unrelated'), 'the legacy copy is left intact')
+  })
+})
+
+test('a verified superset keeps the read even when the shorter copy looks newer', () => {
+  sandbox(undefined, ({ legacyRoot, stateDir }) => {
+    // Degradation verifies that the legacy copy contains the canonical one. A
+    // later external rewrite of the canonical file's timestamp (backup restore,
+    // anti-virus, a touch) must not overrule that verification and hide the
+    // records only the legacy copy holds.
+    writeFileSync(join(legacyRoot, AUDIT_FILENAME), '{"row":1}\n{"row":2}\n')
+    const canonical = join(stateDir, AUDIT_FILENAME)
+    writeFileSync(canonical, '{"row":1}\n')
+    // Break a DIFFERENT file so the degradation is real, then restore the audit
+    // pair the way a post-degradation process would see it.
+    mkdirSync(join(stateDir, LATENCY_FILENAME), { recursive: true })
+    captureWarnings(() => {
+      assert.ok(appendRuntimeLine(LATENCY_FILENAME, '{"s":1}\n') !== undefined)
+    })
+    // Now the canonical copy looks NEWER than the legacy one, without being a
+    // superset of it.
+    utimesSync(canonical, new Date(), new Date())
+    utimesSync(join(legacyRoot, AUDIT_FILENAME), new Date(Date.now() - 120_000), new Date(Date.now() - 120_000))
+    assert.equal(resolveRuntimeReadPath(AUDIT_FILENAME), join(legacyRoot, AUDIT_FILENAME))
+    assert.match(readFileSync(resolveRuntimeReadPath(AUDIT_FILENAME), 'utf8'), /"row":2/)
+  })
+})
+
+test('an overwrite-style store is not replaced by a newer file that lacks canonical entries', () => {
+  sandbox(undefined, ({ legacyRoot, stateDir }) => {
+    const canonical = join(stateDir, LEARNING_FILENAME)
+    const legacy = join(legacyRoot, LEARNING_FILENAME)
+    writeFileSync(canonical, '{"version":1,"entries":{"a":1,"b":2}}')
+    utimesSync(canonical, new Date(Date.now() - 120_000), new Date(Date.now() - 120_000))
+    // Valid JSON, newer, and missing entries the canonical copy has.
+    writeFileSync(legacy, '{"version":1,"entries":{"a":9}}')
+    const warnings = captureWarnings(() => {
+      reconcileRuntimeCopies()
+    })
+    assert.equal(readFileSync(canonical, 'utf8'), '{"version":1,"entries":{"a":1,"b":2}}')
+    assert.equal(warnings.length, 1)
+    assert.match(warnings[0], /diverged/)
+  })
+})
+
+test('an overwrite-style store IS carried back when the newer file covers the canonical entries', () => {
+  sandbox(undefined, ({ legacyRoot, stateDir }) => {
+    const canonical = join(stateDir, LEARNING_FILENAME)
+    const legacy = join(legacyRoot, LEARNING_FILENAME)
+    writeFileSync(canonical, '{"version":1,"entries":{"a":1}}')
+    utimesSync(canonical, new Date(Date.now() - 120_000), new Date(Date.now() - 120_000))
+    writeFileSync(legacy, '{"version":1,"entries":{"a":1,"b":2}}')
+    reconcileRuntimeCopies()
+    assert.equal(readFileSync(canonical, 'utf8'), '{"version":1,"entries":{"a":1,"b":2}}')
+  })
+})
+
+test('a failed carry-back is reported, not left as a silent orphan', () => {
+  sandbox(undefined, ({ legacyRoot, stateDir }) => {
+    // A legacy copy whose content is not readable as text cannot be merged back.
+    // The window must be surfaced: once the canonical file is written again it
+    // becomes the newer one and the legacy records would be stranded for good.
+    const canonical = join(stateDir, AUDIT_FILENAME)
+    writeFileSync(canonical, '{"row":1}\n')
+    utimesSync(canonical, new Date(Date.now() - 120_000), new Date(Date.now() - 120_000))
+    // A directory at the legacy path: existsSync passes, reading text does not.
+    mkdirSync(join(legacyRoot, AUDIT_FILENAME), { recursive: true })
+    const warnings = captureWarnings(() => {
+      reconcileRuntimeCopies()
+    })
+    assert.ok(warnings.length >= 1, 'the unmergeable legacy copy is surfaced')
+    assert.match(warnings.join('\n'), /diverged/)
   })
 })
 

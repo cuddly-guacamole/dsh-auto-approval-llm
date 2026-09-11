@@ -38,13 +38,15 @@
  *   3. The canonical copy wins while the canonical directory is usable, so a stale
  *      legacy copy can never shadow live data. Once writes degrade to the legacy
  *      chain, the NEWER of the two readable copies wins — but only while the two
- *      are VERIFIED to be ordered (one a byte-prefix of the other). "Newer" is not
- *      taken as proof of "superset": a legacy file can be refreshed by a backup
- *      restore, a hand copy, or an older process still writing the package root, so
- *      the recovery direction checks the prefix relation (append-only files) or
- *      that the file parses as JSON (overwrite-style); when the check fails it keeps
- *      the canonical copy and warns. A divergence therefore never authorises a
- *      destructive replace — the copies stay split until a human resolves them.
+ *      are VERIFIED to contain one another: append-only files by byte prefix, the
+ *      overwrite-style stores by recursive entry coverage. "Newer" is never taken as
+ *      proof of "superset" — a legacy file can be refreshed by a backup restore, a
+ *      hand copy, or an older process still writing the package root — so the check
+ *      runs BEFORE any write, in both directions, and a negative verdict means the
+ *      canonical copy is kept, the pair is marked as diverged, and one warning is
+ *      printed. The read chain then reads the canonical copy instead of following a
+ *      timestamp, and a verified superset outranks a refreshed timestamp; the two
+ *      copies stay split until a human resolves them.
  *
  * Append-only files additionally carry their legacy content forward on the first
  * write, because a fresh target would otherwise shadow records that are still
@@ -118,6 +120,7 @@ export function setRuntimePathsForTests(next: RuntimePathOverrides | undefined):
   warnedAboutNoLocation = false
   warnedAboutDivergence = false
   divergedNames.clear()
+  verifiedSupersetNames.clear()
 }
 
 /**
@@ -337,6 +340,17 @@ function extendAppendOnlyFile(source: string, target: string): 'copied' | 'exten
  * read chain must not let a timestamp decide which history to hide.
  */
 const divergedNames = new Set<string>()
+
+/**
+ * Names whose LEGACY copy was verified to contain the canonical one.
+ *
+ * The read chain must not let a timestamp overrule a verification it already has:
+ * when the canonical file's own mtime is refreshed by something else (a backup
+ * restore, an anti-virus rewrite, a `touch`) while its content is still only a
+ * prefix of the legacy copy, "newer" would hand the read to the shorter file and
+ * silently hide the records only the legacy copy holds.
+ */
+const verifiedSupersetNames = new Set<string>()
 let warnedAboutDivergence = false
 
 function markDiverged(name: string, detail: string): void {
@@ -382,16 +396,57 @@ export function reconcileRuntimeCopies(): void {
     if (APPEND_ONLY_FILENAMES.has(name)) {
       const outcome = extendAppendOnlyFile(legacy, canonical)
       if (outcome === 'diverged') markDiverged(name, 'a newer legacy copy is not a superset')
+      else if (outcome !== 'failed') verifiedSupersetNames.add(name)
+      // A 'failed' outcome must be as loud as a divergence: the degraded window
+      // would otherwise stay stranded in the legacy file with nobody told, and the
+      // next canonical write makes it unreachable for good.
+      else if (outcome === 'failed') markDiverged(name, 'the newer legacy copy could not be carried back')
       continue
     }
     // Overwrite-style stores: the newer file carries the state a degraded process
-    // wrote, but only if it is intact.
-    if (readJsonIfFile(legacy) === undefined) {
+    // wrote, but "valid JSON" is not "superset" — a store refreshed by a backup
+    // restore is valid JSON and would silently drop every entry the canonical copy
+    // has. Require the canonical keys to be present in the newer file before it
+    // replaces them.
+    const legacyJson = readJsonIfFile(legacy)
+    if (legacyJson === undefined) {
       markDiverged(name, 'a newer legacy copy is not valid JSON')
+      continue
+    }
+    const canonicalJson = readJsonIfFile(canonical)
+    if (!jsonCovers(canonicalJson, legacyJson)) {
+      markDiverged(name, 'a newer legacy copy does not contain the canonical entries')
       continue
     }
     if (!copyFileAtomic(legacy, canonical)) markDiverged(name, 'the newer legacy copy could not be copied back')
   }
+}
+
+/**
+ * Whether `candidate` carries every entry `reference` has, recursively.
+ *
+ * Both are the JSON snapshots the two overwrite-style stores persist: a nested
+ * object (`{version, entries: {key: …}}`) whose leaf values are opaque. A
+ * top-level key check would be useless here — `version` and `entries` exist in
+ * both spellings while the ENTRY MAP is what a backup restore could have thinned
+ * out. So the check descends: every key of the reference must exist in the
+ * candidate, and every corresponding value must itself be covered. Arrays require
+ * every reference element to be present. A shape mismatch, a non-object, or an
+ * unparseable file counts as NOT covered, so the canonical copy is kept.
+ */
+function jsonCovers(reference: unknown, candidate: unknown): boolean {
+  if (reference === null || typeof reference !== 'object') return true
+  if (candidate === null || typeof candidate !== 'object') return false
+  if (Array.isArray(reference)) {
+    if (!Array.isArray(candidate)) return false
+    return reference.every((item) => candidate.some((other) => jsonCovers(item, other) && jsonCovers(other, item)))
+  }
+  if (Array.isArray(candidate)) return false
+  const referenceRecord = reference as Record<string, unknown>
+  const candidateRecord = candidate as Record<string, unknown>
+  return Object.keys(referenceRecord).every(
+    (key) => key in candidateRecord && jsonCovers(referenceRecord[key], candidateRecord[key]),
+  )
 }
 
 /** Parse a JSON file, or undefined when absent/unreadable/malformed. */
@@ -456,6 +511,10 @@ function degradeToLegacy(): void {
       const outcome = extendAppendOnlyFile(canonical, legacy)
       if (outcome === 'diverged') markDiverged(name, 'the canonical and legacy histories diverge')
       else if (outcome === 'failed') markDiverged(name, 'the canonical copy could not be merged into the legacy location')
+      // The verification is knowledge the read chain must keep: the legacy copy
+      // holds every canonical record, so no timestamp may hand the read back to
+      // the shorter canonical file.
+      else verifiedSupersetNames.add(name)
       continue
     }
     // Overwrite-style stores are whole-file snapshots of the in-memory state, so
@@ -586,6 +645,10 @@ export function resolveRuntimeReadPath(name: string): string {
     if (legacyTime === undefined) return canonical
     const canonicalTime = fileMtimeMs(canonical)
     if (canonicalTime === undefined) return legacy
+    // A verification already made outranks a timestamp: when the legacy copy is
+    // known to contain the canonical one, a refreshed canonical mtime must not
+    // hand the read back to the shorter file.
+    if (verifiedSupersetNames.has(name)) return legacy
     return canonicalTime > legacyTime ? canonical : legacy
   }
   if (fileMtimeMs(canonical) !== undefined) return canonical
