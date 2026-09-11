@@ -762,6 +762,41 @@ export function shellReadsCredentialMaterial(source, shell, roots) {
  */
 const RAW_ABSOLUTE_PATH = /(?:^|[^A-Za-z0-9_])((?:[A-Za-z]:[\\/]|\\\\[^\s"'|&;<>()]+)[^\s"'|&;<>()]*)/g;
 
+/**
+ * The path spelling inside one operand token, or '' when the token is not one.
+ *
+ * Three shapes carry a path in a non-leading position and used to be dropped:
+ *   - a flag value (`--file=ext/id_rsa`, pwsh `-Path:ext\id_rsa`);
+ *   - a command-specific key value (`dd if=ext/id_rsa`);
+ *   - a curl-style form field (`-F file=@ext/id_rsa`, where `@` marks a file).
+ *
+ * A bare `NAME=value` is NOT skipped wholesale any more: `unwrapCommand` already
+ * strips the environment prefixes that precede a command, so the blanket filter
+ * only ever removed real operands — `dd if=<junction>/id_rsa` and
+ * `curl -F file=@<junction>/id_rsa` were both invisible to the guard because of
+ * it. A token that is genuinely an assignment with no path-looking value (for
+ * example `--pretty=format:%h`) normalizes to a workspace-relative pseudo-path
+ * and triggers nothing.
+ */
+function operandPathSpelling(text) {
+    if (text === '')
+        return '';
+    if (text.startsWith('-')) {
+        // `-Flag:value` and `--flag=value` spellings (the pwsh inline colon is a
+        // real gap: `Get-Content -Path:ext\id_rsa` has no separated operand).
+        const colon = /^-[A-Za-z][A-Za-z0-9-]*(?::|=)(.+)$/.exec(text);
+        if (colon !== null)
+            return colon[1];
+        return '';
+    }
+    const keyed = /^[A-Za-z_][A-Za-z0-9_-]*=(.+)$/.exec(text);
+    if (keyed !== null) {
+        const value = keyed[1];
+        return value.startsWith('@') ? value.slice(1) : value;
+    }
+    return text;
+}
+
 export function shellGuardTargets(source, shell, roots) {
     if (typeof source !== 'string' || source.length === 0)
         return undefined;
@@ -783,13 +818,10 @@ export function shellGuardTargets(source, shell, roots) {
                 if (word === undefined || stripped.includes(word))
                     continue;
                 const text = typeof word.text === 'string' ? word.text : '';
-                if (text === '' || text.startsWith('-'))
+                const spelled = operandPathSpelling(text);
+                if (spelled === '')
                     continue;
-                // Environment assignments (`VAR=value`) are not paths, and their
-                // value may legitimately name something outside the workspace.
-                if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(text))
-                    continue;
-                out.push(normalizePath(text, segmentRoots.workspace, segmentRoots.home));
+                out.push(normalizePath(spelled, segmentRoots.workspace, segmentRoots.home));
             }
             const next = effectiveCwdAfter(segment, shell, segmentRoots);
             if (next !== undefined)

@@ -29,15 +29,17 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   AUDIT_FILENAME,
   appendRuntimeLine,
   isDegradableRuntimeWriteError,
   legacyRootFilePath,
   probeRuntimeDirWritable,
+  resolveRuntimeReadPath,
   resolveRuntimeWritePath,
   runtimeFilePath,
   setRuntimePathsForTests,
@@ -155,20 +157,76 @@ test('the atomic writer relocates the whole snapshot on the same rule', () => {
   })
 })
 
+test('degradation keeps the read chain and the write chain on the SAME file', () => {
+  sandbox(({ stateDir }) => {
+    // A canonical copy exists and holds rows; then the file position becomes
+    // unusable while the directory itself stays fine.
+    mkdirSync(join(stateDir, AUDIT_FILENAME), { recursive: true })
+  }, ({ legacyRoot, stateDir }) => {
+    captureWarnings(() => {
+      assert.ok(appendRuntimeLine(AUDIT_FILENAME, '{"row":"legacy"}\n') !== undefined)
+    })
+    // The invariant runtime-paths.test.mjs already states for the other failure
+    // shape: a read that disagrees with the write chain is a split brain. Here it
+    // would mean the process appends where it never reads back — every persisted
+    // mode/learning/history change silently lost on the next load.
+    assert.equal(resolveRuntimeReadPath(AUDIT_FILENAME), resolveRuntimeWritePath(AUDIT_FILENAME))
+    assert.equal(resolveRuntimeWritePath(AUDIT_FILENAME), join(legacyRoot, AUDIT_FILENAME))
+    // The planted directory at the canonical file position is untouched.
+    assert.ok(existsSync(join(stateDir, AUDIT_FILENAME)))
+  })
+})
+
+test('degradation carries the canonical append-only content into the new location', () => {
+  sandbox(({ stateDir }) => {
+    // Pre-degrade rows live ONLY in the canonical file...
+    writeFileSync(resolveRuntimeWritePath(AUDIT_FILENAME), '{"row":1}\n')
+    // ...and the boot probe is the constructible way to degrade while that file
+    // still exists: make the probe path itself unwritable.
+    mkdirSync(join(stateDir, `.write-probe-${process.pid}`), { recursive: true })
+  }, ({ legacyRoot }) => {
+    captureWarnings(() => {
+      assert.equal(probeRuntimeDirWritable(), false)
+    })
+    // The read rule now follows the write chain, so rows that stayed behind in a
+    // frozen canonical copy would be unreachable forever.
+    const legacy = readFileSync(join(legacyRoot, AUDIT_FILENAME), 'utf8')
+    assert.match(legacy, /\{"row":1\}/, 'the pre-degrade row survives in the location now being written')
+  })
+})
+
 test('a failure that is NOT "this location refuses writes" keeps failing closed, without relocating', () => {
-  // Real filesystem failure, no mock: `writeFileSync` rejects a non-string
-  // payload with ERR_INVALID_ARG_TYPE before touching the filesystem. It says
-  // nothing about the directory, so the ladder must not move the runtime files
-  // because of it — a relocation here would hide a genuine write bug behind a
-  // silent change of location.
+  // Real failure, no mock: a non-string payload is rejected by `appendFileSync`
+  // before any byte moves (ERR_INVALID_ARG_TYPE). It says nothing about the
+  // directory, so the ladder must not retry it or move the runtime files because
+  // of it — doing so would hide a genuine write bug behind a silent change of
+  // location.
   sandbox(undefined, ({ stateDir }) => {
     const warnings = captureWarnings(() => {
+      assert.equal(appendRuntimeLine(AUDIT_FILENAME, { not: 'a string' }), undefined)
       assert.equal(writeRuntimeAtomic(AUDIT_FILENAME, { not: 'a string' }), false)
     })
     assert.deepEqual(warnings, [])
     assert.equal(resolveRuntimeWritePath(AUDIT_FILENAME), join(stateDir, AUDIT_FILENAME))
     assert.ok(!existsSync(runtimeFilePath(AUDIT_FILENAME)))
   })
+})
+
+test('the ladder checks the error class BEFORE replaying the line', () => {
+  // The same-path retry exists only to absorb a transient sharing violation. It
+  // must not run for an error that can fail AFTER a partial write (ENOSPC and
+  // friends): replaying the same text would splice a fragment and a full line
+  // into one corrupt record, i.e. a silently lost audit line. That ordering is
+  // not constructible with a real filesystem failure on this platform, so it is
+  // pinned against the compiled artifact instead: the first class check must
+  // precede the second attempt at the same path in `appendRuntimeLine`.
+  const lib = readFileSync(fileURLToPath(new URL('../lib/auto/runtime-paths.js', import.meta.url)), 'utf8')
+  const body = lib.slice(lib.indexOf('export function appendRuntimeLine'), lib.indexOf('export function writeRuntimeAtomic'))
+  const firstCheck = body.indexOf('isDegradableRuntimeWriteError(lastWriteError)')
+  const secondAttempt = body.indexOf('tryAppend(primary, text)', body.indexOf('tryAppend(primary, text)') + 1)
+  assert.ok(firstCheck >= 0, 'the ladder must consult the error class')
+  assert.ok(secondAttempt >= 0, 'the ladder must keep its single same-path retry')
+  assert.ok(firstCheck < secondAttempt, 'the error class must be judged before the retry, not after')
 })
 
 test('the degradable set is exactly the "location refuses writes" codes', () => {

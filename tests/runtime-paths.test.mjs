@@ -288,7 +288,9 @@ test('a copy that cannot complete leaves no truncated target to shadow the legac
 
 test('the carry forward stages through a temp file rather than copying in place', () => {
   const source = readFileSync(new URL('../src/auto/runtime-paths.ts', import.meta.url), 'utf8')
-  const body = source.slice(source.indexOf('function carryForwardAppendOnly'))
+  // The staging lives in the single owner both directions call: legacy→canonical
+  // (migration) and canonical→legacy (degradation).
+  const body = source.slice(source.indexOf('function carryForwardFile'))
   assert.match(body, /copyFileSync\(source, tmp\)/, 'the copy goes to a staging path')
   assert.match(body, /renameSync\(tmp, target\)/, 'and is renamed into place, so the target is never partial')
   assert.ok(

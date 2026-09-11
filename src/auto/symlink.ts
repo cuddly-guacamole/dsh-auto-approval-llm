@@ -117,9 +117,16 @@ export function symlinkEscapeReason(
       if (runtimeStateTargetInZone(normalized, roots.allowedDshSubpaths)) {
         return `shell target resolves into plugin runtime state: ${normalized}`
       }
-      const escapes = !isWithin(roots.workspace, normalized) && !trustedZone.some(root => isWithin(root, normalized))
+      // The zone comparison uses the RESOLVED workspace as well as the textual
+      // one. A deployment whose workspace path is not realpath-clean (a junction
+      // component, an 8.3 short name) would otherwise make
+      // `!isWithin(roots.workspace, normalized)` true for every target, and the
+      // DSH_HOME clause would then refuse ordinary reads inside the workspace —
+      // this repository itself lives under `~/.dsh/plugins/…`.
+      const inWorkspace = isWithin(roots.workspace, normalized) || isWithin(realWsNormalized, normalized)
+      const escapes = !inWorkspace && !trustedZone.some(root => isWithin(root, normalized))
       if (!escapes) continue
-      if (isCriticalPath(normalized, roots) || isWithin(roots.dshHome, normalized) || runtimeStateTargetInZone(normalized, roots.allowedDshSubpaths)) {
+      if (isCriticalPath(normalized, roots) || isWithin(roots.dshHome, normalized)) {
         return `shell target resolves outside the workspace into a protected location: ${normalized}`
       }
       continue

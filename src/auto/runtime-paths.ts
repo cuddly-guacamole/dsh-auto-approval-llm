@@ -226,7 +226,19 @@ function degradeToLegacy(): void {
   if (stateDirWriteDenied) return
   stateDirWriteDenied = true
   const fallback = legacyRoot()
-  if (tryMakeDir(fallback)) warnFallbackOnce(fallback)
+  if (tryMakeDir(fallback)) {
+    // The canonical copies are about to go stale: the read rule follows the write
+    // chain, so anything that lives ONLY in the canonical directory would become
+    // unreachable. Append-only files therefore carry their canonical content into
+    // the legacy target before the first legacy append — the mirror image of the
+    // migration carry-forward, and only when the legacy file does not exist.
+    for (const name of APPEND_ONLY_FILENAMES) {
+      carryForwardFile(runtimeFilePath(name), join(fallback, name))
+    }
+    warnFallbackOnce(fallback)
+  } else {
+    warnNoUsableLocation()
+  }
 }
 
 function tryMakeDir(dir: string): boolean {
@@ -267,14 +279,25 @@ export function ensureRuntimeDir(): boolean {
 export function probeRuntimeDirWritable(): boolean {
   if (!ensureRuntimeDir()) return false
   const probe = join(stateDirPath(), `.write-probe-${process.pid}`)
+  let wrote = false
   try {
     writeFileSync(probe, '')
-    rmSync(probe, { force: true })
-    return true
+    wrote = true
   } catch {
     degradeToLegacy()
     return false
   }
+  // Cleanup happens OUTSIDE the verdict. A probe file that cannot be removed is
+  // exactly what the comment above calls harmless, and treating it as "refuses
+  // writes" would move six files for a sharing violation on a file nobody reads.
+  if (wrote) {
+    try {
+      rmSync(probe, { force: true })
+    } catch {
+      // Harmless residue: the file is never read and carries a pid suffix.
+    }
+  }
+  return true
 }
 
 /** Warn once per process that writes are landing in a legacy location. */
@@ -286,16 +309,39 @@ function warnFallbackOnce(used: string): void {
   )
 }
 
+/** Warn once per process that NO location accepted the runtime files. */
+function warnNoUsableLocation(): void {
+  if (warnedAboutFallback) return
+  warnedAboutFallback = true
+  console.warn(
+    `[dsh-auto-approval-llm] neither ${stateDirPath()} nor ${legacyRoot()} accepted writes; `
+    + 'the audit is the fail-closed commit gate, so verdicts will be refused until one of them is writable',
+  )
+}
+
 /**
- * Where to READ `name` from: the canonical copy when it exists, otherwise the
- * legacy package-root file. Falls back to the canonical path when neither
- * exists, so a caller reporting the path shows the intended location rather than
- * a historical one.
+ * Where to READ `name` from.
+ *
+ * The rule is "wherever the WRITE chain would put it", because a read that
+ * disagrees with the write chain is a split brain: the process would read the
+ * frozen canonical copy while appending to the legacy one, so every persisted
+ * change (per-session review mode, learned entries, history) would be silently
+ * lost on the next load, and the offline query tools would show a file that
+ * stops growing. Hence:
+ *
+ *   - after degradation, the legacy copy wins when it exists (that is where new
+ *     records go), otherwise the canonical one still holds the pre-degrade data;
+ *   - otherwise the canonical copy wins when it exists, and the legacy file is
+ *     the migration fallback.
+ *
+ * Falls back to the canonical path when neither exists, so a caller reporting
+ * the path shows the intended location rather than a historical one.
  */
 export function resolveRuntimeReadPath(name: string): string {
   const canonical = runtimeFilePath(name)
-  if (existsSync(canonical)) return canonical
   const legacy = legacyRootFilePath(name)
+  if (stateDirWriteDenied) return existsSync(legacy) ? legacy : canonical
+  if (existsSync(canonical)) return canonical
   if (existsSync(legacy)) return legacy
   return canonical
 }
@@ -331,10 +377,8 @@ const APPEND_ONLY_FILENAMES: ReadonlySet<string> = new Set([
  * the new record still has to be persisted, and the audit in particular is the
  * fail-closed commit gate.
  */
-function carryForwardAppendOnly(name: string): void {
-  const target = runtimeFilePath(name)
+function carryForwardFile(source: string, target: string): void {
   if (existsSync(target)) return
-  const source = legacyRootFilePath(name)
   if (source === target || !existsSync(source)) return
   const tmp = `${target}.carry-${process.pid}`
   try {
@@ -349,6 +393,11 @@ function carryForwardAppendOnly(name: string): void {
   }
 }
 
+/** Legacy → canonical, once, for append-only files (the migration direction). */
+function carryForwardAppendOnly(name: string): void {
+  carryForwardFile(legacyRootFilePath(name), runtimeFilePath(name))
+}
+
 /**
  * Where to WRITE `name`: the canonical directory once it exists, otherwise the
  * legacy package-root path. Never throws — a write that cannot pick its home must
@@ -360,7 +409,11 @@ export function resolveRuntimeWritePath(name: string): string {
     return runtimeFilePath(name)
   }
   const fallback = legacyRoot()
+  // Warn in BOTH outcomes: when the legacy root is usable the message says where
+  // records go, and when it is not the operator still learns that neither
+  // location accepts writes — otherwise every verdict fails closed in silence.
   if (tryMakeDir(fallback)) warnFallbackOnce(fallback)
+  else warnNoUsableLocation()
   // The fallback IS the legacy location, so an append continues that file rather
   // than starting a fresh one — no carry-forward applies here.
   return join(fallback, name)
@@ -384,11 +437,15 @@ function tryAppend(file: string, text: string): boolean {
  * The caller needs the RETURNED path rather than a fresh resolution because the
  * size-capped files rotate the very file they appended to.
  *
- * The ladder: primary, one retry at the same path, then — only if the error is a
- * "this location refuses writes" code — degrade and try the legacy path. The
- * same-path retry exists because Windows rename races raise `EPERM` transiently;
- * degrading on the first such failure would move the runtime files for a reason
- * that had nothing to do with the directory.
+ * The ladder, in this order for a reason: one retry at the SAME path, but only
+ * after the error is known to be one that cannot have written bytes. A retry
+ * exists because Windows rename/open races raise `EPERM` transiently, and
+ * degrading on a first such failure would move six files for a sharing
+ * violation. It must not run for the other errors: `ENOSPC` and friends can fail
+ * AFTER a partial write, so replaying the same text would splice a fragment and
+ * a full line into one corrupt record — a silently lost audit line. Only after a
+ * retry-safe error repeats does the ladder conclude the directory refuses writes
+ * and try the legacy path.
  */
 export function appendRuntimeLine(name: string, text: string, fixedPath?: string): string | undefined {
   // An explicit target (the audit test seam) never participates in the ladder:
@@ -396,6 +453,7 @@ export function appendRuntimeLine(name: string, text: string, fixedPath?: string
   if (fixedPath !== undefined) return tryAppend(fixedPath, text) ? fixedPath : undefined
   const primary = resolveRuntimeWritePath(name)
   if (tryAppend(primary, text)) return primary
+  if (!isDegradableRuntimeWriteError(lastWriteError)) return undefined
   if (tryAppend(primary, text)) return primary
   if (!isDegradableRuntimeWriteError(lastWriteError)) return undefined
   degradeToLegacy()
@@ -423,7 +481,11 @@ export function writeRuntimeAtomic(name: string, content: string, tmpSuffix = `.
   }
   const primary = resolveRuntimeWritePath(name)
   if (attempt(primary)) return true
-  if (attempt(primary)) return true
+  // Retry only for an error that cannot have damaged the target: the whole write
+  // is tmp+rename, so a failed rename leaves the target untouched and the retry
+  // is idempotent. A non-degradable failure (a crash mid-tmp-write, ENOSPC) is
+  // reported as-is rather than retried.
+  if (isDegradableRuntimeWriteError(lastWriteError) && attempt(primary)) return true
   if (!isDegradableRuntimeWriteError(lastWriteError)) return false
   degradeToLegacy()
   return attempt(resolveRuntimeWritePath(name))
