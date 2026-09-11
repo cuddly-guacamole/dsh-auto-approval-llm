@@ -197,6 +197,21 @@ export interface ReviewPollHandle {
   pollNow(): void
 }
 
+/** Ceiling for the review-status poller's failure backoff. */
+export const MAX_POLL_BACKOFF_MS = 5_000
+
+/**
+ * Pure: how long to hold the next review-status poll off after `failures`
+ * consecutive failures. Exponential from the base cadence, capped so that a
+ * permanently broken route still re-observes inside the ceiling window — the
+ * poller slows down, it never stops observing and never resolves an approval.
+ */
+export function nextPollDelayMs(failures: number, baseMs: number, maxMs: number): number {
+  if (!(failures > 0)) return baseMs
+  const scaled = baseMs * 2 ** Math.min(failures, 30)
+  return Math.min(Math.max(baseMs, scaled), maxMs)
+}
+
 // One armed approval: 500ms review-status observation + the countdown state
 // machine + the bounded grace fallback. The returned handle lets the watcher
 // detach (approval left pending) and fire immediate polls (C2 thaw events).
@@ -225,6 +240,13 @@ export function startReviewPolling(
   // standing interval beats one fetch per event. inFlight stays the
   // concurrency guard.
   const MIN_POLL_GAP_MS = 200
+  // Failure backoff: consecutive failures push the next allowed poll out, a
+  // success resets it to "now". The interval keeps its period and simply
+  // declines to issue a request while the hold-off is in force, so a sick
+  // route costs one declined tick instead of two requests per second, and a
+  // recovered route resumes without waiting out a grown delay.
+  let failures = 0
+  let nextAllowedAt = 0
   let interval: any
   let graceTimer: any
   let meta: string | undefined
@@ -314,6 +336,11 @@ export function startReviewPolling(
 
   const poll = async () => {
     if (settled || inFlight) return
+    // Backoff gate: the interval still ticks, but no request is issued until
+    // the hold-off a run of failures bought has elapsed. Skipping the fetch
+    // (rather than rescheduling the timer) keeps a single timer and leaves
+    // dispose() semantics untouched.
+    if (Date.now() < nextAllowedAt) return
     lastPollAt = Date.now()
     inFlight = true
     let status: any
@@ -326,17 +353,26 @@ export function startReviewPolling(
       })
       if (!res.ok) {
         // Transient server error: keep observing; never treat it as a
-        // resolution.
+        // resolution. The failed attempt buys the next hold-off.
+        failures += 1
+        nextAllowedAt = Date.now() + nextPollDelayMs(failures, pollMs, MAX_POLL_BACKOFF_MS)
         return
       }
       const data = await res.json()
       status = data?.ok ? data.value : undefined
     } catch {
-      // Network error: never treat it as a resolution; keep observing.
+      // Network error: never treat it as a resolution; keep observing. It
+      // buys the next hold-off exactly like an HTTP failure.
+      failures += 1
+      nextAllowedAt = Date.now() + nextPollDelayMs(failures, pollMs, MAX_POLL_BACKOFF_MS)
       return
     } finally {
       inFlight = false
     }
+    // A reachable route clears the run, so the next failure starts the climb
+    // over instead of resuming from a grown delay.
+    failures = 0
+    nextAllowedAt = 0
     // Drop late responses for approvals already detached from.
     if (settled) return
     applyStatus(status)

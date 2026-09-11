@@ -402,6 +402,17 @@ test('startReviewPolling: transient server errors keep observing and never resol
   // Wait for the observation count instead, which is what the assertion means.
   await until(() => fetchLog.length >= 3, 'poller kept observing through the errors')
   assert.ok(fetchLog.length >= 3, 'poller keeps observing while the server is sick')
+  // Observing must still mean observing, not spinning: consecutive failures buy
+  // an exponential hold-off, so a fixed window adds far fewer requests than the
+  // base cadence would. The floor above pins that observation continues; this
+  // pins that it is no longer a flat 1/pollMs.
+  const settled = fetchLog.length
+  await sleep(300)
+  assert.ok(fetchLog.length >= settled, 'the poller must never stop observing')
+  assert.ok(
+    fetchLog.length - settled <= 12,
+    `expected failure backoff to slow the cadence, added ${fetchLog.length - settled} in 300ms at pollMs=10`,
+  )
   assert.equal(responds.length, 0)
   poller.dispose()
 })
