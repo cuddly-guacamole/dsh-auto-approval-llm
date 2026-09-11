@@ -14,7 +14,7 @@
 import test, { after } from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { tmpdir, homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -23,6 +23,7 @@ import {
 } from '../lib/auto/audit.js'
 
 const REPO_ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
+const DSH_HOME = process.env.DSH_HOME?.trim() || join(homedir(), '.dsh')
 const SCRATCH_DIR = mkdtempSync(join(tmpdir(), 'dsh-audit-test-'))
 const AUDIT_FILE = join(SCRATCH_DIR, 'audit.jsonl')
 const AUDIT_TMP = `${AUDIT_FILE}.tmp`
@@ -53,7 +54,7 @@ test('auditFilePath: the default is the runtime/ audit.jsonl (redirection is opt
   try {
     setAuditFilePathForTests(undefined)
     const defaultPath = auditFilePath()
-    assert.equal(defaultPath, join(REPO_ROOT, 'runtime', 'audit.jsonl'))
+    assert.equal(defaultPath, join(DSH_HOME, 'auto-approval-llm', 'audit.jsonl'))
   } finally {
     // The restore must run even when the assertion above throws. A cleared
     // override surviving this test sends every later rotation test in this file

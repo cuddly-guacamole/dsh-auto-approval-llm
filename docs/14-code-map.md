@@ -29,7 +29,7 @@ src/
 │    ├─ review-mode.ts   57   每会话评审模式持久化快照
 │    ├─ risk-tokens.ts   24   HIGH 风险正则（NAME/REASON 单一事实源）
 │    ├─ rules.ts         434  声明式规则解析/求值（host 与浏览器共用）
-│    ├─ runtime-paths.ts 222  运行态文件唯一路径 owner（`runtime/` 规范位置、旧根路径回退读、目录不可用回退写、仅追加型文件原子前搬）
+│    ├─ runtime-paths.ts 276  运行态文件唯一路径 owner（`<DSH_HOME>/auto-approval-llm/` 规范位置、包根回退读、目录不可用回退写、仅追加型文件原子前搬；迁移代码待退役）
 │    ├─ shell.ts         1805 bash/pwsh 词法分解 + 整行熔断 + 逐段静态分类（最大单文件）
 │    ├─ symlink.ts       120  符号链接创建与目标校验
 │    ├─ tool-stats.ts    94   工具调用统计收集

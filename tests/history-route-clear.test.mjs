@@ -25,7 +25,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -103,11 +103,14 @@ async function isolated(body) {
   }
 }
 
-test('history: the default paths are the runtime/ files', () => {
+test('history: the default paths are the DSH_HOME state files', () => {
   // The seams must not change production behaviour: with no override (the only
-  // state production is ever in) both effective paths are the runtime location.
-  assert.equal(historyFilePath(), join(REPO_ROOT, 'runtime', 'history.jsonl'))
-  assert.equal(auditFilePath(), join(REPO_ROOT, 'runtime', 'audit.jsonl'))
+  // state production is ever in) both effective paths are the canonical state
+  // directory, deliberately outside the installed package.
+  const dshHome = process.env.DSH_HOME?.trim() || join(homedir(), '.dsh')
+  assert.equal(historyFilePath(), join(dshHome, 'auto-approval-llm', 'history.jsonl'))
+  assert.equal(auditFilePath(), join(dshHome, 'auto-approval-llm', 'audit.jsonl'))
+  assert.ok(!historyFilePath().startsWith(REPO_ROOT), 'state must live outside the installed package')
 })
 
 test('history DELETE: truncates the configured file, writes the tombstone to the configured audit', async () => {

@@ -1,15 +1,18 @@
 # 11 · 数据与持久化
 > *What lands on disk*
 
-插件运行态共**六个文件**（<span class="lnum">paths.ts:LRUNTIME_STATE_BASENAMES</span> RUNTIME_STATE_BASENAMES 六员：`history.jsonl / audit.jsonl / approval-debug.jsonl / review-mode.json / llm-latency.jsonl / learning.json`）——这名单同时是保护对象：任何工具调用改写它们都会被静态引擎无条件硬拒。名单按**文件名**匹配，故六个文件移入 `runtime/` 子目录不削弱这条硬拒。
+插件运行态共**六个文件**（<span class="lnum">paths.ts:LRUNTIME_STATE_BASENAMES</span> RUNTIME_STATE_BASENAMES 六员：`history.jsonl / audit.jsonl / approval-debug.jsonl / review-mode.json / llm-latency.jsonl / learning.json`）——这名单同时是保护对象：任何工具调用改写它们都会被静态引擎无条件硬拒；且规范目录位于 `DSH_HOME` 下，guard 对 `DSH_HOME` 的写入本身就一律拒绝（不限于这六个文件名），保护比按名单匹配更宽。
 
-## 位置与读写回退（`runtime/`）
+## 位置与读写回退（`<DSH_HOME>/auto-approval-llm/`）
 
-六个文件的规范位置是 `<插件根目录>/runtime/`（<span class="lnum">runtime-paths.ts:LruntimeFilePath</span>），插件写入前按需创建该目录；搬移前的旧位置是插件根目录下同名的六个文件。位置规则集中在 `runtime-paths.ts`：
+六个文件的规范位置是 `DSH_HOME`（默认 `~/.dsh`）下的 `auto-approval-llm/`（<span class="lnum">runtime-paths.ts:LruntimeFilePath</span>），插件写入前按需创建该目录。**刻意放在插件包目录之外**：npm 升级会替换整个包目录，包内的运行态数据每次升级都会被删除（实测：同版本重装保留、升级到新版本删除）。位置规则集中在 `runtime-paths.ts`：
 
-- **读**（<span class="lnum">runtime-paths.ts:LresolveRuntimeReadPath</span>）：优先 `runtime/<文件名>`，该副本不存在时才用旧根文件；两者都在时以 `runtime/` 为准——删掉已搬移的文件不会被旧副本「复活」。两处都没有时返回规范路径，调用方报出的位置不会是历史位置。
-- **写**（<span class="lnum">runtime-paths.ts:LresolveRuntimeWritePath</span>）：先 `mkdirSync(..., {recursive:true})` 规范目录，成功则写 `runtime/`；创建失败（如目录被同名文件占位、父目录不可写）时改写旧根路径，并打印**每个进程一次**的 `console.warn` 说明目录不可用、文件留在旧位置，而不是让写入失败。目录可用性缓存成功，但**每次解析都会复检目录仍在**（缓存不盲信）——`runtime/` 被 `git clean` 之类在运行中删掉时写路径会自愈重建，避免出现「读回退旧根、写指向已删目录」的分裂。失败不进缓存，下一次写会重试。**这条回退最要紧的是审计**：`appendAuditLine` 是 fail-closed 的提交闸（返回 false 会让裁决转拒），路径不可写不能变成「每条裁决都不可审计」。
-- **搬移**：旧文件由用户在插件之外移入 `runtime/`（插件的 guard 拒绝 agent 搬动自己的运行态文件）：停 dsh → 移入 `runtime/` → 启动 dsh。该步骤可选：未搬移的安装靠读回退照常工作——插件不删除也不重命名旧副本。**仅追加型文件**（`history.jsonl` / `audit.jsonl` / `approval-debug.jsonl` / `llm-latency.jsonl`）在首次写入前会把旧根内容**经临时文件原子复制**到 `runtime/`，此后旧记录与新记录都在新位置可读（复制仅在目标不存在时发生，绝不覆盖已有新内容）；**覆盖型**（`learning.json` / `review-mode.json`）写出的本就是内存中经读回退合并后的整份状态，故无需搬运。
+- **读**（<span class="lnum">runtime-paths.ts:LresolveRuntimeReadPath</span>）：优先规范目录；该副本不存在时回退到**插件根目录**的旧文件（已发布版本写入的位置）。规范副本存在时以它为准，旧副本永远不会「复活」遮蔽活数据。两处都没有时返回规范路径，调用方报出的位置不会是历史位置。
+- **写**（<span class="lnum">runtime-paths.ts:LresolveRuntimeWritePath</span>）：先 `mkdirSync(..., {recursive:true})` 规范目录，成功则写那里；创建失败（如目录被同名文件占位、父目录不可写）时回退插件根目录并打印**每个进程一次**的 `console.warn`，而不是让写入失败。目录可用性缓存成功，但**每次解析都会复检目录仍在**（缓存不盲信）——目录被 `git clean` 之类在运行中删掉时写路径会自愈重建，避免「读回退旧位置、写指向已删目录」的分裂。失败不进缓存，下一次写会重试。**这条回退最要紧的是审计**：`appendAuditLine` 是 fail-closed 的提交闸（返回 false 会让裁决转拒），路径不可写不能变成「每条裁决都不可审计」。
+- **自动迁移**：无需用户手工搬文件。**仅追加型文件**（`history.jsonl` / `audit.jsonl` / `approval-debug.jsonl` / `llm-latency.jsonl`）在首次写入前把旧位置内容**经临时文件原子复制**进规范目录，此后旧记录与新记录都在规范位置可读（复制仅在目标不存在时发生，绝不覆盖已有新内容；半截复制不会成为目标，因为走 tmp+rename）；**覆盖型**（`learning.json` / `review-mode.json`）写出的本就是内存中经读链合并后的整份状态，故无需搬运。旧副本不被删除，可由用户自行清理。
+- **宿主对齐**：`apply()` 用**自己解析的 `dshHome`** 调 `setRuntimeStateDir`，使插件写入的目录与 guard 保护的目录一致；且**持久化存储的加载发生在该调用之后**（`loadRuntimeStores()`），否则会「从环境变量推导的目录读、向配置解析的目录写」——这正是复核发现并修掉的 F1。相对路径的 `setRuntimeStateDir` 参数会被忽略（避免落到守卫保护范围之外）。
+- **无 `<plugin root>/runtime/` 兼容路径**：该布局**从未随任何发行版发布**（已发布版本写的是包根），无人可能有那里的数据，故无迁移分支。
+- **退役期限**：回退与自动前搬都是给老安装的一次性过渡，**计划在本改动发布 3 个版本后（版本号达 0.0.25）移除**，只留规范目录。
 
 ## 11.1 四条 JSONL 的真实形态（取自本仓库现网样例）
 

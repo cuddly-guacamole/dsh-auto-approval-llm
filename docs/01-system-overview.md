@@ -31,13 +31,15 @@
 - 评审可走**会话模型**（`ctx.llm.stream`）或**在线端点**（OpenAI/Anthropic 兼容）
 - 官方 ApprovalPanel 是唯一的人工交互面
 
-### 数据太平面（规范位置 `<插件根目录>/runtime/`）
+### 数据太平面（规范位置 `<DSH_HOME>/auto-approval-llm/`）
 
-六个运行态文件的规范位置是 `<插件根目录>/runtime/`（插件写入前按需创建）；搬移前的旧位置是插件根目录本身。
+六个运行态文件的规范位置是 `DSH_HOME`（默认 `~/.dsh`）下的 `auto-approval-llm/`（插件写入前按需创建）——**刻意放在插件包目录之外**，因为 npm 升级会替换整个包目录，包内的运行态数据每次升级都会被删除。
 
-- **读**优先 `runtime/<文件名>`，该副本不存在时才回退到旧根文件，两者都在时以 `runtime/` 为准。
-- **写**进 `runtime/`；目录创建失败（如只读的全局安装）时回退旧根路径并打印一条进程内一次性的 `console.warn`，而不是让写入失败——审计是 fail-closed 的提交闸。
-- **搬移**由用户在插件之外完成（guard 拒绝 agent 搬动运行态文件）：停 dsh → 移入 `runtime/` → 启动 dsh；未搬移的安装靠读回退照常工作。
+- **读**优先规范目录；缺失时回退到插件根目录的旧文件（已发布版本写入的位置），规范副本存在时以它为准。
+- **写**进规范目录；目录无法创建时回退插件根目录并打印一条进程内一次性的 `console.warn`，而不是让写入失败——审计是 fail-closed 的提交闸。
+- **迁移自动**：无需手工搬文件；仅追加型文件首写前把旧位置内容经临时文件原子复制进规范目录，覆盖型写出整份内存状态。
+- **保护更强**：规范目录在 `DSH_HOME` 下，guard 对 `DSH_HOME` 的写入一律拒绝（不限这六个文件名）；读取仍落 `runtime-state-read` 观测事件。
+- 迁移回退与自动迁移是**过渡代码**，计划 3 个版本后（版本号达 0.0.25）移除。
 
 | 文件 | 语义 | 写入方 |
 | --- | --- | --- |
@@ -48,7 +50,7 @@
 | `llm-latency.jsonl` | LLM 评审耗时遥测（环形缓冲 200 条，>1MB 轮转；与审批历史分离） | 宿主 pushLatencySample |
 | `learning.json` | 确认制学习条目（SHA-256 键、TTL 30 天/100 条上限，原子 tmp+rename） | 宿主 persistLearning |
 
-以上六个文件同属运行态保护名单（<span class="lnum">paths.ts:LRUNTIME_STATE_BASENAMES</span>），任何工具调用都改不了它们——该名单按**文件名**匹配，故移入 `runtime/` 子目录不削弱这条硬拒。
+以上六个文件同属运行态保护名单（<span class="lnum">paths.ts:LRUNTIME_STATE_BASENAMES</span>），任何工具调用都改不了它们；规范目录又在 `DSH_HOME` 之下，guard 对 `DSH_HOME` 的写入本就一律拒绝，故保护比「按文件名匹配」更宽。
 
 ::: tip 唯一终结者
 `approval/request` 以 `{prepend:true, global:true}` 注册（<span class="lnum">index.ts:L"anyCtx.on('approval/request', async"</span>，options 行 <span class="lnum">index.ts:L"{ prepend: true, global: true }"</span>）—— 对命中的 ask，本插件就是最终裁决，不会开第二个弹窗、不会双写、不会让审计断裂。

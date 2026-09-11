@@ -13,6 +13,7 @@
 import http from 'node:http'
 import { spawn } from 'node:child_process'
 import { copyFileSync, existsSync, rmSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { runAuthChecks } from './verify-auth.mjs'
@@ -25,18 +26,22 @@ const here = dirname(fileURLToPath(import.meta.url))
 const MOCK_REVIEWER = join(here, 'mock-reviewer.mjs')
 
 /**
- * The plugin's runtime files live in `runtime/`; the pre-move root file is read
- * for one upgrade window. Prefer whichever exists, and report the canonical path
- * when neither does — a verification helper must not depend on the plugin's
- * build output, so the rule is repeated here rather than imported.
+ * Where the plugin's runtime files live: `<DSH_HOME>/auto-approval-llm/`, with the
+ * two earlier layouts read as a migration chain (`<plugin root>/runtime/` then the
+ * package root). Prefer whichever exists and report the canonical path when none
+ * does. A verification helper must not depend on the plugin's build output, so
+ * the rule is repeated here rather than imported from `lib/`.
  */
 function runtimeOrDefault(name) {
   const root = join(here, '..')
-  const runtime = join(root, 'runtime', name)
-  if (existsSync(runtime)) return runtime
-  const legacy = join(root, name)
-  if (existsSync(legacy)) return legacy
-  return runtime
+  const dshHome = process.env.DSH_HOME?.trim() || join(homedir(), '.dsh')
+  const canonical = join(dshHome, 'auto-approval-llm', name)
+  if (existsSync(canonical)) return canonical
+  for (const dir of [join(root, 'runtime'), root]) {
+    const candidate = join(dir, name)
+    if (existsSync(candidate)) return candidate
+  }
+  return canonical
 }
 
 // The learning store is plugin runtime state just like history/audit; the

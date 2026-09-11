@@ -3,74 +3,122 @@
  *
  * The plugin writes six files: the approval history, the append-only audit, the
  * debug trace, the review-latency telemetry, the confirmation-learning store and
- * the per-session review-mode snapshot. They used to be derived independently in
- * four source files and all landed beside `package.json`, so the package root
- * accumulated runtime data next to the source tree.
+ * the per-session review-mode snapshot.
  *
- * This module is the single owner of those locations. The canonical location is
- * `<plugin root>/runtime/`, and three rules keep the move safe for a plugin that
- * is already installed and running elsewhere:
+ * The canonical home is `<DSH_HOME>/auto-approval-llm/`, deliberately OUTSIDE the
+ * installed package. Mutable state must not live in a directory npm owns: a
+ * version upgrade replaces the whole package tree, so state kept under the
+ * package root is deleted on every `npm install` of a new version (measured —
+ * same-version reinstall keeps it, a version change does not, and this was
+ * already true when the files sat directly beside `package.json`). A state
+ * directory under DSH_HOME survives upgrades, and it is also protected more
+ * broadly: the guard denies writes anywhere under DSH_HOME, not only for the six
+ * basenames.
  *
- *   1. READING prefers the new location but falls back to the old root path, so
- *      an upgraded install keeps its existing learning entries, review modes and
- *      history until the files are moved.
- *   2. WRITING creates `runtime/` first. If the directory cannot be made (the
- *      plugin root is writable but the directory is blocked, for instance),
- *      writes fall back to the old root path with a warning rather than failing.
- *      That matters most for the audit: `appendAuditLine` returning false makes
- *      every verdict fail closed, so a missing directory must not silently turn
- *      into "refuse everything".
- *   3. The NEW location always wins when both exist. Deleting a moved file must
- *      not resurrect a stale copy from the old path.
- *   4. Append-only files carry their pre-move content forward on the first
- *      write, because a fresh target would otherwise shadow records that are
- *      still intact in the old file.
+ * Three rules govern the location, ordered by which one must win:
  *
- * The files stay listed in `RUNTIME_STATE_BASENAMES` (`./paths.ts`), which is a
- * basename match, so moving them into a subdirectory does not weaken the hard
- * deny that protects them.
+ *   1. READING prefers the canonical directory and falls back to the legacy
+ *      package-root file, so an install whose data still sits where shipped
+ *      releases wrote it keeps its history, audit and learned entries.
+ *   2. WRITING creates the canonical directory. If it cannot be made, writes fall
+ *      back to the legacy path rather than failing. That matters most for the
+ *      audit: `appendAuditLine` returning false makes every verdict fail closed,
+ *      so an unusable directory must not silently turn into "refuse everything".
+ *   3. The canonical copy always wins when it exists, so a stale legacy copy can
+ *      never shadow live data.
+ *
+ * Append-only files additionally carry their legacy content forward on the first
+ * write, because a fresh target would otherwise shadow records that are still
+ * intact in the old file. Overwrite-style stores need nothing: their writer
+ * serializes the whole in-memory state, which was loaded through rule 1.
+ *
+ * There is no compatibility path for the short-lived `<plugin root>/runtime/`
+ * layout: it shipped in no release (the published line still wrote to the package
+ * root), so no install can have data there.
+ *
+ * RETIREMENT: the legacy fallback, the carry-forward and the write fallback are a
+ * one-way migration shim for installs that predate the DSH_HOME layout. Remove
+ * them once three releases have shipped from this change — i.e. when the package
+ * version reaches 0.0.25 — leaving only the canonical directory. Registered as a
+ * backlog row so the removal is not left to memory.
  */
-import { copyFileSync, existsSync, mkdirSync, renameSync, rmSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { existsSync, mkdirSync, copyFileSync, renameSync, rmSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { dirname, isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 // Compiled to lib/auto/runtime-paths.js, so two levels up is the plugin root.
+// Used ONLY for the legacy read/write chain — never for the canonical location.
 const PLUGIN_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 
+/** The state directory's name under DSH_HOME. */
+const STATE_DIR_NAME = 'auto-approval-llm'
+
 /**
- * Test-only redirection of both roots.
+ * DSH_HOME resolution, mirroring `resolveRoots` in `./paths.ts`: a non-empty
+ * `DSH_HOME` wins, otherwise `~/.dsh`. Nothing here reads the plugin config,
+ * because these paths are resolved while the module loads; the host re-aligns
+ * this from its own resolved `dshHome` at startup (see `setRuntimeStateDir`).
+ */
+function envDshHome(): string {
+  const fromEnv = process.env.DSH_HOME?.trim()
+  return fromEnv !== undefined && fromEnv !== '' ? fromEnv : join(homedir(), '.dsh')
+}
+
+function defaultStateDir(): string {
+  return join(envDshHome(), STATE_DIR_NAME)
+}
+
+/**
+ * Test-only redirection of the whole chain.
  *
- * The fallback and priority rules can only be exercised with two real
- * directories, and pointing them at the plugin root would make the test write
- * probe files into the repository. Nothing in production sets this.
+ * The priority rules can only be exercised with real directories, and pointing
+ * them at the plugin root would make tests write probe files into the repository.
+ * Nothing in production sets this.
  */
 interface RuntimePathOverrides {
-  /** Directory the runtime files live in. */
-  runtimeDir?: string
-  /** Directory the pre-move files lived in. */
+  /** Canonical directory. */
+  stateDir?: string
+  /** Legacy package-root layout (the location shipped releases wrote to). */
   legacyRoot?: string
 }
 
 let overrides: RuntimePathOverrides | undefined
+let stateDirFromHost: string | undefined
 
-/** Test-only: redirect both roots (pass undefined to restore the defaults). */
+/** Test-only: redirect the chain (pass undefined to restore the defaults). */
 export function setRuntimePathsForTests(next: RuntimePathOverrides | undefined): void {
   overrides = next
-  runtimeDirUsable = false
+  stateDirUsable = false
   warnedAboutFallback = false
 }
 
-function effectiveRoot(): string {
+/**
+ * Host-only: point the canonical directory at the SAME `dshHome` the guard uses.
+ *
+ * The guard resolves roots from config (`config.dshHome` overrides `DSH_HOME`), so
+ * if the two ever disagreed the plugin would persist outside the protected
+ * subtree while the guard protected a different one. `apply()` calls this with its
+ * own resolved `dshHome`, which makes location and protection agree by
+ * construction. Passing undefined restores the environment-derived default.
+ *
+ * A non-absolute argument is IGNORED rather than stored: a relative path would
+ * resolve against whatever the process's cwd happens to be, which could land the
+ * state outside the guarded tree. Callers pass a resolved path.
+ */
+export function setRuntimeStateDir(dir: string | undefined): void {
+  if (dir !== undefined && !isAbsolute(dir)) return
+  stateDirFromHost = dir
+  stateDirUsable = false
+}
+
+/** The canonical directory all six files belong in. */
+export function stateDirPath(): string {
+  return overrides?.stateDir ?? stateDirFromHost ?? defaultStateDir()
+}
+
+function legacyRoot(): string {
   return overrides?.legacyRoot ?? PLUGIN_ROOT
-}
-
-function effectiveRuntimeDir(): string {
-  return overrides?.runtimeDir ?? join(effectiveRoot(), 'runtime')
-}
-
-/** The directory the runtime files belong in. */
-export function runtimeDirPath(): string {
-  return effectiveRuntimeDir()
 }
 
 export const HISTORY_FILENAME = 'history.jsonl'
@@ -92,66 +140,73 @@ export const RUNTIME_FILENAMES = [
 
 /** The canonical location of `name` (the directory may not exist yet). */
 export function runtimeFilePath(name: string): string {
-  return join(effectiveRuntimeDir(), name)
+  return join(stateDirPath(), name)
 }
 
-/** The pre-move location of `name`, read for one upgrade window. */
+/** The legacy package-root location of `name` (where shipped releases wrote). */
 export function legacyRootFilePath(name: string): string {
-  return join(effectiveRoot(), name)
+  return join(legacyRoot(), name)
 }
 
 /**
  * Cache the directory's usability so the hot append path does not re-create it
  * on every write.
  *
- * The cache is re-validated rather than trusted blindly. `runtime/` can be
- * removed while the process is running — it is gitignored, and a routine
- * `git clean -xdf`, an installer replacing the plugin directory or a cleanup
- * script deletes it under a live host. If the cached success survived that, the
- * write path would keep aiming at the REMOVED directory while the read path
- * fell back to the legacy file: a split brain in which `appendAuditLine` fails,
- * the fail-closed gate refuses every verdict, and history/latency/learning stop
- * persisting — all silently. One `existsSync` per resolution is the price of not
- * having that failure mode.
+ * The cache is re-validated rather than trusted blindly. A state directory can
+ * be removed while the process is running, and if the cached success survived
+ * that, the write path would keep aiming at the REMOVED directory while the read
+ * path fell back to a legacy file: a split brain in which `appendAuditLine`
+ * fails, the fail-closed gate refuses every verdict, and history/latency/learning
+ * stop persisting — all silently. One `existsSync` per resolution is the price of
+ * not having that failure mode.
  */
-let runtimeDirUsable = false
+let stateDirUsable = false
 let warnedAboutFallback = false
 
-/** Recreate the directory when the cached success no longer holds. */
-export function ensureRuntimeDir(): boolean {
-  if (runtimeDirUsable && existsSync(effectiveRuntimeDir())) return true
+function tryMakeDir(dir: string): boolean {
   try {
-    mkdirSync(effectiveRuntimeDir(), { recursive: true })
-    runtimeDirUsable = true
+    mkdirSync(dir, { recursive: true })
     return true
   } catch {
-    // Failure is never cached: a transient failure (a lock, a slow mount) must
-    // be retried by the next write.
-    runtimeDirUsable = false
     return false
   }
 }
 
-/** Warn once per process that writes are landing in the old root location. */
-function warnFallbackOnce(): void {
+/** Create the canonical directory if needed; false means writes use the legacy chain. */
+export function ensureRuntimeDir(): boolean {
+  const dir = stateDirPath()
+  if (stateDirUsable && existsSync(dir)) return true
+  if (tryMakeDir(dir)) {
+    stateDirUsable = true
+    return true
+  }
+  // Failure is never cached: a transient failure (a lock, a slow mount) must be
+  // retried by the next write.
+  stateDirUsable = false
+  return false
+}
+
+/** Warn once per process that writes are landing in a legacy location. */
+function warnFallbackOnce(used: string): void {
   if (warnedAboutFallback) return
   warnedAboutFallback = true
   console.warn(
-    `[dsh-auto-approval-llm] cannot use ${effectiveRuntimeDir()}; runtime files stay in ${effectiveRoot()}`,
+    `[dsh-auto-approval-llm] cannot use ${stateDirPath()}; runtime files stay in ${used}`,
   )
 }
 
 /**
- * Where to READ `name` from: the new location when it exists, otherwise the old
- * root path. Falls back to the new path when neither exists, so a caller that
- * reports the path shows the canonical location rather than a legacy one.
+ * Where to READ `name` from: the canonical copy when it exists, otherwise the
+ * legacy package-root file. Falls back to the canonical path when neither
+ * exists, so a caller reporting the path shows the intended location rather than
+ * a historical one.
  */
 export function resolveRuntimeReadPath(name: string): string {
-  const next = runtimeFilePath(name)
-  if (existsSync(next)) return next
+  const canonical = runtimeFilePath(name)
+  if (existsSync(canonical)) return canonical
   const legacy = legacyRootFilePath(name)
   if (existsSync(legacy)) return legacy
-  return next
+  return canonical
 }
 
 /**
@@ -160,12 +215,10 @@ export function resolveRuntimeReadPath(name: string): string {
  *
  * The overwrite-style files (`learning.json`, `review-mode.json`) do not need
  * this: their writer serializes the whole in-memory state, which was loaded
- * through the read fallback, so the first persist already carries the legacy
- * content across. Append-only files have no such moment — the first append to an
- * empty `runtime/history.jsonl` would leave the pre-move records behind in a
- * file the read rule then never consults again, because the runtime copy now
- * exists and wins. That is silent, partial data loss on the upgrade path, so the
- * legacy content is copied forward before the first append.
+ * through the read chain, so the first persist already carries the old content
+ * across. Append-only files have no such moment — the first append to an empty
+ * canonical file would leave earlier records in a file the read rule then never
+ * consults again, because the canonical copy now exists and wins.
  */
 const APPEND_ONLY_FILENAMES: ReadonlySet<string> = new Set([
   HISTORY_FILENAME,
@@ -175,14 +228,13 @@ const APPEND_ONLY_FILENAMES: ReadonlySet<string> = new Set([
 ])
 
 /**
- * Copy the pre-move file forward into the runtime location, once.
+ * Copy a legacy file forward into the canonical directory, once.
  *
- * The copy goes to a temporary sibling and is renamed into place, so a copy that
- * fails partway can never leave a truncated target. That matters because the
- * target's mere EXISTENCE is what makes the read rule stop consulting the legacy
- * file: a half-written target would permanently shadow data that is still
- * intact, which is precisely the silent partial loss this carry-forward exists
- * to prevent.
+ * The copy is staged through a temporary sibling and renamed into place, so a
+ * copy that fails partway can never leave a truncated target. That matters
+ * because the target's mere EXISTENCE is what makes the read rule stop consulting
+ * the legacy file: a half-written target would permanently shadow data that is
+ * still intact.
  *
  * Best-effort by design: a failed copy must not stop the append that follows —
  * the new record still has to be persisted, and the audit in particular is the
@@ -191,14 +243,13 @@ const APPEND_ONLY_FILENAMES: ReadonlySet<string> = new Set([
 function carryForwardAppendOnly(name: string): void {
   const target = runtimeFilePath(name)
   if (existsSync(target)) return
-  const legacy = legacyRootFilePath(name)
-  if (!existsSync(legacy) || legacy === target) return
+  const source = legacyRootFilePath(name)
+  if (source === target || !existsSync(source)) return
   const tmp = `${target}.carry-${process.pid}`
   try {
-    copyFileSync(legacy, tmp)
+    copyFileSync(source, tmp)
     renameSync(tmp, target)
   } catch {
-    // The append that follows still creates the target and persists the record.
     try {
       if (existsSync(tmp)) rmSync(tmp, { force: true })
     } catch {
@@ -208,19 +259,18 @@ function carryForwardAppendOnly(name: string): void {
 }
 
 /**
- * Where to WRITE `name`: the new location once the directory exists, otherwise
- * the old root path. Never throws — a write that cannot pick its home must still
- * return a path the caller can attempt.
- *
- * For append-only files this also carries the pre-move content forward first, so
- * the switch to `runtime/` does not truncate the file's history to whatever was
- * written after the upgrade.
+ * Where to WRITE `name`: the canonical directory once it exists, otherwise the
+ * legacy package-root path. Never throws — a write that cannot pick its home must
+ * still return a path the caller can attempt.
  */
 export function resolveRuntimeWritePath(name: string): string {
   if (ensureRuntimeDir()) {
     if (APPEND_ONLY_FILENAMES.has(name)) carryForwardAppendOnly(name)
     return runtimeFilePath(name)
   }
-  warnFallbackOnce()
-  return legacyRootFilePath(name)
+  const fallback = legacyRoot()
+  if (tryMakeDir(fallback)) warnFallbackOnce(fallback)
+  // The fallback IS the legacy location, so an append continues that file rather
+  // than starting a fresh one — no carry-forward applies here.
+  return join(fallback, name)
 }

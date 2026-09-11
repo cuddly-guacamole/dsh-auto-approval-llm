@@ -34,24 +34,29 @@
  *     [--latency <llm-latency.jsonl>] [--since YYYY-MM-DD] [--window N] [--json]
  */
 import { existsSync, readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
 /**
- * The plugin's runtime files live in `runtime/`; the pre-move root file is read
- * for one upgrade window. Prefer whichever exists, and report the canonical path
- * when neither does — a read-only report must not depend on the plugin's build
- * output, so the rule is repeated here rather than imported.
+ * Where the plugin's runtime files live: `<DSH_HOME>/auto-approval-llm/`, with the
+ * two earlier layouts read as a migration chain (`<plugin root>/runtime/` then the
+ * package root). Prefer whichever exists and report the canonical path when none
+ * does. A read-only report must not depend on the plugin's build output, so the
+ * rule is repeated here rather than imported from `lib/`.
  */
 function runtimeOrDefault(name) {
   const root = join(HERE, '..')
-  const runtime = join(root, 'runtime', name)
-  if (existsSync(runtime)) return runtime
-  const legacy = join(root, name)
-  if (existsSync(legacy)) return legacy
-  return runtime
+  const dshHome = process.env.DSH_HOME?.trim() || join(homedir(), '.dsh')
+  const canonical = join(dshHome, 'auto-approval-llm', name)
+  if (existsSync(canonical)) return canonical
+  for (const dir of [join(root, 'runtime'), root]) {
+    const candidate = join(dir, name)
+    if (existsSync(candidate)) return candidate
+  }
+  return canonical
 }
 
 const DEFAULT_AUDIT = runtimeOrDefault('audit.jsonl')
