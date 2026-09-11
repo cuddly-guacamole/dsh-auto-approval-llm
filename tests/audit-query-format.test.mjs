@@ -64,6 +64,17 @@ test('formatAuditLine: observation events carry the payload their emitter writes
   assert.ok(rules.includes('count=2'))
   assert.ok(rules.includes('errors=[{"line":3},{"line":7}]'))
 
+  const trustedIntents = formatAuditLine({
+    type: 'trusted-intents',
+    at,
+    sessionId: 'session-1',
+    count: 3,
+    origins: { 'user-message': 2, 'question-answer': 1 },
+  })
+  assert.ok(trustedIntents.startsWith('[trusted-intents] '))
+  assert.ok(trustedIntents.includes('count=3'))
+  assert.ok(trustedIntents.includes('question-answer'))
+
   const revoked = formatAuditLine({ type: 'learning-revoked', at, key: 'deadbeef' })
   assert.ok(revoked.startsWith('[learning-revoked] '))
   assert.ok(revoked.includes('key=deadbeef'))

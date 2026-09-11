@@ -2634,6 +2634,37 @@ export interface QuestionAnswerEntry {
   text: string
 }
 
+/**
+ * Text carried by a `tool/result` message.
+ *
+ * The message nests the tool's own return value: `createToolResultMessage`
+ * (dsh-llm) wraps the result blocks as
+ * `{type:'tool-result', toolCallId, content:[{type:'text', text}]}`. Looking for
+ * a DIRECT `{type:'text'}` block therefore finds nothing and silently collects
+ * no answers — which is exactly how an authorization the user granted through
+ * the question panel never reached the trusted intents, leaving a later
+ * state-changing call judged as unauthorized.
+ *
+ * Both shapes are accepted: the nested one is what the host produces, and a
+ * direct text block is tolerated so an emitter that flattens the payload cannot
+ * silently drop the answers again.
+ */
+function toolResultText(message: any): string {
+  let text = ''
+  for (const block of message?.content ?? []) {
+    if (block?.type === 'text' && typeof block.text === 'string') {
+      text += block.text
+      continue
+    }
+    if (block?.type === 'tool-result' && Array.isArray(block.content)) {
+      for (const inner of block.content) {
+        if (inner?.type === 'text' && typeof inner.text === 'string') text += inner.text
+      }
+    }
+  }
+  return text
+}
+
 export function questionAnswerMessages(events: readonly any[]): QuestionAnswerEntry[] {
   const out: QuestionAnswerEntry[] = []
   if (!Array.isArray(events)) return out
@@ -2655,10 +2686,7 @@ export function questionAnswerMessages(events: readonly any[]): QuestionAnswerEn
     if (events[index]?.type !== 'tool/result' || typeof callId !== 'string') continue
     const questions = askCalls.get(callId)
     if (!Array.isArray(questions) || questions.length === 0) continue
-    let answersText = ''
-    for (const block of d?.message?.content ?? []) {
-      if (block?.type === 'text' && typeof block.text === 'string') answersText += block.text
-    }
+    const answersText = toolResultText(d?.message)
     let answers: any[] = []
     try {
       const parsed = JSON.parse(answersText)
@@ -2688,7 +2716,13 @@ export function questionAnswerMessages(events: readonly any[]): QuestionAnswerEn
   return out
 }
 
-export function trustedUserMessages(authority: any) {
+export interface TrustedUserIntent {
+  text: string
+  /** Which user-authority channel the evidence arrived through. */
+  origin: 'user-message' | 'question-answer'
+}
+
+export function trustedUserIntents(authority: any): TrustedUserIntent[] {
   if (authority === undefined) return []
   const events = sessionEventList(authority.session)
   // Steered/interjected prompts live in the agent inbox until the next step
@@ -2713,7 +2747,7 @@ export function trustedUserMessages(authority: any) {
   // its event index so recency is exact.
   const qaByEvent = new Map<number, string>()
   for (const qa of questionAnswerMessages(events)) qaByEvent.set(qa.index, qa.text)
-  const eventCandidates: Array<{ seq: number; text: string }> = []
+  const eventCandidates: Array<{ seq: number; text: string; origin: TrustedUserIntent['origin'] }> = []
   for (let i = events.length - 1; i >= 0; i -= 1) {
     const event = events[i]
     if (event?.type === 'user/message' && event.data?.source?.kind === 'user') {
@@ -2722,32 +2756,77 @@ export function trustedUserMessages(authority: any) {
         .map((block: any) => block.text)
         .join('\n')
       const trimmed = String(text).trim()
-      if (trimmed !== '') eventCandidates.push({ seq: i, text: sanitizeClassifierText(trimmed) })
+      if (trimmed !== '') eventCandidates.push({ seq: i, text: sanitizeClassifierText(trimmed), origin: 'user-message' })
     } else if (event?.type === 'tool/result' && qaByEvent.has(i)) {
-      eventCandidates.push({ seq: i, text: qaByEvent.get(i)! })
+      eventCandidates.push({ seq: i, text: qaByEvent.get(i)!, origin: 'question-answer' })
     }
   }
   // Budget: at most 4 messages, newest first; deduped; 4000-char cap. Inbox
   // entries are the newest intents (they arrive after the last event), so
   // they are admitted first and appear last in the oldest-first output.
-  const chosen: string[] = []
-  const remainingBudget = () => 4_000 - chosen.reduce((sum, t) => sum + t.length, 0)
-  const tryPick = (text: string): boolean => {
-    if (chosen.includes(text)) return true
+  const chosen: TrustedUserIntent[] = []
+  const remainingBudget = () => 4_000 - chosen.reduce((sum, t) => sum + t.text.length, 0)
+  const tryPick = (intent: TrustedUserIntent): boolean => {
+    if (chosen.some((c) => c.text === intent.text)) return true
     if (chosen.length >= 4) return false
-    if (text.length > remainingBudget()) return false
-    chosen.push(text)
+    if (intent.text.length > remainingBudget()) return false
+    chosen.push(intent)
     return true
   }
-  for (let i = 0; i < inboxTexts.length; i += 1) tryPick(inboxTexts[i])
+  for (const text of inboxTexts) tryPick({ text, origin: 'user-message' })
   const eventOrdered = eventCandidates.sort((a, b) => b.seq - a.seq)
   for (const c of eventOrdered) {
     if (chosen.length >= 4) break
-    tryPick(c.text)
+    tryPick({ text: c.text, origin: c.origin })
   }
-  const inboxChosen = chosen.filter((t) => inboxTexts.includes(t))
-  const eventChosen = chosen.filter((t) => !inboxTexts.includes(t))
+  const inboxChosen = chosen.filter((t) => inboxTexts.includes(t.text))
+  const eventChosen = chosen.filter((t) => !inboxTexts.includes(t.text))
   return [...eventChosen.reverse(), ...inboxChosen]
+}
+
+export function trustedUserMessages(authority: any) {
+  return trustedUserIntents(authority).map((intent) => intent.text)
+}
+
+/** Last provenance signature reported per session (the event is deduped). */
+const trustedIntentReported = new Map<string, string>()
+
+/**
+ * Observational record of WHICH kinds of authorization evidence the classifier
+ * actually received.
+ *
+ * This class of gap is invisible by construction: when the user's decision never
+ * reaches `trustedUserIntents`, the classifier simply sees "no authorization"
+ * and denies — no error, no warning, and the audit row is indistinguishable from
+ * an ordinary denial. The question-answer channel was broken exactly that way
+ * and stayed broken through a previous fix, so the provenance is recorded as a
+ * non-decision observation event (default on, never part of a verdict or of the
+ * tool statistics).
+ *
+ * Only the ORIGIN COUNTS are recorded, never the user's text, and the row is
+ * deduped per session: it appears when the mix changes — e.g. the first request
+ * that finally carries a question answer. The classifier boundary is the right
+ * place because it is the reader that authorizes state-changing calls, and it
+ * reads the same function as the reviewer.
+ */
+function reportTrustedIntentOrigins(sessionId: string | undefined, intents: readonly TrustedUserIntent[]): void {
+  try {
+    const origins: Record<string, number> = {}
+    for (const intent of intents) origins[intent.origin] = (origins[intent.origin] ?? 0) + 1
+    const signature = `${intents.length}:${Object.entries(origins).sort().map(([k, v]) => `${k}=${v}`).join(',')}`
+    const key = String(sessionId ?? '')
+    if (trustedIntentReported.get(key) === signature) return
+    trustedIntentReported.set(key, signature)
+    appendAuditLine(JSON.stringify({
+      type: 'trusted-intents',
+      at: Date.now(),
+      sessionId: sessionId ?? null,
+      count: intents.length,
+      origins,
+    }))
+  } catch {
+    // Observational only: it never touches the decision path.
+  }
 }
 
 function isAutoPermissionExecution(exec: any, permissionPresets: any, presetName = AUTO_PRESET) {
@@ -3509,6 +3588,8 @@ export function apply(ctx: Context, rawConfig: Config): void {
       const route = resolveModelRoute(exec.agent) ?? resolveModelRoute(authority)
       const aggressiveAuto = config.categoryMode === 'aggressive' && 'auto' === directive && AGGRESSIVE_BUILTIN.includes(category as CategoryKey)
       const riskTier = riskFromAssessment(assessment, exec.name)
+      const trustedIntents = trustedUserIntents(authority)
+      reportTrustedIntentOrigins(authorityKeyFor(exec), trustedIntents)
       const classifierInput = {
         toolName: exec.name,
         arguments: sanitizeClassifierArguments(exec.arguments),
@@ -3517,7 +3598,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
         // sanitize at the classifier boundary like every other payload field
         // (RISK-04 prompt-injection surface).
         policyReason: sanitizeClassifierText(assessment.reason),
-        trustedUserMessages: trustedUserMessages(authority),
+        trustedUserMessages: trustedIntents.map((intent) => intent.text),
         mode: config.categoryMode,
         aggressiveAuto: aggressiveAuto,
         riskTier: riskTier,

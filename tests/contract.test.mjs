@@ -33,7 +33,7 @@ import { parseClassifierDecision } from '../lib/auto/classifier.js'
 import { MODEL_REASON_MAX_CHARS } from '../lib/auto/constants.js'
 import { RISK_NAME_PATTERN, RISK_REASON_PATTERN } from '../lib/auto/risk-tokens.js'
 import { buildAskReason, buildEditDiffText } from '../lib/auto/editdiff.js'
-import { Config, resolveConfig, sessionModelRoute, buildReviewSnapshot, markFirstAutoSessionNotice, onboardingTimeoutLabel, onboardingNoticeText, extractProbeErrorSummary, extractReviewerKeyLine, installFeedbackRoute, installReviewerCredentialRoute, sessionEventList, currentPreset, trustedUserMessages, questionAnswerMessages, officialRejectionIn } from '../lib/index.js'
+import { Config, resolveConfig, sessionModelRoute, buildReviewSnapshot, markFirstAutoSessionNotice, onboardingTimeoutLabel, onboardingNoticeText, extractProbeErrorSummary, extractReviewerKeyLine, installFeedbackRoute, installReviewerCredentialRoute, sessionEventList, currentPreset, trustedUserMessages, questionAnswerMessages, trustedUserIntents, officialRejectionIn } from '../lib/index.js'
 import { categorizeCommand } from '../lib/auto/category.js'
 
 /**
@@ -4408,7 +4408,27 @@ const qaCallEvent = (callId, questions) => ({
   type: 'tool/call',
   data: { callId, name: 'ask_user_question', arguments: JSON.stringify({ questions }) },
 })
+// The REAL host shape: `session.append('tool/result', { message })` where the
+// message comes from dsh-llm's createToolResultMessage, which nests the tool's
+// return blocks as `{type:'tool-result', toolCallId, content:[{type:'text'}]}`.
+// The flat variant (a direct text block) is an emitter-shaped fallback and is
+// covered separately — using only the flat shape here is what let the answers
+// silently stop being collected.
 const qaResultEvent = (callId, answers) => ({
+  type: 'tool/result',
+  data: {
+    message: {
+      source: { kind: 'tool', callId },
+      content: [{
+        type: 'tool-result',
+        toolCallId: callId,
+        content: [{ type: 'text', text: JSON.stringify({ answers }) }],
+        isError: false,
+      }],
+    },
+  },
+})
+const qaResultEventFlat = (callId, answers) => ({
   type: 'tool/result',
   data: { message: { source: { callId }, content: [{ type: 'text', text: JSON.stringify({ answers }) }] } },
 })
@@ -4449,6 +4469,58 @@ test('questionAnswerMessages: malformed call arguments or result payloads are ig
     { type: 'tool/result', data: { message: { source: { callId: 'r2' }, content: [{ type: 'text', text: 'not json either' }] } } },
   ]
   assert.deepEqual(questionAnswerMessages(events), [])
+})
+
+test('questionAnswerMessages: the host-nested payload and a flattened one both yield answers', () => {
+  const nested = questionAnswerMessages([
+    qaCallEvent('n1', [{ id: 'a', question: 'proceed?' }]),
+    qaResultEvent('n1', [{ id: 'a', selected: ['yes'] }]),
+  ])
+  assert.equal(nested.length, 1, 'the nested tool-result block is read')
+  assert.ok(nested[0].text.includes('user chose: yes'))
+
+  const flat = questionAnswerMessages([
+    qaCallEvent('f1', [{ id: 'a', question: 'proceed?' }]),
+    qaResultEventFlat('f1', [{ id: 'a', selected: ['yes'] }]),
+  ])
+  assert.equal(flat.length, 1, 'a flattened emitter cannot silently drop the answer again')
+  assert.ok(flat[0].text.includes('user chose: yes'))
+})
+
+test('questionAnswerMessages: a tool-result carrying no text block yields no answer', () => {
+  // The "criterion must not hold" direction: a result whose payload is not text
+  // (or is an unrelated shape) must not be turned into authorization evidence.
+  const events = [
+    qaCallEvent('t1', [{ id: 'a', question: 'proceed?' }]),
+    {
+      type: 'tool/result',
+      data: {
+        message: {
+          source: { kind: 'tool', callId: 't1' },
+          content: [{ type: 'tool-result', toolCallId: 't1', content: [{ type: 'image', data: 'x' }], isError: false }],
+        },
+      },
+    },
+  ]
+  assert.deepEqual(questionAnswerMessages(events), [])
+})
+
+test('trustedUserIntents: the provenance of each admitted intent is reported', () => {
+  const events = [
+    { type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: 'first words' }] } },
+    qaCallEvent('p1', [{ id: 'v', question: '版本？' }]),
+    qaResultEvent('p1', [{ id: 'v', selected: ['v0.0.19'] }]),
+  ]
+  const intents = trustedUserIntents({ session: { snapshotEvents: () => events } })
+  assert.deepEqual(intents.map((i) => i.origin), ['user-message', 'question-answer'])
+  // The text API stays the same list, in the same order.
+  assert.deepEqual(trustedUserMessages({ session: { snapshotEvents: () => events } }), intents.map((i) => i.text))
+  // A plugin-sourced inbox entry is never authorization evidence.
+  const injected = trustedUserIntents({
+    session: { snapshotEvents: () => [] },
+    inbox: { nextStep: [[{ source: { kind: 'plugin' }, content: 'plugin text' }]] },
+  })
+  assert.deepEqual(injected, [])
 })
 
 test('trustedUserMessages: admits an ask_user_question answer interleaved with plain messages in time order', () => {
