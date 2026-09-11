@@ -347,13 +347,13 @@ export function startReviewPolling(
     meta = next
   }
 
-  const poll = async () => {
+  // `force` is the event-driven path (pollNow on thaw/resume/reconnect). The
+  // hold-off exists to stop the standing interval from hammering a sick route;
+  // it must not also swallow an explicit realignment request, which is exactly
+  // when the panel most needs to learn that the wire came back.
+  const poll = async (force = false) => {
     if (settled || inFlight) return
-    // Backoff gate: the interval still ticks, but no request is issued until
-    // the hold-off a run of failures bought has elapsed. Skipping the fetch
-    // (rather than rescheduling the timer) keeps a single timer and leaves
-    // dispose() semantics untouched.
-    if (Date.now() < nextAllowedAt) return
+    if (!force && Date.now() < nextAllowedAt) return
     lastPollAt = Date.now()
     inFlight = true
     let status: any
@@ -397,7 +397,7 @@ export function startReviewPolling(
   return {
     dispose: detach,
     pollNow: () => {
-      if (Date.now() - lastPollAt >= MIN_POLL_GAP_MS) void poll()
+      if (Date.now() - lastPollAt >= MIN_POLL_GAP_MS) void poll(true)
     },
   }
 }
