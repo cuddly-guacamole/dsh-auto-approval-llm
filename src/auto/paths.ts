@@ -160,6 +160,53 @@ export function isProtectedProjectPath(target, roots) {
     return false;
 }
 /**
+ * Credential-free Git metadata a reader may open without a human: the symbolic
+ * HEAD and everything under `refs/` (branch, tag and remote tips). They carry
+ * commit ids and a ref name, nothing secret — reading them is how an agent
+ * checks what it is working on, and gating them surfaced a question to the user
+ * for what is a `git rev-parse`-shaped inspection.
+ *
+ * Deliberately narrow, and scoped like `isProtectedProjectPath` (the
+ * workspace's OWN top-level `.git` directory only):
+ *   - `.git/config` stays protected — credential helpers, `url.*.insteadOf`;
+ *   - `.git/hooks/**` stays protected — git executes those files;
+ *   - `.git/objects/**`, `.git/modules/**`, `packed-refs` and `.gitmodules`
+ *     stay protected.
+ * Readers only: every mutation and shell write path keeps the full
+ * `isProtectedProjectPath` gate.
+ */
+export function isGitRefReadPath(target, roots) {
+    const normalized = normalizePath(target, roots.workspace, roots.home);
+    if (!isWithin(roots.workspace, normalized))
+        return false;
+    const wsNormalized = normalizePath(roots.workspace, roots.workspace, roots.home);
+    const style = styleOf(wsNormalized);
+    const api = pathApi(style);
+    const relative = api.relative(wsNormalized, normalized).replaceAll('\\', '/');
+    const segments = relative.split('/');
+    if ((segments[0] ?? '').toLowerCase() !== '.git')
+        return false;
+    // `..` is already collapsed by normalizePath, so a traversal spelling
+    // (`.git/refs/../../.env`) cannot reach this branch.
+    const rest = segments.slice(1).join('/').toLowerCase();
+    if (rest === 'head')
+        return true;
+    return rest === 'refs' || rest.startsWith('refs/');
+}
+/**
+ * Reader-facing lifetime of the protected-metadata rule: protected project
+ * metadata stays gated EXCEPT for the credential-free Git metadata above.
+ *
+ * One owner on purpose. The policy plane and the category plane must answer
+ * this identically: when they disagree, a path the policy layer marked
+ * `classifierEligible` can still be pinned to an unanswerable countdown by the
+ * category layer's LOCKED set — the mismatch that turned a "send to semantic
+ * review" ask into a prompt no human or model could ever resolve.
+ */
+export function isProtectedReadMetadata(target, roots) {
+    return isProtectedProjectPath(target, roots) && !isGitRefReadPath(target, roots);
+}
+/**
  * The plugin's own installation root, derived the same way audit.ts locates
  * its runtime-state file (compiled module sits at <root>/lib/auto/paths.js —
  * three dirnames up is <root>).

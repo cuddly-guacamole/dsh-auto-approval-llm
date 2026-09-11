@@ -6,7 +6,7 @@
 // fail-closed classifier must not escape the compiler — DSH schema drift must
 // surface at build time, not at runtime. Keep the helper types below minimal so
 // the logic stays the single source of truth.
-import { hardDestructiveTargetReason, isCriticalPath, isProtectedProjectPath, isWithin, normalizePath, runtimeStateBasename, runtimeStateTargetInZone, runtimeStateTargetReason, } from './paths.js';
+import { hardDestructiveTargetReason, isCriticalPath, isProtectedProjectPath, isProtectedReadMetadata, isWithin, normalizePath, runtimeStateBasename, runtimeStateTargetInZone, runtimeStateTargetReason, } from './paths.js';
 import { assessShell, hardDenyShellReason, shellReadsCredentialMaterial } from './shell.js';
 import { isEffectiveRoutine, sensitiveBasenameAt } from './category.js';
 import { DIRECT_HUMAN_TOOL } from './constants.js';
@@ -355,7 +355,7 @@ export function assessTool(exec: ExecLike, roots: Roots, artifacts: unknown): To
         // silently read through the `read` tool family. The shell path is gated
         // (`readPathsAreRoutine`), so routing the read *tool* to semantic review
         // here closes the mismatch (mirror of the F1 contract).
-        if (isProtectedProjectPath(normalized, roots))
+        if (isProtectedReadMetadata(normalized, roots))
             return {
                 decision: 'ask',
                 reason: `reading protected project metadata requires semantic review: ${normalized}`,
@@ -490,7 +490,7 @@ export function assessTool(exec: ExecLike, roots: Roots, artifacts: unknown): To
             // silently readable through it. Without this the same path was an
             // ask through `read` and a static allow through `view`, which made
             // the reader choice the security boundary.
-            if (isProtectedProjectPath(normalized, roots))
+            if (isProtectedReadMetadata(normalized, roots))
                 return {
                     decision: 'ask',
                     reason: `reading protected project metadata requires semantic review: ${normalized}`,

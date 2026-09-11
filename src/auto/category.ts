@@ -21,7 +21,7 @@
  */
 
 import { basename } from 'node:path'
-import { isProtectedProjectPath, isWithin, normalizePath } from './paths.js'
+import { isProtectedProjectPath, isProtectedReadMetadata, isWithin, normalizePath } from './paths.js'
 import { decomposeCommandLine, isNullSink } from './shell.js'
 
 /** The 11 configurable category keys. */
@@ -266,7 +266,7 @@ export function categorizeTool(exec: CategoryExec, roots: CategoryRoots): Catego
     const path = pathArgument(exec?.arguments)
     if (path !== undefined) {
       const normalized = normalizePath(path, roots.workspace, roots.home)
-      if (sensitiveBasenameAt(normalized, roots) || isProtectedProjectPath(normalized, roots)) return 'protected'
+      if (sensitiveBasenameAt(normalized, roots) || isProtectedReadMetadata(normalized, roots)) return 'protected'
     }
     return 'readOnly'
   }
@@ -289,7 +289,11 @@ export function categorizeTool(exec: CategoryExec, roots: CategoryRoots): Catego
     const path = pathArgument(exec?.arguments)
     if (path === undefined) return 'unknown'
     const normalized = normalizePath(path, roots.workspace, roots.home)
-    const fused = sensitiveBasenameAt(normalized, roots) || isProtectedProjectPath(normalized, roots)
+    // `view` is a READER, so it gets the reader rule; the mutating commands keep
+    // the full protected rule — the Git-metadata opening must not follow them
+    // into `create`/`str_replace`/`insert`.
+    const fused = sensitiveBasenameAt(normalized, roots)
+      || (command === 'view' ? isProtectedReadMetadata(normalized, roots) : isProtectedProjectPath(normalized, roots))
     if (command === 'view') return fused ? 'protected' : 'readOnly'
     if (command === 'create' || command === 'str_replace' || command === 'insert') {
       return fused ? 'protected' : 'fileEdit'
@@ -472,12 +476,23 @@ function explicitPaths(words: SegmentWord[], roots: CategoryRoots): { raw: strin
   return out
 }
 
-function readTargetsProtected(targets: SegmentWord[], roots: CategoryRoots): boolean {
+/**
+ * Whether any explicit operand hits protected metadata.
+ *
+ * `readers` selects which metadata rule applies, and the split is load-bearing:
+ * a READER may open the credential-free Git metadata (`.git/HEAD`, `refs/**`),
+ * while a creation/mutation target must not gain that opening — `mkdir
+ * .git/refs/x` or `touch .git/HEAD` stays protected. One loop, one owner, so
+ * the two rules cannot drift into two tables.
+ */
+function targetsHitProtectedMetadata(targets: SegmentWord[], roots: CategoryRoots, readers = false): boolean {
   for (const target of targets) {
     if (target.dynamic || target.glob) continue
     if (!looksLikeExplicitPath(target.text)) continue
     const normalized = normalizePath(target.text, roots.workspace, roots.home)
-    if (sensitiveBasenameAt(normalized, roots) || isProtectedProjectPath(normalized, roots)) return true
+    const hit = sensitiveBasenameAt(normalized, roots)
+      || (readers ? isProtectedReadMetadata(normalized, roots) : isProtectedProjectPath(normalized, roots))
+    if (hit) return true
   }
   return false
 }
@@ -499,7 +514,7 @@ function creationCategory(name: string, words: SegmentWord[], shell: string, roo
     }
   }
   if (raw.length === 0) return 'unknown'
-  if (readTargetsProtected(raw, roots)) return 'protected'
+  if (targetsHitProtectedMetadata(raw, roots)) return 'protected'
   return 'fileEdit'
 }
 
@@ -566,7 +581,7 @@ function classifySegmentBase(segment: Segment, shell: string, roots: CategoryRoo
   }
   const readOnly = (shell === 'bash' ? BASH_READ_ONLY : PWSH_READ_ONLY).has(name)
   if (readOnly) {
-    const protectedPath = readTargetsProtected([...unwrapped.words.slice(1), ...segment.readTargets], roots)
+    const protectedPath = targetsHitProtectedMetadata([...unwrapped.words.slice(1), ...segment.readTargets], roots, true)
     if (protectedPath) return 'protected'
     return 'readOnly'
   }
@@ -602,7 +617,7 @@ function classifySegmentBase(segment: Segment, shell: string, roots: CategoryRoo
     return copyMoveStyleCategory(unwrapped.words.slice(1), roots)
   }
   if (segment.writeTargets.length > 0) {
-    if (readTargetsProtected(segment.writeTargets, roots)) return 'protected'
+    if (targetsHitProtectedMetadata(segment.writeTargets, roots)) return 'protected'
     return 'fileEdit'
   }
   return 'unknown'

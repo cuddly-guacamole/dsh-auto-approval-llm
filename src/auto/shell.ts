@@ -3,7 +3,7 @@
 // MIT License, Copyright (c) 2026 程序员阿江-Relakkes (https://github.com/NanmiCoder/dsh-auto-mode).
 // Retained per the MIT License: this is a substantial portion of the original.
 import { basename } from 'node:path';
-import { hardDestructiveTargetReason, isArtifactArea, isCriticalPath, isProtectedProjectPath, isWithin, normalizePath, runtimeStateBasename, runtimeStateTargetInZone, runtimeStateTargetReason, } from './paths.js';
+import { hardDestructiveTargetReason, isArtifactArea, isCriticalPath, isProtectedProjectPath, isProtectedReadMetadata, isWithin, normalizePath, runtimeStateBasename, runtimeStateTargetInZone, runtimeStateTargetReason, } from './paths.js';
 import { isEffectiveRoutine, sensitiveBasenameAt } from './category.js';
 function ambiguous(reason) {
     return { decision: 'ask', reason, classifierEligible: true };
@@ -662,7 +662,7 @@ function readPathsAreRoutine(words, roots) {
     // `~user/…` expands to another user's home — never a routine root.
     if (words.some(word => word && tildeUserTarget(word.text)))
         return false;
-    return explicitPaths(words, roots).every(path => (isEffectiveRoutine(path, roots) && !isProtectedProjectPath(path, roots)
+    return explicitPaths(words, roots).every(path => (isEffectiveRoutine(path, roots) && !isProtectedReadMetadata(path, roots)
         && !(!isWithin(roots.workspace, path) && sensitiveBasenameAt(path, roots)))
         || roots.tempRoots.some(root => isWithin(root, path)));
 }
