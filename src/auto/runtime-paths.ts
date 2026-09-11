@@ -37,17 +37,21 @@
  *      so a rejected directory is not revisited on every append.
  *   3. The canonical copy wins while the canonical directory is usable, so a stale
  *      legacy copy can never shadow live data. Once writes degrade to the legacy
- *      chain, the NEWER of the two copies wins instead, because that is where the
- *      records are going. The two transitions keep "newer" equal to "superset":
- *      degrading seeds each legacy file from the canonical copy (or leaves a
- *      legacy copy that is already newer, which can only mean the canonical copy
- *      was seeded into it earlier), and a later boot with a usable canonical
- *      directory copies a newer legacy file back (`reconcileRuntimeCopies`).
+ *      chain, the NEWER of the two readable copies wins — but only while the two
+ *      are VERIFIED to be ordered (one a byte-prefix of the other). "Newer" is not
+ *      taken as proof of "superset": a legacy file can be refreshed by a backup
+ *      restore, a hand copy, or an older process still writing the package root, so
+ *      the recovery direction checks the prefix relation (append-only files) or
+ *      that the file parses as JSON (overwrite-style); when the check fails it keeps
+ *      the canonical copy and warns. A divergence therefore never authorises a
+ *      destructive replace — the copies stay split until a human resolves them.
  *
  * Append-only files additionally carry their legacy content forward on the first
  * write, because a fresh target would otherwise shadow records that are still
- * intact in the old file. Overwrite-style stores need nothing: their writer
- * serializes the whole in-memory state, which was loaded through rule 1.
+ * intact in the old file. Overwrite-style stores need no migration carry-forward:
+ * their writer serializes the whole in-memory state, which was loaded through rule
+ * 1. (Degradation does seed both kinds, because the read rule follows the write
+ * chain in either case.)
  *
  * There is no compatibility path for the short-lived `<plugin root>/runtime/`
  * layout: it shipped in no release (the published line still wrote to the package
@@ -60,7 +64,7 @@
  * the canonical directory. Registered as a backlog row so the removal is not left
  * to memory.
  */
-import { appendFileSync, existsSync, mkdirSync, copyFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, copyFileSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -112,6 +116,8 @@ export function setRuntimePathsForTests(next: RuntimePathOverrides | undefined):
   lastWriteError = undefined
   warnedAboutFallback = false
   warnedAboutNoLocation = false
+  warnedAboutDivergence = false
+  divergedNames.clear()
 }
 
 /**
@@ -275,20 +281,92 @@ function copyFileAtomic(source: string, target: string): boolean {
   }
 }
 
+/** Read a file's text, or undefined when it cannot be read as a regular file. */
+function readTextIfFile(path: string): string | undefined {
+  if (fileMtimeMs(path) === undefined) return undefined
+  try {
+    return readFileSync(path, 'utf8')
+  } catch {
+    return undefined
+  }
+}
+
 /**
- * Make the canonical copy carry the legacy one when the legacy copy is newer.
+ * Make `target` carry `source` for an APPEND-ONLY file, after VERIFYING that
+ * "source is newer" really means "source is a superset".
+ *
+ * The verification must come FIRST. An atomic replace is unrecoverable, so running
+ * it before the check would already have destroyed the history it was meant to
+ * preserve — the first version of this helper did exactly that, and the contract
+ * test for a non-superset legacy copy caught it.
+ *
+ * When the target's bytes are a PREFIX of the source's, the source is a pure
+ * continuation and the target can be completed: by the atomic replace, or — when a
+ * third party holds the target and refuses the rename (an anti-virus scanner, a
+ * backup agent: sharing writes allowed, deletion refused) — by APPENDING the
+ * missing tail. An append-only file is a line sequence, so the result is
+ * byte-identical either way. Anything else is a genuine divergence, two
+ * differently-ordered histories, which must not be resolved silently: appending
+ * would interleave records and replacing would destroy the target's own lines.
+ *
+ * Returns 'copied' | 'extended' | 'target-covers-source' | 'diverged' | 'failed'.
+ */
+function extendAppendOnlyFile(source: string, target: string): 'copied' | 'extended' | 'target-covers-source' | 'diverged' | 'failed' {
+  const targetText = readTextIfFile(target)
+  if (targetText === undefined) {
+    // The target is not a readable file, so there is no history to lose.
+    return copyFileAtomic(source, target) ? 'copied' : 'failed'
+  }
+  const sourceText = readTextIfFile(source)
+  if (sourceText === undefined) return 'failed'
+  // `source` is the newer copy and `target` is the one to bring up to date, so
+  // the safe direction is "target's bytes are a prefix of source's".
+  if (targetText.startsWith(sourceText)) return 'target-covers-source'
+  if (!sourceText.startsWith(targetText)) return 'diverged'
+  if (copyFileAtomic(source, target)) return 'copied'
+  try {
+    appendFileSync(target, sourceText.slice(targetText.length))
+    return 'extended'
+  } catch {
+    return 'failed'
+  }
+}
+
+/**
+ * Names whose two copies have diverged (neither is a prefix of the other), so the
+ * read chain must not let a timestamp decide which history to hide.
+ */
+const divergedNames = new Set<string>()
+let warnedAboutDivergence = false
+
+function markDiverged(name: string, detail: string): void {
+  divergedNames.add(name)
+  if (warnedAboutDivergence) return
+  warnedAboutDivergence = true
+  console.warn(
+    `[dsh-auto-approval-llm] the runtime copies of ${name} diverged (${detail}); `
+    + 'the canonical copy is kept as the audit trail and the packages remain split until it is resolved by hand',
+  )
+}
+
+/**
+ * Make the canonical copy carry a newer legacy copy.
  *
  * The reverse transition of `degradeToLegacy`. A previous process may have
- * degraded — the state directory refusing writes is not necessarily permanent,
- * an ACL fix is enough — and appended to the legacy copy for a while. Those
- * records are newer than anything in the canonical file, and since the legacy
- * file was SEEDED from the canonical one when the degradation started, "newer"
- * also means "contains everything the canonical one has". Copying it back is
- * therefore a union, not a loss, and it keeps the read chain (which prefers the
- * canonical copy when it is not degraded) from silently hiding the window.
+ * degraded — the state directory refusing writes is not necessarily permanent —
+ * and appended to the legacy copy for a while. Those records are newer than the
+ * canonical file's, and the legacy file was SEEDED from the canonical one when
+ * the degradation started, so it should also CONTAIN it.
  *
- * Best-effort and idempotent: once the canonical copy is the newer one, nothing
- * happens on later boots.
+ * "Should" is why this verifies instead of trusting a timestamp: an append-only
+ * legacy copy is only copied over the canonical one when the canonical content is
+ * a prefix of it, i.e. when "newer" really does mean "superset". A legacy copy
+ * refreshed by something else (a backup restore, a hand copy, an older process
+ * still writing the package root) can otherwise be newer without being a superset,
+ * and replacing the canonical copy with it would destroy the only copy of the
+ * records in between — irreversibly, and without a warning. Overwrite-style stores
+ * have no prefix relation to check, so they are only copied back when the newer
+ * file parses as JSON.
  */
 export function reconcileRuntimeCopies(): void {
   if (!ensureRuntimeDir()) return
@@ -300,7 +378,30 @@ export function reconcileRuntimeCopies(): void {
       copyFileAtomic(legacy, canonical)
       continue
     }
-    if (newerCopyIs(legacy, canonical)) copyFileAtomic(legacy, canonical)
+    if (!newerCopyIs(legacy, canonical)) continue
+    if (APPEND_ONLY_FILENAMES.has(name)) {
+      const outcome = extendAppendOnlyFile(legacy, canonical)
+      if (outcome === 'diverged') markDiverged(name, 'a newer legacy copy is not a superset')
+      continue
+    }
+    // Overwrite-style stores: the newer file carries the state a degraded process
+    // wrote, but only if it is intact.
+    if (readJsonIfFile(legacy) === undefined) {
+      markDiverged(name, 'a newer legacy copy is not valid JSON')
+      continue
+    }
+    if (!copyFileAtomic(legacy, canonical)) markDiverged(name, 'the newer legacy copy could not be copied back')
+  }
+}
+
+/** Parse a JSON file, or undefined when absent/unreadable/malformed. */
+function readJsonIfFile(path: string): unknown {
+  const text = readTextIfFile(path)
+  if (text === undefined) return undefined
+  try {
+    return JSON.parse(text)
+  } catch {
+    return undefined
   }
 }
 
@@ -341,9 +442,28 @@ function degradeToLegacy(): void {
   }
   for (const name of RUNTIME_FILENAMES) {
     const canonical = runtimeFilePath(name)
-    if (!existsSync(canonical)) continue
+    // Only a regular file can be seeded; a directory parked at the canonical path
+    // is what made the directory unusable in the first place.
+    if (fileMtimeMs(canonical) === undefined) continue
     const legacy = join(fallback, name)
-    if (!existsSync(legacy) || newerCopyIs(canonical, legacy)) copyFileAtomic(canonical, legacy)
+    if (APPEND_ONLY_FILENAMES.has(name)) {
+      // Verify, do not assume: `newerCopyIs` alone would leave a legacy snapshot
+      // that is newer but NOT a superset as the read chain's chosen history.
+      if (!existsSync(legacy)) {
+        if (!copyFileAtomic(canonical, legacy)) markDiverged(name, 'the canonical copy could not be seeded into the legacy location')
+        continue
+      }
+      const outcome = extendAppendOnlyFile(canonical, legacy)
+      if (outcome === 'diverged') markDiverged(name, 'the canonical and legacy histories diverge')
+      else if (outcome === 'failed') markDiverged(name, 'the canonical copy could not be merged into the legacy location')
+      continue
+    }
+    // Overwrite-style stores are whole-file snapshots of the in-memory state, so
+    // there is no prefix relation to verify: seed the newer canonical snapshot into
+    // the legacy location, and say so when that fails.
+    if (!existsSync(legacy) || newerCopyIs(canonical, legacy)) {
+      if (!copyFileAtomic(canonical, legacy)) markDiverged(name, 'the canonical copy could not be seeded into the legacy location')
+    }
   }
   warnFallbackOnce(fallback)
 }
@@ -456,9 +576,12 @@ export function resolveRuntimeReadPath(name: string): string {
   if (stateDirWriteDenied) {
     // Degraded: the write chain appends to the legacy copy, which was seeded from
     // the canonical one, so that copy carries both. Prefer the newer of the two
-    // READABLE copies anyway: if the seeding copy failed, the canonical file still
-    // holds the records the legacy snapshot predates, and reading past it would
-    // hide them. A directory sitting at either path is not a copy at all.
+    // READABLE copies — but only when the copies are known to be ordered. A
+    // timestamp decides nothing once they diverged (neither is a prefix of the
+    // other) or when the seeding itself failed: in both cases letting "newer" win
+    // would hide the records only the canonical copy holds, which for the audit is
+    // the fail-closed evidence base. A directory at either path is not a copy.
+    if (divergedNames.has(name)) return canonical
     const legacyTime = fileMtimeMs(legacy)
     if (legacyTime === undefined) return canonical
     const canonicalTime = fileMtimeMs(canonical)

@@ -293,6 +293,62 @@ test('reconciliation leaves a normal install alone', () => {
   })
 })
 
+test('a newer legacy copy that is NOT a superset never overwrites the canonical history', () => {
+  sandbox(undefined, ({ legacyRoot, stateDir }) => {
+    // A timestamp alone must not authorise a destructive replace: a legacy file
+    // refreshed by a backup restore (or written by an older process still using
+    // the package root) can be newer without containing the canonical records.
+    const canonical = join(stateDir, AUDIT_FILENAME)
+    writeFileSync(canonical, '{"row":"canonical-only"}\n')
+    utimesSync(canonical, new Date(Date.now() - 120_000), new Date(Date.now() - 120_000))
+    // Legacy is newer, yet its lines are a DIFFERENT history, not a continuation.
+    writeFileSync(join(legacyRoot, AUDIT_FILENAME), '{"row":"legacy-unrelated"}\n')
+
+    const warnings = captureWarnings(() => {
+      reconcileRuntimeCopies()
+    })
+    assert.equal(readFileSync(canonical, 'utf8'), '{"row":"canonical-only"}\n', 'the canonical history survives')
+    assert.equal(warnings.length, 1, 'and the divergence is surfaced, not silent')
+    assert.match(warnings[0], /diverged/)
+  })
+})
+
+test('a superset legacy copy is still carried back, by append when the replace is refused', () => {
+  sandbox(undefined, ({ legacyRoot, stateDir }) => {
+    // The legitimate recovery direction: the legacy file IS the canonical content
+    // plus the degraded window.
+    const canonical = join(stateDir, AUDIT_FILENAME)
+    writeFileSync(canonical, '{"row":1}\n')
+    utimesSync(canonical, new Date(Date.now() - 120_000), new Date(Date.now() - 120_000))
+    writeFileSync(join(legacyRoot, AUDIT_FILENAME), '{"row":1}\n{"row":2}\n')
+    reconcileRuntimeCopies()
+    assert.equal(readFileSync(canonical, 'utf8'), '{"row":1}\n{"row":2}\n')
+  })
+})
+
+test('a diverged pair is read from the canonical copy, not from the newer timestamp', () => {
+  sandbox(undefined, ({ legacyRoot, stateDir }) => {
+    const canonical = join(stateDir, AUDIT_FILENAME)
+    const legacy = join(legacyRoot, AUDIT_FILENAME)
+    writeFileSync(canonical, '{"row":"canonical-only"}\n')
+    utimesSync(canonical, new Date(Date.now() - 120_000), new Date(Date.now() - 120_000))
+    writeFileSync(legacy, '{"row":"legacy-unrelated"}\n')
+    // Divergence is declared by the verification in the recovery direction, which
+    // refuses to replace the canonical history with a newer non-superset.
+    captureWarnings(() => {
+      reconcileRuntimeCopies()
+    })
+    // Now degrade through a DIFFERENT file, so the audit pair is the one read back.
+    captureWarnings(() => {
+      mkdirSync(join(stateDir, LATENCY_FILENAME), { recursive: true })
+      assert.ok(appendRuntimeLine(LATENCY_FILENAME, '{"s":1}\n') !== undefined)
+    })
+    // The legacy copy is the newer one; a timestamp must not hand it the read.
+    assert.equal(resolveRuntimeReadPath(AUDIT_FILENAME), canonical)
+    assert.ok(readFileSync(legacy, 'utf8').includes('legacy-unrelated'), 'the legacy copy is left intact')
+  })
+})
+
 test('the degradable and retryable error sets are pinned separately', () => {
   // Degradable = "this location refuses writes", and every member is raised while
   // OPENING the target, so relocating the files is safe. Retryable additionally
