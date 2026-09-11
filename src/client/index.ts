@@ -1944,7 +1944,12 @@ function SettingsSection() {
     ),
   )
 
-  const buildSecurityBody = () => React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 10 } },
+  const buildSecurityBody = () => {
+    // Parsed once per render: the two consumers below used to evaluate this
+    // independently, running the whole declared-rules parse twice on every
+    // keystroke in the rules textarea.
+    const declaredRuleErrors = parseRulesText(draft.rulesText).errors
+    return React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 10 } },
     field(t('settings.rules.safetyPrompt'),
       React.createElement(React.Fragment, null,
         React.createElement('textarea', {
@@ -2045,17 +2050,18 @@ function SettingsSection() {
       options: onOffOptions(),
       onChange: (v: string) => update({ rulesDryRun: v as 'on' | 'off' }),
     }), t('settings.rulesDryRunHint')),
-    ...(parseRulesText(draft.rulesText).errors.map((er) => React.createElement('p', {
+    ...(declaredRuleErrors.map((er) => React.createElement('p', {
       key: er.line,
       style: { color: 'var(--dsw-alias-state-error-primary)', fontSize: 12, margin: '2px 0 0' },
     }, `L${er.line}: ${er.message}`))),
-    ...(parseRulesText(draft.rulesText).errors.length > 0
+    ...(declaredRuleErrors.length > 0
       ? [React.createElement('p', {
           key: 'rules-blocked',
           style: { color: 'var(--dsw-alias-state-error-primary)', fontSize: 12, margin: '2px 0 0' },
         }, t('settings.rules.rulesTextBlocked'))]
       : []),
-  )
+    )
+  }
 
   const buildCategoryBody = () => React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 10 } },
     row(t('settings.category.mode'), React.createElement(CapsuleSelect, {
