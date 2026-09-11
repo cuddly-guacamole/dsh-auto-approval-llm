@@ -29,7 +29,10 @@
     "./package.json": "./package.json"
   },
   "files": [
-    "lib",
+    "lib/index.js",
+    "lib/auto/*.js",
+    "lib/client.js",
+    "lib/types/**/*.d.ts",
     "assets",
     "cordis.patch.yml"
   ],
@@ -69,7 +72,7 @@
     "build": "bash scripts/build.sh",
     "build:client": "tsdown",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "pretest": "tsc -p tsconfig.json && tsdown",
+    "pretest": "node scripts/clean-lib.mjs && tsc -p tsconfig.json && tsdown",
     "test": "node --test \"tests/**/*.test.mjs\"",
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
