@@ -20,10 +20,21 @@
  *   1. READING prefers the canonical directory and falls back to the legacy
  *      package-root file, so an install whose data still sits where shipped
  *      releases wrote it keeps its history, audit and learned entries.
- *   2. WRITING creates the canonical directory. If it cannot be made, writes fall
- *      back to the legacy path rather than failing. That matters most for the
- *      audit: `appendAuditLine` returning false makes every verdict fail closed,
- *      so an unusable directory must not silently turn into "refuse everything".
+ *   2. WRITING creates the canonical directory. If it cannot be made, or if it
+ *      demonstrably rejects writes, writes fall back to the legacy path rather
+ *      than failing. That matters most for the audit: `appendAuditLine` returning
+ *      false makes every verdict fail closed, so an unusable directory must not
+ *      silently turn into "refuse everything".
+ *
+ *      A directory that already EXISTS was the blind spot: `mkdirSync` on an
+ *      existing directory reports success, so "unwritable" was never noticed and
+ *      every append failed against it. Two mechanisms close it, both without a
+ *      check-then-write window (the write itself stays the writability test):
+ *      `probeRuntimeDirWritable()` at boot, and the write-failure ladder in
+ *      `appendRuntimeLine` / `writeRuntimeAtomic`, which retries once at the same
+ *      path (to absorb the transient rename races seen on Windows) and only then
+ *      concludes the directory is unusable and degrades. The decision is sticky,
+ *      so a rejected directory is not revisited on every append.
  *   3. The canonical copy always wins when it exists, so a stale legacy copy can
  *      never shadow live data.
  *
@@ -36,13 +47,14 @@
  * layout: it shipped in no release (the published line still wrote to the package
  * root), so no install can have data there.
  *
- * RETIREMENT: the legacy fallback, the carry-forward and the write fallback are a
- * one-way migration shim for installs that predate the DSH_HOME layout. Remove
- * them once three releases have shipped from this change — i.e. when the package
- * version reaches 0.0.25 — leaving only the canonical directory. Registered as a
- * backlog row so the removal is not left to memory.
+ * RETIREMENT: the legacy fallback, the carry-forward, the write fallback, the boot
+ * probe and the write-failure ladder are a one-way migration shim for installs
+ * that predate the DSH_HOME layout. Remove them once three releases have shipped
+ * from this change — i.e. when the package version reaches 0.0.25 — leaving only
+ * the canonical directory. Registered as a backlog row so the removal is not left
+ * to memory.
  */
-import { existsSync, mkdirSync, copyFileSync, renameSync, rmSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, copyFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -90,6 +102,8 @@ let stateDirFromHost: string | undefined
 export function setRuntimePathsForTests(next: RuntimePathOverrides | undefined): void {
   overrides = next
   stateDirUsable = false
+  stateDirWriteDenied = false
+  lastWriteError = undefined
   warnedAboutFallback = false
 }
 
@@ -110,6 +124,10 @@ export function setRuntimeStateDir(dir: string | undefined): void {
   if (dir !== undefined && !isAbsolute(dir)) return
   stateDirFromHost = dir
   stateDirUsable = false
+  // A verdict about the previous directory must not survive re-alignment to a
+  // different one: `apply()` sets the directory and then probes it.
+  stateDirWriteDenied = false
+  lastWriteError = undefined
 }
 
 /** The canonical directory all six files belong in. */
@@ -163,6 +181,54 @@ export function legacyRootFilePath(name: string): string {
 let stateDirUsable = false
 let warnedAboutFallback = false
 
+/**
+ * Sticky verdict that the canonical directory REJECTS writes.
+ *
+ * Kept separate from `stateDirUsable` on purpose. `ensureRuntimeDir` re-validates
+ * the cache with `mkdirSync`, which reports success on a directory that merely
+ * exists — so clearing the usability cache would not stop the next append from
+ * aiming at a directory already shown to reject writes. This flag is what does.
+ */
+let stateDirWriteDenied = false
+
+/** The error from the most recent failed write attempt, for the ladder's verdict. */
+let lastWriteError: unknown
+
+/**
+ * Error codes that mean "this location refuses writes" rather than "this attempt
+ * failed". Everything here is raised while OPENING the target, so a retry cannot
+ * duplicate or truncate a record. Errors raised after bytes moved (`ENOSPC`,
+ * `EIO`, `EMFILE`) are deliberately absent: those must keep failing closed rather
+ * than silently relocating the audit.
+ */
+const DEGRADABLE_WRITE_CODES: ReadonlySet<string> = new Set([
+  'EACCES',
+  'EPERM',
+  'EROFS',
+  'EISDIR',
+  'ENOTDIR',
+])
+
+/** Pure: would this write error justify moving the runtime files? */
+export function isDegradableRuntimeWriteError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code
+  return typeof code === 'string' && DEGRADABLE_WRITE_CODES.has(code)
+}
+
+/**
+ * Sticky degradation: every later write goes to the legacy chain.
+ *
+ * The fallback directory is created here (and the warning emitted once) so the
+ * operator sees WHERE records are going, not merely that something failed.
+ */
+function degradeToLegacy(): void {
+  stateDirUsable = false
+  if (stateDirWriteDenied) return
+  stateDirWriteDenied = true
+  const fallback = legacyRoot()
+  if (tryMakeDir(fallback)) warnFallbackOnce(fallback)
+}
+
 function tryMakeDir(dir: string): boolean {
   try {
     mkdirSync(dir, { recursive: true })
@@ -174,6 +240,7 @@ function tryMakeDir(dir: string): boolean {
 
 /** Create the canonical directory if needed; false means writes use the legacy chain. */
 export function ensureRuntimeDir(): boolean {
+  if (stateDirWriteDenied) return false
   const dir = stateDirPath()
   if (stateDirUsable && existsSync(dir)) return true
   if (tryMakeDir(dir)) {
@@ -184,6 +251,30 @@ export function ensureRuntimeDir(): boolean {
   // retried by the next write.
   stateDirUsable = false
   return false
+}
+
+/**
+ * Boot probe: prove the canonical directory accepts writes before the session
+ * starts serving verdicts.
+ *
+ * `ensureRuntimeDir` cannot answer this, because a directory that already exists
+ * — the common shape, e.g. one created by another account — satisfies it while
+ * rejecting every write. This runs once per process from `apply()`, so the
+ * degradation is decided and announced up front instead of being discovered by
+ * the first audited verdict. The probe file is removed on the way out; a failure
+ * to remove it is harmless (it is never read).
+ */
+export function probeRuntimeDirWritable(): boolean {
+  if (!ensureRuntimeDir()) return false
+  const probe = join(stateDirPath(), `.write-probe-${process.pid}`)
+  try {
+    writeFileSync(probe, '')
+    rmSync(probe, { force: true })
+    return true
+  } catch {
+    degradeToLegacy()
+    return false
+  }
 }
 
 /** Warn once per process that writes are landing in a legacy location. */
@@ -273,4 +364,67 @@ export function resolveRuntimeWritePath(name: string): string {
   // The fallback IS the legacy location, so an append continues that file rather
   // than starting a fresh one — no carry-forward applies here.
   return join(fallback, name)
+}
+
+function tryAppend(file: string, text: string): boolean {
+  try {
+    appendFileSync(file, text)
+    return true
+  } catch (error) {
+    lastWriteError = error
+    return false
+  }
+}
+
+/**
+ * Append one line to a runtime file, degrading to the legacy chain when the
+ * canonical directory demonstrably rejects writes.
+ *
+ * Returns the file the line landed in, or `undefined` when no attempt succeeded.
+ * The caller needs the RETURNED path rather than a fresh resolution because the
+ * size-capped files rotate the very file they appended to.
+ *
+ * The ladder: primary, one retry at the same path, then — only if the error is a
+ * "this location refuses writes" code — degrade and try the legacy path. The
+ * same-path retry exists because Windows rename races raise `EPERM` transiently;
+ * degrading on the first such failure would move the runtime files for a reason
+ * that had nothing to do with the directory.
+ */
+export function appendRuntimeLine(name: string, text: string, fixedPath?: string): string | undefined {
+  // An explicit target (the audit test seam) never participates in the ladder:
+  // the caller owns that path, including its failures.
+  if (fixedPath !== undefined) return tryAppend(fixedPath, text) ? fixedPath : undefined
+  const primary = resolveRuntimeWritePath(name)
+  if (tryAppend(primary, text)) return primary
+  if (tryAppend(primary, text)) return primary
+  if (!isDegradableRuntimeWriteError(lastWriteError)) return undefined
+  degradeToLegacy()
+  const fallback = resolveRuntimeWritePath(name)
+  return tryAppend(fallback, text) ? fallback : undefined
+}
+
+/** Write `content` to a runtime file through tmp+rename, with the same ladder. */
+export function writeRuntimeAtomic(name: string, content: string, tmpSuffix = `.tmp.${process.pid}`): boolean {
+  const attempt = (file: string): boolean => {
+    const tmp = `${file}${tmpSuffix}`
+    try {
+      writeFileSync(tmp, content)
+      renameSync(tmp, file)
+      return true
+    } catch (error) {
+      lastWriteError = error
+      try {
+        if (existsSync(tmp)) rmSync(tmp, { force: true })
+      } catch {
+        // Best-effort cleanup; the previous target content is untouched.
+      }
+      return false
+    }
+  }
+  const primary = resolveRuntimeWritePath(name)
+  if (attempt(primary)) return true
+  if (attempt(primary)) return true
+  if (!isDegradableRuntimeWriteError(lastWriteError)) return false
+  degradeToLegacy()
+  return attempt(resolveRuntimeWritePath(name))
 }

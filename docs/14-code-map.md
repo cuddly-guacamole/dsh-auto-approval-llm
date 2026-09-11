@@ -29,7 +29,7 @@ src/
 │    ├─ review-mode.ts   57   每会话评审模式持久化快照
 │    ├─ risk-tokens.ts   24   HIGH 风险正则（NAME/REASON 单一事实源）
 │    ├─ rules.ts         434  声明式规则解析/求值（host 与浏览器共用）
-│    ├─ runtime-paths.ts 276  运行态文件唯一路径 owner（`<DSH_HOME>/auto-approval-llm/` 规范位置、包根回退读、目录不可用回退写、仅追加型文件原子前搬；迁移代码待退役）
+│    ├─ runtime-paths.ts 430  运行态文件唯一路径 owner（`<DSH_HOME>/auto-approval-llm/` 规范位置、包根回退读、目录不可用/拒绝写入回退写、仅追加型文件原子前搬、启动期写探针与写失败阶梯；迁移代码待退役）
 │    ├─ shell.ts         1805 bash/pwsh 词法分解 + 整行熔断 + 逐段静态分类（最大单文件）
 │    ├─ symlink.ts       120  符号链接创建与目标校验
 │    ├─ tool-stats.ts    94   工具调用统计收集
@@ -53,7 +53,8 @@ tests/
 ├─ protected-read-credential-floor.test.mjs / protected-auto-review.test.mjs / audit-rejection-category.test.mjs
 ├─ docs-anchors.test.mjs / artifact-deletion-exemption.test.mjs / runtime-paths.test.mjs
 ├─ guard-deny-decision.test.mjs / feedback-route-write.test.mjs / history-route-clear.test.mjs
-└─ 合计 72 个 tests/*.test.mjs（node --test 全绿基线）
+├─ runtime-write-fallback.test.mjs（目录存在但拒绝写入：启动探针、写失败阶梯、粘滞降级、非白名单错误仍 fail-closed）
+└─ 合计 73 个 tests/*.test.mjs（node --test 全绿基线）
 scripts/
 ├─ build.sh             （DSH 源码仓库布局）tsc 编译 src→lib
 ├─ check-anchors.mjs    docs 源码锚点校验器（符号/字面量锚；无法解析的 span 亦判失败，默认只读）

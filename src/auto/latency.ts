@@ -19,8 +19,8 @@
  *   the average), so it is counted separately and never aggregated into
  *   the latency statistics.
  */
-import { appendFileSync, existsSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
-import { LATENCY_FILENAME, resolveRuntimeReadPath, resolveRuntimeWritePath } from './runtime-paths.js'
+import { existsSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { LATENCY_FILENAME, appendRuntimeLine, resolveRuntimeReadPath, resolveRuntimeWritePath } from './runtime-paths.js'
 
 export interface LatencySample {
   at: number
@@ -118,15 +118,16 @@ export function pushLatencySample(samples: LatencySample[], sample: LatencySampl
   samples.push(sample)
   if (samples.length > MAX_LATENCY_SAMPLES) samples.shift()
   try {
-    appendFileSync(latencyWritePath(), `${JSON.stringify(sample)}\n`)
-    if (statSync(latencyWritePath()).size > 1_048_576) {
+    const file = appendRuntimeLine(LATENCY_FILENAME, `${JSON.stringify(sample)}\n`)
+    if (file === undefined) return
+    if (statSync(file).size > 1_048_576) {
       // Mirror of atomicWriteFile in ../index.ts: temp file + rename so a
       // crash mid-rotation cannot truncate the JSONL; original preserved on
       // failure (fail-closed).
-      const tmp = `${latencyWritePath()}.tmp.${process.pid}`
+      const tmp = `${file}.tmp.${process.pid}`
       try {
         writeFileSync(tmp, `${samples.map((s) => JSON.stringify(s)).join('\n')}\n`)
-        renameSync(tmp, latencyWritePath())
+        renameSync(tmp, file)
       } catch (error) {
         try {
           if (existsSync(tmp)) unlinkSync(tmp)

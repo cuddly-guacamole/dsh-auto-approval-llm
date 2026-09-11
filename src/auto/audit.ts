@@ -7,8 +7,8 @@
  * audit lives in a plain file (never in user/message session events), so the
  * main model can never read it back as an injection channel.
  */
-import { appendFileSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
-import { AUDIT_FILENAME, resolveRuntimeWritePath, runtimeFilePath } from './runtime-paths.js'
+import { readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { AUDIT_FILENAME, appendRuntimeLine, runtimeFilePath } from './runtime-paths.js'
 
 export const MAX_AUDIT_LINES = 5_000
 
@@ -54,25 +54,7 @@ function auditPath(): string {
 }
 
 /**
- * The path an append should go to: the canonical location once `runtime/`
- * exists, otherwise the pre-move root path with a warning.
- *
- * The fallback matters most here. `appendAuditLine` is the fail-closed commit
- * gate, so a directory that cannot be created must not turn into "every verdict
- * is unauditable" — a still-writable root keeps receiving the audit, and the
- * warning says so.
- *
- * Scope, stated honestly: this rescues the case where the DIRECTORY cannot be
- * created while the root can be written. It does not rescue a root that is
- * itself unwritable, and a `runtime/` that exists but rejects writes is not
- * detected here at all — that path fails the append, and the gate then fails
- * closed as designed.
- */
-function auditWritePath(): string {
-  return auditFileOverride ?? resolveRuntimeWritePath(AUDIT_FILENAME)
-}
-
-/** Rotate by keeping only the tail (append-mostly; never edits in place). */
+ * Rotate by keeping only the tail (append-mostly; never edits in place). */
 export function trimAuditTail(content: string, maxLines = MAX_AUDIT_LINES): string {
   const lines = content.split('\n').filter(Boolean)
   if (lines.length <= maxLines) return content.endsWith('\n') ? content : `${content}\n`
@@ -114,13 +96,17 @@ export function auditRotateContent(content: string, maxBytes = MAX_AUDIT_BYTES, 
  * persisted. Fail-closed contract (APPROVAL-07): observational call sites may
  * ignore the result, but every verdict commit (pushHistory) must fail closed
  * to denied when this returns false, so no unaudited allow can take effect.
- * The append itself is the writability check — no separate probe (a probe
- * would only add a TOCTOU window between check and write).
+ *
+ * The append itself is the writability check — no separate probe (a probe would
+ * only add a TOCTOU window between check and write). Relocation when the
+ * canonical directory refuses writes is `appendRuntimeLine`'s job, and it is
+ * exactly that: relocate and keep auditing, never "skip the write and report
+ * success". A location that fails for other reasons still fails closed here.
  */
 export function appendAuditLine(line: string): boolean {
-  const file = auditWritePath()
+  const file = appendRuntimeLine(AUDIT_FILENAME, `${line}\n`, auditFileOverride)
+  if (file === undefined) return false
   try {
-    appendFileSync(file, `${line}\n`)
     if (statSync(file).size > MAX_AUDIT_BYTES) {
       const content = readFileSync(file, 'utf8')
       const rotated = auditRotateContent(content)

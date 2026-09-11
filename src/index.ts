@@ -44,7 +44,6 @@ import {
   emptyLearningStore,
   learnGateEligible,
   loadLearning,
-  persistLearning,
   recordConfirm,
   resetConfirmation,
   revokeLearning,
@@ -66,10 +65,13 @@ import {
   DEBUG_FILENAME,
   HISTORY_FILENAME,
   LEARNING_FILENAME,
+  appendRuntimeLine,
+  probeRuntimeDirWritable,
   resolveRuntimeReadPath,
   resolveRuntimeWritePath,
   runtimeFilePath,
   setRuntimeStateDir,
+  writeRuntimeAtomic,
 } from './auto/runtime-paths.js'
 import { runtimeStateReadHits } from './auto/shell.js'
 import { isLoopbackHostname, isTrustedRequest, resolvePublicReviewerTarget, reviewerProbeTargetAllowed, validateReviewerBaseUrl } from './auto/trust.js'
@@ -1471,12 +1473,12 @@ let configError: string | null = null
 function debugLog(entry: Record<string, unknown>): void {
   if (!debugOn) return
   try {
-    const file = resolveRuntimeWritePath(DEBUG_FILENAME)
-    if (existsSync(file) && statSync(file).size > 1_048_576) {
+    const file = appendRuntimeLine(DEBUG_FILENAME, `${JSON.stringify({ at: Date.now(), ...entry })}\n`)
+    if (file === undefined) return
+    if (statSync(file).size > 1_048_576) {
       const lines = readFileSync(file, 'utf8').split('\n').filter(Boolean)
       atomicWriteFile(file, `${lines.slice(-2000).join('\n')}\n`)
     }
-    appendFileSync(file, `${JSON.stringify({ at: Date.now(), ...entry })}\n`)
   } catch {
     // Debug is best-effort; never affects the approval outcome.
   }
@@ -1550,11 +1552,13 @@ function pushHistory(entry: Omit<HistoryRecord, 'id' | 'at'>): boolean {
   approvalHistory.push(record)
   if (approvalHistory.length > 200) approvalHistory.shift()
   try {
-    appendFileSync(historyWritePath(), `${JSON.stringify(record)}\n`)
+    const file = appendRuntimeLine(HISTORY_FILENAME, `${JSON.stringify(record)}\n`, historyFileOverride)
     // Rotate the on-disk log once it grows past 1 MB so it cannot grow without
-    // bound (the in-memory window is already capped at 200 records).
-    if (statSync(historyWritePath()).size > 1_048_576) {
-      atomicWriteFile(historyWritePath(), `${approvalHistory.map((r) => JSON.stringify(r)).join('\n')}\n`)
+    // bound (the in-memory window is already capped at 200 records). The file
+    // that actually received the line is the one to rotate: after a relocation
+    // it is not the canonical path.
+    if (file !== undefined && statSync(file).size > 1_048_576) {
+      atomicWriteFile(file, `${approvalHistory.map((r) => JSON.stringify(r)).join('\n')}\n`)
     }
   } catch {
     // History persistence is best-effort.
@@ -1624,10 +1628,6 @@ let learningStore: LearningStore = emptyLearningStore()
 // on-disk file after boot and validation still rejects poisoned entries on
 // the next load — this is observational only: one audit line + one warning
 // per divergence, never a decision change.
-function learningPersistPath(): string {
-  return resolveRuntimeWritePath(LEARNING_FILENAME)
-}
-
 let learningDiskFingerprint: LearningFileFingerprint | undefined
 
 /**
@@ -1658,7 +1658,11 @@ const persistLearningGuarded = (): void => {
     console.warn('[dsh-auto-approval-llm] learning.json changed outside the plugin process; the in-memory store overwrites it on this persist (audit trail: learning-tamper).')
     appendAuditLine(JSON.stringify({ type: 'learning-tamper', at: Date.now(), seen: current ?? null, expected: learningDiskFingerprint ?? null }))
   }
-  persistLearning(learningPersistPath(), learningStore)
+  // Relocates to the pre-move root when the canonical directory refuses writes
+  // (see runtime-paths.ts). Silent on failure by design: the in-memory store
+  // still applies, and the boot probe has already warned once if the canonical
+  // location was unusable from the start.
+  writeRuntimeAtomic(LEARNING_FILENAME, JSON.stringify(learningStore), '.tmp')
   learningDiskFingerprint = learningFileFingerprint(resolveRuntimeReadPath(LEARNING_FILENAME))
 }
 
@@ -2937,6 +2941,12 @@ export function apply(ctx: Context, rawConfig: Config): void {
   // is always the directory the guard protects: a divergence would put the files
   // outside the protected subtree while the guard watched a different one.
   setRuntimeStateDir(join(resolveRoots(process.cwd(), rootOptions).dshHome, 'auto-approval-llm'))
+  // Prove the directory accepts writes before the first verdict. `mkdirSync`
+  // cannot answer this: a directory that already exists satisfies it while
+  // rejecting every write, and an append failing there makes the audit gate
+  // refuse every verdict. A rejection degrades the runtime files to the pre-move
+  // root once, with a warning saying where they went.
+  probeRuntimeDirWritable()
   // Only now is the state directory known. Loading must happen after this call,
   // never at module load: the directory depends on `config.dshHome`, which does
   // not exist until here, and a load that ran earlier would read one directory
