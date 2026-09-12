@@ -101,6 +101,11 @@ export function loadLatencySamples(): LatencySample[] {
         if (parsed && typeof parsed.at === 'number' && typeof parsed.tookMs === 'number' && typeof parsed.settled === 'boolean') {
           const sample: LatencySample = { at: parsed.at, tookMs: parsed.tookMs, settled: parsed.settled }
           if (parsed.channel === 'classifier' || parsed.channel === 'reviewer') sample.channel = parsed.channel
+          // The retry count is part of the record (the retry loop exists to
+          // surface it). Rebuilding the sample from a fixed key set dropped it
+          // on every reload — and because rotation rewrites the file from the
+          // in-memory array, the loss became permanent at the next rotation.
+          if (typeof parsed.attempts === 'number') sample.attempts = parsed.attempts
           samples.push(sample)
         }
       } catch {
