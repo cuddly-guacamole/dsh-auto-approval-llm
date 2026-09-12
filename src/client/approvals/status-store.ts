@@ -207,6 +207,17 @@ export function createApprovalStatusStore(now: () => number = Date.now): Approva
       if (tombstones.has(key)) return
       const existing = records.get(key)
       if (existing && existing.phase === 'follow') return
+      // A published countdown is stronger evidence than "a pending exists": the
+      // per-approval watcher re-observes the same ask when its panel finally
+      // appears, and that must not downgrade a running countdown to "waiting for
+      // a human" (observed live as a one-poll flicker).
+      if (existing && existing.seconds > 0) {
+        if (breaker && !existing.breaker) {
+          existing.breaker = breaker
+          notify()
+        }
+        return
+      }
       const at = now()
       records.set(key, {
         sessionId,

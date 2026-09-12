@@ -128,6 +128,10 @@ test('a poll that briefly misses the countdown does not repaint the chip', () =>
   store.publishStatus('s1', 'c1', { phase: 'countdown', action: 'reject', seconds: 10 })
   store.confirmAwaiting('s1', 'c1')
   assert.equal(chipState(store.activeFor('s1', now), now, false).kind, 'countdown')
+  // The watcher re-observing the same ask when its panel appears must not
+  // downgrade the running countdown either (the other half of the same bug).
+  store.observePending('s1', 'c1')
+  assert.equal(chipState(store.activeFor('s1', now), now, false).kind, 'countdown')
   // An ask that never published a countdown still reports waiting for a human.
   store.dropPending('s1', 'c1')
   now = 2_000
