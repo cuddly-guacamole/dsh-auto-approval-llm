@@ -181,11 +181,14 @@ test('boundary: a win32 traversal re-anchors to its true destination and still d
 })
 
 test('known limit: a posix changer target cannot be seen as the same tree', () => {
-  // The conservative rule refuses to re-anchor onto a posix base, so the
-  // relative traversal is still resolved against the win32 workspace and lands
-  // under DSH_HOME — denied, but for the workspace reading rather than for the
-  // contract file. Pinning "denied" (not the exact reason) keeps the assertion
-  // honest without freezing which fuse happens to fire.
+  // A posix changer base is not compared against the win32 workspace, so the
+  // relative traversal is not re-anchored and is instead resolved against the
+  // workspace, where it lands under DSH_HOME — denied, but possibly for the
+  // workspace reading rather than for the contract file. The posix spellings
+  // themselves are translated at the normalize entry on win32
+  // (paths.ts:canonicalizeMsysPath, see tests/audit-msys-spelling-fuses.test.mjs);
+  // this case pins only the weaker invariant — the traversal must not become
+  // answerable — so it stays honest without freezing which fuse fires.
   // The relative spelling is derived without trusting a hardcoded home depth or
   // user name: `..` + the posix plugin path is exactly the traversal the fixed
   // `../Administrator/.dsh/...` spelling spelled for the original checkout.

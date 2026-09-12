@@ -5,8 +5,33 @@
 import { homedir, tmpdir } from 'node:os';
 import { dirname, posix, win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
+/**
+ * Translate the MSYS/Git-Bash spelling of a Windows location into its win32
+ * form: `/c/Users/…` → `C:/Users/…`, bare `/c` → `C:`, and a forward-slash UNC
+ * (`//server/share/…`) into backslashes. Platform-gated on purpose: on a POSIX
+ * host `/c/…` is a real path rather than an alias, so the translation must not
+ * exist there.
+ *
+ * Why it exists: the agent's shell is Git Bash, so `$HOME` reaches the model as
+ * `/c/Users/…`. Without the translation the two spellings of one target landed
+ * in different path styles, and every style-sensitive containment fuse
+ * (`isWithin` / `isCriticalPath` / the shell DSH_HOME write fuse / the
+ * plugin-zone fuse) silently missed the posix-spelled one — `printf x >
+ * /c/…/lib/index.js` and `rm -rf /c/…/.dsh` were merely classifier-answerable
+ * asks while the `C:\…` spelling of the same target was hard-denied.
+ */
+export function canonicalizeMsysPath(input, platform = process.platform) {
+    if (platform !== 'win32')
+        return input;
+    if (input.startsWith('//'))
+        return input.replace(/\//g, '\\');
+    const drive = /^\/([A-Za-z])(\/|$)/.exec(input);
+    if (drive !== null)
+        return `${drive[1].toUpperCase()}:${input.slice(2)}`;
+    return input;
+}
 function explicitStyleOf(value) {
-    const canonical = canonicalizeWindowsNamespace(value);
+    const canonical = canonicalizeMsysPath(canonicalizeWindowsNamespace(value));
     if (/^[A-Za-z]:/.test(canonical) || canonical.startsWith('\\'))
         return 'win32';
     if (canonical.startsWith('/'))
@@ -71,7 +96,7 @@ export function canonicalizePosixSystemAlias(path, platform = process.platform) 
 }
 /** Normalize an absolute or cwd-relative user path without following links. */
 export function normalizePath(input, cwd, userHome = homedir()) {
-    const canonicalInput = canonicalizeWindowsNamespace(input);
+    const canonicalInput = canonicalizeMsysPath(canonicalizeWindowsNamespace(input));
     const expanded = canonicalInput === '~'
         ? userHome
         : canonicalInput.startsWith('~/') || canonicalInput.startsWith('~\\')
