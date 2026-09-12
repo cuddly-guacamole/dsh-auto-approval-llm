@@ -1225,6 +1225,11 @@ function SettingsSection() {
       const data = await res.json()
       if (!data?.ok) throw new Error(data?.error ?? t('settings.saveFailed'))
       broadcastSettings(data.value)
+      // The server response is the new baseline: without adopting it the card
+      // keeps the pre-save revision, so the NEXT save from any card is rejected
+      // (400, expectedRevision) and the card reports "unsaved" against a value
+      // that is no longer stored. Every other save path adopts it here.
+      setSnapshot(data.value)
       const del = await (globalThis as any).fetch(REVIEWER_CREDENTIAL_ROUTE, {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
