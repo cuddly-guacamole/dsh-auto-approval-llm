@@ -1827,30 +1827,54 @@ function reviewerKeyFromCredentialFile(): string | undefined {
 /** Best-effort removal of the reviewer key line from the shared credential
  * file, mirroring the fallback probe paths. Used by the credential DELETE so
  * "restore defaults" really clears the reviewer key in every source. Never
- * touches any other ref line. */
-function clearReviewerKeyFromCredentialFile(): boolean {
-  try {
-    const candidates = [
-      process.env.DSH_HOME ? join(process.env.DSH_HOME, '.credentials.yaml') : '',
-      join(homedir(), '.dsh', '.credentials.yaml'),
-    ]
-    for (const file of candidates) {
-      if (!file) continue
-      try {
-        const text = readFileSync(file, 'utf8')
-        const pattern = new RegExp(`^\\s*${REVIEWER_CREDENTIAL_REF}\\s*:.*$`, 'm')
-        if (!pattern.test(text)) continue
-        const cleaned = text.replace(pattern, '')
-        writeFileSync(file, cleaned)
-        return true
-      } catch {
-        // try the next candidate
-      }
-    }
-    return false
-  } catch {
-    return false
+ * touches any other ref line.
+ *
+ * Tri-state on purpose: the route must not answer 200 while the key it claims
+ * to have cleared is still readable there — `resolveReviewerApiKey` falls back
+ * to this file on the next review, so a failed removal means the key stays live
+ * and keeps being sent. `absent` (no readable candidate carries the ref) is a
+ * success; `failed` (the ref is present and could not be removed) is not. */
+export function clearReviewerKeyFromCredentialFile(): 'cleared' | 'absent' | 'failed' {
+  const candidates = [
+    process.env.DSH_HOME ? join(process.env.DSH_HOME, '.credentials.yaml') : '',
+    join(homedir(), '.dsh', '.credentials.yaml'),
+  ]
+  let failed = false
+  for (const file of candidates) {
+    const result = clearReviewerKeyInFile(file)
+    if (result === 'cleared') return 'cleared'
+    if (result === 'failed') failed = true
   }
+  return failed ? 'failed' : 'absent'
+}
+
+/**
+ * Remove the reviewer ref line from ONE credential file.
+ *
+ * Tri-state on purpose: the route must not answer 200 while the key it claims
+ * to have cleared is still readable there — `resolveReviewerApiKey` falls back
+ * to this file on the next review, so a failed removal means the key stays live
+ * and keeps being sent. 'absent' (no such line, or an unreadable file) is a
+ * success; 'failed' (the line is present and could not be rewritten) is not.
+ * Takes the path so the verdict is contract-testable without touching the
+ * machine's real credential file.
+ */
+export function clearReviewerKeyInFile(file: string): 'cleared' | 'absent' | 'failed' {
+  if (!file) return 'absent'
+  let text: string
+  try {
+    text = readFileSync(file, 'utf8')
+  } catch {
+    return 'absent'
+  }
+  const pattern = new RegExp(`^\\s*${REVIEWER_CREDENTIAL_REF}\\s*:.*$`, 'm')
+  if (!pattern.test(text)) return 'absent'
+  try {
+    writeFileSync(file, text.replace(pattern, ''))
+  } catch {
+    return 'failed'
+  }
+  return 'cleared'
 }
 
 interface ReviewStatus {
@@ -2279,8 +2303,15 @@ export function installReviewerCredentialRoute(ctx: any): void {
           }
           // Also drop the shared-file fallback source (the line this plugin
           // appended earlier): a cleared reviewer key must not resurrect from
-          // the credential file on the next review. Best-effort only.
-          clearReviewerKeyFromCredentialFile()
+          // the credential file on the next review. The removal is reported
+          // honestly — a 200 here means the key is gone from every source, so a
+          // failure to rewrite the file is a 400 rather than a silent ok the
+          // next review would contradict by sending the key again.
+          const fileClear = clearReviewerKeyFromCredentialFile()
+          if (fileClear === 'failed') {
+            responseJson(res, 400, { ok: false, error: 'credential clear failed on the shared credential file' })
+            return
+          }
           responseJson(res, 200, { ok: true })
           return
         }
