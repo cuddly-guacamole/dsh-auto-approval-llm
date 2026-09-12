@@ -23,12 +23,37 @@ import { fileURLToPath } from 'node:url';
 export function canonicalizeMsysPath(input, platform = process.platform) {
     if (platform !== 'win32')
         return input;
+    // A bare `//c` is a drive alias, not a UNC share: a share spelling always
+    // names a share after the host. Leaving it to the UNC branch below turned
+    // it into a driveless `\c`, so the drive-root fuse never saw it.
+    if (/^\/{2}[A-Za-z]\/?$/.test(input))
+        return `${input[2].toUpperCase()}:\\`;
     if (input.startsWith('//'))
         return input.replace(/\//g, '\\');
     const drive = /^\/([A-Za-z])(\/|$)/.exec(input);
     if (drive !== null)
-        return `${drive[1].toUpperCase()}:${input.slice(2)}`;
+        return `${drive[1].toUpperCase()}:${input.length > 2 ? input.slice(2) : '\\'}`;
     return input;
+}
+/** Literal prefix of a glob target: everything before the first `*`/`?` segment. */
+export function globRootOf(target) {
+    const parts = target.split(/[\\/]/);
+    const index = parts.findIndex(part => /[*?]/.test(part));
+    if (index < 0)
+        return target;
+    const kept = parts.slice(0, index);
+    if (kept.length === 0) {
+        // A glob inside the drive segment itself (`C:*`, `C:?`) still names the
+        // drive root, and the drive-relative gate is the owner that rejects it:
+        // hand the drive spec back instead of collapsing to the current
+        // directory, which would make the whole fuse family look at the
+        // workspace.
+        const drive = /^([A-Za-z]):/.exec(parts[0] ?? '');
+        return drive !== null ? `${drive[1].toUpperCase()}:` : '.';
+    }
+    if (kept.length === 1 && kept[0] === '')
+        return target.startsWith('\\') ? '\\' : '/';
+    return kept.join(target.includes('\\') && !target.includes('/') ? '\\' : '/');
 }
 function explicitStyleOf(value) {
     const canonical = canonicalizeMsysPath(canonicalizeWindowsNamespace(value));
@@ -263,13 +288,18 @@ export function pluginZoneSelfModifyReason(normalized) {
 }
 /** Deterministic destructive-target fuse. */
 export function hardDestructiveTargetReason(target, roots) {
-    const namespaceReason = windowsDeviceNamespaceReason(target);
+    // A glob names the directory it sweeps, not a literal path: `C:\*` and
+    // `/c/*` are the drive root, and `c:\*` is not a filesystem root to any
+    // containment check. Reduce to the glob root BEFORE every predicate so one
+    // owner decides the target the whole fuse family sees.
+    const rootTarget = globRootOf(target);
+    const namespaceReason = windowsDeviceNamespaceReason(rootTarget);
     if (namespaceReason !== undefined)
         return namespaceReason;
-    const canonicalTarget = canonicalizeWindowsNamespace(target);
+    const canonicalTarget = canonicalizeWindowsNamespace(rootTarget);
     if (/^[A-Za-z]:(?![\\/])/.test(canonicalTarget))
         return `ambiguous Windows drive-relative path ${canonicalTarget}`;
-    const normalized = normalizePath(target, roots.workspace, roots.home);
+    const normalized = normalizePath(rootTarget, roots.workspace, roots.home);
     if (isFilesystemRoot(normalized))
         return `filesystem root ${normalized}`;
     if (styleOf(normalized) === 'win32') {

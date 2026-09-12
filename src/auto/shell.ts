@@ -3,7 +3,7 @@
 // MIT License, Copyright (c) 2026 程序员阿江-Relakkes (https://github.com/NanmiCoder/dsh-auto-mode).
 // Retained per the MIT License: this is a substantial portion of the original.
 import { basename } from 'node:path';
-import { hardDestructiveTargetReason, isArtifactArea, isCriticalPath, isProtectedProjectPath, isProtectedReadMetadata, isWithin, normalizePath, runtimeStateBasename, runtimeStateTargetInZone, runtimeStateTargetReason, } from './paths.js';
+import { globRootOf, hardDestructiveTargetReason, isArtifactArea, isCriticalPath, isProtectedProjectPath, isProtectedReadMetadata, isWithin, normalizePath, runtimeStateBasename, runtimeStateTargetInZone, runtimeStateTargetReason, } from './paths.js';
 import { isEffectiveRoutine, sensitiveBasenameAt } from './category.js';
 function ambiguous(reason) {
     return { decision: 'ask', reason, classifierEligible: true };
@@ -360,16 +360,7 @@ export function isNullSink(word, shell) {
  * unbounded expansion such as `/*` is judged against `/`.
  */
 function globRoot(target) {
-    const parts = target.split(/[\\/]/);
-    const index = parts.findIndex(part => /[*?]/.test(part));
-    if (index < 0)
-        return target;
-    const kept = parts.slice(0, index);
-    if (kept.length === 0)
-        return '.';
-    if (kept.length === 1 && kept[0] === '')
-        return target.startsWith('\\') ? '\\' : '/';
-    return kept.join(target.includes('\\') && !target.includes('/') ? '\\' : '/');
+    return globRootOf(target);
 }
 function deletionSpec(name, words, shell) {
     if (shell === 'bash' && ['rm', 'rmdir', 'unlink', 'shred'].includes(name)) {

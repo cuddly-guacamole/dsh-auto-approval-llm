@@ -21,7 +21,7 @@ test('the translation is platform-gated: POSIX hosts keep `/c/...` verbatim', ()
   assert.equal(canonicalizeMsysPath('/c/Users/u/.dsh', 'linux'), '/c/Users/u/.dsh')
   assert.equal(canonicalizeMsysPath('/c/Users/u/.dsh', 'darwin'), '/c/Users/u/.dsh')
   assert.equal(canonicalizeMsysPath('/c/Users/u/.dsh', 'win32'), 'C:/Users/u/.dsh')
-  assert.equal(canonicalizeMsysPath('/c', 'win32'), 'C:')
+  assert.equal(canonicalizeMsysPath('/c', 'win32'), 'C:\\')
   assert.equal(canonicalizeMsysPath('//server/share/x', 'win32'), '\\\\server\\share\\x')
   // Non-drive posix paths and near-miss shapes stay untouched.
   assert.equal(canonicalizeMsysPath('/tmp/x', 'win32'), '/tmp/x')
