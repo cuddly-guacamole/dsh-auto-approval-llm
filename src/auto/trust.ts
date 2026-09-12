@@ -143,9 +143,13 @@ export function isPublicIpv4(text: string): boolean {
 export function isPublicIpv6(text: string): boolean {
   const stripped = text.startsWith('[') && text.endsWith(']') ? text.slice(1, -1) : text
   const lower = stripped.toLowerCase()
-  // IPv4-mapped (::ffff:a.b.c.d, also 0:0:0:0:0:ffff:...) → judge the embedded IPv4.
-  const mapped = lower.match(/^(?:0+:)*0*ffff:([0-9.]+)$/)
-  if (mapped) return isPublicIpv4(mapped[1])
+  // IPv4-mapped addresses are never public: the module contract rejects the
+  // mapped class outright, and the fully written spelling used to judge the
+  // embedded IPv4 (so `0:0:0:0:0:ffff:8.8.8.8` was public while
+  // `::ffff:8.8.8.8` was not). Spelling the check this way also closes the
+  // hex forms, which fell through to the final charset test:
+  // `::ffff:a9fe:a9fe` is the cloud metadata address 169.254.169.254.
+  if (/^(?:::ffff:|(?:0{1,4}:){5}ffff:)/i.test(lower)) return false
   if (lower === '::' || lower === '::1') return false
   if (lower.startsWith('fe8') || lower.startsWith('fe9') || lower.startsWith('fea') || lower.startsWith('feb')) return false // fe80::/10
   if (lower.startsWith('fc') || lower.startsWith('fd')) return false // fc00::/7
