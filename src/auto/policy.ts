@@ -220,7 +220,15 @@ function riskyPluginToolReason(name: string): string | undefined {
         return `registered tool name indicates a security-boundary change: ${name}`;
     return undefined;
 }
-/** Exact, audited session/control-plane tools whose effects stay in Harness state. */
+/**
+ * Exact, audited session/control-plane tools whose effects stay in Harness
+ * state. The Cordis dynamic-plugin bookkeeping belongs here because `define`
+ * records source and stops short of applying it, while `stop` and `undefine`
+ * only manage the session's own plugins; the session reminder pair adds and
+ * removes one reminder. `cordis_run` is deliberately absent: it is the one
+ * member that executes model-written host code, so it stays unrecognized and
+ * classifier judged rather than pre-approved.
+ */
 const SESSION_STATE_TOOLS = new Set([
     'ask_user_question',
     'todo_write',
@@ -229,12 +237,19 @@ const SESSION_STATE_TOOLS = new Set([
     'update_goal',
     'exit_plan_mode',
     'skill',
+    'present',
+    'cordis_define',
+    'cordis_stop',
+    'cordis_undefine',
+    'schedule_create',
+    'schedule_delete',
 ]);
 /** Read-only tools backed by owner/workspace-authorized Harness services. */
 const HARNESS_READ_TOOLS = new Set([
     'job_output',
     'job_list',
     'schedule_list',
+    'list_subagent_models',
     'session_search',
     'session_event_search',
     'session_trace',

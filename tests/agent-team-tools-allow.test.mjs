@@ -123,6 +123,7 @@ const EXTERNAL_LOOKUP_LABELS = new Map([
  */
 const RISK_TOKEN_EXCEPTIONS = new Map([
   ['send_message', 'the token is the verb "send"; the tool posts to the durable peer mailbox, not to an external service'],
+  ['schedule_delete', 'the token is the verb "delete"; it removes one session-local reminder by exact id, reached only through schedule_create, and touches no file, path or external service'],
 ])
 
 /** The nine tools the installed Agent Teams package actually registers. */

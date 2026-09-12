@@ -44,12 +44,15 @@ export const DIRECT_HUMAN_TOOL = 'dsa_request_user'
 export const DEFAULT_ALLOW_TOOL_GROUPS: ReadonlyArray<{ label: string; tools: readonly string[] }> = [
   {
     label: 'Session & control',
-    tools: ['ask_user_question', 'todo_write', 'get_goal', 'create_goal', 'update_goal', 'exit_plan_mode', 'skill'],
+    tools: [
+      'ask_user_question', 'todo_write', 'get_goal', 'create_goal', 'update_goal', 'exit_plan_mode', 'skill',
+      'present', 'cordis_define', 'cordis_stop', 'cordis_undefine', 'schedule_create', 'schedule_delete',
+    ],
   },
   {
     label: 'Read-only Harness',
     tools: [
-      'job_output', 'job_list', 'schedule_list',
+      'job_output', 'job_list', 'schedule_list', 'list_subagent_models',
       'session_search', 'session_event_search', 'session_trace', 'session_event_trace', 'session_event_read',
       'terminal_read', 'terminal_list',
       'cordis_inspect_list', 'cordis_inspect_query', 'cordis_inspect_self',

@@ -228,10 +228,11 @@ const READ_TOOLS = new Set(['read', 'read_image', 'grep', 'glob', 'lsp'])
 const WRITE_TOOLS = new Set(['write', 'edit'])
 const SESSION_STATE_TOOLS = new Set([
   'ask_user_question', 'todo_write', 'get_goal', 'create_goal', 'update_goal',
-  'exit_plan_mode', 'skill',
+  'exit_plan_mode', 'skill', 'present', 'cordis_define', 'cordis_stop', 'cordis_undefine',
+  'schedule_create', 'schedule_delete',
 ])
 const HARNESS_READ_TOOLS = new Set([
-  'job_output', 'job_list', 'schedule_list', 'session_search', 'session_event_search',
+  'job_output', 'job_list', 'schedule_list', 'list_subagent_models', 'session_search', 'session_event_search',
   'session_trace', 'session_event_trace', 'session_event_read', 'terminal_read', 'terminal_list',
   'cordis_inspect_list', 'cordis_inspect_query', 'cordis_inspect_self',
 ])
