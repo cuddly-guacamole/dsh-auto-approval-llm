@@ -2381,7 +2381,10 @@ function SettingsSection() {
           React.createElement(Button, {
             variant: 'outline',
             size: 'sm',
-            disabled: saving,
+            // Same write gate as every other settings-card button: this one
+            // POSTs too, so a read-only configuration plane must disable it up
+            // front instead of answering a failed write.
+            disabled: saving || !snapshot.writable,
             onClick: () => { void clearInvalidKeys() },
           }, t('settings.clearInvalid')),
         )
@@ -2515,6 +2518,8 @@ function chipLabel(state: ChipState): string | null {
 function SessionApprovalPanel(props: any) {
   const [open, setOpen] = React.useState(false)
   const [records, setRecords] = React.useState<any[]>([])
+  // The history load failed: the panel says so instead of rendering zeroes.
+  const [historyUnavailable, setHistoryUnavailable] = React.useState(false)
   const [panelMode, setPanelMode] = React.useState<'on' | 'auto' | 'off'>('off')
   const [sessionMode, setSessionMode] = React.useState<string | undefined>()
   // Bumped by the panel's refresh button to re-read the history.
@@ -2614,11 +2619,18 @@ function SessionApprovalPanel(props: any) {
     ;(globalThis as any).fetch(HISTORY_ROUTE, { credentials: 'same-origin' })
       .then((r: any) => r.json())
       .then((data: any) => {
-        if (disposed || !data?.ok) return
+        if (disposed) return
+        // A failed load must never render as "no records": that reads as
+        // "nothing was ever adjudicated", which is a different and false claim.
+        if (!data?.ok) {
+          setHistoryUnavailable(true)
+          return
+        }
         const all = data.value.records ?? []
         setRecords(all.filter((r: any) => r.sessionId === sessionId).slice(0, 50))
+        setHistoryUnavailable(false)
       })
-      .catch(() => {})
+      .catch(() => { if (!disposed) setHistoryUnavailable(true) })
     return () => { disposed = true }
   }, [open, sessionId, reloadKey])
 
@@ -2722,9 +2734,12 @@ function SessionApprovalPanel(props: any) {
           React.createElement('path', { d: OVERLAY_CLOSE_PATH, fill: 'currentColor' }),
         )),
       ),
-      React.createElement('div', null, t('panel.stats', { total, allow, deny, timeout, breaker })),
+      React.createElement('div', null, historyUnavailable
+        ? t('panel.historyUnavailable')
+        : t('panel.stats', { total, allow, deny, timeout, breaker })),
       records.length === 0
-        ? React.createElement('p', { style: { color: 'var(--dsw-alias-label-tertiary)', margin: 0 } }, t('panel.empty'))
+        ? React.createElement('p', { style: { color: 'var(--dsw-alias-label-tertiary)', margin: 0 } },
+            historyUnavailable ? t('panel.historyRetry') : t('panel.empty'))
         : React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 4 } },
             records.slice(0, MAX_PANEL_RECORDS).map((r: any) => React.createElement('div', {
               key: r.id,

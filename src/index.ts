@@ -2239,7 +2239,10 @@ export function installSettingsRoute(ctx: any, settings: any): void {
           return
         }
         const body = await readJsonBody(req)
-        if (typeof body?.value !== 'object' || body.value === null) {
+        // A plain object is required: an array passes `typeof === 'object'` and
+        // then spreads to `{}` in preserveHostKeys, silently resetting every
+        // card key to the schema default behind a 200.
+        if (typeof body?.value !== 'object' || body.value === null || Array.isArray(body.value)) {
           throw new TypeError('value is required')
         }
         // Optimistic concurrency is mandatory: an omitted expectedRevision
@@ -2482,20 +2485,31 @@ function installLearningStoreRoute(ctx: any, revoke: (key: string) => Promise<bo
         return
       }
       if (req.method === 'DELETE') {
-        const body = await readJsonBody(req)
-        if (typeof body?.key !== 'string' || body.key === '') {
-          throw new TypeError('key is required')
+        // Same error contract as every sibling route: a JSON body over the
+        // limit is a 413 and any other failure a JSON 400. Without this the
+        // host answered a bare, non-JSON 400 that the settings card could not
+        // read, so the revoke failed silently in the UI.
+        try {
+          const body = await readJsonBody(req)
+          if (typeof body?.key !== 'string' || body.key === '') {
+            throw new TypeError('key is required')
+          }
+          const removed = await revoke(body.key)
+          if (removed !== true) {
+            responseJson(res, 404, { ok: false, error: 'learning entry not found' })
+            return
+          }
+          persistLearningGuarded()
+          // Revoking a learned entry changes future decisions — leave a
+          // recoverable audit trail (mirrors recordAuditClear's discipline).
+          appendAuditLine(JSON.stringify({ type: 'learning-revoked', at: Date.now(), key: body.key }))
+          responseJson(res, 200, { ok: true, value: { removed: true } })
+        } catch (error) {
+          responseJson(res, error instanceof RangeError ? 413 : 400, {
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+          })
         }
-        const removed = await revoke(body.key)
-        if (removed !== true) {
-          responseJson(res, 404, { ok: false, error: 'learning entry not found' })
-          return
-        }
-        persistLearningGuarded()
-        // Revoking a learned entry changes future decisions — leave a
-        // recoverable audit trail (mirrors recordAuditClear's discipline).
-        appendAuditLine(JSON.stringify({ type: 'learning-revoked', at: Date.now(), key: body.key }))
-        responseJson(res, 200, { ok: true, value: { removed: true } })
         return
       }
       res.setHeader('Allow', 'GET, DELETE')
