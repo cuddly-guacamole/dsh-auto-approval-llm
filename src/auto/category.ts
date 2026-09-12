@@ -242,7 +242,14 @@ const OWNER_CONTROL_TOOLS = new Set(['job_kill', 'terminal_signal', 'terminal_cl
 const AGENT_TEAMS_CONTROL_TOOLS = new Set([
   'team_task_create', 'team_task_get', 'team_task_list', 'team_task_update',
 ])
-const ORCHESTRATION_TOOLS = new Set([
+/**
+ * Orchestration tools whose payload stays inside this host process: an agent
+ * inbox write, or a child-session prompt. Exported because the credential
+ * material fuse in the policy plane asks the same question ("can this payload
+ * leave the host?"), and a second copy of the list is exactly the drift this
+ * module's contract test forbids.
+ */
+export const ORCHESTRATION_TOOLS = new Set([
   'subagent', 'workflow', 'ralph', 'spawn_agent', 'spawn_teammate', 'send_message', 'wait_agent',
   'list_agents', 'interrupt_agent', 'read_thread', 'wait_threads',
 ])

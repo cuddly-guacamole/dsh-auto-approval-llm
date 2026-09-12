@@ -8,7 +8,7 @@
 // the logic stays the single source of truth.
 import { hardDestructiveTargetReason, isCriticalPath, isProtectedProjectPath, isProtectedReadMetadata, isWithin, normalizePath, runtimeStateBasename, runtimeStateTargetInZone, runtimeStateTargetReason, } from './paths.js';
 import { assessShell, hardDenyShellReason, shellReadsCredentialMaterial } from './shell.js';
-import { isEffectiveRoutine, sensitiveBasenameAt } from './category.js';
+import { isEffectiveRoutine, ORCHESTRATION_TOOLS, sensitiveBasenameAt } from './category.js';
 import { DIRECT_HUMAN_TOOL } from './constants.js';
 import * as riskTokens from './risk-tokens.js';
 
@@ -198,6 +198,19 @@ function containsCredentialMaterial(argumentsValue: unknown): boolean {
         .test(serializedArguments(argumentsValue));
 }
 const { DESTRUCTIVE_TOOL, EXTERNAL_WRITE_TOOL, SECURITY_CHANGE_TOOL } = riskTokens;
+/**
+ * Whether a tool name is an egress channel this fuse must police. The
+ * credential-material fuse answers "could this payload leave the host?"; a
+ * host-internal tool (agent inbox, shared-task board, child-session prompt)
+ * cannot, whatever its name spells — `send_message` is not `send_email`. The
+ * member lists are the existing carriers, tied together by the cross-copy
+ * contract test, so the fuse reads the same names the allow plane does.
+ */
+function isEgressChannelName(name: string): boolean {
+    if (ORCHESTRATION_TOOLS.has(name) || AGENT_TEAMS_CONTROL_TOOLS.has(name))
+        return false;
+    return /^(?:web_fetch|curl|wget)/i.test(name) || EXTERNAL_WRITE_TOOL.test(name);
+}
 function riskyPluginToolReason(name: string): string | undefined {
     if (DESTRUCTIVE_TOOL.test(name))
         return `registered tool name indicates a destructive operation: ${name}`;
@@ -282,7 +295,7 @@ const AGENT_TEAMS_CONTROL_TOOLS = new Set([
 /** Synchronous hard-deny reason suitable for the monotonic tool guard. */
 export function hardDenyReason(exec: ExecLike, roots: Roots): string | undefined {
     const args = record(exec.arguments);
-    if ((/^(?:web_fetch|curl|wget)/i.test(exec.name) || EXTERNAL_WRITE_TOOL.test(exec.name)) && containsCredentialMaterial(exec.arguments)) {
+    if (isEgressChannelName(exec.name) && containsCredentialMaterial(exec.arguments)) {
         return 'external call contains credential or private-key material';
     }
     if ((exec.name === 'bash' || exec.name === 'pwsh') && typeof args?.command === 'string') {
