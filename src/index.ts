@@ -2372,14 +2372,24 @@ export function installHistoryRoute(ctx: any): void {
         return
       }
       if (req.method === 'DELETE') {
-        const clearedCount = approvalHistory.length
-        approvalHistory.length = 0
+        // Truncate FIRST and report honestly: clearing the in-memory window
+        // while the file it was loaded from still holds the records means the
+        // next boot resurrects them, and a 200 for that is a false success. The
+        // clear also leaves a recoverable audit trail (never a silent erase),
+        // so a failed truncate must not claim to have cleared anything.
+        let truncated = false
         try {
           writeFileSync(historyWritePath(), '')
+          truncated = statSync(historyWritePath()).size === 0
         } catch {
-          // Best-effort clear.
+          truncated = false
         }
-        // Clear leaves a recoverable audit trail (never a silent erase).
+        if (!truncated) {
+          responseJson(res, 500, { ok: false, error: 'history clear failed: the history file could not be truncated' })
+          return
+        }
+        const clearedCount = approvalHistory.length
+        approvalHistory.length = 0
         recordAuditClear(clearedCount)
         responseJson(res, 200, { ok: true, value: { records: [] } })
         return
