@@ -352,7 +352,10 @@ const DELETE_PWSH = new Set(['remove-item', 'rm', 'ri', 'rd', 'del', 'erase', 'r
 function unwrapWords(words: SegmentWord[]): { words: SegmentWord[]; dynamicInput: boolean } {
   let current = words
   let dynamicInput = false
-  while (current.length > 1 && /^[A-Za-z_][A-Za-z0-9_]*=.+/.test(current[0]?.text ?? '')) {
+  // The value part is optional: an empty-value prefix (`FOO= sudo ls`) is a
+  // legal spelling that used to stay as the effective command name and lose
+  // the privilege / destructive verdict on this plane too.
+  while (current.length > 1 && /^[A-Za-z_][A-Za-z0-9_]*=/.test(current[0]?.text ?? '')) {
     current = current.slice(1)
   }
   for (let depth = 0; depth < 4; depth += 1) {

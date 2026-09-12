@@ -382,7 +382,11 @@ function deletionSpec(name, words, shell) {
         const targets = [];
         for (let index = 1; index < words.length; index += 1) {
             const word = words[index];
-            if (/^-(?:path|literalpath)$/i.test(word.text)) {
+            const inlineValue = /^-(?:path|literalpath):(.+)$/i.exec(word.text);
+            if (inlineValue !== null) {
+                targets.push({ text: inlineValue[1], dynamic: word.dynamic, glob: word.glob, quoted: true });
+            }
+            else if (/^-(?:path|literalpath)$/i.test(word.text)) {
                 const value = words[index + 1];
                 if (value !== undefined)
                     targets.push(value);
@@ -418,8 +422,11 @@ function unwrapCommand(words) {
     // Strip leading `NAME=value` environment prefixes (`VAR=val cmd`), which
     // are legal in both shells. Without this, `words[0]` being `VAR=val` made
     // the effective command name `var=val` and skipped the privilege / hard
-    // destructive fuses entirely (`BLAH=0 sudo ls`, `BLAH=0 rm -rf /`).
-    while (current.length > 1 && /^[A-Za-z_][A-Za-z0-9_]*=.+/.test(current[0]?.text ?? '')) {
+    // destructive fuses entirely (`BLAH=0 sudo ls`, `BLAH=0 rm -rf /`). The
+    // value may be EMPTY (`FOO= sudo ls` clears the variable for one command),
+    // which is why the value part is optional: requiring `.+` left `FOO=` as
+    // the effective command name and lost both fuses for that spelling.
+    while (current.length > 1 && /^[A-Za-z_][A-Za-z0-9_]*=/.test(current[0]?.text ?? '')) {
         current = current.slice(1);
     }
     for (let depth = 0; depth < 4; depth += 1) {
@@ -928,8 +935,16 @@ const PWSH_READ_ONLY = [
     'get-location', 'get-childitem', 'get-content', 'select-string', 'get-item', 'test-path',
     'write-output', 'write-host', 'measure-object', 'select-object', 'sort-object', 'get-date',
 ];
-const FIND_MUTATING_ACTION = /^-(?:delete|fprint|fprintf|fls)$/;
+const FIND_MUTATING_ACTION = /^-(?:delete|fprint|fprint0|fprintf|fls)$/;
 const FIND_NESTED_ACTION = /^-(?:exec|execdir|ok|okdir)$/;
+/** find actions whose next word is an output FILE (`-fprint F`, `-fprint0 F`, `-fls F`). */
+const FIND_WRITE_ACTION = /^-(?:fprint|fprint0|fprintf|fls)$/;
+/**
+ * cp/mv/install flags whose value is a SEPARATE word. Without this the value
+ * (`-m 755`, `-S orig`) became the last positional and the real destination
+ * (`lib/index.js`) fell out of both the fuse and the static-allow judgement.
+ */
+const COPY_DEST_VALUE_FLAGS = new Set(['-t', '--target-directory', '-S', '--suffix', '-m', '--mode', '-o', '--owner', '-g', '--group', '--strip-program']);
 function findSearchRoots(words) {
     const roots = [];
     for (let index = 1; index < words.length; index += 1) {
@@ -1101,21 +1116,40 @@ function writesThroughOperands(name, words) {
     return false;
 }
 /**
- * Explicit path operands of a command word list that act as write targets.
- * cp/mv/install: the destination is the last non-flag operand; the earlier
- * ones are sources (reads) and must not be denied as writes. `-t DEST` /
- * `--target-directory=DEST` invert the operand order: their value IS the
- * destination no matter where it sits. Dynamic/glob operands are KEPT in the
- * result: callers must judge them (a dynamic target cannot be statically
- * proven inside the routine roots, and `$HOME` spellings are hard-denied
- * exactly like the redirection and deletion branches do).
+ * Write-target operands of a command word list. cp/install: the destination is
+ * the LAST POSITIONAL operand and the earlier ones are sources (reads) that
+ * must not be denied as writes; `mv` removes its sources, so every positional
+ * is judged. `-t DEST` / `--target-directory=DEST` invert the operand order:
+ * their value IS the destination no matter where it sits. Dynamic/glob
+ * operands are KEPT in the result: callers must judge them (a dynamic target
+ * cannot be statically proven inside the routine roots, and `$HOME` spellings
+ * are hard-denied exactly like the redirection and deletion branches do).
  */
-function writeOperandCandidates(words) {
-    const candidates = [];
+function writeOperandCandidates(words, name) {
+    if (!words || words.length === 0)
+        return [];
+    const positionals = [];
     for (let index = 1; index < words.length; index += 1) {
-        const word = words[index];
-        if (word.text.startsWith('-')) continue;
-        if (index === words.length - 1) candidates.push(word);
+        if (words[index].text.startsWith('-') || COPY_DEST_VALUE_FLAGS.has(words[index - 1]?.text ?? ''))
+            continue;
+        positionals.push(words[index]);
+    }
+    const candidates = [];
+    if (name === 'mv') {
+        candidates.push(...positionals);
+    }
+    else {
+        // The destination is the last POSITIONAL, not the last word: GNU
+        // getopt permutes trailing flags (`cp a b -v`), which used to hide the
+        // destination from every operand fuse below.
+        let targetDirectory = false;
+        for (let index = 1; index < words.length; index += 1) {
+            const text = words[index].text;
+            if (text === '-t' || text === '--target-directory' || text.startsWith('--target-directory='))
+                targetDirectory = true;
+        }
+        if (!targetDirectory && positionals.length > 0)
+            candidates.push(positionals[positionals.length - 1]);
     }
     for (let index = 1; index < words.length; index += 1) {
         const text = words[index].text;
@@ -1176,7 +1210,7 @@ function segmentHardDenyReason(segment, shell, roots) {
     // uses must not weaken when the workspace IS the zone.
     let writeOperands = null;
     if (shell === 'bash' && ['cp', 'mv'].includes(name)) {
-        writeOperands = writeOperandCandidates(unwrapped.words);
+        writeOperands = writeOperandCandidates(unwrapped.words, name);
     }
     else if (shell === 'bash' && ['mkdir', 'touch'].includes(name)) {
         writeOperands = unwrapped.words.slice(1).filter(word => !word.text.startsWith('-'));
@@ -1188,7 +1222,7 @@ function segmentHardDenyReason(segment, shell, roots) {
         // names its output only through of=; in-place sed edits its file
         // operands; tee and truncate write their bare operands directly.
         if (name === 'install')
-            writeOperands = writeOperandCandidates(unwrapped.words);
+            writeOperands = writeOperandCandidates(unwrapped.words, name);
         else if (name === 'dd')
             writeOperands = ddOutputTargets(unwrapped.words);
         else if (name === 'sed')
@@ -1226,6 +1260,18 @@ function segmentHardDenyReason(segment, shell, roots) {
         }
     }
     if (writeOperands !== null) {
+        // Runtime-state files keep their precise reason in every spelling, so
+        // they are judged over ALL operands first: `mv` contributes its source
+        // before its destination, and the broad DSH_HOME refusal below would
+        // otherwise answer for the source and mask the destination's precise
+        // "runtime state file" reason.
+        for (const operand of writeOperands) {
+            if (operand.dynamic || operand.glob)
+                continue;
+            const stateReason = runtimeStateWriteReason(normalizePath(operand.text, roots.workspace, roots.home), roots);
+            if (stateReason !== undefined)
+                return `${name} targets ${stateReason}`;
+        }
         for (const operand of writeOperands) {
             if (operand.dynamic) {
                 // Mirror the redirection / deletion branches: a dynamic write
@@ -1245,9 +1291,13 @@ function segmentHardDenyReason(segment, shell, roots) {
             }
             const normalized = normalizePath(operand.text, roots.workspace, roots.home);
             // Runtime-state files keep their precise reason (zone basename
-            // match), then the unconditional DSH_HOME fuse covers the rest of
-            // DSH_HOME. Only explicit path shapes are fused: bare flag values
-            // like `truncate -s 0`'s `0` are not write targets.
+            // match), then the destructive-target predicate covers the rest.
+            // That predicate is applied to EVERY operand: gating it on
+            // `looksLikeExplicitPath` let a bare relative destination
+            // (`cp ./src/index.ts lib/index.js`) rewrite the plugin's own
+            // execution code with no fuse at all. The spelling check stays
+            // only around the broad DSH_HOME refusal, which would otherwise
+            // read a bare flag value (`truncate -s 0`'s `0`) as a path.
             const stateReason = runtimeStateWriteReason(normalized, roots);
             if (stateReason !== undefined)
                 return `${name} targets ${stateReason}`;
@@ -1255,13 +1305,13 @@ function segmentHardDenyReason(segment, shell, roots) {
                 const dshReason = shellWriteToDshHomeDenied(normalized, roots);
                 if (dshReason !== undefined)
                     return `${name} targets ${dshReason}`;
-                // Same destructive fuse the redirection and deletion branches
-                // apply: an operand spelling a credential-critical or system
-                // path must hard-deny, not decay into an answerable ask.
-                const reason = hardDestructiveTargetReason(normalized, roots);
-                if (reason !== undefined)
-                    return `${name} targets ${reason}`;
             }
+            // Same destructive fuse the redirection and deletion branches
+            // apply: an operand spelling a credential-critical or system path
+            // must hard-deny, not decay into an answerable ask.
+            const reason = hardDestructiveTargetReason(normalized, roots);
+            if (reason !== undefined)
+                return `${name} targets ${reason}`;
         }
     }
     if (name === 'find' && findHasDestructiveAction(unwrapped.words)) {
@@ -1278,6 +1328,33 @@ function segmentHardDenyReason(segment, shell, roots) {
             const stateReason = runtimeStateWriteReason(normalizePath(globRoot(target.text), roots.workspace, roots.home), roots);
             if (stateReason !== undefined)
                 return `destructive find operation targets ${stateReason}`;
+        }
+    }
+    if (name === 'find') {
+        // find's own writing actions name a file operand (`-fprint FILE`,
+        // `-fprintf FILE FMT`, `-fls FILE`). The module already classes them as
+        // mutating, but only the `-delete` / `-exec` shapes reached a target
+        // fuse, and the category plane labels the segment readOnly (not
+        // LOCKED) — so `find . -fprint ~/.ssh/authorized_keys` was an
+        // answerable countdown that timeoutAction=allow can settle while every
+        // other write vector hard-denies the same target.
+        for (let index = 1; index < unwrapped.words.length; index += 1) {
+            if (!FIND_WRITE_ACTION.test(unwrapped.words[index].text))
+                continue;
+            const target = unwrapped.words[index + 1];
+            if (target === undefined)
+                continue;
+            if (target.dynamic) {
+                if (dynamicHomeTarget(target.text))
+                    return 'find output targeting the user home is not permitted';
+                continue;
+            }
+            const reason = hardDestructiveTargetReason(globRoot(target.text), roots);
+            if (reason !== undefined)
+                return `find output targets ${reason}`;
+            const stateReason = runtimeStateWriteReason(normalizePath(globRoot(target.text), roots.workspace, roots.home), roots);
+            if (stateReason !== undefined)
+                return `find output targets ${stateReason}`;
         }
     }
     if (name === 'find') {
@@ -1385,8 +1462,13 @@ function effectiveCwdAfter(segment, shell, roots) {
  * (`printf x>file`, `printf x2>file`, `printf "a">file`), which is the idiomatic
  * spelling; requiring a separator made the whole recovery bypassable by
  * removing one space.
+ *
+ * `>&file` / `N>&file` are writes (the lexer's own operator table sends them to
+ * `pending = 'write'`), so they are matched too — hence the second operator
+ * alternative. Its `(?=\D)` lookahead keeps a descriptor dup (`>&2`, `2>&1`)
+ * out: those name a file descriptor, not a path, and must stay unfused.
  */
-const OPAQUE_REDIRECT_TARGET = /(?:^|[^;&|()<>])(?:\d*&?>{1,2}\|?)\s*("[^"]*"|'[^']*'|[^\s;&|()<>]+)/g;
+const OPAQUE_REDIRECT_TARGET = /(?:^|[^;&|()<>])(?:\d*&?>{1,2}\|?|\d*>{1,2}&(?=\D))\s*("[^"]*"|'[^']*'|[^\s;&|()<>]+)/g;
 
 /**
  * The redirect-target fuse applied to a command line `decomposeCommandLine`
