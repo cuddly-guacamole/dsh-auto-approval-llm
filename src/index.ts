@@ -111,7 +111,6 @@ export interface Config {
   breakerAntiHijackMs: number
   /** Hold the official panel back for countdown asks; 0 = show it immediately. */
   panelDelayMs?: number
-  aiButtonPosition: 'header' | 'floating'
   workspaceRoot?: string
   dshHome?: string
   tempRoots?: string[]
@@ -232,7 +231,6 @@ export const Config: z<Config> = z.object({
   // appears immediately. Bounded so a mis-set value cannot hide an ask for
   // longer than the shortest countdown can settle it.
   panelDelayMs: z.number().default(THRESHOLD_DEFAULTS.panelDelayMs).min(0).max(10_000),
-  aiButtonPosition: z.union(['header', 'floating'] as const).default('header'),
   workspaceRoot: z.string().default(''),
   dshHome: z.string().default(''),
   tempRoots: z.array(z.string()).default([]),

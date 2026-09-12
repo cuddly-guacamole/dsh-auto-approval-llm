@@ -26,8 +26,8 @@ export const PERMISSION_LABEL_SETS = {
 };
 // Shield outline + bolt, drawn 1:1 like the official 16px permission glyphs
 // (stroke currentColor / fill currentColor, aria-hidden wrapper).
-const SHIELD_PATH = 'M8.20554 0.899994L14.7901 3.36857V7.01026C14.7901 12 11.0466 14.2103 8.20554 15.3C5.36446 14.2103 1.62012 12 1.62012 7.01026V3.36857L8.20554 0.899994Z';
-const BOLT_PATH = 'M8.75 3.65 5.95 8.2h2.08l-.78 4.15 2.82-4.9H8.12l.63-3.8Z';
+export const SHIELD_PATH = 'M8.20554 0.899994L14.7901 3.36857V7.01026C14.7901 12 11.0466 14.2103 8.20554 15.3C5.36446 14.2103 1.62012 12 1.62012 7.01026V3.36857L8.20554 0.899994Z';
+export const BOLT_PATH = 'M8.75 3.65 5.95 8.2h2.08l-.78 4.15 2.82-4.9H8.12l.63-3.8Z';
 // The official preset name for `auto` in this deployment's patch (cordis.patch.yml).
 const CONFIGURED_AUTO_NAME = 'Auto';
 function autoName(document) {

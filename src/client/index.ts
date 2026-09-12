@@ -3,7 +3,7 @@ import { Button, Input } from '@deepseek-ai/dsh-client-ui-primitives'
 import { normalizeTimeoutAction, hasBreakerNote, AWAITING_MARKER, REVIEWER_SYSTEM, assembleReviewerSystem } from '../auto/decision.js'
 import { THRESHOLD_DEFAULTS, DEFAULT_ALLOW_TOOL_GROUPS } from '../auto/constants.js'
 import { parseRulesText } from '../auto/rules.js'
-import { installAutoPermissionIcon } from './auto-icon.js'
+import { installAutoPermissionIcon, SHIELD_PATH, BOLT_PATH } from './auto-icon.js'
 import { createTrailingThrottle, MIN_PANEL_SCAN_INTERVAL_MS } from './throttle.js'
 import { zh, en } from './locale.js'
 import { computeTextNodeRewrites, createBreakerGuard, isLinkDown, revealApproval } from './approvals/shared.js'
@@ -33,9 +33,6 @@ const LLM_MODELS_ROUTE = '/_dsh/auto-approval-llm/llm-models'
 const REASONING_EFFORTS_ROUTE = '/_dsh/auto-approval-llm/reasoning-efforts'
 let sessionsRef: any
 let breakerAntiHijackMs = THRESHOLD_DEFAULTS.breakerAntiHijackMs
-// Whether the approval-panel entry is rendered beside or over the session
-// header; read from settings at apply and refreshed by the settings card.
-let aiButtonPosition: 'header' | 'floating' = 'header'
 const MAX_PANEL_RECORDS = 10
 const LOCALE_NS = 'dsh-auto-approval-llm'
 // First-use onboarding is one-shot per browser (and per page lifetime after
@@ -308,7 +305,6 @@ interface Draft {
   breakerAntiHijackMs: string
   panelDelayMs: string
   reviewMaxRetries: string
-  aiButtonPosition: 'header' | 'floating'
   directHumanEnabled: 'on' | 'off'
   slashCommandsEnabled: 'on' | 'off'
   debug: 'on' | 'off'
@@ -362,7 +358,6 @@ function draftOf(value: any): Draft {
     breakerAntiHijackMs: String(value?.breakerAntiHijackMs ?? THRESHOLD_DEFAULTS.breakerAntiHijackMs),
     panelDelayMs: String(value?.panelDelayMs ?? THRESHOLD_DEFAULTS.panelDelayMs),
     reviewMaxRetries: String(value?.reviewMaxRetries ?? THRESHOLD_DEFAULTS.reviewMaxRetries),
-    aiButtonPosition: value?.aiButtonPosition === 'floating' ? 'floating' : 'header',
     directHumanEnabled: value?.directHumanEnabled === true ? 'on' : 'off',
     slashCommandsEnabled: value?.slashCommandsEnabled === true ? 'on' : 'off',
     debug: value?.debug === true ? 'on' : 'off',
@@ -412,7 +407,6 @@ function valueOf(draft: Draft): any {
     breakerAntiHijackMs: Math.max(0, Number(draft.breakerAntiHijackMs) || 0),
     panelDelayMs: Math.max(0, Math.min(10_000, Number(draft.panelDelayMs) || 0)),
     reviewMaxRetries: Math.max(0, Math.min(2, Number(draft.reviewMaxRetries) || 0)),
-    aiButtonPosition: draft.aiButtonPosition,
     directHumanEnabled: draft.directHumanEnabled === 'on',
     slashCommandsEnabled: draft.slashCommandsEnabled === 'on',
     debug: draft.debug === 'on',
@@ -517,7 +511,6 @@ const INVALID_CONFIG_ENUMS: Record<string, string[]> = {
   llmTakeoverScope: ['low', 'medium-or-below', 'high-or-below'],
   defaultReviewMode: ['manual', 'smart', 'unattended'],
   showSessionPanel: ['on', 'auto', 'off'],
-  aiButtonPosition: ['header', 'floating'],
   endpointProtocol: ['openai', 'anthropic'],
   categoryMode: ['standard', 'aggressive'],
   classifierSource: ['session', 'preset', 'endpoint'],
@@ -572,13 +565,6 @@ function onOffOptions(): CapsuleOption[] {
   return [
     { value: 'on', label: t('common.on') },
     { value: 'off', label: t('common.off') },
-  ]
-}
-
-function buttonPositionOptions(): CapsuleOption[] {
-  return [
-    { value: 'header', label: t('option.header') },
-    { value: 'floating', label: t('option.floating') },
   ]
 }
 
@@ -1031,7 +1017,7 @@ function SettingsSection() {
   // Per-card ownership: saving a card only persists the fields it owns,
   // overlaid on the last-saved baseline; other cards' unsaved edits are left
   // in the local draft and never accidentally persisted by another card.
-  const TOP_KEYS = ['enabled', 'autoSwitchPolicyToAsk', 'timeoutAction', 'llmReviewScope', 'llmTakeoverScope', 'defaultReviewMode', 'showSessionPanel', 'aiButtonPosition', 'autoModeNoticeEnabled']
+  const TOP_KEYS = ['enabled', 'autoSwitchPolicyToAsk', 'timeoutAction', 'llmReviewScope', 'llmTakeoverScope', 'defaultReviewMode', 'showSessionPanel', 'autoModeNoticeEnabled']
   const TIMER_KEYS = ['breakerAntiHijackMs', 'panelDelayMs', 'lowRiskSeconds', 'mediumRiskSeconds', 'highRiskSeconds', 'maxConsecutiveDenials', 'maxTotalDenials', 'reviewWaitSeconds', 'directHumanEnabled', 'slashCommandsEnabled']
   const REVIEW_KEYS = ['classifierSource', 'classifierProvider', 'classifierModel', 'reviewerSource', 'reviewerProvider', 'reviewerModel', 'reviewerMaxTokens', 'reviewerReasoning', 'classifierReasoning', 'endpointUrl', 'endpointModel', 'endpointProtocol', 'reviewMaxRetries']
   const SECURITY_KEYS = ['safetyPrompt', 'allowlist', 'denyList', 'humanOnlyList', 'rulesText', 'rulesDryRun']
@@ -1075,7 +1061,6 @@ function SettingsSection() {
 
   const broadcastSettings = (saved: any) => {
     breakerAntiHijackMs = saved?.value?.breakerAntiHijackMs ?? THRESHOLD_DEFAULTS.breakerAntiHijackMs
-    aiButtonPosition = saved?.value?.aiButtonPosition === 'floating' ? 'floating' : 'header'
     const g = globalThis as any
     if (typeof g.CustomEvent === 'function') {
       g.dispatchEvent(new g.CustomEvent('dsh-auto-approval-llm:settings-changed'))
@@ -1240,7 +1225,7 @@ function SettingsSection() {
     // control, so "restore defaults" flipping it would silently change a
     // guard the user cannot see or undo from this card (its value is a
     // host-level fact — the patch pins it true at install time).
-    const defaults: Partial<Draft> = { enabled: 'on', timeoutAction: 'reject', llmReviewScope: 'low-or-above', llmTakeoverScope: 'medium-or-below', defaultReviewMode: 'smart', showSessionPanel: 'off', aiButtonPosition: 'header' }
+    const defaults: Partial<Draft> = { enabled: 'on', timeoutAction: 'reject', llmReviewScope: 'low-or-above', llmTakeoverScope: 'medium-or-below', defaultReviewMode: 'smart', showSessionPanel: 'off' }
     const merged = { ...base, ...defaults }
     setDraft({ ...draft, ...defaults })
     setSaving(true); setError(''); setMessage('')
@@ -1623,11 +1608,6 @@ function SettingsSection() {
       options: showPanelOptions(),
       onChange: (v: string) => { void instantSaveKey('showSessionPanel', v as any) },
     })),
-    draft.showSessionPanel !== 'off' ? row(t('settings.buttonPosition'), React.createElement(CapsuleSelect, {
-      value: draft.aiButtonPosition,
-      options: buttonPositionOptions(),
-      onChange: (v: string) => { void instantSaveKey('aiButtonPosition', v as any) },
-    })) : null,
   )
 
   // Timers & breaker card body (the numeric/dangerous group).
@@ -2507,7 +2487,6 @@ function SessionApprovalPanel(props: any) {
   const [open, setOpen] = React.useState(false)
   const [records, setRecords] = React.useState<any[]>([])
   const [panelMode, setPanelMode] = React.useState<'on' | 'auto' | 'off'>('off')
-  const [buttonPosition, setButtonPosition] = React.useState<'header' | 'floating'>('header')
   const [sessionMode, setSessionMode] = React.useState<string | undefined>()
   // The control doubles as the status display: idle shows its own name, an
   // active ask shows the countdown, and a settled one shows the outcome for a
@@ -2534,7 +2513,6 @@ function SessionApprovalPanel(props: any) {
       .then((data: any) => {
         if (disposed || !data?.ok) return
         setPanelMode(normalizeShowSessionPanel(data.value.value?.showSessionPanel ?? 'off'))
-        setButtonPosition(data.value.value?.aiButtonPosition === 'floating' ? 'floating' : 'header')
       })
       .catch(() => {})
     return () => { disposed = true }
@@ -2548,7 +2526,6 @@ function SessionApprovalPanel(props: any) {
         .then((data: any) => {
           if (!data?.ok) return
           setPanelMode(normalizeShowSessionPanel(data.value.value?.showSessionPanel ?? 'off'))
-          setButtonPosition(data.value.value?.aiButtonPosition === 'floating' ? 'floating' : 'header')
         })
         .catch(() => {})
     }
@@ -2624,7 +2601,6 @@ function SessionApprovalPanel(props: any) {
     return () => doc?.removeEventListener?.('mousedown', onPointerDown)
   }, [open])
 
-  if (buttonPosition !== 'header') return null
   if (!computePanelVisible(panelMode, sessionMode)) return null
 
   const total = records.length
@@ -2654,8 +2630,18 @@ function SessionApprovalPanel(props: any) {
   // Idle label, or the live/settled status the ask currently has. The state
   // mapping is the same one the approvals view reads, so both surfaces agree.
   const activeRecord = sessionId ? approvalStatusStore.activeFor(sessionId, Date.now()) : undefined
-  const statusLabel = chipLabel(chipState(activeRecord, Date.now(), isLinkDown()))
+  const statusState = chipState(activeRecord, Date.now(), isLinkDown())
+  const statusLabel = chipLabel(statusState)
   const controlLabel = statusLabel ?? t('panel.button')
+  // Narrow windows drop the text for a state icon: the shield marks the idle /
+  // in-flight control, a check the settled allow, a cross the settled reject.
+  const settled = statusState.kind === 'allowed' || statusState.kind === 'rejected'
+  const compactIcon = settled
+    ? React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 14 14', fill: 'none', xmlns: 'http://www.w3.org/2000/svg' },
+        React.createElement('path', { d: statusState.kind === 'allowed' ? CHECK_PATH : CLOSE_PATH, fill: 'currentColor' }))
+    : React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 16 16', fill: 'none', xmlns: 'http://www.w3.org/2000/svg' },
+        React.createElement('path', { d: SHIELD_PATH, stroke: 'currentColor', strokeWidth: 1.31831, strokeLinejoin: 'round' }),
+        React.createElement('path', { d: BOLT_PATH, fill: 'currentColor' }))
   // The left side asks the host to open a held-back panel right away; that is
   // only meaningful while a countdown runs (it is when the panel is held).
   const canReveal = activeRecord?.phase === 'countdown'
@@ -2666,9 +2652,12 @@ function SessionApprovalPanel(props: any) {
         type: 'button',
         className: 'dsa-sessionMain',
         disabled: !canReveal,
-        'aria-label': canReveal ? t('panel.reveal') : undefined,
+        'aria-label': canReveal ? t('panel.reveal') : controlLabel,
         onClick: canReveal ? () => revealApproval(activeRecord?.callId) : undefined,
-      }, controlLabel),
+      },
+        React.createElement('span', { className: 'dsa-sessionMainText' }, controlLabel),
+        React.createElement('span', { className: 'dsa-sessionMainIcon' }, compactIcon),
+      ),
       React.createElement('span', { className: 'dsa-sessionDivider' }),
       React.createElement('button', {
         type: 'button',
@@ -3031,6 +3020,8 @@ function installSettingsCardStyles(): () => void {
 .dsa-sessionMain:disabled{color:var(--dsw-alias-label-primary);cursor:default}
 .dsa-sessionMain:not(:disabled):hover{background:var(--dsw-alias-interactive-bg-hover)}
 .dsa-sessionMain:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-2px}
+.dsa-sessionMainIcon{display:none}
+@media (max-width:820px){.dsa-sessionMainText{display:none}.dsa-sessionMainIcon{display:inline-flex;align-items:center;justify-content:center}.dsa-sessionSplit{min-width:0}}
 .dsa-sessionDivider{width:1px;flex:none;background:var(--dsw-alias-border-l2)}
 .dsa-sessionChevron{appearance:none;display:inline-flex;align-items:center;justify-content:center;width:28px;flex:none;padding:0;border:none;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer}
 .dsa-sessionChevron:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
@@ -3105,13 +3096,11 @@ export function apply(ctx: any): void {
     .then((data: any) => {
       if (data?.ok) {
         breakerAntiHijackMs = data.value.value?.breakerAntiHijackMs ?? THRESHOLD_DEFAULTS.breakerAntiHijackMs
-        aiButtonPosition = data.value.value?.aiButtonPosition === 'floating' ? 'floating' : 'header'
       }
     })
     .catch(() => {})
   ctx.effect(() => installApprovalPanelDecorations(), 'dsh-auto-approval-llm: approval panel decorations')
   ctx.effect(() => installAutoPermissionIcon((globalThis as any).document), 'dsh-auto-approval-llm: auto permission icon')
-  ctx.effect(() => installFloatingApprovalButton(ctx), 'dsh-auto-approval-llm: floating button')
   ctx.effect(installSettingsCardStyles, 'dsh-auto-approval-llm: settings card styles')
   ctx.effect(() => watchRemoteApprovals(ctx), 'dsh-auto-approval-llm: approval watcher (remote)')
   ctx.effect(() => watchSessionApprovals(ctx), 'dsh-auto-approval-llm: session approval watcher')
