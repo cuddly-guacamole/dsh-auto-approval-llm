@@ -19,8 +19,8 @@ flowchart TD
 
 ::: tip 在线通道安全约束（<span class="lnum">src/auto/trust.ts#</span>：validateReviewerBaseUrl + resolvePublicReviewerTarget）
 **协议栅栏**（validateReviewerBaseUrl）：仅 http/https；**明文 http 只允许回环地址**（localhost/127.0.0.1/[::1]），否则密钥会裸奔在局域网/Docker 桥上。
-**公网地址强制**（resolvePublicReviewerTarget，v0.0.17，对齐官方 dsh-web-fetch-http）：非回环目标解析一次，解析集**任一地址非公网单播即整体拒绝**（私网/回环/链路本地/CGNAT/多播/保留/文档段/映射/NAT64 前缀全查），防 DNS rebinding 把密钥打进内网/metadata。**回环豁免**：本地 mock 评审/Ollama/LM Studio 等回环端点照常可用；**fake-ip 代理豁免**：解析集全部落在 198.18.0.0/15（Clash/Surge TUN 接管按域名路由）时视为代理接管放行，混入真实私网地址仍拒。
-**测试连接同栅栏**：https 外网可测（含公网强制+fake-ip 豁免）；明文 http 仅回环；非 2xx 返回错误摘要（如 429 GoUsageLimitError）。
+**公网地址强制 + 连接钉定**（resolvePublicReviewerTarget + createPinnedLookup，对齐官方 dsh-web-fetch-http）：非回环目标解析一次，解析集**任一地址非公网单播即整体拒绝**（私网/回环/链路本地/CGNAT/多播/保留/文档段/映射/NAT64 前缀全查）；通过校验后，**该地址集被交给连接的 lookup**（`endpoint-call.ts:LrequestEndpointText`），连接期不再做第二次解析——只有「先查再连」会让 TTL≈0 的域名先在检查时答公网、在连接时翻到内网/metadata 并带走密钥。**回环豁免**：本地 mock 评审/Ollama/LM Studio 等回环端点照常可用（回环与 IP 字面量无需钉定）；**fake-ip 代理豁免**：解析集全部落在 198.18.0.0/15（Clash/Surge TUN 接管按域名路由）时视为代理接管放行，混入真实私网地址仍拒。**传输细节**：POST 走 `node:http(s)`（不跟随 302——3xx 作为非 2xx 失败上报）、响应体有 256 KiB 上限（超限丢弃并报错）、超时由调用方 AbortSignal 控制。
+**测试连接同栅栏**：https 外网可测（含公网强制+连接钉定+fake-ip 豁免）；明文 http 仅回环；非 2xx 返回错误摘要（如 429 GoUsageLimitError）。**已保存密钥只随「探针目标 = 已配置端点」的请求发出**（`sameEndpointTarget`），调用方指定的其它地址不带任何凭据。
 :::
 
 ## 6.2　发给模型的载荷（frameReviewerInput 产出）

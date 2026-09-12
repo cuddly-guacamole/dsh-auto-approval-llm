@@ -20,6 +20,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { appendFileSync, existsSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { isIP } from 'node:net'
 import { networkInterfaces, homedir } from 'node:os'
 import { join } from 'node:path'
 import { ArtifactRegistry } from './auto/artifacts.js'
@@ -78,7 +79,7 @@ import { runtimeStateReadHits } from './auto/shell.js'
 import { isLoopbackHostname, isTrustedRequest, resolvePublicReviewerTarget, reviewerProbeTargetAllowed, validateReviewerBaseUrl } from './auto/trust.js'
 import { aggregateToolStats } from './auto/tool-stats.js'
 import { normalizeLane, normalizeSharedEndpoint, resolveTransport } from './auto/model-channel.js'
-import { callEndpointText } from './auto/endpoint-call.js'
+import { callEndpointText, createPinnedLookup, requestEndpointText } from './auto/endpoint-call.js'
 
 export const name = 'dsh-auto-approval-llm'
 export const inject = ['approval', 'permissionPresets', 'tools', 'llm', 'agents', 'webServer', 'settings', 'commands']
@@ -2745,9 +2746,14 @@ function installTestRoute(ctx: any, llm: any, endpointUrlFor: () => string = () 
           // when any address is not public unicast, so an https intranet or
           // metadata host cannot be probed even through a public-looking FQDN.
           // Loopback stays exempt (local mock reviewer / Ollama / LM Studio).
+          // The validated set then PINS the connection (same shared transport
+          // as the live review): a pre-flight resolution alone left the window
+          // between the check and the connect open to a re-binding FQDN.
+          let probeLookup: ReturnType<typeof createPinnedLookup> | undefined
           if (!isLoopbackHostname(probeUrl.hostname)) {
             const resolved = await resolvePublicReviewerTarget(probeUrl.hostname)
             if (!resolved.ok) throw new TypeError(resolved.reason)
+            if (isIP(probeUrl.hostname.replace(/^\[|\]$/g, '')) === 0) probeLookup = createPinnedLookup(resolved.addresses)
           }
           const headers: Record<string, string> = { 'Content-Type': 'application/json' }
           if (probeApiKey) {
@@ -2757,32 +2763,21 @@ function installTestRoute(ctx: any, llm: any, endpointUrlFor: () => string = () 
           const controller = new AbortController()
           const timer = setTimeout(() => controller.abort(), 8_000)
           try {
-            if (protocol === 'anthropic') {
-              const r = await fetch(`${baseUrl}/messages`, {
-                method: 'POST',
-                headers,
-                signal: controller.signal,
-                // Same redirect fence as the configured reviewer: the probe
-                // must not follow a 302 into the broader network.
-                redirect: 'error',
-                body: JSON.stringify({ model, max_tokens: 1, messages: [{ role: 'user', content: 'ping' }] }),
-              })
-              if (!r.ok) {
-                const body = await r.text().catch(() => '')
-                throw new Error(extractProbeErrorSummary(r.status, body))
-              }
-            } else {
-              const r = await fetch(`${baseUrl}/chat/completions`, {
-                method: 'POST',
-                headers,
-                signal: controller.signal,
-                redirect: 'error',
-                body: JSON.stringify({ model, messages: [{ role: 'user', content: 'ping' }], max_tokens: 1 }),
-              })
-              if (!r.ok) {
-                const body = await r.text().catch(() => '')
-                throw new Error(extractProbeErrorSummary(r.status, body))
-              }
+            const probePath = protocol === 'anthropic' ? '/messages' : '/chat/completions'
+            const probeBody = protocol === 'anthropic'
+              ? JSON.stringify({ model, max_tokens: 1, messages: [{ role: 'user', content: 'ping' }] })
+              : JSON.stringify({ model, messages: [{ role: 'user', content: 'ping' }], max_tokens: 1 })
+            const probe = await requestEndpointText(new URL(`${baseUrl}${probePath}`), {
+              headers,
+              body: probeBody,
+              signal: controller.signal,
+              ...(probeLookup === undefined ? {} : { lookup: probeLookup }),
+            })
+            if (probe.tooLarge) throw new Error(extractProbeErrorSummary(0, 'the probe response exceeded the size limit'))
+            // Same redirect fence as the configured reviewer: the transport
+            // never follows a 302, so it surfaces here as a non-2xx status.
+            if (probe.status < 200 || probe.status >= 300) {
+              throw new Error(extractProbeErrorSummary(probe.status, probe.body))
             }
             responseJson(res, 200, { ok: true, value: { reachable: true, modelFound: true } })
           } finally {
