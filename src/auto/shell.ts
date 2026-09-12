@@ -1547,14 +1547,108 @@ function stripHeredocBodies(source) {
             continue;
         }
         out.push(line);
-        for (const introducer of line.matchAll(/<<(-?)\s*(?:"([^"]*)"|'([^']*)'|([A-Za-z_][A-Za-z0-9_]*))/g)) {
-            const delimiter = introducer[2] ?? introducer[3] ?? introducer[4];
-            if (delimiter !== undefined && delimiter !== '') {
-                pending.push({ delimiter, stripTabs: introducer[1] === '-' });
+        // Only a `<<` that is live syntax opens a here-document. Position-blind
+        // matching read `<<` inside quotes and comments too: one line such as
+        // `echo "a << b"` pushed a pending delimiter, and every following line —
+        // real syntax included — was then consumed as body, which silently
+        // disarmed every target fuse for the rest of the input (`rm -rf X; (:)`
+        // after such a line degraded from hard deny to ask).
+        const view = shellSyntaxView(line);
+        for (const introducer of view.matchAll(/<<(-?)/g)) {
+            // The delimiter is read from the ORIGINAL text at the matched
+            // offset (the view blanks quoted spans but keeps offsets), so the
+            // quoted spelling `<<"EOF"` still names its delimiter. Only the
+            // operator is matched in the view: a trailing `\s*` there would
+            // swallow the original delimiter along with the blanked span.
+            const rest = line.slice(introducer.index + introducer[0].length).replace(/^[ \t]*/, '');
+            const delimiter = /^(?:"([^"]*)"|'([^']*)'|([A-Za-z_][A-Za-z0-9_]*))/.exec(rest);
+            const value = delimiter?.[1] ?? delimiter?.[2] ?? delimiter?.[3];
+            if (value !== undefined && value !== '') {
+                pending.push({ delimiter: value, stripTabs: introducer[1] === '-' });
             }
         }
     }
     return out.join('\n');
+}
+
+/**
+ * A same-length view of one shell line with quoted spans, comments and escape
+ * pairs blanked out, so a `<<` that is plain text cannot be read as a
+ * here-document introducer.
+ *
+ * Double-quoted command substitutions stay live syntax — `"$(cat <<'EOF' …)"`
+ * really does open a here-document — so `$(`/`)` nesting is tracked instead of
+ * treating the whole double-quoted span as inert; single-quoted spans are fully
+ * inert by shell rules. Making the fence too eager here would only scan a body
+ * (over-blocking), which is why the introducer is READ from the view but the
+ * delimiter is taken from the original line.
+ */
+function shellSyntaxView(line) {
+    const out = [];
+    const stack = [];
+    const top = () => stack[stack.length - 1];
+    for (let index = 0; index < line.length; index += 1) {
+        const char = line[index];
+        if (top() === 'single') {
+            if (char === "'")
+                stack.pop();
+            out.push(' ');
+            continue;
+        }
+        if (top() === 'double') {
+            if (char === '\\') {
+                out.push('  ');
+                index += 1;
+                continue;
+            }
+            if (char === '"') {
+                stack.pop();
+                out.push(' ');
+                continue;
+            }
+            if (char === '$' && line[index + 1] === '(') {
+                stack.push('subst');
+                out.push('  ');
+                index += 1;
+                continue;
+            }
+            out.push(' ');
+            continue;
+        }
+        // Live syntax, at top level or inside a command substitution.
+        if (char === '\\') {
+            out.push('  ');
+            index += 1;
+            continue;
+        }
+        if (char === '#' && (index === 0 || /[\s;|&(]/.test(line[index - 1]))) {
+            out.push(' '.repeat(line.length - index));
+            break;
+        }
+        if (char === '"') {
+            stack.push('double');
+            out.push(' ');
+            continue;
+        }
+        if (char === "'") {
+            stack.push('single');
+            out.push(' ');
+            continue;
+        }
+        if (char === '$' && line[index + 1] === '(') {
+            stack.push('subst');
+            out.push('  ');
+            index += 1;
+            continue;
+        }
+        if (char === ')' && top() === 'subst') {
+            stack.pop();
+            out.push(' ');
+            continue;
+        }
+        out.push(char);
+    }
+    return out.join('');
 }
 
 /**
