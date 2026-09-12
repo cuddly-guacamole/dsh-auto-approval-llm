@@ -18,6 +18,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import {
+  approvalStateForTests,
   boundedHoldMs,
   createPanelGate,
   holdWhileUnchanged,
@@ -28,6 +29,7 @@ import {
   sessionReviewFingerprint,
   withRemaining,
 } from '../lib/index.js'
+import { followResolution } from '../lib/auto/decision.js'
 
 const LOOPBACK = { method: 'GET', headers: { host: 'localhost:3080' }, socket: { remoteAddress: '127.0.0.1' } }
 const REMOTE = { method: 'GET', headers: { host: 'evil.example' }, socket: { remoteAddress: '203.0.113.9' } }
@@ -180,6 +182,50 @@ test('sessionReviewFingerprint is stable for an unchanged ask list', () => {
     sessionReviewFingerprint('no-such-session'),
     'a stable list yields a stable fingerprint',
   )
+})
+
+test('the session hold wakes when the ask list changes', async () => {
+  const { reviewStates, reviewSessions } = approvalStateForTests()
+  const sessionId = 'hold-wake-session'
+  const callId = 'hold-wake-call'
+  reviewStates.set(callId, { risk: 'LOW', phase: 'countdown', action: 'allow', seconds: 10, revision: 3 })
+  reviewSessions.set(callId, sessionId)
+  try {
+    const { res } = fakeRes()
+    const started = Date.now()
+    const pending = holdWhileValue(() => sessionReviewFingerprint(sessionId), 5_000, res)
+    // A settlement replaces the entry: the fingerprint must move with it.
+    reviewStates.set(callId, { risk: 'LOW', phase: 'follow', action: 'allow', seconds: 0, source: 'llm' })
+    await pending
+    assert.ok(Date.now() - started < 2_000, 'a changed ask list must wake the hold, not wait out the budget')
+  } finally {
+    reviewStates.delete(callId)
+    reviewSessions.delete(callId)
+  }
+})
+
+test('a follow publish wakes the per-ask hold instead of stranding the panel', async () => {
+  // The per-ask long poll compares the published revision, and every follow
+  // publish replaces the entry with a status that carries no revision — that
+  // change from a number to undefined is what wakes the client. If a follow
+  // ever spread the countdown status instead, the hold would sit out its whole
+  // budget and leave the official panel open after the decision.
+  const { reviewStates } = approvalStateForTests()
+  const callId = 'hold-follow-call'
+  reviewStates.set(callId, { risk: 'LOW', phase: 'countdown', action: 'allow', seconds: 10, revision: 9 })
+  try {
+    const { res } = fakeRes()
+    const started = Date.now()
+    const pending = holdWhileUnchanged(callId, 5_000, res)
+    const settled = followResolution('countdown', { risk: 'LOW', outcome: 'allowed-once' }, { timedOut: false, aborted: false })
+    assert.equal(settled.kind, 'publish')
+    assert.equal(settled.follow.revision, undefined, 'a follow must not carry the countdown revision')
+    reviewStates.set(callId, settled.follow)
+    await pending
+    assert.ok(Date.now() - started < 2_000, 'the follow must wake the hold')
+  } finally {
+    reviewStates.delete(callId)
+  }
 })
 
 test('the session discovery route keeps the trust and method fences', async () => {

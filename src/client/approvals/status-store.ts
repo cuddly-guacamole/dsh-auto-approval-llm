@@ -293,20 +293,15 @@ export function createApprovalStatusStore(now: () => number = Date.now): Approva
 
     clearSession(sessionId) {
       let changed = false
-      const prefix = `${sessionId}:`
       for (const [key, record] of records) {
         if (record.sessionId !== sessionId) continue
         records.delete(key)
         changed = true
       }
-      // Leaving a session releases its finished-ask memory: the tab may come
-      // back to it later, and a genuinely new ask must never be suppressed.
-      for (const key of [...tombstones]) {
-        if (!key.startsWith(prefix)) continue
-        tombstones.delete(key)
-        const at = tombstoneOrder.indexOf(key)
-        if (at !== -1) tombstoneOrder.splice(at, 1)
-      }
+      // Finished-ask memory deliberately survives leaving the session: the host
+      // keeps listing a settled ask for its own window, so clearing it here let
+      // the same outcome light up again when the reader came back within that
+      // window. The set stays FIFO-bounded, and ask ids are unique.
       if (changed) notify()
     },
 

@@ -1902,6 +1902,7 @@ const RESOLVED_TTL_MS = 30_000
 // hook, not by the reset or the callId sweeps.
 const approvalState = {
   reviewStates,
+  reviewSessions,
   followExpiry,
   reviewVerdicts,
   resolvedCallIds,

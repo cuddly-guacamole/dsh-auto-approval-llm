@@ -156,10 +156,12 @@ test('a finished ask is not revived by the host still listing it', () => {
   // A different ask in the same session is unaffected.
   store.resolve('s1', 'c2', 'timeout', 'reject')
   assert.equal(chipState(store.activeFor('s1', now), now, false).kind, 'timeout')
-  // Leaving the session releases the memory: a genuinely new ask renders again.
+  // Leaving the session must not release the memory either: the host keeps
+  // listing the settled ask, so coming back within its window would light the
+  // same outcome up again.
   store.clearSession('s1')
   store.resolve('s1', 'c1', 'llm', 'allow')
-  assert.equal(chipState(store.activeFor('s1', now), now, false).kind, 'allowed')
+  assert.equal(chipState(store.activeFor('s1', now), now, false).kind, 'empty')
 })
 
 test('an open ask leaves the chip when its pending goes away', () => {
