@@ -8,7 +8,7 @@
 | `settings.plugin.item` | `auto-approval-llm-card` | 30 | SettingsSection |
 | `conversation.session.header.utilities` | `…-session-panel` | -10 | SessionApprovalPanel |
 
-另有：会话标题栏按钮（header/floating 两种形态）、`auto-icon.ts`（给权限菜单的 Auto 注入盾形图标 + 选择时的风险确认弹窗「我已了解风险」）、`locale.ts`（zh/en）。
+另有：会话标题栏的自动审批控件（分离按钮：左主区显示状态并在有倒计时时提前展开面板，右下箭头打开审批记录浮层）、`auto-icon.ts`（给权限菜单的 Auto 注入盾形图标 + 选择时的风险确认弹窗「我已了解风险」）、`locale.ts`（zh/en）。
 
 ### 关键设计：客户端不自绘审批卡片
 
@@ -53,7 +53,7 @@ li.dsa-card（可折叠；任一卡脏 → 头部「未保存」徽标）
 ├─ 顶层开关区（8 个即时保存 CapsuleSelect；第 8 个按条件显示）
 │    enabled · timeoutAction · 评审与接管预设（一次写
 │    llmReviewScope + llmTakeoverScope 两键；非预设 YAML 组合显示「自定义」兜底，选中不写值）
-│    · defaultReviewMode · autoSwitchPolicyToAsk · autoModeNotice · showSessionPanel · aiButtonPosition(条件显示)
+│    · defaultReviewMode · autoSwitchPolicyToAsk · autoModeNotice · showSessionPanel
 ├─ 首次使用引导块（一次性：首次展开即显示，折叠时写 localStorage
 │    dsa-onboarding-seen-v1 后不再出现；标题+三行+提示；第二行的
 │    {timeout} 标签按实时 timeoutAction 渲染，非 reject 不出现「拒绝」）
@@ -82,12 +82,8 @@ li.dsa-card（可折叠；任一卡脏 → 头部「未保存」徽标）
 <table>
   <tr><th>形态</th><th>触发</th><th>内容</th></tr>
   <tr>
-    <td>header（React，slot utilities）</td>
-    <td><code>aiButtonPosition='header'</code>；<code>panelMode≠off</code>；auto 模式还要求当前会话是 auto</td>
-    <td rowspan="2">GET /history 过滤本会话 slice(50)，算 <b>total/allow/deny/timeout/breaker</b> + 最近 ≤10 条记录；浮动按钮为原生 DOM 版（settings overlay 打开时隐藏）</td>
-  </tr>
-  <tr>
-    <td>floating（原生 DOM）</td>
-    <td><code>aiButtonPosition='floating'</code>，同可见性门</td>
+    <td>会话标题栏控件（React，slot utilities）</td>
+    <td><code>panelMode≠off</code>；auto 模式还要求当前会话是 auto</td>
+    <td>GET /history 过滤本会话 slice(50)，算 <b>total/allow/deny/timeout/breaker</b> + 最近 ≤10 条记录；工具栏为「粗体标题 + 刷新 + 关闭」（图标取自官方 Agent Team 面板），settings overlay 打开时收起</td>
   </tr>
 </table>
