@@ -164,6 +164,22 @@ export function isPublicIpv6(text: string): boolean {
   if (lower.startsWith('2001:10:') || lower.startsWith('2001:2:')) return false
   if (lower.startsWith('2002:')) return false // 6to4
   if (lower.startsWith('3fff:')) return false // documentation analog
+  // Special-purpose blocks the per-prefix table missed, compared against the
+  // official predicate address by address: the reserved 0000::/8 block, the
+  // discard-only 0100::/64 block, the whole IETF protocol-assignment
+  // 2001::/23 block (Teredo, benchmarking, ORCHID v1/v2, AS112 — the earlier
+  // rules named only a few members), the deprecated site-local fec0::/10
+  // block, and the SRv6 SID block 5f00::/16. Every one of them is reachable
+  // inside a site while the official predicate refuses to call it unicast.
+  if (lower.startsWith('100::') || lower.startsWith('100:0:0:0:')) return false
+  if (lower.startsWith('5f00:')) return false
+  const head = parseInt(hextets[0] ?? '', 16)
+  if (head === 0) return false // 0000::/8
+  if (head >= 0xfec0 && head <= 0xfeff) return false // fec0::/10
+  if (head === 0x2001) {
+    const second = parseInt(hextets[1] ?? '', 16)
+    if (Number.isFinite(second) && second <= 0x01ff) return false // 2001::/23
+  }
   return /^[0-9a-f:]+$/i.test(lower)
 }
 
