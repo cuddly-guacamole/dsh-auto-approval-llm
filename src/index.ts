@@ -4014,6 +4014,15 @@ export function apply(ctx: Context, rawConfig: Config): void {
             throw new Error('endpoint source needs a URL and model for classification')
           }
           const endpointApiKey = await resolveReviewerApiKey(getCredentials())
+          // Half-configuration discipline, mirroring the reviewer lane: an
+          // explicitly chosen endpoint with no resolved key cannot classify
+          // anything, and a request sent without one only turns the
+          // misconfiguration into a silent AUTH failure the operator never
+          // sees. Fail loudly here; the catch below converts it into an ask.
+          if (!endpointApiKey) {
+            debugLog({ ev: 'classifier-incomplete', callId: exec.callId ?? null, baseUrl: config.endpointUrl, missing: ['key'] })
+            throw new Error('endpoint source needs a resolved API key for classification')
+          }
           decision = await endpointClassifier.classify(classifierInput, exec.signal, {
             url: config.endpointUrl,
             model: config.endpointModel,
