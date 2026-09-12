@@ -12,7 +12,11 @@ import { watchRemoteApprovals } from './approvals/remote.js'
 import { buildToolChips, applyChipToList, type ToolChip, type ToolStatsPayload, type ToolStatsEntry } from './tool-chips.js'
 
 export const name = 'dsh-auto-approval-llm'
-export const inject = ['slots', 'sessions']
+// Declared service dependencies: cordis keeps this plugin pending until each
+// one is observable, so the approval watcher no longer has to poll for a
+// late-registering `uiSession`. Names
+// match the official approval client's own declaration.
+export const inject = ['sessions', 'remote', 'uiSession', 'slots']
 
 const SETTINGS_ROUTE = '/_dsh/auto-approval-llm/settings'
 const HISTORY_ROUTE = '/_dsh/auto-approval-llm/history'

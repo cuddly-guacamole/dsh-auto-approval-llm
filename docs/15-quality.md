@@ -28,7 +28,7 @@
 
 | 客户端开销 | perf-settings-rules-parse.test.mjs（声明规则每次渲染只解析一次）/ perf-poll-backoff.test.mjs（`nextPollDelayMs` 表驱动 + 阳性上界封顶 + 故障期次线性增长 + 恢复即回基准 + 负向「延迟恒正」）/ perf-scan-throttle.test.mjs（可注入时钟的 trailing 节流：合并、**尾随不丢**、dispose 取消、锚定 `@ts-nocheck` 的 auto-icon 编译产物真带接线）/ perf-countdown-write.test.mjs（后缀串未变不写；**任何真实变化必须写**，含离线冻结标记与回到净文本） |
 
-86 个测试文件，合计 **1213 例**（node --test 全绿基线）。
+87 个测试文件，合计 **1213 例**（node --test 全绿基线）。
 
 ## 15.2　验收命令与运行时证据
 

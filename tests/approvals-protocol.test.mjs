@@ -864,14 +864,17 @@ test('static anchors: remote-only wiring stays pinned; the legacy adapter is gon
   const remote = readFileSync(new URL('../src/client/approvals/remote.ts', import.meta.url), 'utf8')
   assert.ok(remote.includes('pendingInteractions'), 'remote adapter must subscribe to pendingInteractions')
   assert.ok(remote.includes('.answer('), 'remote adapter must answer through pending.answer')
-  // F1 (2026-09-03 audit): a visibility-triggered restart must never stack a
-  // second probe interval over a live one — two intervals racing their own
-  // retry counters made the first give-up clear the other's timer.
-  assert.ok(remote.includes('if (retryTimer !== undefined) return'), 'startProbing must not stack a second probe interval')
+  // The watcher binds at apply time: the services it resolves are declared as
+  // inject dependencies, so no probe interval may come back (the full contract
+  // lives in tests/client-declarative-services.test.mjs).
+  assert.ok(!remote.includes('setInterval'), 'the watcher must not probe for its services')
+  assert.ok(!remote.includes('visibilitychange'), 'the visibility re-probe must stay retired')
   const shared = readFileSync(new URL('../src/client/approvals/shared.ts', import.meta.url), 'utf8')
   assert.ok(!shared.includes('snapshot.pending'), 'the legacy snapshot.pending source must be gone from the shared core')
   const client = readFileSync(new URL('../src/client/index.ts', import.meta.url), 'utf8')
   assert.ok(client.includes('watchRemoteApprovals(ctx)'), 'apply() must mount the remote watcher')
+  assert.ok(/export const inject = \[[^\]]*'uiSession'[^\]]*\]/.test(client), 'uiSession must be a declared inject dependency')
+  assert.ok(/export const inject = \[[^\]]*'remote'[^\]]*\]/.test(client), 'remote must be a declared inject dependency')
   assert.ok(!client.includes('watchLegacyApprovals'), 'the legacy watcher mount must be gone')
   const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
   assert.ok(Array.isArray(pkg.dsh?.client?.inject), 'dsh.client.inject must be an array')

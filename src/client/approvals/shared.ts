@@ -197,12 +197,7 @@ export interface ReviewPollingOptions {
 }
 
 /** Watcher-level options: polling options plus an injectable clock. */
-export interface WatcherOptions extends ReviewPollingOptions {
-  /** Probe interval for the remote watcher's uiSession probe (default 500ms). */
-  retryMs?: number
-  /** Probe attempts before the remote watcher gives up (default 30 = 15s). */
-  maxRetries?: number
-}
+export interface WatcherOptions extends ReviewPollingOptions {}
 
 export interface ReviewPollHandle {
   dispose(): void

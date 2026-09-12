@@ -28,20 +28,13 @@ export interface PendingApprovalLike {
   answer(outcome: ApprovalOutcome): Promise<void>
 }
 
-// The ui-session service is a browser-side dynamic package that registers
-// during the same application batch as this plugin; it may not be
-// queryable at plugin-mount time yet. Instead of silently idling forever
-// (which turns every official panel into an unclosable ghost), keep probing
-// for a bounded window and log when the watcher actually arms or gives up.
-const UI_SESSION_RETRY_MS = 500
-const UI_SESSION_MAX_RETRIES = 30 // 15s covers the client application batch
-
+// `uiSession` is a declared dependency of this client (see the entry's
+// `inject`), so cordis holds the plugin pending until the service exists and
+// the watcher can subscribe at its first apply. The former bounded probe
+// window is retired; only the "service absent at all" protocol mismatch still
+// warns, because silence there would turn every official panel into an
+// unclosable ghost.
 export function watchRemoteApprovals(ctx: any, options: WatcherOptions = {}): void {
-  // Injectable for node contract tests; defaults keep the
-  // 15s probe window of the original alpha.4 wiring.
-  const retryMs = options.retryMs ?? UI_SESSION_RETRY_MS
-  const maxRetries = options.maxRetries ?? UI_SESSION_MAX_RETRIES
-  const g = globalThis as any
   const active = new Map<string, { dispose: () => void; pollNow: () => void }>()
   // Tombstones: approvals the watcher already detached from (host resolved,
   // follow answered). Prevents check() from re-arming a stale approval;
@@ -54,11 +47,6 @@ export function watchRemoteApprovals(ctx: any, options: WatcherOptions = {}): vo
   let unsub: (() => void) | undefined
   let pendingInteractions: any
   let disposed = false
-  let retryTimer: any
-  // Whether the bounded probe window elapsed without uiSession. Guards the
-  // visibility re-probe: only a watcher that actually gave up may re-arm.
-  let gaveUp = false
-  let detachVisibilityProbe: (() => void) | undefined
 
   const stillVisible = (item: PendingApprovalLike): boolean => {
     try {
@@ -128,9 +116,10 @@ export function watchRemoteApprovals(ctx: any, options: WatcherOptions = {}): vo
     }
   }
 
-  // Probe-and-arm: link the watcher to ui-session.pendingInteractions once it
-  // is observable. Returns true when armed, false when still unavailable.
-  const armOnce = (): boolean => {
+  // Declarative arm: bind the watcher to uiSession.pendingInteractions. The
+  // service is a declared inject dependency, so this normally succeeds on the
+  // first apply; `false` means the served client protocol has no such service.
+  const arm = (): boolean => {
     const pi = ctx.get('uiSession')?.pendingInteractions
     if (
       disposed ||
@@ -200,90 +189,20 @@ export function watchRemoteApprovals(ctx: any, options: WatcherOptions = {}): vo
 
   if (!armConnectionWatcher()) {
     // connection is a wire-root service normally present at mount; if it is
-    // missing (unusual), the resume resync silently stays a no-op — warn-级
-    // silence is not needed here because uiSession absence already has its
-    // own probe/announce chain, and doubling warns would confuse the
-    // contract tests that count them.
+    // missing (unusual), the resume resync silently stays a no-op — the
+    // uiSession warning below already breaks the silence for a real protocol
+    // mismatch, and a second warn would only double-count it in tests.
   }
 
-  if (armOnce()) {
-    // armed at mount (pre-alpha.4 ordering)
-  } else {
-    console.warn('[dsh-auto-approval-llm] approval watcher (remote): uiSession.pendingInteractions unavailable at mount; probing')
-    startProbing()
-  }
-
-  // Probe loop. Gives up after `maxRetries` attempts so an install without
-  // the ui-session service does not probe forever, then hands over to the
-  // visibility re-probe below.
-  function startProbing(): void {
-    // A visibility-triggered restart must never stack a second probe interval
-    // over a live one: the two would race their independent retry counters,
-    // and the first to give up would clearProbeTimer() the OTHER interval
-    // (retryTimer is a shared slot), terminating the probe early.
-    if (retryTimer !== undefined) return
-    let retries = 0
-    retryTimer = setInterval(() => {
-      if (disposed) {
-        clearProbeTimer()
-        return
-      }
-      retries += 1
-      if (armOnce()) {
-        clearProbeTimer()
-        console.warn(`[dsh-auto-approval-llm] approval watcher (remote): armed after ${retries * retryMs}ms`)
-        return
-      }
-      if (retries >= maxRetries) {
-        clearProbeTimer()
-        gaveUp = true
-        console.warn(`[dsh-auto-approval-llm] approval watcher (remote): uiSession.pendingInteractions unavailable after ${retries * retryMs}ms; approval auto-close disabled (offline panel)`)
-        armVisibilityProbe()
-      }
-    }, retryMs)
-  }
-
-  const clearProbeTimer = () => {
-    if (retryTimer !== undefined) {
-      clearInterval(retryTimer)
-      retryTimer = undefined
-    }
-  }
-
-  // A slow-starting tab (cold VM, LAN debug, deep backgrounding) may expose
-  // uiSession after the probe window, and HMR is not guaranteed to rebuild the
-  // bundle. Re-arm on the next visibility restore; if the service is still
-  // missing, restart the bounded probe window instead of staying dead until
-  // the plugin is reloaded.
-  function armVisibilityProbe(): void {
-    const doc = g.document
-    if (!doc || typeof doc.addEventListener !== 'function') return
-    detachVisibilityProbe?.()
-    let removed = false
-    const detach = () => {
-      if (removed) return
-      removed = true
-      doc.removeEventListener?.('visibilitychange', onVisible)
-    }
-    const onVisible = () => {
-      if (disposed || !gaveUp) return
-      if (doc.visibilityState !== undefined && doc.visibilityState !== 'visible') return
-      if (armOnce()) {
-        gaveUp = false
-        detach()
-        console.warn('[dsh-auto-approval-llm] approval watcher (remote): armed via visibility re-probe')
-        return
-      }
-      startProbing()
-    }
-    doc.addEventListener('visibilitychange', onVisible)
-    detachVisibilityProbe = detach
+  if (!arm()) {
+    // A protocol mismatch (host serves no uiSession) is the only remaining
+    // cause: warn once so the failure is visible instead of every official
+    // panel silently becoming an unclosable ghost.
+    console.warn('[dsh-auto-approval-llm] approval watcher (remote): uiSession.pendingInteractions unavailable; approval auto-close disabled (offline panel)')
   }
 
   ctx.effect(() => () => {
     disposed = true
-    clearProbeTimer()
-    detachVisibilityProbe?.()
     unsub?.()
     unsubConnection?.()
     for (const [, poller] of active) poller.dispose()
