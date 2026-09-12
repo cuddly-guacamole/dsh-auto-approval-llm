@@ -2652,24 +2652,30 @@ function SessionApprovalPanel(props: any) {
   }
 
   // Idle label, or the live/settled status the ask currently has. The state
-  // mapping is the same one the composer capsule reads, so both surfaces agree.
-  const statusLabel = sessionId
-    ? chipLabel(chipState(approvalStatusStore.activeFor(sessionId, Date.now()), Date.now(), isLinkDown()))
-    : null
+  // mapping is the same one the approvals view reads, so both surfaces agree.
+  const activeRecord = sessionId ? approvalStatusStore.activeFor(sessionId, Date.now()) : undefined
+  const statusLabel = chipLabel(chipState(activeRecord, Date.now(), isLinkDown()))
   const controlLabel = statusLabel ?? t('panel.button')
+  // The left side asks the host to open a held-back panel right away; that is
+  // only meaningful while a countdown runs (it is when the panel is held).
+  const canReveal = activeRecord?.phase === 'countdown'
 
   return React.createElement('div', { style: { display: 'contents' }, ref: rootRef },
     React.createElement('span', { className: 'dsa-sessionSplit' },
-      // Left side carries the status only (no action yet); the chevron owns the
-      // history overlay, mirroring the official split-button shape.
-      React.createElement('span', { className: 'dsa-sessionMain', 'aria-live': 'polite' }, controlLabel),
+      React.createElement('button', {
+        type: 'button',
+        className: 'dsa-sessionMain',
+        disabled: !canReveal,
+        'aria-label': canReveal ? t('panel.reveal') : undefined,
+        onClick: canReveal ? () => revealApproval(activeRecord?.callId) : undefined,
+      }, controlLabel),
+      React.createElement('span', { className: 'dsa-sessionDivider' }),
       React.createElement('button', {
         type: 'button',
         className: 'dsa-sessionChevron',
         'aria-expanded': open ? 'true' : 'false',
         'aria-haspopup': 'menu',
         'aria-label': t('panel.history'),
-        title: t('panel.history'),
         onClick: () => setOpen(!open),
       }, React.createElement('svg', { width: 11, height: 11, viewBox: '0 0 14 14', fill: 'none', xmlns: 'http://www.w3.org/2000/svg' },
         React.createElement('path', { d: CHEVRON_PATH, fill: 'currentColor' }),
@@ -3020,9 +3026,13 @@ function installSettingsCardStyles(): () => void {
 .dsa-statusChip{display:inline-flex;align-items:center;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-secondary);border-radius:999px;flex:none;padding:1px 10px;font-size:12px;line-height:18px;font-variant-numeric:tabular-nums}
 .dsa-statusChipOk{color:var(--dsw-alias-state-success-primary)}
 .dsa-statusChipBad{color:var(--dsw-alias-state-error-primary)}
-.dsa-sessionSplit{display:inline-flex;align-items:center;height:32px;border:1px solid var(--dsw-alias-border-l2);border-radius:18px;background:0 0;overflow:hidden}
-.dsa-sessionMain{display:inline-flex;align-items:center;white-space:nowrap;padding:0 4px 0 12px;font-size:13px;line-height:20px;color:var(--dsw-alias-label-primary);font-variant-numeric:tabular-nums}
-.dsa-sessionChevron{appearance:none;display:inline-flex;align-items:center;justify-content:center;width:26px;height:30px;padding:0;border:none;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer}
+.dsa-sessionSplit{display:inline-flex;align-items:stretch;height:32px;min-width:131px;border:1px solid var(--dsw-alias-border-l2);border-radius:16px;background:0 0;overflow:hidden}
+.dsa-sessionMain{appearance:none;flex:1;display:inline-flex;align-items:center;justify-content:center;white-space:nowrap;padding:0 12px;border:none;background:transparent;font:inherit;font-size:13px;line-height:20px;color:var(--dsw-alias-label-primary);font-variant-numeric:tabular-nums;cursor:pointer;font-family:var(--dsw-font-family)}
+.dsa-sessionMain:disabled{color:var(--dsw-alias-label-primary);cursor:default}
+.dsa-sessionMain:not(:disabled):hover{background:var(--dsw-alias-interactive-bg-hover)}
+.dsa-sessionMain:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-2px}
+.dsa-sessionDivider{width:1px;flex:none;background:var(--dsw-alias-border-l2)}
+.dsa-sessionChevron{appearance:none;display:inline-flex;align-items:center;justify-content:center;width:28px;flex:none;padding:0;border:none;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer}
 .dsa-sessionChevron:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
 .dsa-sessionChevron:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-2px}
 .dsa-dockAction:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}
