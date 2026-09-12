@@ -173,7 +173,7 @@ npx tsdown                 # 构建 client bundle → lib/client.js
 | `rulesDryRun` | false | 规则干跑：只记命中不执法；设置卡可配（安全规则列表子卡） |
 | `maxArgsChars` | 4000 | 取回工具参数的最大长度 |
 | `notifyUser` | true | 「模型通过」通知进会话 |
-| `showSessionPanel` | `off` | 会话标题栏按钮：关 / 仅Auto / 开；控件同时承载审批状态（空闲显示名称，有事显示倒计时/结果） |
+| `showSessionPanel` | `auto` | 会话标题栏按钮：关 / 仅Auto / 开；控件同时承载审批状态（空闲显示名称，有事显示倒计时/结果） |
 | `workspaceRoot` / `dshHome` / `tempRoots` | ''/''/[] | 路径根（DSH_HOME 默认保护） |
 | `classifierTimeoutMs` / `classifierMaxOutputTokens` | 8000 / 1024 | 分类器超时与输出上限 |
 | `reviewMaxRetries` | 1 | LLM 复审失败后的额外重试次数（0 单次 / 1 默认 / 2 上限；仅瞬时故障重试——限流·5xx·传输·空响应，LOW 同步含超时——重试窗口受审批倒计时剩余约束，认证/配置错误不重试） |
@@ -184,7 +184,7 @@ npx tsdown                 # 构建 client bundle → lib/client.js
 | `redactResults` | false | 开启后把成功工具结果也过一遍脱敏器再喂回模型（post-execute 侧） |
 | `reviewerContextFacts` | false | 仅 YAML 可配（设置卡无此控件）。上下文增强复审：给 LLM 复审输入附加结构化工作区事实（目标存在性/类型/大小 + 本会话最近创建文件，最多 8 条）；默认关（载荷与既往一致）。边界：工作区外只报存在性/类型不报大小；tempRoots 文件不入 recent_creates；探测失败整体省略 |
 | `editDiffPreview` | false | 编辑类工具（write/edit/str_replace_editor 非 view/apply_patch）进入人工审批时，面板展示目标文件行级红绿 diff。纯展示：不参与裁决、不进 LLM 复审输入；失败自动省略。边界：可读的工作区内非受保护目标对比现有内容；全量写类（write/create）目标不可读（外部/受保护/新文件）预览仅新内容全量新增（零读目标文件）；对比类（edit/str_replace/insert/apply_patch）目标不可读整体省略；≤1MiB（lstat 不跟随 + 读后字节复核，防 junction 逃逸）；LCS ≤1024 行/侧、单行 ≤200 字符省略、输出 ≤200 行且 ≤32KiB（截断带 `…truncated`）；语义镜像官方（多匹配/已存在/越界 → 省略）；diff 块内倒计时字面量剥离防伪造 |
-| `rejectGuidance` | false | 拒绝引导：工具调用被拒时向 agent 注入一句白名单式短说明（来源/类别枚举，不含工具名与自由文本），减少盲目重试与反复探索；默认关 = 零行为变化。触发面：规则/denyList/类别拒绝与官方「user rejected tool」形态（面板人工拒绝转译）；限流（同调用去重 + 每 60s 至多 5 条）；fail-closed，注入失败不影响审批路径 |
+| `rejectGuidance` | true | 拒绝引导：工具调用被拒时向 agent 注入一句白名单式短说明（来源/类别枚举，不含工具名与自由文本），减少盲目重试与反复探索。默认开。触发面：规则/denyList/类别拒绝与官方「user rejected tool」形态（面板人工拒绝转译）；限流（同调用去重 + 每 60s 至多 5 条）；fail-closed，注入失败不影响审批路径 |
 | `maintenanceDshPaths` | [] | host-only 键：DSH_HOME 中供运维维护的子目录（绝对路径数组）。其内 guard 的 DSH_HOME 硬拒只对**非运行态文件**放宽（技能/配置/文档）；插件运行态文件（history/audit/learning…）在其内仍恒拒，shell 写向量仍恒拒，fenced 子树（sessions/plugins/credentials*）不可指名。仅 patch/YAML 可配 |
 | `categoryPolicy` | `{}` | 11 类三态开关：`{类别: auto\|ask\|deny}`，缺省 `inherit` = 保持既往行为；delete/protected/disk（及未开启相应解锁键时的 privilege/protected）LOCKED 仅可 `ask`（其余值 warn+丢弃）；harnessInternal/unknown 无键不可配 |
 | `privilegeAutoReview` | false | 特权类别解锁开关（默认关=fail-closed）：开启后 privilege 可设 auto/ask/deny 并走分类器 + LLM 评审 + 倒计时管线；delete/protected/disk 不受影响仍锁 ask |

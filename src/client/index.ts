@@ -645,6 +645,10 @@ const CHEVRON_PATH = 'M11.8486 5.5L11.4238 5.92383L8.69727 8.65137C8.44157 8.907
 const CHECK_PATH = 'M15.0498 3.92579L8.49512 12.3818C8.25774 12.6881 8.04517 12.9645 7.84668 13.1689C7.63957 13.3823 7.38732 13.5841 7.04492 13.6719C6.86373 13.7183 6.6757 13.7346 6.48926 13.7197C6.13666 13.6915 5.8528 13.5355 5.6123 13.3604C5.38201 13.1926 5.12573 12.9567 4.83984 12.6953L1.03125 9.21289L1.96875 8.1875L5.77734 11.6699C6.08684 11.9529 6.27773 12.1249 6.43066 12.2363C6.50183 12.2882 6.54699 12.3135 6.57324 12.3252C6.58525 12.3305 6.59269 12.3322 6.5957 12.333C6.59802 12.3336 6.59961 12.334 6.59961 12.334C6.63317 12.3367 6.66758 12.3335 6.7002 12.3252C6.7002 12.3252 6.70211 12.3251 6.7041 12.3242C6.70698 12.3229 6.71348 12.319 6.72461 12.3115C6.74849 12.2956 6.78843 12.2642 6.84961 12.2012C6.98138 12.0654 7.13957 11.8628 7.39648 11.5313L13.9502 3.07422L15.0498 3.92579Z'
 
 const CLOSE_PATH = 'M10.6074 4.40278L8.00975 6.99973L10.6074 9.59739L9.59736 10.6074L6.9997 8.00978L4.40274 10.6074L3.3927 9.59739L5.98966 6.99973L3.3927 4.40278L4.40274 3.39273L6.9997 5.98969L9.59736 3.39273L10.6074 4.40278Z'
+// Refresh and close glyphs taken from the official Agent Team panel toolbar so
+// the approvals overlay matches it.
+const REFRESH_PATH = 'M1.272 6.21348C1.70645 3.08888 4.59169 0.908064 7.71634 1.34239C8.95495 1.51469 10.0438 2.07331 10.8814 2.87755L11.9458 1.81407C12.1347 1.6255 12.4572 1.75911 12.4575 2.02598V5.08751C12.4574 5.25303 12.3233 5.38731 12.1577 5.38731H9.0972C8.82993 5.38731 8.69629 5.06361 8.88528 4.87462L10.0327 3.72618C9.3732 3.09994 8.52006 2.66569 7.5513 2.53087C5.08313 2.18779 2.80376 3.91044 2.46048 6.37852C2.11747 8.84665 3.84009 11.1261 6.30814 11.4693C8.77612 11.8121 11.0557 10.0896 11.399 7.62169L11.9937 7.70372L12.5874 7.78673C12.153 10.9112 9.26756 13.0919 6.1431 12.6578C3.01854 12.2234 0.837738 9.33809 1.272 6.21348Z'
+const OVERLAY_CLOSE_PATH = 'M14.1168 13.197L13.197 14.1167L1.8833 2.80303L2.80309 1.88324L14.1168 13.197ZM13.197 1.88326L14.1168 2.80305L2.80309 14.1168L1.8833 13.197L13.197 1.88326Z'
 
 function CapsuleSelect(props: { value: string; options: CapsuleOption[]; onChange: (value: string) => void }) {
   const [open, setOpen] = React.useState(false)
@@ -1225,7 +1229,7 @@ function SettingsSection() {
     // control, so "restore defaults" flipping it would silently change a
     // guard the user cannot see or undo from this card (its value is a
     // host-level fact — the patch pins it true at install time).
-    const defaults: Partial<Draft> = { enabled: 'on', timeoutAction: 'reject', llmReviewScope: 'low-or-above', llmTakeoverScope: 'medium-or-below', defaultReviewMode: 'smart', showSessionPanel: 'off' }
+    const defaults: Partial<Draft> = { enabled: 'on', timeoutAction: 'reject', llmReviewScope: 'low-or-above', llmTakeoverScope: 'medium-or-below', defaultReviewMode: 'smart', showSessionPanel: 'auto' }
     const merged = { ...base, ...defaults }
     setDraft({ ...draft, ...defaults })
     setSaving(true); setError(''); setMessage('')
@@ -2488,6 +2492,8 @@ function SessionApprovalPanel(props: any) {
   const [records, setRecords] = React.useState<any[]>([])
   const [panelMode, setPanelMode] = React.useState<'on' | 'auto' | 'off'>('off')
   const [sessionMode, setSessionMode] = React.useState<string | undefined>()
+  // Bumped by the panel's refresh button to re-read the history.
+  const [reloadKey, setReloadKey] = React.useState(0)
   // The control doubles as the status display: idle shows its own name, an
   // active ask shows the countdown, and a settled one shows the outcome for a
   // short window. The tick only walks the local second below the coarse
@@ -2589,7 +2595,7 @@ function SessionApprovalPanel(props: any) {
       })
       .catch(() => {})
     return () => { disposed = true }
-  }, [open, sessionId])
+  }, [open, sessionId, reloadKey])
 
   React.useEffect(() => {
     if (!open) return
@@ -2671,16 +2677,24 @@ function SessionApprovalPanel(props: any) {
       )),
     ),
     open ? React.createElement('div', { style: overlayStyle },
-      React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 } },
-        React.createElement('div', { style: { fontWeight: 600, fontSize: 14 } }, t('panel.title')),
+      React.createElement('div', { className: 'dsa-panelToolbar' },
+        React.createElement('strong', null, t('panel.title')),
+        React.createElement('span', { className: 'dsa-panelSpacer' }),
+        React.createElement('button', {
+          type: 'button',
+          className: 'dsa-closeBtn',
+          'aria-label': t('panel.refresh'),
+          onClick: () => setReloadKey((n: number) => n + 1),
+        }, React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 14 14', fill: 'none', xmlns: 'http://www.w3.org/2000/svg' },
+          React.createElement('path', { d: REFRESH_PATH, fill: 'currentColor' }),
+        )),
         React.createElement('button', {
           type: 'button',
           className: 'dsa-closeBtn',
           onClick: () => setOpen(false),
           'aria-label': t('panel.close'),
-          title: t('panel.close'),
-        }, React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 14 14', fill: 'none', xmlns: 'http://www.w3.org/2000/svg' },
-          React.createElement('path', { d: CLOSE_PATH, fill: 'currentColor' }),
+        }, React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 16 16', fill: 'none', xmlns: 'http://www.w3.org/2000/svg' },
+          React.createElement('path', { d: OVERLAY_CLOSE_PATH, fill: 'currentColor' }),
         )),
       ),
       React.createElement('div', null, t('panel.stats', { total, allow, deny, timeout, breaker })),
@@ -2819,6 +2833,8 @@ function installSettingsCardStyles(): () => void {
 .dsa-sessionChevron{appearance:none;display:inline-flex;align-items:center;justify-content:center;width:28px;flex:none;padding:0;border:none;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer}
 .dsa-sessionChevron:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
 .dsa-sessionChevron:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-2px}
+.dsa-panelToolbar{display:flex;align-items:center;gap:8px;font-size:14px}
+.dsa-panelSpacer{flex:1;min-width:0}
 .dsa-dockAction:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}
 .dsa-nestedCard{border:1px solid var(--dsw-alias-border-l1);border-radius:14px;background:var(--dsw-alias-bg-layer-1);display:flex;flex-direction:column;overflow:hidden}
 .dsa-nestedHeader{appearance:none;display:flex;align-items:center;gap:8px;width:100%;padding:14px 16px;background:0 0;border:0;cursor:pointer;font:inherit;color:inherit;text-align:left}

@@ -35,10 +35,9 @@
 | `notifyUser` | true | 「模型通过」通知进会话 |
 | `onboardingMessageEnabled` | true | 首次 Auto 会话向 agent 注入一次性英文引导消息（上下文声明，非用户横幅）；关掉后不再注入 |
 | `autoModeNoticeEnabled` | true | 自动审批模式进入/退出时向 agent 注入英文上下文声明（独立开关） |
-| `showSessionPanel` | off | on/auto/off（客户端消费） |
+| `showSessionPanel` | auto | on/auto/off（客户端消费）；控件同时承载审批状态 |
 | `breakerAntiHijackMs` | 0 | 熔断弹窗防误点（客户端消费）；设置卡可配（计时器与熔断子卡） |
 | `panelDelayMs` | 3000 | 倒计时审批先只在会话标题栏控件上显示状态、推迟官方审批面板出现的时长（毫秒，0–10000，0=立即出现）；host 消费（决定何时 `next()`）；设置卡可配 |
-| `showSessionPanel` | off | on/auto/off（客户端消费） |
 | `workspaceRoot / dshHome / tempRoots` | ''/''/[] | 路径根（DSH_HOME 默认保护；host-only） |
 | `reviewMaxRetries` | 1 | LLM 审查首次失败后的额外重试次数（0-2；0=单次，1=默认；滚动剩余预算，见 src/auto/retry.ts）——**普通键**，安全规则卡可改 |
 | `reviewWaitSeconds` | 5 | 每次 LLM 评审尝试的等待时间（秒，1–10）；官方通道 TTFB 慢时调大，建议不超过低风险倒计时 |

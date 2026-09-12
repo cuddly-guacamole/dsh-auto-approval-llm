@@ -220,7 +220,7 @@ export const Config: z<Config> = z.object({
   maxTotalDenials: z.number().default(THRESHOLD_DEFAULTS.maxTotalDenials).min(0),
   maxArgsChars: z.number().default(THRESHOLD_DEFAULTS.maxArgsChars).min(1),
   notifyUser: z.boolean().default(true),
-  showSessionPanel: z.union(['on', 'auto', 'off'] as const).default('off'),
+  showSessionPanel: z.union(['on', 'auto', 'off'] as const).default('auto'),
   // One-shot first-use notice injected into the session for the AGENT
   // (English, context-style); off disables the injection entirely.
   onboardingMessageEnabled: z.boolean().default(true),
@@ -285,7 +285,7 @@ export const Config: z<Config> = z.object({
   // Rejected-call guidance for the agent (user-message injection with a
   // whitelist-only payload: source/category enums, never tool names or free
   // text). Off by default; rate-limited per callId and per 60s window.
-  rejectGuidance: z.boolean().default(false),
+  rejectGuidance: z.boolean().default(true),
   // Operator maintenance openings: DSH_HOME subtrees where the guard's
   // DSH_HOME hard-deny is relaxed for NON-runtime-state files (skills,
   // profiles, docs…); runtime-state basenames stay hard-denied everywhere,
