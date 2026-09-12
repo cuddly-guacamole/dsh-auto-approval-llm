@@ -271,6 +271,13 @@ export function unattendedMustFailClosed(review: {
  * full `settings.replace` would silently drop them) and when it carries a
  * value (a crafted payload must not repoint the workspace/DSH roots through
  * the settings route).
+ *
+ * Membership is the other half of the key-ownership invariant: a key with no
+ * settings-card control must be listed here, otherwise the next card save
+ * deletes it from settings.yaml and it silently falls back to its schema
+ * default. `rulesDryRun`, `breakerAntiHijackMs` and `reviewMaxRetries` are the
+ * card-retired keys that rely on this (tests/settings-key-ownership.test.mjs
+ * pins the invariant in both directions).
  */
 export const HOST_ONLY_KEYS = [
   'workspaceRoot',
@@ -284,6 +291,9 @@ export const HOST_ONLY_KEYS = [
   'maxArgsChars',
   'notifyUser',
   'reviewerContextFacts',
+  'rulesDryRun',
+  'breakerAntiHijackMs',
+  'reviewMaxRetries',
 ]
 
 /**

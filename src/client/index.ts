@@ -452,9 +452,8 @@ function normalizeShowSessionPanel(value: any): 'on' | 'auto' | 'off' {
 }
 
 /**
- * Single source of truth for session-panel visibility, shared by the header
- * button (React branch) and the floating button (DOM branch) — both must
- * evaluate the same flags or the two modes drift apart. Pure.
+ * Single source of truth for session-panel visibility, consumed by the session
+ * header control. Pure.
  *
  * Note: `sessionMode` can arrive as `null` from the host (an unknown session or
  * an unresolvable preset are both reported as a null mode). This predicate only
@@ -749,6 +748,7 @@ function SettingsSection() {
   const [openCategory, setOpenCategory] = React.useState(false)
   const [openLearning, setOpenLearning] = React.useState(false)
   const [openUtility, setOpenUtility] = React.useState(false)
+  const [openAdvanced, setOpenAdvanced] = React.useState(false)
   const [learningEntries, setLearningEntries] = React.useState<any[]>([])
   const [learningEntriesError, setLearningEntriesError] = React.useState('')
   // Issue #5 model-source pickers: the registered providers and the full
@@ -1021,10 +1021,12 @@ function SettingsSection() {
   // Per-card ownership: saving a card only persists the fields it owns,
   // overlaid on the last-saved baseline; other cards' unsaved edits are left
   // in the local draft and never accidentally persisted by another card.
-  const TOP_KEYS = ['enabled', 'autoSwitchPolicyToAsk', 'timeoutAction', 'llmReviewScope', 'llmTakeoverScope', 'defaultReviewMode', 'showSessionPanel', 'autoModeNoticeEnabled']
-  const TIMER_KEYS = ['breakerAntiHijackMs', 'panelDelayMs', 'lowRiskSeconds', 'mediumRiskSeconds', 'highRiskSeconds', 'maxConsecutiveDenials', 'maxTotalDenials', 'reviewWaitSeconds', 'directHumanEnabled', 'slashCommandsEnabled']
-  const REVIEW_KEYS = ['classifierSource', 'classifierProvider', 'classifierModel', 'reviewerSource', 'reviewerProvider', 'reviewerModel', 'reviewerMaxTokens', 'reviewerReasoning', 'classifierReasoning', 'endpointUrl', 'endpointModel', 'endpointProtocol', 'reviewMaxRetries']
-  const SECURITY_KEYS = ['safetyPrompt', 'allowlist', 'denyList', 'humanOnlyList', 'rulesText', 'rulesDryRun']
+  // Keys with no card control are deliberately absent from every slice below:
+  // they are host-only (decision.ts HOST_ONLY_KEYS), so preserveHostKeys keeps
+  // their stored value and no save path can reach them.
+  const TIMER_KEYS = ['panelDelayMs', 'lowRiskSeconds', 'mediumRiskSeconds', 'highRiskSeconds', 'maxConsecutiveDenials', 'maxTotalDenials', 'reviewWaitSeconds', 'directHumanEnabled', 'slashCommandsEnabled']
+  const REVIEW_KEYS = ['classifierSource', 'classifierProvider', 'classifierModel', 'reviewerSource', 'reviewerProvider', 'reviewerModel', 'reviewerMaxTokens', 'reviewerReasoning', 'classifierReasoning', 'endpointUrl', 'endpointModel', 'endpointProtocol']
+  const SECURITY_KEYS = ['safetyPrompt', 'allowlist', 'denyList', 'humanOnlyList', 'rulesText']
   const UTILITY_KEYS = ['onboardingMessageEnabled', 'redactResults', 'editDiffPreview', 'rejectGuidance']
   const LEARNING_KEYS = ['learningEnabled', 'learningThreshold']
   const pick = (keys: string[], from: Draft): Partial<Draft> => {
@@ -1170,10 +1172,9 @@ function SettingsSection() {
       mediumRiskSeconds: String(THRESHOLD_DEFAULTS.mediumRiskSeconds),
       highRiskSeconds: String(THRESHOLD_DEFAULTS.highRiskSeconds),
       reviewWaitSeconds: String(THRESHOLD_DEFAULTS.reviewWaitSeconds),
-      // breakerAntiHijackMs is deliberately NOT reset: the card default is 0
-      // (guard no-op), so resetting would silently close an anti-hijack
-      // window the user configured only through YAML — the key has no control
-      // on this card to set it back.
+      // breakerAntiHijackMs is deliberately NOT reset: it has no control on
+      // this card and is host-only (decision.ts HOST_ONLY_KEYS), so neither a
+      // card save nor any reset path can reach a window configured in YAML.
       maxConsecutiveDenials: String(THRESHOLD_DEFAULTS.maxConsecutiveDenials),
       maxTotalDenials: String(THRESHOLD_DEFAULTS.maxTotalDenials),
       directHumanEnabled: 'off',
@@ -1225,10 +1226,10 @@ function SettingsSection() {
 
   const restoreTopDefaults = async () => {
     const base = draftOf(snapshot.value)
-    // autoSwitchPolicyToAsk is deliberately NOT restored: it has no UI
-    // control, so "restore defaults" flipping it would silently change a
-    // guard the user cannot see or undo from this card (its value is a
-    // host-level fact — the patch pins it true at install time).
+    // autoSwitchPolicyToAsk is deliberately NOT restored: its stored value is
+    // an install-time host fact (the patch pins it true) and the guard it
+    // drives is a session-policy safety rail, so restoring it would silently
+    // change a guard rather than a user preference.
     const defaults: Partial<Draft> = { enabled: 'on', timeoutAction: 'reject', llmReviewScope: 'low-or-above', llmTakeoverScope: 'medium-or-below', defaultReviewMode: 'smart', showSessionPanel: 'auto' }
     const merged = { ...base, ...defaults }
     setDraft({ ...draft, ...defaults })
@@ -1592,6 +1593,12 @@ function SettingsSection() {
         void instantSaveKeys({ llmReviewScope: preset.review, llmTakeoverScope: preset.takeover })
       },
     }), t(`settings.llmScope.hint.${scopePresetId}`)),
+  )
+
+  // Overflow of the first screen: what a session keeps once it is set up. Each
+  // row saves on change exactly as before — the section adds no footer, no
+  // draft-dirty tracking and no new save path.
+  const buildAdvancedBody = () => React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 10 } },
     row(t('settings.defaultReviewMode'), React.createElement(CapsuleSelect, {
       value: draft.defaultReviewMode,
       options: reviewModeOptions(),
@@ -1612,6 +1619,7 @@ function SettingsSection() {
       options: showPanelOptions(),
       onChange: (v: string) => { void instantSaveKey('showSessionPanel', v as any) },
     })),
+    React.createElement('p', { className: 'dsa-hint', style: { margin: 0 } }, t('settings.advanced.yamlNote')),
   )
 
   // Timers & breaker card body (the numeric/dangerous group).
@@ -1676,14 +1684,6 @@ function SettingsSection() {
         style: { width: 80 },
       }),
     ), t('settings.denialBreakerHint')),
-    row(t('settings.breakerAntiHijack'), React.createElement('input', {
-      type: 'number',
-      min: 0,
-      value: draft.breakerAntiHijackMs,
-      onChange: (e: any) => update({ breakerAntiHijackMs: e.target.value }),
-      className: 'dsa-input',
-      style: { width: 110 },
-    }), t('settings.breakerAntiHijackHint')),
     row(t('settings.panelDelay'), React.createElement('input', {
       type: 'number',
       min: 0,
@@ -1807,6 +1807,17 @@ function SettingsSection() {
     return options
   }
 
+  // The custom-endpoint lane is legacy configuration. It earns its place in the
+  // card once a lane actually points at it, or once anything is configured on
+  // it — a stored URL/model/credential must stay visible (and clearable) even
+  // after both lanes are moved back to the session source.
+  const endpointBlockVisible =
+    draft.classifierSource === 'endpoint'
+    || draft.reviewerSource === 'endpoint'
+    || draft.endpointUrl.trim() !== ''
+    || draft.endpointModel.trim() !== ''
+    || credentialConfigured
+
   const buildReviewBody = () => React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 10 } },
     React.createElement('p', { className: 'dsa-hint', style: { margin: 0 } }, t('settings.reviewer.description')),
     sourceSection('classifier'),
@@ -1837,7 +1848,8 @@ function SettingsSection() {
         style: { width: 110 },
       }), t('settings.reviewer.maxTokensHint')),
     ),
-    React.createElement('div', { style: { borderTop: '1px solid var(--dsw-alias-border-l1, rgba(128,128,128,.25))', paddingTop: 10 } },
+    endpointBlockVisible
+      ? React.createElement('div', { style: { borderTop: '1px solid var(--dsw-alias-border-l1, rgba(128,128,128,.25))', paddingTop: 10 } },
     React.createElement('div', { className: 'dsa-titleRow' },
       React.createElement('span', { className: 'dsa-title' }, t('settings.reviewer.endpointTitle')),
       React.createElement('span', { className: 'dsa-titleBadge', style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } }, t('settings.reviewer.endpointLegacy')),
@@ -1875,15 +1887,6 @@ function SettingsSection() {
       React.createElement('span', { className: credentialConfigured ? 'dsa-badgeOk' : 'dsa-badgeMuted' },
         credentialConfigured ? t('settings.reviewer.credentialConfigured') : t('settings.reviewer.credentialMissing')),
     ),
-    row(t('settings.reviewer.maxRetries'), React.createElement('input', {
-      type: 'number',
-      min: 0,
-      max: 2,
-      value: draft.reviewMaxRetries,
-      onChange: (e: any) => update({ reviewMaxRetries: e.target.value }),
-      className: 'dsa-input',
-      style: { width: 80 },
-    }), t('settings.reviewer.maxRetriesHint')),
     React.createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
       React.createElement(Button, { variant: 'outline', size: 'sm', disabled: saving, onClick: testOnline }, t('settings.reviewer.test')),
       credentialConfigured && credentialWritable
@@ -1891,7 +1894,8 @@ function SettingsSection() {
         : null,
       testResult ? renderTestResult(testResult) : null,
     ),
-    ),
+    )
+      : null,
   )
 
   const buildSecurityBody = () => {
@@ -1995,11 +1999,6 @@ function SettingsSection() {
       placeholder: '# Claude 式声明规则（每行一条）\nbash,git(^git\\s+push\\b) | deny | arguments\n(?i)rm\\s+(-[a-z]+\\s+)*/ | human | arguments\nwrite,edit\\(.*://.*\\) | deny | arguments',
       className: 'dsa-textarea dsa-code',
     }), t('settings.rules.rulesTextHint')),
-    row(t('settings.rulesDryRun'), React.createElement(CapsuleSelect, {
-      value: draft.rulesDryRun,
-      options: onOffOptions(),
-      onChange: (v: string) => update({ rulesDryRun: v as 'on' | 'off' }),
-    }), t('settings.rulesDryRunHint')),
     ...(declaredRuleErrors.map((er) => React.createElement('p', {
       key: er.line,
       style: { color: 'var(--dsw-alias-state-error-primary)', fontSize: 12, margin: '2px 0 0' },
@@ -2400,6 +2399,7 @@ function SettingsSection() {
     subcard(t('settings.utility.title'), openUtility, utilityDirty, () => setOpenUtility((o) => !o), buildUtilityBody, () => cardFooter(UTILITY_KEYS, 'utility', utilityDirty)),
     subcard(t('settings.reviewer.title'), openReview, reviewDirty, () => setOpenReview((o) => !o), buildReviewBody, buildReviewFooter),
     subcard(t('settings.history.title'), openHistory, false, () => setOpenHistory((o) => !o), buildHistoryBody, buildHistoryFooter),
+    subcard(t('settings.advanced.title'), openAdvanced, false, () => setOpenAdvanced((o) => !o), buildAdvancedBody),
     React.createElement('div', { style: { borderTop: '1px solid var(--dsw-alias-border-l2)', marginTop: 4 } },
       row(t('settings.debug'), React.createElement(CapsuleSelect, {
         value: draft.debug,
