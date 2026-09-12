@@ -336,6 +336,12 @@ const WRAPPER_VALUE_FLAGS: Record<string, RegExp> = {
   stdbuf: /^-(?:i|o|e)$/,
   nice: /^-(?:n)$/,
   ionice: /^-(?:c|n|p)$/,
+  // timeout: `-s/--signal <SIG>` and `-k/--kill-after <DUR>` take a value. This
+  // table is a copy of the shell plane's authority (auto/shell.ts) and had lost
+  // the entry: `timeout -s KILL 5 rm -rf X` unwrapped to `KILL` here (unknown)
+  // while the shell plane saw `rm`, so the delete hard lock and the operator's
+  // delete categoryPolicy never fired for that spelling. Keep the two in step.
+  timeout: /^-(?:s|k)$|^--(?:signal|kill-after)$/,
 }
 const NESTED_INTERPRETERS = new Set(['node', 'deno', 'bun', 'python', 'python3', 'perl', 'ruby', 'php', 'osascript'])
 const NESTED_SHELLS = new Set(['sh', 'bash', 'zsh', 'fish', 'ksh', 'dash', 'cmd', 'cmd.exe', 'powershell', 'powershell.exe', 'pwsh', 'pwsh.exe'])
