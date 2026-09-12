@@ -54,6 +54,13 @@ const KEY_COLON_RULE = new RegExp(`\\b(${SECRET_KEY_NAME})\\s*:\\s*\\S{6,}`, 'gi
 const AUTHORIZATION_RULE = /\b(authorization\s*[:=]\s*)\S+(?:\s+\S+)?/gi
 
 /**
+ * The compound credential word the space-separated rule keys off. Declared
+ * once and interpolated into both the rule and the feature pre-screen, so the
+ * pre-screen cannot be a non-superset of the rule it gates.
+ */
+const COMPOUND_CREDENTIAL = '(?:[a-z0-9]*[_-])*(?:auth|access|refresh|api)[_-]?(?:token|secret|key)'
+
+/**
  * Space-separated compound-credential rule (`npm config set //x:_authToken
  * TOKEN` — the standard npm auth shape, which has no `=`/`:` to key off).
  * Deliberately narrow: only compound auth/access/refresh/api token/secret/key
@@ -61,7 +68,7 @@ const AUTHORIZATION_RULE = /\b(authorization\s*[:=]\s*)\S+(?:\s+\S+)?/gi
  * must not match), and the value needs 8+ chars. The lookahead keeps already
  * redacted output from being re-consumed and reformatted.
  */
-const KEY_SPACE_RULE = new RegExp(`\\b((?:[a-z0-9]*[_-])*(?:auth|access|refresh|api)[_-]?(?:token|secret|key))\\s+(?!\\[redacted)(\\S{8,})`, 'gi')
+const KEY_SPACE_RULE = new RegExp(`\\b(${COMPOUND_CREDENTIAL})\\s+(?!\\[redacted)(\\S{8,})`, 'gi')
 
 /**
  * Field names that carry credential-shaped material (shared with the
@@ -76,11 +83,13 @@ export const SECRET_KEYS = /(?:api|auth|access|secret|private|credential|passwor
  * redaction patterns below can match (`=` for key=value forms, `bearer`,
  * `begin` for PEM, `akia`, `eyj` for JWT, the token prefixes, `://` for
  * connection strings, `:\s*["']` / `:\s*\S{6,}` for JSON and bare colon
- * forms). It only decides whether to run the replacement chain
- * — never which replacement applies — so a benign huge result (e.g. a file
- * read) skips the multi-pass scan without any false-negative gate.
+ * forms, and the space-separated compound word, which needs neither `=` nor
+ * `:` and used to skip the whole chain). It only decides whether to run the
+ * replacement chain — never which replacement applies — so a benign huge
+ * result (e.g. a file read) skips the multi-pass scan without any
+ * false-negative gate.
  */
-const SECRET_FEATURES = /[=]|bearer|basic|begin|akia|eyj|github_pat|\bsk[-_]|ghp[-_]|xox|authorization|:\/\/|:\s*["']|:\s*\S{6,}/i
+const SECRET_FEATURES = new RegExp(`[=]|bearer|basic|begin|akia|eyj|github_pat|\\bsk[-_]|ghp[-_]|xox|authorization|:\\/\\/|:\\s*["']|:\\s*\\S{6,}|${COMPOUND_CREDENTIAL}`, 'i')
 
 /** Redact likely secrets (key formats, bearer tokens, key=value pairs). */
 export function redactSecrets(value: string): string {
