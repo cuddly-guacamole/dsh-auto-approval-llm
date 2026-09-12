@@ -52,6 +52,12 @@ export interface ApprovalRecord {
 /** How long a settled ask stays on the chip after the panel is gone. */
 export const TERMINAL_TTL_MS = 8_000
 
+/**
+ * Ceiling for remembered finished asks. A browser tab outlives many sessions,
+ * so the set is FIFO-bounded like the answer tombstones.
+ */
+export const MAX_TOMBSTONES = 500
+
 /** Above this many seconds the chip shows a coarse value instead of digits. */
 export const COARSE_COUNTDOWN_SECONDS = 30
 
@@ -130,7 +136,23 @@ function recordKey(sessionId: string, callId: string): string {
 
 export function createApprovalStatusStore(now: () => number = Date.now): ApprovalStatusStore {
   const records = new Map<string, ApprovalRecord>()
+  // Keys whose terminal window has already been shown. The host keeps a
+  // settled ask in its session list for its own retention window, so without a
+  // tombstone every later discovery poll would revive the finished chip for
+  // another window — the same outcome would blink for minutes.
+  const tombstones = new Set<string>()
+  const tombstoneOrder: string[] = []
   const listeners = new Set<() => void>()
+
+  const rememberTombstone = (key: string) => {
+    if (tombstones.has(key)) return
+    tombstones.add(key)
+    tombstoneOrder.push(key)
+    while (tombstoneOrder.length > MAX_TOMBSTONES) {
+      const oldest = tombstoneOrder.shift()
+      if (oldest !== undefined) tombstones.delete(oldest)
+    }
+  }
 
   const notify = () => {
     for (const listener of [...listeners]) {
@@ -144,7 +166,10 @@ export function createApprovalStatusStore(now: () => number = Date.now): Approva
 
   const prune = (at: number) => {
     for (const [key, record] of records) {
-      if (record.phase === 'follow' && at - record.observedAt > TERMINAL_TTL_MS) records.delete(key)
+      if (record.phase !== 'follow') continue
+      if (at - record.observedAt <= TERMINAL_TTL_MS) continue
+      records.delete(key)
+      rememberTombstone(key)
     }
   }
 
@@ -155,6 +180,7 @@ export function createApprovalStatusStore(now: () => number = Date.now): Approva
     action: 'allow' | 'reject',
   ) => {
     const key = recordKey(sessionId, callId)
+    if (tombstones.has(key)) return
     const existing = records.get(key)
     if (existing && existing.phase === 'follow') return
     const at = now()
@@ -178,6 +204,7 @@ export function createApprovalStatusStore(now: () => number = Date.now): Approva
   return {
     observePending(sessionId, callId, breaker = false) {
       const key = recordKey(sessionId, callId)
+      if (tombstones.has(key)) return
       const existing = records.get(key)
       if (existing && existing.phase === 'follow') return
       const at = now()
@@ -207,6 +234,7 @@ export function createApprovalStatusStore(now: () => number = Date.now): Approva
 
     publishStatus(sessionId, callId, status) {
       const key = recordKey(sessionId, callId)
+      if (tombstones.has(key)) return
       const existing = records.get(key)
       const at = now()
       if (status.phase === 'follow') {
@@ -250,10 +278,19 @@ export function createApprovalStatusStore(now: () => number = Date.now): Approva
 
     clearSession(sessionId) {
       let changed = false
+      const prefix = `${sessionId}:`
       for (const [key, record] of records) {
         if (record.sessionId !== sessionId) continue
         records.delete(key)
         changed = true
+      }
+      // Leaving a session releases its finished-ask memory: the tab may come
+      // back to it later, and a genuinely new ask must never be suppressed.
+      for (const key of [...tombstones]) {
+        if (!key.startsWith(prefix)) continue
+        tombstones.delete(key)
+        const at = tombstoneOrder.indexOf(key)
+        if (at !== -1) tombstoneOrder.splice(at, 1)
       }
       if (changed) notify()
     },

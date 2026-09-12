@@ -117,6 +117,28 @@ test('a settled ask stays readable for a bounded window, then clears', () => {
   assert.equal(chipState(store.activeFor('s1', now), now, false).kind, 'empty')
 })
 
+test('a finished ask is not revived by the host still listing it', () => {
+  // The host keeps a settled ask in its session list for its own retention
+  // window. Without the tombstone the discovery poll rebuilds the record every
+  // window and the same outcome blinks for minutes (observed live).
+  let now = 1_000
+  const store = createApprovalStatusStore(() => now)
+  store.resolve('s1', 'c1', 'llm', 'allow')
+  now += TERMINAL_TTL_MS + 1
+  assert.equal(chipState(store.activeFor('s1', now), now, false).kind, 'empty')
+  store.resolve('s1', 'c1', 'llm', 'allow')
+  store.publishStatus('s1', 'c1', { phase: 'countdown', action: 'allow', seconds: 6 })
+  store.observePending('s1', 'c1')
+  assert.equal(chipState(store.activeFor('s1', now), now, false).kind, 'empty', 'the shown outcome must not come back')
+  // A different ask in the same session is unaffected.
+  store.resolve('s1', 'c2', 'timeout', 'reject')
+  assert.equal(chipState(store.activeFor('s1', now), now, false).kind, 'timeout')
+  // Leaving the session releases the memory: a genuinely new ask renders again.
+  store.clearSession('s1')
+  store.resolve('s1', 'c1', 'llm', 'allow')
+  assert.equal(chipState(store.activeFor('s1', now), now, false).kind, 'allowed')
+})
+
 test('an open ask leaves the chip when its pending goes away', () => {
   let now = 1_000
   const store = createApprovalStatusStore(() => now)
