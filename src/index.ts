@@ -4183,6 +4183,10 @@ export function apply(ctx: Context, rawConfig: Config): void {
       // The one-shot greeting marker is keyed by the same id; drop it so a
       // long-lived process never grows the Set with disposed sessions.
       firstAutoNoticeSeen.delete(key)
+      // The trusted-intent signature is keyed by the same authority id and had
+      // no other owner: without this it kept one entry per Auto session that
+      // ever reached the classifier, for the process lifetime.
+      trustedIntentReported.delete(key)
       // rejectGuidanceSeen keys are `${sessionId}:${callId}`; drop every key
       // of a disposed session wholesale (same L1 discipline — the Set is
       // additionally capped by insert-order FIFO in maybeInjectRejectGuidance).
