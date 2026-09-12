@@ -267,9 +267,13 @@ export function validateReviewerBaseUrl(raw: string):
     return { ok: false, reason: `reviewerBaseUrl 仅支持 http/https：${url.protocol}` }
   }
   const host = url.hostname
-  // Node's URL.hostname keeps the brackets for IPv6 ("[::1]"), so test both.
-  const isLoopback = host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]'
-  if (url.protocol === 'http:' && !isLoopback) {
+  // Node's URL.hostname keeps the brackets for IPv6 ("[::1]"), which
+  // isLoopbackHostname handles together with the whole 127/8 range and the
+  // IPv4-mapped IPv6 spellings. The endpoint caller uses that same predicate to
+  // decide whether a target is the local machine, so a spelling it accepts must
+  // not be refused here — two loopback lists drifted apart once (127.1.2.3 and
+  // the mapped forms were accepted downstream and rejected at configuration).
+  if (url.protocol === 'http:' && !isLoopbackHostname(host)) {
     return { ok: false, reason: `reviewerBaseUrl 使用明文 http 且非回环地址（${host}）；请改用 https:// 或本机代理` }
   }
   return { ok: true, baseUrl, insecure: url.protocol === 'http:' }
