@@ -7,7 +7,7 @@
 // display store, so the countdown is visible before any panel appears.
 //
 // Display only: the per-approval poller still owns the auto-answer decision.
-import { SESSION_REVIEW_STATUS_ROUTE, REVIEW_WAIT_MS } from './shared.js'
+import { SESSION_REVIEW_STATUS_ROUTE, REVIEW_WAIT_MS, POLL_TIMEOUT_MARGIN_MS, pollAbortSignal } from './shared.js'
 import { approvalStatusStore } from './status-store.js'
 
 /** Fallback cadence between discovery requests (long poll handles the rest). */
@@ -18,6 +18,8 @@ export interface SessionWatchOptions {
   waitMs?: number
   /** Cadence between discovery requests (default SESSION_WATCH_POLL_MS). */
   pollMs?: number
+  /** Hard timeout for one discovery request (default waitMs + POLL_TIMEOUT_MARGIN_MS). */
+  pollTimeoutMs?: number
 }
 
 export function watchSessionApprovals(ctx: any, options: SessionWatchOptions = {}): void {
@@ -25,6 +27,9 @@ export function watchSessionApprovals(ctx: any, options: SessionWatchOptions = {
   const sessions = ctx.get('sessions')
   const waitMs = options.waitMs ?? REVIEW_WAIT_MS
   const pollMs = options.pollMs ?? SESSION_WATCH_POLL_MS
+  // Bounded request: a hung connection would otherwise hold `inFlight` forever
+  // and the session watch would go silent for the rest of the tab's life.
+  const pollTimeoutMs = options.pollTimeoutMs ?? waitMs + POLL_TIMEOUT_MARGIN_MS
   let current: string | undefined
   let timer: any
   let inFlight = false
@@ -46,6 +51,7 @@ export function watchSessionApprovals(ctx: any, options: SessionWatchOptions = {
           'x-auto-approval-wait-ms': String(waitMs),
         },
         credentials: 'same-origin',
+        signal: pollAbortSignal(pollTimeoutMs),
       })
       if (!res.ok) return
       const data = await res.json()

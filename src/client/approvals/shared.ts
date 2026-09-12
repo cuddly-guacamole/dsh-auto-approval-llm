@@ -18,6 +18,25 @@ export const REVEAL_ROUTE = '/_dsh/auto-approval-llm/reveal-approval'
 export const REVIEW_WAIT_MS = 20_000
 
 /**
+ * Slack added to the long-poll budget before one request is aborted. A poll
+ * that never settles would hold the poller's `inFlight` guard forever: the
+ * interval keeps ticking, every tick declines, and the approval can no longer
+ * be observed or auto-answered — the official panel then stays open until the
+ * host timer resolves it. The request is therefore bounded.
+ */
+export const POLL_TIMEOUT_MARGIN_MS = 5_000
+
+/**
+ * AbortSignal bounding one poll, or undefined when the runtime has no
+ * `AbortSignal.timeout` (the poll then keeps its previous unbounded behaviour
+ * rather than failing).
+ */
+export function pollAbortSignal(timeoutMs: number): AbortSignal | undefined {
+  const anyAbort = (globalThis as any).AbortSignal
+  return typeof anyAbort?.timeout === 'function' ? anyAbort.timeout(timeoutMs) : undefined
+}
+
+/**
  * Ask the host to show the official panel now, before the configured delay
  * elapsed. Best-effort: a 404/403 (older host) leaves the panel to arrive on its
  * own, and the answer never gates anything the client renders.
@@ -180,6 +199,8 @@ export interface ReviewPollingOptions {
   pollMs?: number
   /** Hold budget for one review-status request (default REVIEW_WAIT_MS). */
   waitMs?: number
+  /** Hard timeout for one review-status request (default waitMs + POLL_TIMEOUT_MARGIN_MS). */
+  pollTimeoutMs?: number
   /** Grace window after the countdown status vanishes (default FOLLOW_GRACE_MS). */
   graceMs?: number
   /** Notifies the watcher that the approval settled; the watcher tombstones the key. */
@@ -220,6 +241,8 @@ export function startReviewPolling(
 ): ReviewPollHandle {
   const pollMs = options.pollMs ?? 500
   const graceMs = options.graceMs ?? FOLLOW_GRACE_MS
+  const waitMs = options.waitMs ?? REVIEW_WAIT_MS
+  const pollTimeoutMs = options.pollTimeoutMs ?? waitMs + POLL_TIMEOUT_MARGIN_MS
   // Status-less ask (no callId): nothing can ever be published for it and no
   // answer may be derived from marker text — never arm a poller.
   if (!handle.callId) return { dispose: () => {}, pollNow: () => {} }
@@ -364,8 +387,12 @@ export function startReviewPolling(
           'x-auto-approval-call-id': String(handle.callId),
           // Long poll: the host answers when the ask's revision changes, so the
           // standing interval only has to cover hosts that ignore the header.
-          'x-auto-approval-wait-ms': String(options.waitMs ?? REVIEW_WAIT_MS),
+          'x-auto-approval-wait-ms': String(waitMs),
         },
+        // Bounded request: a hung connection must never wedge `inFlight`
+        // forever — the interval would keep declining and the ask would never
+        // be observed or auto-answered again.
+        signal: pollAbortSignal(pollTimeoutMs),
       })
       if (!res.ok) {
         // Transient server error: keep observing; never treat it as a
