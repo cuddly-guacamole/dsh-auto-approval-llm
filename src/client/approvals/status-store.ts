@@ -49,8 +49,11 @@ export interface ApprovalRecord {
   observedAt: number
 }
 
-/** How long a settled ask stays on the chip after the panel is gone. */
-export const TERMINAL_TTL_MS = 8_000
+/**
+ * How long a settled ask stays visible after the panel is gone. Short by
+ * design: the outcome is a glance, then the control returns to its idle label.
+ */
+export const TERMINAL_TTL_MS = 1_500
 
 /**
  * Ceiling for remembered finished asks. A browser tab outlives many sessions,

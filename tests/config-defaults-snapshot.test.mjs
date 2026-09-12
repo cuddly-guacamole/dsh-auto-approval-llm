@@ -44,7 +44,6 @@ test('schema defaults snapshot: changing a default must be a reviewed diff', () 
       autoModeNoticeEnabled: true,
       breakerAntiHijackMs: 0,
       panelDelayMs: 3000,
-      capsulePlacement: 'header',
       aiButtonPosition: 'header',
       workspaceRoot: '',
       dshHome: '',

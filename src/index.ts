@@ -111,8 +111,6 @@ export interface Config {
   breakerAntiHijackMs: number
   /** Hold the official panel back for countdown asks; 0 = show it immediately. */
   panelDelayMs?: number
-  /** Where the pre-panel countdown is rendered. */
-  capsulePlacement?: 'header' | 'composer'
   aiButtonPosition: 'header' | 'floating'
   workspaceRoot?: string
   dshHome?: string
@@ -234,9 +232,6 @@ export const Config: z<Config> = z.object({
   // appears immediately. Bounded so a mis-set value cannot hide an ask for
   // longer than the shortest countdown can settle it.
   panelDelayMs: z.number().default(THRESHOLD_DEFAULTS.panelDelayMs).min(0).max(10_000),
-  // Where the pre-panel countdown is shown: the session header chip (default,
-  // no new composer row) or the composer dock.
-  capsulePlacement: z.union(['header', 'composer'] as const).default('header'),
   aiButtonPosition: z.union(['header', 'floating'] as const).default('header'),
   workspaceRoot: z.string().default(''),
   dshHome: z.string().default(''),

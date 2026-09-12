@@ -33,10 +33,8 @@ const LLM_MODELS_ROUTE = '/_dsh/auto-approval-llm/llm-models'
 const REASONING_EFFORTS_ROUTE = '/_dsh/auto-approval-llm/reasoning-efforts'
 let sessionsRef: any
 let breakerAntiHijackMs = THRESHOLD_DEFAULTS.breakerAntiHijackMs
-// Where the pre-panel countdown is rendered; read from settings at apply and
-// refreshed by the settings card. The session header chip is always mounted —
-// this only decides whether the composer dock carries a second copy.
-let capsulePlacement: 'header' | 'composer' = 'header'
+// Whether the approval-panel entry is rendered beside or over the session
+// header; read from settings at apply and refreshed by the settings card.
 let aiButtonPosition: 'header' | 'floating' = 'header'
 const MAX_PANEL_RECORDS = 10
 const LOCALE_NS = 'dsh-auto-approval-llm'
@@ -309,7 +307,6 @@ interface Draft {
   autoModeNoticeEnabled: 'on' | 'off'
   breakerAntiHijackMs: string
   panelDelayMs: string
-  capsulePlacement: 'header' | 'composer'
   reviewMaxRetries: string
   aiButtonPosition: 'header' | 'floating'
   directHumanEnabled: 'on' | 'off'
@@ -364,7 +361,6 @@ function draftOf(value: any): Draft {
     autoModeNoticeEnabled: value?.autoModeNoticeEnabled === false ? 'off' : 'on',
     breakerAntiHijackMs: String(value?.breakerAntiHijackMs ?? THRESHOLD_DEFAULTS.breakerAntiHijackMs),
     panelDelayMs: String(value?.panelDelayMs ?? THRESHOLD_DEFAULTS.panelDelayMs),
-    capsulePlacement: value?.capsulePlacement === 'composer' ? 'composer' : 'header',
     reviewMaxRetries: String(value?.reviewMaxRetries ?? THRESHOLD_DEFAULTS.reviewMaxRetries),
     aiButtonPosition: value?.aiButtonPosition === 'floating' ? 'floating' : 'header',
     directHumanEnabled: value?.directHumanEnabled === true ? 'on' : 'off',
@@ -415,7 +411,6 @@ function valueOf(draft: Draft): any {
     autoModeNoticeEnabled: draft.autoModeNoticeEnabled === 'off' ? false : true,
     breakerAntiHijackMs: Math.max(0, Number(draft.breakerAntiHijackMs) || 0),
     panelDelayMs: Math.max(0, Math.min(10_000, Number(draft.panelDelayMs) || 0)),
-    capsulePlacement: draft.capsulePlacement,
     reviewMaxRetries: Math.max(0, Math.min(2, Number(draft.reviewMaxRetries) || 0)),
     aiButtonPosition: draft.aiButtonPosition,
     directHumanEnabled: draft.directHumanEnabled === 'on',
@@ -523,7 +518,6 @@ const INVALID_CONFIG_ENUMS: Record<string, string[]> = {
   defaultReviewMode: ['manual', 'smart', 'unattended'],
   showSessionPanel: ['on', 'auto', 'off'],
   aiButtonPosition: ['header', 'floating'],
-  capsulePlacement: ['header', 'composer'],
   endpointProtocol: ['openai', 'anthropic'],
   categoryMode: ['standard', 'aggressive'],
   classifierSource: ['session', 'preset', 'endpoint'],
@@ -1038,7 +1032,7 @@ function SettingsSection() {
   // overlaid on the last-saved baseline; other cards' unsaved edits are left
   // in the local draft and never accidentally persisted by another card.
   const TOP_KEYS = ['enabled', 'autoSwitchPolicyToAsk', 'timeoutAction', 'llmReviewScope', 'llmTakeoverScope', 'defaultReviewMode', 'showSessionPanel', 'aiButtonPosition', 'autoModeNoticeEnabled']
-  const TIMER_KEYS = ['breakerAntiHijackMs', 'panelDelayMs', 'capsulePlacement', 'lowRiskSeconds', 'mediumRiskSeconds', 'highRiskSeconds', 'maxConsecutiveDenials', 'maxTotalDenials', 'reviewWaitSeconds', 'directHumanEnabled', 'slashCommandsEnabled']
+  const TIMER_KEYS = ['breakerAntiHijackMs', 'panelDelayMs', 'lowRiskSeconds', 'mediumRiskSeconds', 'highRiskSeconds', 'maxConsecutiveDenials', 'maxTotalDenials', 'reviewWaitSeconds', 'directHumanEnabled', 'slashCommandsEnabled']
   const REVIEW_KEYS = ['classifierSource', 'classifierProvider', 'classifierModel', 'reviewerSource', 'reviewerProvider', 'reviewerModel', 'reviewerMaxTokens', 'reviewerReasoning', 'classifierReasoning', 'endpointUrl', 'endpointModel', 'endpointProtocol', 'reviewMaxRetries']
   const SECURITY_KEYS = ['safetyPrompt', 'allowlist', 'denyList', 'humanOnlyList', 'rulesText', 'rulesDryRun']
   const UTILITY_KEYS = ['onboardingMessageEnabled', 'redactResults', 'editDiffPreview', 'rejectGuidance']
@@ -1081,7 +1075,6 @@ function SettingsSection() {
 
   const broadcastSettings = (saved: any) => {
     breakerAntiHijackMs = saved?.value?.breakerAntiHijackMs ?? THRESHOLD_DEFAULTS.breakerAntiHijackMs
-    capsulePlacement = saved?.value?.capsulePlacement === 'composer' ? 'composer' : 'header'
     aiButtonPosition = saved?.value?.aiButtonPosition === 'floating' ? 'floating' : 'header'
     const g = globalThis as any
     if (typeof g.CustomEvent === 'function') {
@@ -1716,14 +1709,6 @@ function SettingsSection() {
       className: 'dsa-input',
       style: { width: 110 },
     }), t('settings.panelDelayHint')),
-    row(t('settings.capsulePlacement'), React.createElement(CapsuleSelect, {
-      value: draft.capsulePlacement,
-      options: [
-        { value: 'header', label: t('option.capsule.header') },
-        { value: 'composer', label: t('option.capsule.composer') },
-      ],
-      onChange: (v: string) => update({ capsulePlacement: v as 'header' | 'composer' }),
-    }), t('settings.capsulePlacementHint')),
     row(t('settings.slashCommands.title'), React.createElement(CapsuleSelect, {
       value: draft.slashCommandsEnabled,
       options: onOffOptions(),
@@ -2481,46 +2466,16 @@ function SettingsSection() {
 }
 
 
-// ── approval status chip ──────────────────────────────────────────────────
-// Display-only status for the current session, rendered from the shared store
-// (the same source the composer capsule reads). The official panel keeps its
-// own buttons and labels; the chip carries the countdown and the outcome, so
-// nothing has to rewrite the panel's DOM.
-//
-// The tick exists only to walk the local second below the coarse threshold:
-// above it the chip shows a rounded minute value, which is what makes the
-// slow cadence acceptable.
+// ── approval status label ─────────────────────────────────────────────────
+// The session header control doubles as the status display: it reads the same
+// shared store the composer capsule reads, so the two surfaces always agree.
+// Localized copy lives in `chipLabel`, one string per state; the walking
+// countdown only ticks below the coarse threshold, above which a rounded
+// minute value stays put.
 
-/** States the chip announces to assistive tech (the walking countdown never does). */
-const ANNOUNCED_CHIP_STATES = new Set(['imminent', 'allowed', 'rejected', 'timeout', 'cancelled', 'awaiting', 'breaker', 'offline'])
-
-function ApprovalStatusChip(props: any) {
-  const sessionId = props?.sessionId
-  const [, setTick] = React.useState(0)
-  React.useEffect(() => {
-    const rerender = () => setTick((n: number) => n + 1)
-    const unsubscribe = approvalStatusStore.subscribe(rerender)
-    const timer = setInterval(rerender, 1000)
-    return () => {
-      unsubscribe()
-      clearInterval(timer)
-    }
-  }, [])
-  if (!sessionId) return null
-  const state = chipState(approvalStatusStore.activeFor(sessionId, Date.now()), Date.now(), isLinkDown())
-  const label = chipLabel(state)
-  if (label === null) return null
-  const tone = state.kind === 'allowed' || state.kind === 'human'
-    ? ' dsa-statusChipOk'
-    : state.kind === 'rejected'
-      ? ' dsa-statusChipBad'
-      : ''
-  const role = ANNOUNCED_CHIP_STATES.has(state.kind) ? 'status' : undefined
-  return React.createElement('span', { className: `dsa-statusChip${tone}`, role }, label)
-}
-
-/** Localized copy for one chip state; null means nothing is displayed. */
-function chipLabel(state: ChipState): string | null {  switch (state.kind) {
+/** Localized copy for one status state; null means "show the idle label". */
+function chipLabel(state: ChipState): string | null {
+  switch (state.kind) {
     case 'empty':
       return null
     case 'countdown':
@@ -2548,18 +2503,22 @@ function chipLabel(state: ChipState): string | null {  switch (state.kind) {
   }
 }
 
-/**
- * Composer-dock copy of the same status. Mounted only when `capsulePlacement`
- * asks for it: the session header chip is always the primary surface, and a
- * second row above the composer is for readers who want the status next to the
- * text they are typing. While the official panel is up the whole dock is
- * hidden by the composer chain, so the two never share the screen.
- */
-function ApprovalStatusCapsule(props: any) {
-  const sessionId = props?.sessionId ?? props?.session?.id ?? props?.zone?.session?.id
-  const [, setTick] = React.useState(0)
+function SessionApprovalPanel(props: any) {
+  const [open, setOpen] = React.useState(false)
+  const [records, setRecords] = React.useState<any[]>([])
+  const [panelMode, setPanelMode] = React.useState<'on' | 'auto' | 'off'>('off')
+  const [buttonPosition, setButtonPosition] = React.useState<'header' | 'floating'>('header')
+  const [sessionMode, setSessionMode] = React.useState<string | undefined>()
+  // The control doubles as the status display: idle shows its own name, an
+  // active ask shows the countdown, and a settled one shows the outcome for a
+  // short window. The tick only walks the local second below the coarse
+  // threshold; the store drives every real change.
+  const [, setStatusTick] = React.useState(0)
+  const sessionId = props.sessionId
+  const rootRef = React.useRef<any>(null)
+
   React.useEffect(() => {
-    const rerender = () => setTick((n: number) => n + 1)
+    const rerender = () => setStatusTick((n: number) => n + 1)
     const unsubscribe = approvalStatusStore.subscribe(rerender)
     const timer = setInterval(rerender, 1000)
     return () => {
@@ -2567,31 +2526,6 @@ function ApprovalStatusCapsule(props: any) {
       clearInterval(timer)
     }
   }, [])
-  if (!sessionId || capsulePlacement !== 'composer') return null
-  const record = approvalStatusStore.activeFor(sessionId, Date.now())
-  const state = chipState(record, Date.now(), isLinkDown())
-  const label = chipLabel(state)
-  if (!record || label === null) return null
-  const pending = state.kind === 'countdown' || state.kind === 'imminent'
-  return React.createElement('div', { className: 'dsa-dockRow' },
-    React.createElement('span', { className: 'dsa-dockText' }, label),
-    pending
-      ? React.createElement('button', {
-          type: 'button',
-          className: 'dsa-dockAction',
-          onClick: () => revealApproval(record.callId),
-        }, t('chip.showNow'))
-      : null)
-}
-
-function SessionApprovalPanel(props: any) {
-  const [open, setOpen] = React.useState(false)
-  const [records, setRecords] = React.useState<any[]>([])
-  const [panelMode, setPanelMode] = React.useState<'on' | 'auto' | 'off'>('off')
-  const [buttonPosition, setButtonPosition] = React.useState<'header' | 'floating'>('header')
-  const [sessionMode, setSessionMode] = React.useState<string | undefined>()
-  const sessionId = props.sessionId
-  const rootRef = React.useRef<any>(null)
 
   React.useEffect(() => {
     let disposed = false
@@ -2717,12 +2651,30 @@ function SessionApprovalPanel(props: any) {
     fontSize: 12,
   }
 
+  // Idle label, or the live/settled status the ask currently has. The state
+  // mapping is the same one the composer capsule reads, so both surfaces agree.
+  const statusLabel = sessionId
+    ? chipLabel(chipState(approvalStatusStore.activeFor(sessionId, Date.now()), Date.now(), isLinkDown()))
+    : null
+  const controlLabel = statusLabel ?? t('panel.button')
+
   return React.createElement('div', { style: { display: 'contents' }, ref: rootRef },
-    React.createElement('button', {
-      type: 'button',
-      className: 'dsa-sessionButton',
-      onClick: () => setOpen(!open),
-    }, React.createElement('span', null, t('panel.button'))),
+    React.createElement('span', { className: 'dsa-sessionSplit' },
+      // Left side carries the status only (no action yet); the chevron owns the
+      // history overlay, mirroring the official split-button shape.
+      React.createElement('span', { className: 'dsa-sessionMain', 'aria-live': 'polite' }, controlLabel),
+      React.createElement('button', {
+        type: 'button',
+        className: 'dsa-sessionChevron',
+        'aria-expanded': open ? 'true' : 'false',
+        'aria-haspopup': 'menu',
+        'aria-label': t('panel.history'),
+        title: t('panel.history'),
+        onClick: () => setOpen(!open),
+      }, React.createElement('svg', { width: 11, height: 11, viewBox: '0 0 14 14', fill: 'none', xmlns: 'http://www.w3.org/2000/svg' },
+        React.createElement('path', { d: CHEVRON_PATH, fill: 'currentColor' }),
+      )),
+    ),
     open ? React.createElement('div', { style: overlayStyle },
       React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 } },
         React.createElement('div', { style: { fontWeight: 600, fontSize: 14 } }, t('panel.title')),
@@ -3068,10 +3020,11 @@ function installSettingsCardStyles(): () => void {
 .dsa-statusChip{display:inline-flex;align-items:center;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-secondary);border-radius:999px;flex:none;padding:1px 10px;font-size:12px;line-height:18px;font-variant-numeric:tabular-nums}
 .dsa-statusChipOk{color:var(--dsw-alias-state-success-primary)}
 .dsa-statusChipBad{color:var(--dsw-alias-state-error-primary)}
-.dsa-dockRow{display:flex;align-items:center;gap:8px;border:1px solid var(--dsw-alias-border-l2);border-radius:12px;background:var(--dsw-alias-bg-layer-2);padding:6px 10px;font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary)}
-.dsa-dockText{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-variant-numeric:tabular-nums}
-.dsa-dockAction{appearance:none;font:inherit;cursor:pointer;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:2px 10px;font-size:12px;line-height:18px;background:transparent;color:var(--dsw-alias-label-secondary);flex:none}
-.dsa-dockAction:hover:not(:disabled){color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-label-dimmed);background:var(--dsw-alias-interactive-bg-hover)}
+.dsa-sessionSplit{display:inline-flex;align-items:center;height:32px;border:1px solid var(--dsw-alias-border-l2);border-radius:18px;background:0 0;overflow:hidden}
+.dsa-sessionMain{display:inline-flex;align-items:center;white-space:nowrap;padding:0 4px 0 12px;font-size:13px;line-height:20px;color:var(--dsw-alias-label-primary);font-variant-numeric:tabular-nums}
+.dsa-sessionChevron{appearance:none;display:inline-flex;align-items:center;justify-content:center;width:26px;height:30px;padding:0;border:none;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer}
+.dsa-sessionChevron:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.dsa-sessionChevron:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-2px}
 .dsa-dockAction:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}
 .dsa-nestedCard{border:1px solid var(--dsw-alias-border-l1);border-radius:14px;background:var(--dsw-alias-bg-layer-1);display:flex;flex-direction:column;overflow:hidden}
 .dsa-nestedHeader{appearance:none;display:flex;align-items:center;gap:8px;width:100%;padding:14px 16px;background:0 0;border:0;cursor:pointer;font:inherit;color:inherit;text-align:left}
@@ -3142,7 +3095,6 @@ export function apply(ctx: any): void {
     .then((data: any) => {
       if (data?.ok) {
         breakerAntiHijackMs = data.value.value?.breakerAntiHijackMs ?? THRESHOLD_DEFAULTS.breakerAntiHijackMs
-        capsulePlacement = data.value.value?.capsulePlacement === 'composer' ? 'composer' : 'header'
         aiButtonPosition = data.value.value?.aiButtonPosition === 'floating' ? 'floating' : 'header'
       }
     })
@@ -3162,30 +3114,6 @@ export function apply(ctx: any): void {
     label: () => t('plugin.name'),
     locale: LOCALE_NS,
   }, SettingsSection))
-  // The composer dock is a shared list slot whose entry order is owned by
-  // several plugins; a contract change there must degrade to "no capsule"
-  // instead of taking the whole client (settings card, approval watcher) down.
-  ctx.slots.inject('conversation.input.dock', () => {
-    try {
-      return ctx.slots.register({
-        name: 'conversation.input.dock',
-        id: 'auto-approval-llm-capsule',
-        order: 5,
-        label: () => t('plugin.name'),
-        locale: LOCALE_NS,
-      }, ApprovalStatusCapsule)
-    } catch (error) {
-      console.warn('[dsh-auto-approval-llm] composer capsule slot unavailable; countdown stays on the header chip', error)
-      return undefined
-    }
-  })
-  ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register({
-    name: 'conversation.session.header.utilities',
-    id: 'auto-approval-llm-status-chip',
-    order: -11,
-    label: () => t('plugin.name'),
-    locale: LOCALE_NS,
-  }, ApprovalStatusChip))
   ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register({
     name: 'conversation.session.header.utilities',
     id: 'auto-approval-llm-session-panel',

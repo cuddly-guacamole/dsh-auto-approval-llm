@@ -150,8 +150,7 @@ Session approval stats — the "Auto Approval" header-button popup: totals / all
 | `defaultReviewMode` | `smart` | Default per-session review mode: Manual / Smart / Unattended |
 | `lowRiskSeconds` / `mediumRiskSeconds` / `highRiskSeconds` | 5 / 8 / 10 | Countdown seconds per tier |
 | `breakerAntiHijackMs` | 0 | Disable breaker panel buttons for this many ms; 0 disables; configurable in the settings card (Timers & breaker) |
-| `panelDelayMs` | 3000 | Countdown asks show status only (session header chip) before the official approval panel opens (ms, 0–10000, 0 = open immediately); a review that settles inside the window means no panel appears; configurable in the settings card (Timers & breaker) |
-| `capsulePlacement` | `header` | Where the countdown lives while the panel is held back: `header` (session header chip, default) or `composer` (a status row above the composer, with "Show now") |
+| `panelDelayMs` | 3000 | Countdown asks show status only on the session header control before the official approval panel opens (ms, 0–10000, 0 = open immediately); a review that settles inside the window means no panel appears; configurable in the settings card (Timers & breaker) |
 | `maxConsecutiveDenials` | 3 | Consecutive LLM-denial breaker threshold; 0 off |
 | `maxTotalDenials` | 20 | Cumulative denial breaker threshold; 0 off |
 | `classifierSource` | `session` | Fast-decision lane model source: `session` (follow the conversation) / `preset` (DSH-configured model, with `classifierProvider`+`classifierModel`) / `endpoint` (shared custom endpoint, no longer maintained) |

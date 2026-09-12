@@ -292,11 +292,14 @@ test('the retired button-hijack path leaves no trace in source or bundle', () =>
   assert.ok(!sharedSource.includes('formatCountdownSuffix'), 'the button suffix formatter must be gone')
 })
 
-test('the chip is registered on the session header next to the existing entry', () => {
+test('the session control carries the status label and owns no separate surface', () => {
   assert.ok(clientSource.includes("'conversation.session.header.utilities'"), 'the header slot must be used')
-  assert.ok(clientSource.includes("id: 'auto-approval-llm-status-chip'"), 'the chip must own a distinct slot id')
-  assert.ok(/id: 'auto-approval-llm-status-chip',\s*\n\s*order: -11/.test(clientSource), 'the chip sits before the panel button')
-  assert.ok(clientBundle.includes('dsa-statusChip'), 'the chip styles must ship in the bundle')
+  assert.ok(clientSource.includes('dsa-sessionSplit'), 'the control must render as a split control')
+  assert.ok(clientSource.includes('dsa-sessionChevron'), 'the chevron must own the history overlay')
+  assert.ok(clientSource.includes("const controlLabel = statusLabel ?? t('panel.button')"), 'idle must fall back to the control name')
+  assert.ok(clientBundle.includes('dsa-sessionSplit'), 'the split styles must ship in the bundle')
+  assert.ok(!clientSource.includes("id: 'auto-approval-llm-status-chip'"), 'the standalone chip must be gone')
+  assert.ok(!clientSource.includes("'conversation.input.dock'"), 'the composer-dock capsule must be gone')
 })
 
 test('the surviving panel decorations are still mounted (no over-deletion)', () => {

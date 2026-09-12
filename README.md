@@ -156,8 +156,7 @@ npx tsdown                 # 构建 client bundle → lib/client.js
 | `defaultReviewMode` | `smart` | 每会话评审模式默认：人工 / 智能 / 无人值守 |
 | `lowRiskSeconds` / `mediumRiskSeconds` / `highRiskSeconds` | 5 / 8 / 10 | 三档倒计时（秒） |
 | `breakerAntiHijackMs` | 0 | 熔断弹窗按钮防误点禁用时长，0 不启用；设置卡可配（计时器与熔断子卡） |
-| `panelDelayMs` | 3000 | 倒计时审批先只显示状态（会话标题栏芯片），推迟官方审批面板出现的时间（毫秒，0–10000，0 = 立即出现）；窗口内评审给出结论则面板不出现；设置卡可配（计时器与熔断子卡） |
-| `capsulePlacement` | `header` | 延迟期间倒计时位置：`header`（会话标题栏芯片，默认）或 `composer`（输入框上方状态条，带「现在查看」） |
+| `panelDelayMs` | 3000 | 倒计时审批先只在会话标题栏控件上显示状态，推迟官方审批面板出现的时间（毫秒，0–10000，0 = 立即出现）；窗口内评审给出结论则面板不出现；设置卡可配（计时器与熔断子卡） |
 | `maxConsecutiveDenials` | 3 | 连续 LLM 拒绝熔断阈值，0 关闭 |
 | `maxTotalDenials` | 20 | 累计拒绝熔断阈值，0 关闭 |
 | `classifierSource` | `session` | 快速判断通道模型来源：`session`（跟随会话模型）/ `preset`（DSH 已配置模型，配 `classifierProvider`+`classifierModel`）/ `endpoint`（自定义端点，配下方共享端点，不再维护） |
