@@ -227,6 +227,10 @@ export function createApprovalStatusStore(now: () => number = Date.now): Approva
     confirmAwaiting(sessionId, callId) {
       const record = records.get(recordKey(sessionId, callId))
       if (!record || record.phase === 'follow' || record.awaiting) return
+      // A countdown was already published for this ask: one poll that briefly
+      // misses the status (the host window between publishes) must not repaint
+      // a running countdown as "waiting for a human" and back again.
+      if (record.seconds > 0) return
       record.awaiting = true
       record.observedAt = now()
       notify()

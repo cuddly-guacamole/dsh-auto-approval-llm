@@ -117,6 +117,25 @@ test('a settled ask stays readable for a bounded window, then clears', () => {
   assert.equal(chipState(store.activeFor('s1', now), now, false).kind, 'empty')
 })
 
+test('a poll that briefly misses the countdown does not repaint the chip', () => {
+  // Observed live: the panel appeared ~8s into a locked-category countdown and
+  // the chip flicked to "waiting for a human" for one poll before returning to
+  // the countdown, because the poller confirmed "no countdown" over a record
+  // that already carried one.
+  let now = 1_000
+  const store = createApprovalStatusStore(() => now)
+  store.observePending('s1', 'c1')
+  store.publishStatus('s1', 'c1', { phase: 'countdown', action: 'reject', seconds: 10 })
+  store.confirmAwaiting('s1', 'c1')
+  assert.equal(chipState(store.activeFor('s1', now), now, false).kind, 'countdown')
+  // An ask that never published a countdown still reports waiting for a human.
+  store.dropPending('s1', 'c1')
+  now = 2_000
+  store.observePending('s1', 'c2')
+  store.confirmAwaiting('s1', 'c2')
+  assert.equal(chipState(store.activeFor('s1', now), now, false).kind, 'awaiting')
+})
+
 test('a finished ask is not revived by the host still listing it', () => {
   // The host keeps a settled ask in its session list for its own retention
   // window. Without the tombstone the discovery poll rebuilds the record every
