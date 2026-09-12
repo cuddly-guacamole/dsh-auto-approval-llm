@@ -1620,6 +1620,46 @@ export function directHumanTargetRefusal(input: {
   return undefined
 }
 
+/**
+ * Whether two endpoint URLs name the same request target: scheme, host, port
+ * and path must agree, with a trailing slash ignored and a default port
+ * normalized away. The stored reviewer credential is issued for the configured
+ * endpoint only, so it is attached to a probe of that address and to no other —
+ * anything unparsable or different counts as a different target (the caller
+ * then probes without the stored key).
+ */
+export function sameEndpointTarget(a: string, b: string): boolean {
+  const parse = (raw: unknown): URL | undefined => {
+    try {
+      return new URL(String(raw ?? '').trim())
+    } catch {
+      return undefined
+    }
+  }
+  const left = parse(a)
+  const right = parse(b)
+  if (left === undefined || right === undefined) return false
+  const port = (url: URL): string => url.port !== '' ? url.port : (url.protocol === 'https:' ? '443' : url.protocol === 'http:' ? '80' : '')
+  return left.protocol === right.protocol
+    && left.hostname === right.hostname
+    && port(left) === port(right)
+    && left.pathname.replace(/\/+$/, '') === right.pathname.replace(/\/+$/, '')
+}
+
+/**
+ * Pure: why a name-based pre-authorization channel must not settle this call on
+ * its own — `undefined` means it may.
+ *
+ * Both name-based channels (the allowlist mirror in pre-execute and the
+ * answerer's static-allow path) enumerated only delete/disk, so an operator's
+ * `allowlist: ['read']` — a TOOL name, never a path — also pre-authorized reads
+ * of key material, and the allowlist carries no `credentialRead` judgement of
+ * its own. The documented floor is that no name-based channel unlocks
+ * credential material, exactly as `protectedAutoReview` cannot; delete/disk
+ * stay unreachable for the same reason they always were (their damage is not
+ * recoverable), with the one non-name-based exception the policy itself proved:
+ * a deletion targeting only paths this session created.
+ */
 export function nameChannelLockRefusal(input: {
   category?: string
   sessionArtifactDeletion?: boolean
@@ -2586,7 +2626,7 @@ export function installRevealRoute(ctx: any): void {
   }), 'dsh-auto-approval-llm: reveal route')
 }
 
-function installTestRoute(ctx: any, llm: any): void {
+function installTestRoute(ctx: any, llm: any, endpointUrlFor: () => string = () => ''): void {
   const webServer = ctx.get('webServer')
   if (!webServer) return
   ctx.effect(() => webServer.register({
@@ -2627,19 +2667,23 @@ function installTestRoute(ctx: any, llm: any): void {
           const model = String(body.model ?? '').trim()
           const apiKey = typeof body.apiKey === 'string' ? body.apiKey.trim() : ''
           if (!baseUrl || !model) throw new TypeError('API 地址和模型名称是必填项')
-          // Fall back to the stored reviewer key when the draft field is empty
-          // (the key was saved earlier and the input clears on save): resolve
-          // the credential service per request, then the shared credential
-          // file — the same chain the live review path uses, so the probe
-          // behaves exactly like the review it prepares for.
-          const probeApiKey = apiKey || await (async () => {
+          // The stored reviewer key may only be attached when this probe
+          // targets the endpoint that key belongs to. The route sits on the
+          // loopback trust plane, which any loopback peer passes — including
+          // the agent's own shell — while the target host comes from the
+          // request body, so an unconditional fallback handed the saved key to
+          // whatever address the caller named: a credential-exfiltration
+          // primitive that needed no filesystem access. A foreign target now
+          // probes unauthenticated and reports the real auth failure.
+          const storedKeyAllowed = sameEndpointTarget(baseUrl, endpointUrlFor())
+          const probeApiKey = apiKey || (storedKeyAllowed ? await (async () => {
             const creds = ctx.get('credentials')
             try {
               const resolved = await creds?.resolve?.(REVIEWER_CREDENTIAL_REF)
               if (resolved?.value) return String(resolved.value)
             } catch { /* fall through to file */ }
             return reviewerKeyFromCredentialFile() ?? ''
-          })()
+          })() : '')
           let probeUrl: URL
           try {
             probeUrl = new URL(baseUrl)
@@ -3986,7 +4030,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       if (done) persistLearningGuarded()
       return done
     }))
-  installTestRoute(anyCtx, llm)
+  installTestRoute(anyCtx, llm, () => config.endpointUrl)
   installLlmCatalogRoutes(anyCtx, llm)
   installSessionModeRoute(anyCtx)
   installStatsRoute(anyCtx)
