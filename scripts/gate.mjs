@@ -242,6 +242,10 @@ export async function main() {
   run('the packed tarball is complete', 'node', ['--test', 'tests/pack-contents.test.mjs'])
   run('the documented counts match', 'node', ['scripts/check-doc-numbers.mjs', '--observed', String(observed.tests), '--observed-pass', String(observed.pass)])
   run('the documentation anchors resolve', 'node', ['scripts/check-anchors.mjs'])
+  // Read-only, and it skips with a warning when the official packages are not
+  // installed, so it holds no ordering requirement beyond running before the
+  // release steps.
+  run('the official anchors still hold', 'node', ['scripts/check-official-anchors.mjs'])
 
   let pkg
   try {
