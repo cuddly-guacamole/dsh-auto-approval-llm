@@ -10,7 +10,6 @@ import test, { beforeEach, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import {
-  parseCountdown,
   canonicalPendingKey,
   answerOnce,
   startReviewPolling,
@@ -189,26 +188,9 @@ function fakeConnectionEnv(initial = 'connected') {
 }
 
 // ── pure functions ─────────────────────────────────────────────────────────
-
-test('parseCountdown: real host marker parses with action mapping and seconds floor', () => {
-  assert.deepEqual(parseCountdown('[dsh-auto-approval-llm] ⏳ will auto-approve in 42s'), { seconds: 42, action: 'allow' })
-  assert.deepEqual(parseCountdown('[dsh-auto-approval-llm] ⏳ will auto-reject in 7s'), { seconds: 7, action: 'reject' })
-  // The host appends "if no response" after the seconds; the parser anchors on
-  // the marker prefix and keeps matching (same as pre-0.0.12).
-  assert.deepEqual(parseCountdown('[dsh-auto-approval-llm] ⏳ will auto-approve in 10s if no response'), { seconds: 10, action: 'allow' })
-  // 0s normalizes to 1s so the hijack countdown never freezes at 0.
-  assert.equal(parseCountdown('[dsh-auto-approval-llm] ⏳ will auto-approve in 0s').seconds, 1)
-  assert.equal(parseCountdown('[dsh-auto-approval-llm] ⏳ will auto-reject in 00s').seconds, 1)
-})
-
-test('parseCountdown: absent marker or non-matching shape returns null', () => {
-  assert.equal(parseCountdown(undefined), null)
-  assert.equal(parseCountdown(''), null)
-  assert.equal(parseCountdown('will auto-approve in 10s'), null, 'bare text without the marker prefix is not anchored')
-  assert.equal(parseCountdown('[dsh-auto-approval-llm] will auto-approve in 10s'), null, 'missing ⏳ is not anchored')
-  assert.equal(parseCountdown('[dsh-auto-approval-llm] ⏳ will auto-approve in 10 seconds'), null)
-  assert.equal(parseCountdown('[dsh-auto-approval-llm] ⏳ will maybe-approve in 10s'), null)
-})
+// Countdown text parsing is retired: the client renders status from the host's
+// structured review-status payload (tests/client-status-chip.test.mjs), never
+// from marker text a command could forge.
 
 test('canonicalPendingKey: sessionId:callId, null without callId', () => {
   assert.equal(canonicalPendingKey('s1', 'c1'), 's1:c1')

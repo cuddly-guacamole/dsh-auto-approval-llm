@@ -6,8 +6,9 @@ import { parseRulesText } from '../auto/rules.js'
 import { installAutoPermissionIcon } from './auto-icon.js'
 import { createTrailingThrottle, MIN_PANEL_SCAN_INTERVAL_MS } from './throttle.js'
 import { zh, en } from './locale.js'
-import { computeTextNodeRewrites, createBreakerGuard, formatCountdownSuffix, isLinkDown, parseCountdown, shouldWriteCountdownSuffix } from './approvals/shared.js'
-import type { CountdownInfo } from './approvals/shared.js'
+import { computeTextNodeRewrites, createBreakerGuard, isLinkDown } from './approvals/shared.js'
+import { approvalStatusStore, chipState, coarseMinutes } from './approvals/status-store.js'
+import type { ChipState } from './approvals/status-store.js'
 import { watchRemoteApprovals } from './approvals/remote.js'
 import { buildToolChips, applyChipToList, type ToolChip, type ToolStatsPayload, type ToolStatsEntry } from './tool-chips.js'
 
@@ -90,88 +91,20 @@ function watchSessionModeChanges(ctx: any): void {
   }, 'dsh-auto-approval-llm: session mode watcher')
 }
 
-// ── button hijack ─────────────────────────────────────────────────────────
-// The official ApprovalPanel owns its buttons, but we can still update their
-// visible labels from outside React. This makes the countdown visible directly
-// on "拒绝/允许一次" while the user is about to click.
-function hijackApprovalButtons(): () => void {
+// ── approval panel decorations ────────────────────────────────────────────
+// The countdown is no longer written into the official buttons: status is
+// rendered by the header chip from the shared store, so the panel keeps its
+// own labels. What remains here is additive decoration of the panel's own
+// text — the hidden edit-diff preview block — plus the breaker anti-hijack
+// window, which must arm as soon as the marker text appears.
+function installApprovalPanelDecorations(): () => void {
   const g = globalThis as any
   if (!g.document || !g.MutationObserver) return () => {}
   const doc = g.document
-  const originals = new Map<any, string>()
-  const intervals = new Map<string, any>()
   // Breaker anti-hijack guard, held in the shared core factory so the
   // re-arm/restore logic is unit-testable against the compiled lib. The
   // window read is live: 0 (default) makes the guard a complete no-op.
   const breaker = createBreakerGuard(() => breakerAntiHijackMs)
-
-  const originalText = (btn: any): string => {
-    if (!originals.has(btn)) originals.set(btn, btn.textContent ?? '')
-    return originals.get(btn) ?? ''
-  }
-
-  const updatePanel = (panel: any, key: string, info: CountdownInfo) => {
-    if (intervals.has(key)) return
-    const buttons: any[] = Array.from(panel.querySelectorAll('button'))
-    const reject: any = buttons.find((b: any) => /^(拒绝|Reject)$/i.test((b.textContent ?? '').trim()))
-    const allow: any = buttons.find((b: any) => /^(允许一次|Allow once)$/i.test((b.textContent ?? '').trim()))
-    if (!reject && !allow) return
-    const deadline = Date.now() + info.seconds * 1000
-    let interval: any
-    // Frozen display while the wire is down (断线暂停倒计时): capture the
-    // last-known remaining once and stop walking the local deadline — the
-    // deadline goes stale offline and walking it would show a number we can
-    // no longer confirm. Reconnect resumes the normal walk; a stale deadline
-    // then expires immediately and restores clean text. Observed behavior at
-    // this stage: disconnect unmounts the official panel outright and resume
-    // does not bring it back, so the frozen display only surfaces when a
-    // panel outlives the outage. Render only: the poller owns answers and is
-    // untouched, and the host timer never pauses.
-    let frozen: number | undefined
-    const renderSuffix = (remaining: number, offline: boolean) => {
-      const suffix = formatCountdownSuffix(remaining, offline)
-      // Only the button that will auto-execute on timeout carries the
-      // countdown; the other button stays clean.
-      const button = info.action === 'allow' ? allow : reject
-      if (!button) return
-      const text = `${originalText(button)}${suffix}`
-      // The display ticks every 200ms while the text only changes once a
-      // second, and every write lands in the body-level MutationObserver that
-      // then rescans the whole document — so the unchanged writes used to drive
-      // roughly five extra scans per second per visible countdown. Compared
-      // against the LIVE button text rather than a remembered copy: the
-      // official panel owns this DOM and may rewrite the label between ticks,
-      // and a remembered "already written" would then suppress the restore and
-      // drop the countdown entirely. Reading the DOM keeps that self-healing.
-      if (!shouldWriteCountdownSuffix(button.textContent ?? undefined, text)) return
-      button.textContent = text
-    }
-    const apply = () => {
-      if (isLinkDown()) {
-        if (frozen === undefined) frozen = Math.max(0, Math.ceil((deadline - Date.now()) / 1000))
-        renderSuffix(frozen, true)
-        return
-      }
-      frozen = undefined
-      const remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000))
-      renderSuffix(remaining, false)
-      if (remaining <= 0) {
-        // Expired: stop ticking but KEEP the key registered so a later scan
-        // cannot re-arm this panel with the marker's static seconds — before
-        // that guard, the countdown restarted at its full value on every DOM
-        // mutation. The live-keys sweep in scan() releases the key when the
-        // panel actually leaves the DOM. Restore the clean button text so the
-        // stale "（0s）" suffix does not linger on a panel the host already
-        // resolved.
-        if (info.action === 'allow' && allow) allow.textContent = originalText(allow)
-        else if (reject) reject.textContent = originalText(reject)
-        clearInterval(interval)
-      }
-    }
-    interval = setInterval(apply, 200)
-    intervals.set(key, interval)
-    apply()
-  }
 
   const enablePreLine = (panel: any) => {
     const leaves: any[] = Array.from(panel.querySelectorAll('div')).filter((el: any) =>
@@ -284,9 +217,9 @@ function hijackApprovalButtons(): () => void {
       if (!key) continue
       liveKeys.add(key)
       enablePreLine(panel)
-      // Diff preview first: the raw block is hidden before the countdown is
-      // parsed, so a countdown-literal inside preview content can never arm
-      // the local auto-answer (host strips it too; this is the second fence).
+      // The raw preview block is hidden before anything reads the panel text,
+      // so a marker literal inside preview content can never arm a guard (the
+      // host strips it too; this is the second fence).
       const rawText = panel.textContent ?? ''
       const block = extractDiffBlock(rawText)
       if (block) {
@@ -295,23 +228,8 @@ function hijackApprovalButtons(): () => void {
       }
       const text = panel.textContent ?? ''
       if (hasBreakerNote(text)) breaker.apply(panel, key)
-      const info = parseCountdown(text)
-      if (!info) continue
-      updatePanel(panel, key, info)
-    }
-    for (const key of [...intervals.keys()]) {
-      if (!liveKeys.has(key)) {
-        clearInterval(intervals.get(key))
-        intervals.delete(key)
-      }
     }
     breaker.prune(liveKeys)
-    // The `originals` cache is keyed by button nodes React re-creates per
-    // approval; pruning disconnected nodes here (rather than only at dispose)
-    // stops a long-lived SPA from accumulating stale button strong-refs.
-    for (const [btn] of originals) {
-      if (btn != null && btn.isConnected === false) originals.delete(btn)
-    }
   }
 
   // The observer sees every streaming token as a subtree mutation, and this
@@ -327,10 +245,7 @@ function hijackApprovalButtons(): () => void {
   return () => {
     observer.disconnect()
     throttledScan.dispose()
-    for (const timer of intervals.values()) clearInterval(timer)
-    intervals.clear()
     breaker.dispose()
-    originals.clear()
   }
 }
 
@@ -2524,6 +2439,74 @@ function SettingsSection() {
 }
 
 
+// ── approval status chip ──────────────────────────────────────────────────
+// Display-only status for the current session, rendered from the shared store
+// (the same source the composer capsule reads). The official panel keeps its
+// own buttons and labels; the chip carries the countdown and the outcome, so
+// nothing has to rewrite the panel's DOM.
+//
+// The tick exists only to walk the local second below the coarse threshold:
+// above it the chip shows a rounded minute value, which is what makes the
+// slow cadence acceptable.
+
+/** States the chip announces to assistive tech (the walking countdown never does). */
+const ANNOUNCED_CHIP_STATES = new Set(['imminent', 'allowed', 'rejected', 'timeout', 'cancelled', 'awaiting', 'breaker', 'offline'])
+
+function ApprovalStatusChip(props: any) {
+  const sessionId = props?.sessionId
+  const [, setTick] = React.useState(0)
+  React.useEffect(() => {
+    const rerender = () => setTick((n: number) => n + 1)
+    const unsubscribe = approvalStatusStore.subscribe(rerender)
+    const timer = setInterval(rerender, 1000)
+    return () => {
+      unsubscribe()
+      clearInterval(timer)
+    }
+  }, [])
+  if (!sessionId) return null
+  const state = chipState(approvalStatusStore.activeFor(sessionId, Date.now()), Date.now(), isLinkDown())
+  const label = chipLabel(state)
+  if (label === null) return null
+  const tone = state.kind === 'allowed' || state.kind === 'human'
+    ? ' dsa-statusChipOk'
+    : state.kind === 'rejected'
+      ? ' dsa-statusChipBad'
+      : ''
+  const role = ANNOUNCED_CHIP_STATES.has(state.kind) ? 'status' : undefined
+  return React.createElement('span', { className: `dsa-statusChip${tone}`, role }, label)
+}
+
+/** Localized copy for one chip state; null means nothing is displayed. */
+function chipLabel(state: ChipState): string | null {
+  switch (state.kind) {
+    case 'empty':
+      return null
+    case 'countdown':
+      return state.coarse
+        ? t(`chip.minutes.${state.action}`, { minutes: coarseMinutes(state.seconds) })
+        : t(`chip.seconds.${state.action}`, { seconds: state.seconds })
+    case 'imminent':
+      return t(`chip.imminent.${state.action}`)
+    case 'offline':
+      return t(`chip.offline.${state.action}`, { seconds: state.seconds })
+    case 'awaiting':
+      return t('chip.awaiting')
+    case 'breaker':
+      return t('chip.breaker')
+    case 'allowed':
+      return state.by === 'llm' ? t('chip.allowedLlm') : t('chip.allowed')
+    case 'rejected':
+      return state.by === 'llm' ? t('chip.rejectedLlm') : t('chip.rejected')
+    case 'timeout':
+      return t(`chip.timeout.${state.action}`)
+    case 'human':
+      return t('chip.human')
+    case 'cancelled':
+      return t('chip.cancelled')
+  }
+}
+
 function SessionApprovalPanel(props: any) {
   const [open, setOpen] = React.useState(false)
   const [records, setRecords] = React.useState<any[]>([])
@@ -3005,6 +2988,9 @@ function installSettingsCardStyles(): () => void {
 .dsa-fieldRow .dsa-label{flex:1;min-width:0}
 .dsa-fieldRow .dsa-hint{flex-basis:100%;margin:0}
 .dsa-pending{white-space:nowrap;background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-secondary);border-radius:999px;flex:none;padding:1px 8px;font-size:11px;font-weight:500;line-height:17px}
+.dsa-statusChip{display:inline-flex;align-items:center;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-secondary);border-radius:999px;flex:none;padding:1px 10px;font-size:12px;line-height:18px;font-variant-numeric:tabular-nums}
+.dsa-statusChipOk{color:var(--dsw-alias-state-success-primary)}
+.dsa-statusChipBad{color:var(--dsw-alias-state-error-primary)}
 .dsa-nestedCard{border:1px solid var(--dsw-alias-border-l1);border-radius:14px;background:var(--dsw-alias-bg-layer-1);display:flex;flex-direction:column;overflow:hidden}
 .dsa-nestedHeader{appearance:none;display:flex;align-items:center;gap:8px;width:100%;padding:14px 16px;background:0 0;border:0;cursor:pointer;font:inherit;color:inherit;text-align:left}
 .dsa-nestedHeader:hover{background:var(--dsw-alias-interactive-bg-hover)}
@@ -3078,7 +3064,7 @@ export function apply(ctx: any): void {
       }
     })
     .catch(() => {})
-  ctx.effect(() => hijackApprovalButtons(), 'dsh-auto-approval-llm: button hijack')
+  ctx.effect(() => installApprovalPanelDecorations(), 'dsh-auto-approval-llm: approval panel decorations')
   ctx.effect(() => installAutoPermissionIcon((globalThis as any).document), 'dsh-auto-approval-llm: auto permission icon')
   ctx.effect(() => installFloatingApprovalButton(ctx), 'dsh-auto-approval-llm: floating button')
   ctx.effect(installSettingsCardStyles, 'dsh-auto-approval-llm: settings card styles')
@@ -3092,6 +3078,13 @@ export function apply(ctx: any): void {
     label: () => t('plugin.name'),
     locale: LOCALE_NS,
   }, SettingsSection))
+  ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register({
+    name: 'conversation.session.header.utilities',
+    id: 'auto-approval-llm-status-chip',
+    order: -11,
+    label: () => t('plugin.name'),
+    locale: LOCALE_NS,
+  }, ApprovalStatusChip))
   ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register({
     name: 'conversation.session.header.utilities',
     id: 'auto-approval-llm-session-panel',

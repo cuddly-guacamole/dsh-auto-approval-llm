@@ -8,9 +8,11 @@
 export const FEEDBACK_ROUTE = '/_dsh/auto-approval-llm/feedback'
 export const REVIEW_STATUS_ROUTE = '/_dsh/auto-approval-llm/review-status'
 
+import { approvalStatusStore } from './status-store.js'
+
 // ── link-state broadcast (connection down → countdown render freeze) ───────
 // The connection watcher (remote.ts) publishes the wire state here; render
-// paths (index.ts updatePanel) poll it on their own tick — no listeners, no
+// paths (the header chip) poll it on their own tick — no listeners, no
 // coupling. Per-tab local state only: it never crosses to the host, so one
 // tab's outage can never pause another tab's (let alone the host's)
 // countdown. The host timer stays authoritative throughout.
@@ -28,39 +30,11 @@ export function isLinkDown(): boolean {
   return linkDown
 }
 
-/**
- * Countdown button suffix: `（Ns）` while walking, `（Ns·断线）` while
- * frozen offline. Pure for contract tests; the regexes that read panel text
- * (parseCountdown, breaker button match) never match this shape.
- */
-export function formatCountdownSuffix(remainingSeconds: number, offline = false): string {
-  return offline ? `（${remainingSeconds}s·断线）` : `（${remainingSeconds}s）`
-}
-
-/**
- * Pure: should the countdown suffix be written to the button?
- *
- * The display ticks every 200ms but the text only changes once a second, and
- * every write lands in a document-level MutationObserver that then rescans the
- * whole document. Skipping the unchanged writes removes that self-triggered
- * scan without changing what the panel ever shows: any real change — including
- * the walk back to clean text, and the offline freeze marker — still writes.
- */
-export function shouldWriteCountdownSuffix(previous: string | undefined, next: string): boolean {
-  return previous !== next
-}
-
 // Grace (ms) during which a countdown approval whose host follow is not yet
 // observable keeps being watched before the client closes the panel with the
 // recorded countdown action. Aligned with the host's follow TTL so the client
 // never closes before the host would have swept the follow state.
 export const FOLLOW_GRACE_MS = 120_000
-
-export interface CountdownInfo {
-  seconds: number
-  action: 'allow' | 'reject'
-  feedbackText?: string
-}
 
 export type ApprovalOutcome = 'allowed-once' | 'rejected'
 
@@ -144,16 +118,6 @@ export function createSeenSessionTracker(
 export function canonicalPendingKey(sessionId: string, callId: string | undefined): string | null {
   if (!callId) return null
   return `${sessionId}:${callId}`
-}
-
-export function parseCountdown(reason: string | undefined): CountdownInfo | null {
-  if (!reason) return null
-  const match = reason.match(/\[dsh-auto-approval-llm\]\s*⏳\s*will auto-(approve|reject) in (\d+)s/)
-  if (!match) return null
-  return {
-    seconds: Math.max(1, Number(match[2])),
-    action: match[1] === 'approve' ? 'allow' : 'reject',
-  }
 }
 
 // Answer exactly once, regardless of who calls: dedup with the shared guard,
@@ -267,7 +231,9 @@ export function startReviewPolling(
   }
 
   // Stop observing one approval: clear poller/timer/meta and tombstone it via
-  // the watcher. Idempotent — a late dispose() from the watcher is a no-op.
+  // the watcher. Idempotent — a late dispose() from the watcher is a no-op. A
+  // record already settled keeps its bounded terminal window; one still open
+  // leaves the chip with the pending that is going away.
   const detach = () => {
     if (settled) return
     settled = true
@@ -276,6 +242,8 @@ export function startReviewPolling(
       clearInterval(interval)
       interval = undefined
     }
+    approvalStatusStore.dropPending(handle.sessionId, handle.callId!)
+    approvalStatusStore.dropPending(handle.sessionId, handle.callId!)
     options.onDetach?.(timerKey)
   }
 
@@ -286,6 +254,9 @@ export function startReviewPolling(
   const applyStatus = (status: any) => {
     if (settled) return
     if (status?.phase === 'follow') {
+      // Publish the settlement before detaching so the chip can show the
+      // outcome after the panel is gone (bounded TTL in the store).
+      approvalStatusStore.resolve(handle.sessionId, handle.callId!, status.source, status.action)
       if (status.source === 'human' || status.source === 'abort') {
         // The human answered the panel / the ask was cancelled: detaching is
         // enough — re-answering would re-respond to a settled approval and
@@ -316,6 +287,7 @@ export function startReviewPolling(
         graceTimer = setTimeout(() => {
           graceTimer = undefined
           if (isStillPending()) {
+            approvalStatusStore.resolve(handle.sessionId, handle.callId!, 'timeout', recordedAction)
             answerAction(recordedAction)
           }
           detach()
@@ -328,9 +300,14 @@ export function startReviewPolling(
       // The marker regex matches free text any command can forge, so reason
       // parsing must not decide outcomes — status-less asks (breaker / manual
       // / human-only) are meant to wait for a human, and every real countdown
-      // shows up here as a published review-status within one poll.
+      // shows up here as a published review-status within one poll. The ask is
+      // still displayed: the chip reports it as waiting for a human.
+      approvalStatusStore.confirmAwaiting(handle.sessionId, handle.callId!)
       return
     }
+    // Mirror the host's published countdown into the display store on every
+    // poll: the revision guard inside the store makes a replayed payload inert.
+    approvalStatusStore.publishStatus(handle.sessionId, handle.callId!, status)
     const next = `countdown:${status.action}:${status.seconds}`
     // A published countdown always supersedes any grace armed on an earlier
     // observation — cancel FIRST, also when the same value is

@@ -12,6 +12,8 @@ import {
   setLinkDown,
   startReviewPolling,
 } from './shared.js'
+import { approvalStatusStore } from './status-store.js'
+import { hasBreakerNote } from '../../auto/decision.js'
 import type { ApprovalHandle, ApprovalOutcome, WatcherOptions } from './shared.js'
 
 // Structural shape of a PendingApproval as surfaced by
@@ -76,10 +78,14 @@ export function watchRemoteApprovals(ctx: any, options: WatcherOptions = {}): vo
       const item: PendingApprovalLike = pending
       const callId = item.callId
       const key = canonicalPendingKey(item.sessionId, callId)
-      if (!key) continue
+      if (!callId || !key) continue
       seen.add(key)
       if (active.has(key) || resolvedKeys.has(key)) continue
       seenSessions.add(item.sessionId)
+      // Display state for the header chip: the pending is known before any
+      // host status is fetched, and the breaker marker (a structured token,
+      // never localized prose) says no countdown will ever settle this ask.
+      approvalStatusStore.observePending(item.sessionId, callId, hasBreakerNote(item.reason))
       const handle: ApprovalHandle = {
         sessionId: item.sessionId,
         key,
@@ -208,6 +214,9 @@ export function watchRemoteApprovals(ctx: any, options: WatcherOptions = {}): vo
     for (const [, poller] of active) poller.dispose()
     active.clear()
     resolvedKeys.clear()
-    for (const sessionId of seenSessions.seen) forgetAnsweredKeys(sessionId)
+    for (const sessionId of seenSessions.seen) {
+      forgetAnsweredKeys(sessionId)
+      approvalStatusStore.clearSession(sessionId)
+    }
   }, 'dsh-auto-approval-llm: approval watcher (remote)')
 }
