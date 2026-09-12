@@ -67,6 +67,20 @@ const COLON_PARAM = /^-[A-Za-z]+:/
 const SKELETON_ALLOWED = /^[a-zA-Z0-9_.,:<>|&+=() -]+$/
 const SKELETON_MAX = 512
 
+/**
+ * Whether a stored skeleton passes the character gate. The redactor's own
+ * marker is the one spelling the gate must accept: the write side builds the
+ * skeleton by redacting a line it has already validated, so a gate that
+ * rejected the marker dropped every such entry on the next load — a silent
+ * loss of the confirmation count with no artifact left behind. Every other
+ * character stays forbidden, so a corrupted or hand-edited file is still
+ * refused.
+ */
+const REDACTION_MARKER = '[redacted-secret]'
+function skeletonGateOk(value: string): boolean {
+  return SKELETON_ALLOWED.test(value.split(REDACTION_MARKER).join('x'))
+}
+
 /** Monotonicity tolerance for timestamps coming from another clock. */
 const TIME_TOLERANCE_MS = 60_000
 
@@ -239,7 +253,11 @@ export function signatureFor(input: SignatureInput): SignatureResult | undefined
     }
     const line = templates.join(' && ')
     if (!line.trim() || line.length > SKELETON_MAX || !SKELETON_ALLOWED.test(line)) return undefined
-    return { signature: line, skeleton: redactSecrets(line) }
+    const skeleton = redactSecrets(line)
+    // The stored skeleton is the redacted line: gate the product too, so the
+    // write side can never persist an entry the load gate would refuse.
+    if (!skeletonGateOk(skeleton)) return undefined
+    return { signature: line, skeleton }
   } catch {
     return undefined
   }
@@ -367,7 +385,7 @@ export function validateLearningEntry(value: unknown, now: number): LearningEntr
   if (typeof workspace !== 'string' || workspace === '') return undefined
   if (typeof kind !== 'string' || !LEARNING_KINDS.includes(kind as LearningKind)) return undefined
   if (typeof skeleton !== 'string' || skeleton === '' || skeleton.length > SKELETON_MAX) return undefined
-  if (!SKELETON_ALLOWED.test(skeleton)) return undefined
+  if (!skeletonGateOk(skeleton)) return undefined
   const { count, firstAt, lastAt } = raw as Partial<LearningEntry>
   if (typeof count !== 'number' || !Number.isFinite(count) || !Number.isInteger(count) || count < 0) return undefined
   if (typeof firstAt !== 'number' || !Number.isFinite(firstAt) || firstAt < 0) return undefined

@@ -101,7 +101,7 @@ pushHistory 每次附带写一条 `type:'decision'`；UI 清历史只清内存+h
 ```
 
 - **键**：SHA-256(`sigVersion|kind|workspace|signature`)（<span class="lnum">learning.ts:LlearningKey</span>）——签名是确定性整行模板（[§18](./18-confirm-learning)），不含任何原始值。
-- **骨架卫生**：模板先过 `redactSecrets` 再落盘（<span class="lnum">learning.ts:L"redactSecrets(template)"</span>、<span class="lnum">learning.ts:L"redactSecrets(line)"</span>），且只允许字符白名单、长度 ≤512（`SKELETON_MAX`，<span class="lnum">learning.ts:LSKELETON_MAX</span>）。
+- **骨架卫生**：模板先过 `redactSecrets` 再落盘（<span class="lnum">learning.ts:L"redactSecrets(template)"</span>、<span class="lnum">learning.ts:L"redactSecrets(line)"</span>），且只允许字符白名单、长度 ≤512（`SKELETON_MAX`，<span class="lnum">learning.ts:LSKELETON_MAX</span>）；白名单对脱敏器自身的标记放行，写侧与读侧共用同一判据，故带标记的骨架可往返落盘。
 - **回收**：TTL 默认 30 天、上限默认 100 条，按 `lastAt` LRU 逐出（`evictLearning`，<span class="lnum">learning.ts:LevictLearning</span>）；关闭开关不清数据。
 - **写入**：同步 `tmp + rename` 原子替换（`persistLearning`，<span class="lnum">learning.ts:LpersistLearning</span>），best-effort，进程内副本兜底。
 - **隔离**：查找要求 `entry.workspace === 当前工作区` 精确相等（lookupLearning 门，<span class="lnum">learning.ts:LlookupLearning</span>）——一个项目学到的放行资格不会带到另一个项目。
