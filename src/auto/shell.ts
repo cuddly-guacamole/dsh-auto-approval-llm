@@ -992,6 +992,46 @@ function findActionsAreReadOnly(words) {
     }
     return true;
 }
+/**
+ * Output/write flags of whitelisted read-only commands, keyed per command:
+ * `-o` means "only matching" for `rg`/`grep` and must never be treated as a
+ * write, so a shared short-flag list would over-block. `git` only writes
+ * through the long form (`--output`), not through `--output-indicator-*`.
+ */
+const READ_ONLY_OUTPUT_FLAGS = {
+    sort: /^(?:-[a-zA-Z]*o.*|--output(?:=.*)?)$/,
+    tree: /^(?:-[a-zA-Z]*o.*|--output(?:=.*)?)$/,
+    git: /^--output(?:=.*)?$/,
+};
+/** The write targets a read-only command carries inside its own output flag. */
+function readOnlyOutputFlagTargets(name, words, shell) {
+    if (shell !== 'bash')
+        return [];
+    const pattern = READ_ONLY_OUTPUT_FLAGS[name];
+    if (pattern === undefined)
+        return [];
+    const targets = [];
+    for (let index = 1; index < words.length; index += 1) {
+        const word = words[index];
+        const text = word.text;
+        if (!pattern.test(text))
+            continue;
+        const eq = text.indexOf('=');
+        if (eq > 1) {
+            targets.push({ text: text.slice(eq + 1), dynamic: word.dynamic, glob: word.glob, quoted: word.quoted });
+            continue;
+        }
+        const at = text.indexOf('o', 1);
+        if (at === text.length - 1) {
+            const value = words[index + 1];
+            if (value !== undefined)
+                targets.push(value);
+            continue;
+        }
+        targets.push({ text: text.slice(at + 1), dynamic: word.dynamic, glob: word.glob, quoted: word.quoted });
+    }
+    return targets.filter(target => target.text !== '');
+}
 function readOnlyCommand(name, words, shell) {
     const tokens = words.map(word => word.text);
     if (shell === 'bash') {
@@ -1857,12 +1897,24 @@ function classifyEffectiveCommand(name, words, segment, shell, roots, artifacts,
     // ends in an independent classification. Discard sinks (/dev/null, NUL,
     // $null) are not file writes and keep the fast path.
     const redirectedToFile = segment.writeTargets.some(target => !isNullSink(target, shell));
+    // A whitelisted read-only command can still write through its own output
+    // flag (`sort -o out`, `tree -o out`, `git diff --output=out`): the value
+    // is a real write target even though no redirection token carries it, so
+    // judge it with the same destructive fuse and keep the segment off the
+    // static read-only allow.
+    const outputFlagWrites = readOnlyOutputFlagTargets(name, words, shell);
+    for (const target of outputFlagWrites) {
+        const reason = hardDestructiveTargetReason(globRoot(target.text), roots);
+        if (reason !== undefined)
+            return denied(`output flag writes ${reason}`);
+    }
+    const writesAFile = redirectedToFile || outputFlagWrites.length > 0;
     if (name === 'find' && !findActionsAreReadOnly(words)) {
         return semanticReview(findHasDestructiveAction(words)
             ? 'find deletion requires specific user authorization'
             : 'find executes or writes through a non-read-only action and requires independent classification');
     }
-    if (!redirectedToFile && readOnlyCommand(name, words, shell)) {
+    if (!writesAFile && readOnlyCommand(name, words, shell)) {
         // git `rev:path` operands (`HEAD:.env`) hide a path inside a colon
         // token that `explicitPaths` never lifts; judge them with the same
         // gates so the read-only fast path cannot expose protected content.
