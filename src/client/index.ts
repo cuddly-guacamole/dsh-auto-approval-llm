@@ -1,6 +1,6 @@
 import React from 'react'
 import { Button, Input } from '@deepseek-ai/dsh-client-ui-primitives'
-import { normalizeTimeoutAction, hasBreakerNote, AWAITING_MARKER, REVIEWER_SYSTEM, assembleReviewerSystem } from '../auto/decision.js'
+import { normalizeTimeoutAction, hasBreakerNote, AWAITING_MARKER, REVIEWER_SYSTEM, assembleReviewerSystem, EDIT_DIFF_BLOCK_END, EDIT_DIFF_BLOCK_START } from '../auto/decision.js'
 import { THRESHOLD_DEFAULTS, DEFAULT_ALLOW_TOOL_GROUPS } from '../auto/constants.js'
 import { parseRulesText } from '../auto/rules.js'
 import { installAutoPermissionIcon, SHIELD_PATH, BOLT_PATH } from './auto-icon.js'
@@ -118,9 +118,11 @@ function installApprovalPanelDecorations(): () => void {
   // The host appends a marked line-prefixed block ("[dsh-edit-diff]…[/dsh-edit-diff]")
   // to the ask reason of edit-class approvals. The block is parsed from the
   // panel's plain text and re-rendered as a colored line diff; the raw block
-  // text is then removed from the panel so it never double-displays.
-  const DIFF_START = '[dsh-edit-diff]'
-  const DIFF_END = '[/dsh-edit-diff]'
+  // text is then removed from the panel so it never double-displays. The
+  // delimiters come from the host module that also strips them from
+  // model-controlled text, so a forged block cannot be parsed here.
+  const DIFF_START = EDIT_DIFF_BLOCK_START
+  const DIFF_END = EDIT_DIFF_BLOCK_END
 
   const extractDiffBlock = (text: string): { header: string; lines: { kind: string; text: string }[] } | null => {
     const start = text.indexOf(DIFF_START)

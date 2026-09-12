@@ -592,6 +592,24 @@ export function hasBreakerNote(text: string | undefined): boolean {
 }
 
 /**
+ * The retired countdown marker pattern. It is no longer emitted, but a forged
+ * one must never reach the client, so every stripping path shares this single
+ * frozen literal (a second copy drifted before).
+ */
+export const COUNTDOWN_MARKER_PATTERN = /\[dsh-auto-approval-llm\]\s*⏳\s*will auto-(?:approve|reject) in \d+s/g
+
+/**
+ * The edit-diff block delimiters. The host appends exactly one block at the END
+ * of the ask reason, and the client re-renders (then hides) the first block it
+ * finds — so a model-controlled base reason that spelled a complete block could
+ * hijack the preview and push the real diff out of view. ONE owner: the host
+ * strips these delimiters from model-controlled text (`stripCountdownMarkers`,
+ * `stripPreviewMarkers`) and the client parses with the same constants.
+ */
+export const EDIT_DIFF_BLOCK_START = '[dsh-edit-diff]'
+export const EDIT_DIFF_BLOCK_END = '[/dsh-edit-diff]'
+
+/**
  * Remove client-parseable markers from a base approval reason before the host
  * appends its own protocol notes. Every marker doubles as a browser signal, so
  * a model-controlled base reason that embedded one could otherwise arm the
@@ -603,9 +621,11 @@ export function hasBreakerNote(text: string | undefined): boolean {
  */
 export function stripCountdownMarkers(reason: string): string {
   return reason.replace(
-    /\[dsh-auto-approval-llm\]\s*⏳\s*will auto-(?:approve|reject) in \d+s/g,
+    COUNTDOWN_MARKER_PATTERN,
     '',
-  ).split(BREAKER_MARKER).join('').split(AWAITING_MARKER).join('').replace(/[ \t]+$/gm, '').trim()
+  ).split(BREAKER_MARKER).join('').split(AWAITING_MARKER).join('')
+    .split(EDIT_DIFF_BLOCK_START).join('').split(EDIT_DIFF_BLOCK_END).join('')
+    .replace(/[ \t]+$/gm, '').trim()
 }
 
 // ── reviewer system assembly ─────────────────────────────────────────────────

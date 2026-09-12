@@ -15,7 +15,7 @@
  */
 import { lstatSync, readFileSync, realpathSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { AWAITING_MARKER, BREAKER_MARKER, stripCountdownMarkers } from './decision.js'
+import { AWAITING_MARKER, BREAKER_MARKER, COUNTDOWN_MARKER_PATTERN, EDIT_DIFF_BLOCK_END, EDIT_DIFF_BLOCK_START, stripCountdownMarkers } from './decision.js'
 import { isProtectedProjectPath, isWithin, normalizePath } from './paths.js'
 
 /** Independent args-lookup cap for the diff preview (never maxArgsChars). */
@@ -47,16 +47,21 @@ const TRUNCATED_LINE = '…truncated'
 // arguments and from existing file content, so a line spelling the breaker
 // marker would otherwise arm the client's anti-hijack guard (buttons disabled)
 // on an ordinary ask, and an awaiting marker would make it render the
-// status-less copy. Mirrors decision.js stripCountdownMarkers (its marker
-// literals are imported, not re-spelled) without its whitespace trim.
-const COUNTDOWN_MARKER_PATTERN = /\[dsh-auto-approval-llm\]\s*⏳\s*will auto-(?:approve|reject) in \d+s/g
-
-/** Remove every marker the client parses from a preview block. */
+// status-less copy. The block delimiters are stripped for the same reason and
+// with the same single owner: the client re-renders the FIRST block it finds, so
+// a preview line spelling a closing delimiter would cut the real diff short.
+// All literals are imported from decision.js, never re-spelled.
+/** Remove every marker the client parses from a preview block's CONTENT. */
 export function stripPreviewMarkers(text: string): string {
   return text
     .replace(COUNTDOWN_MARKER_PATTERN, '')
     .split(BREAKER_MARKER).join('')
     .split(AWAITING_MARKER).join('')
+    // Only the CLOSING delimiter is harmful inside the body: the client anchors
+    // its parse on the block the host just opened (which precedes any body
+    // line), so an opening delimiter in a preview line is inert and stays
+    // verbatim — a closing one would cut the real diff short.
+    .split(EDIT_DIFF_BLOCK_END).join('')
 }
 
 /** Realpath of the deepest existing ancestor of `input` (probe.ts-style). */
@@ -441,13 +446,13 @@ export function buildEditDiff(
  * auto-answer guard or the status-less copy.
  */
 export function buildEditDiffText(diff: EditDiffResult): string {
-  const block = [
-    '[dsh-edit-diff]',
+  // Strip the CONTENT first, then wrap: stripping the assembled block would
+  // delete its own delimiters and leave the client nothing to parse.
+  const body = stripPreviewMarkers([
     diff.header,
     ...diff.lines.map((l) => `${linePrefix(l.kind)}${l.text}`),
-    '[/dsh-edit-diff]',
-  ].join('\n')
-  return stripPreviewMarkers(block)
+  ].join('\n'))
+  return [EDIT_DIFF_BLOCK_START, body, EDIT_DIFF_BLOCK_END].join('\n')
 }
 
 /**
