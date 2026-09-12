@@ -76,7 +76,12 @@ function normalizeWindowsSegments(path) {
     const root = win32.parse(path).root;
     const tail = path.slice(root.length)
         .split('\\')
-        .map(segment => segment.replace(/[ .]+$/g, ''))
+        // `file::$DATA` (and the single-colon spelling) names the file itself,
+        // so the default data stream is dropped before the trailing dot/space
+        // trim — otherwise every basename fuse (plugin contract/build files,
+        // protected metadata, credential names) is one suffix away from being
+        // bypassed. Named streams stay distinct: they carry other content.
+        .map(segment => segment.replace(/::?\$data$/i, '').replace(/[ .]+$/g, ''))
         .join('\\');
     return tail === '' ? root : `${root}${tail}`;
 }
