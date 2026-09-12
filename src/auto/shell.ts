@@ -1145,7 +1145,7 @@ function writeOperandCandidates(words, name) {
         let targetDirectory = false;
         for (let index = 1; index < words.length; index += 1) {
             const text = words[index].text;
-            if (text === '-t' || text === '--target-directory' || text.startsWith('--target-directory='))
+            if (text === '-t' || text === '--target-directory' || text.startsWith('--target-directory=') || /^-t[^-]/.test(text))
                 targetDirectory = true;
         }
         if (!targetDirectory && positionals.length > 0)
@@ -1169,6 +1169,16 @@ function writeOperandCandidates(words, name) {
                 // gate; `-t DEST` (separate word above) already preserves the
                 // flags, so this branch must not diverge from it.
                 candidates.push({ text: value, dynamic: words[index].dynamic, glob: words[index].glob, quoted: true });
+        }
+        else if (/^-t[^-]/.test(text)) {
+            // GNU getopt fuses a flag with its value: `-t./lib` IS
+            // `-t ./lib`. Only the separated and `--long=` spellings used to
+            // be read, so the destination never entered the operand list and
+            // every write-target fuse judged the SOURCE instead — a fused
+            // `-t` was a silent, statically allowed write to the plugin's own
+            // execution code. Same inherited flags as the `--long=` branch.
+            const value = text.slice(2);
+            candidates.push({ text: value, dynamic: words[index].dynamic, glob: words[index].glob, quoted: true });
         }
     }
     return candidates;
