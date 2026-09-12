@@ -277,17 +277,22 @@ test('the exemption lifts the hard-locked allowlist gates too', () => {
   // An allowlist entry naming the tool is a name-based channel; the provenance
   // flag is not, so the hard lock must not discard the exemption when the tool
   // name is allowlisted. Both gates are anchored in the compiled host because
-  // they are wiring, not pure functions: each `HARD_LOCKED_CATEGORIES` test must
-  // be accompanied by the delete+flag exemption right next to it.
+  // they are wiring, not pure functions: both name-based channels must consult
+  // the shared locked predicate, and the predicate itself must carry the
+  // delete+flag exemption.
   const host = readFileSync(fileURLToPath(new URL('../lib/index.js', import.meta.url)), 'utf8')
-  const gateRegex = /HARD_LOCKED_CATEGORIES\.includes\([^)]*\)/g
+  const gateRegex = /nameChannelLockRefusal\(\{/g
   const gates = [...host.matchAll(gateRegex)]
-  assert.equal(gates.length, 2, 'both hard-locked gates are present (pre-execute mirror and answerer)')
+  assert.equal(gates.length, 2, 'both name-based gates consult the locked predicate (pre-execute mirror and answerer)')
   for (const gate of gates) {
-    const window = host.slice(gate.index, gate.index + 200)
+    const window = host.slice(gate.index, gate.index + 260)
     assert.ok(
-      /category === ['"]delete['"]\s*&&\s*[\w.?]*assessment\?\.sessionArtifactDeletion === true/.test(window),
-      `every hard-locked gate must honour the proven-artifact-deletion flag, got:\n${window}`,
+      /sessionArtifactDeletion:\s*[\w.?]*assessment\?\.sessionArtifactDeletion === true/.test(window),
+      `every name-based gate must pass the proven-artifact-deletion flag, got:\n${window}`,
     )
   }
+  assert.ok(
+    /if \(input\.category === 'delete' && input\.sessionArtifactDeletion === true\)\s*\n?\s*return undefined/.test(host),
+    'the shared predicate must carry the proven-artifact-deletion exemption',
+  )
 })

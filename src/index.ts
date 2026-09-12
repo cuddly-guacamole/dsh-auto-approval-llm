@@ -1620,6 +1620,19 @@ export function directHumanTargetRefusal(input: {
   return undefined
 }
 
+export function nameChannelLockRefusal(input: {
+  category?: string
+  sessionArtifactDeletion?: boolean
+  credentialRead?: boolean
+}): string | undefined {
+  if (input.category === 'delete' && input.sessionArtifactDeletion === true) return undefined
+  if (input.credentialRead === true) return 'credential material read is not name-authorized'
+  if (input.category !== undefined && HARD_LOCKED_CATEGORIES.includes(input.category as never)) {
+    return `hard-locked category ${input.category}`
+  }
+  return undefined
+}
+
 /**
  * Fail-closed downgrade for an allow verdict whose audit record could not be
  * persisted: leave an honest feedback trail (surfaced to the model through
@@ -3799,9 +3812,16 @@ export function apply(ctx: Context, rawConfig: Config): void {
       // exception is a deletion the shell classifier proved targets only
       // session-created paths — that provenance is not a name-based channel, so
       // it lifts the hard lock here exactly as it does in the locked predicate.
-      if (HARD_LOCKED_CATEGORIES.includes(category as never)
-        && !(category === 'delete' && assessment?.sessionArtifactDeletion === true)) {
-        return { kind: 'ask', reason: `[dsh-auto-approval-llm] hard-locked category ${exec.name}` }
+      // The same predicate also carries the credential-read floor: an allowlist
+      // entry names a TOOL, not a path, so it can no more hand over key
+      // material than `protectedAutoReview` can.
+      const mirrorRefusal = nameChannelLockRefusal({
+        category,
+        sessionArtifactDeletion: assessment?.sessionArtifactDeletion === true,
+        credentialRead: assessment?.credentialRead === true,
+      })
+      if (mirrorRefusal !== undefined) {
+        return { kind: 'ask', reason: `[dsh-auto-approval-llm] ${mirrorRefusal} ${exec.name}` }
       }
       const audited = pushHistory({
         sessionId: authorityKeyFor(exec),
@@ -4856,13 +4876,17 @@ export function apply(ctx: Context, rawConfig: Config): void {
       return 'rejected'
     }
     if (staticDecision.kind === 'allow'
-      && HARD_LOCKED_CATEGORIES.includes(classified.category as never)
-      && !(classified.category === 'delete' && classified.assessment?.sessionArtifactDeletion === true)) {
+      && nameChannelLockRefusal({
+        category: classified.category,
+        sessionArtifactDeletion: classified.assessment?.sessionArtifactDeletion === true,
+        credentialRead: classified.assessment?.credentialRead === true,
+      }) !== undefined) {
       // Hard-locked categories (delete / disk) cannot be pre-authorized by a
       // name — the allowlist does not beat them in either plane. The call
       // falls to the same hard-reject countdown as the locked ask branch
       // below: pinned to reject, no LLM takeover, no learning,
-      // highRiskSeconds to respond.
+      // highRiskSeconds to respond. The credential-read floor rides the same
+      // predicate, so a name-based allow never releases key material.
       const lockedStatus: ReviewStatus = {
         risk: 'HIGH',
         phase: 'countdown',

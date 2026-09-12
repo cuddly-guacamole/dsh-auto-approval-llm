@@ -106,14 +106,18 @@ test('hard-locked categories: no name-based channel pre-authorizes delete/disk',
   // NOT settle as allowed-once. The pre-execute mirror hands an explicit ask,
   // and the answerer routes the call into the hard-reject countdown (same
   // shape as the locked ask branch) before its allowlist allow.
-  const gatePre = HOST_SRC.indexOf('[dsh-auto-approval-llm] hard-locked category')
-  assert.ok(gatePre > 0, 'the pre-execute mirror must exempt hard-locked categories')
+  const gatePre = HOST_SRC.indexOf('const mirrorRefusal = nameChannelLockRefusal({')
+  assert.ok(gatePre > 0, 'the pre-execute mirror must consult the locked/credential predicate')
   const firstAllow = HOST_SRC.indexOf("source: 'allowlist-allow'")
-  assert.ok(gatePre < firstAllow, 'the pre-execute hard-locked gate must precede the allowlist allow')
+  assert.ok(gatePre < firstAllow, 'the pre-execute gate must precede the allowlist allow')
   // Answerer plane: the gate rides the allow condition, before the static allow settles.
-  const gateAnswerer = HOST_SRC.indexOf('HARD_LOCKED_CATEGORIES.includes(classified.category')
-  assert.ok(gateAnswerer > gatePre, 'the answerer hard-locked gate exists')
+  const gateAnswerer = HOST_SRC.indexOf('nameChannelLockRefusal({', gatePre)
+  assert.ok(gateAnswerer > gatePre, 'the answerer gate exists and reads the target classification')
+  assert.ok(
+    HOST_SRC.indexOf('credentialRead: classified.assessment?.credentialRead === true', gateAnswerer) > gateAnswerer,
+    'the answerer gate carries the credential-read floor',
+  )
   const answererAllow = HOST_SRC.indexOf('source: staticDecision.source', gateAnswerer)
-  assert.ok(answererAllow > gateAnswerer, 'the answerer hard-locked gate must precede the allowlist allow settle')
+  assert.ok(answererAllow > gateAnswerer, 'the answerer gate must precede the allowlist allow settle')
   assert.ok(HOST_SRC.includes("risk: 'HIGH'"), 'the countdown shape is reused')
 })
