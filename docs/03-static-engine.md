@@ -100,7 +100,9 @@ flowchart TD
 - 只读名单刻意**不含** `cd`（会改变后续段 cwd 解析基准）。
 - `routineInlineProbe`：`python -c` 只放行 import/print 字面量，`node -e` 只放行 require/console.log(process.version) —— 内联代码只认可「绝对安全」形态。
 - 危险 token 提取：`sensitiveMarker`（.ssh/.env/密钥关键词）、`dshHomeExfil`（4 组模式抓 DSH_HOME 外传）、`dynamicHomeTarget`（$HOME 动态目标）→ 全部绕过静态判定。
-- **写重定向脱离只读快径**：命令含真实文件写重定向（`>`/`>>`/`>|`/`&>`/`N>`，非 discard sink）时，其段不得走只读命令快径放行——落入既有评估流；`/dev/null`、NUL、`$null` 等 discard sink 维持快径。
+- **写重定向脱离只读快径**：命令含真实文件写重定向（`>`/`>>`/`>|`/`&>`/`N>`，非 discard sink）时，其段不得走只读命令快径放行——落入既有评估流；`/dev/null`、NUL、`$null` 等 discard sink 维持快径。**只读命令自带的输出 flag 同判**：`sort -o`（含 `-oFILE`/`-uo`）、`tree -o`、`git diff --output=` 等取出的值同样是写目标，先过 `hardDestructiveTargetReason`，未命中则脱离快径——按命令建表（`-o` 对 `rg`/`grep` 是 only-matching，不可共用短旗标表）。
+- **写目标提取不吃相对拼法**：只读命令的 `..` 中段与工作区外相对目标一律进入显式路径判定（`cat b/../../../../x` 与 `cat ../../../../x` 同裁决）。
+- **win32 段归一覆盖别名拼法**：MSYS 裸盘根（`/c`、`//c`）、盘根通配（`C:\*`、`/c/*`）与 NTFS 默认数据流后缀（`file::$DATA`/`file:$DATA`）在 `normalizePath` 的同一处归一到 `C:\` / 文件名本体，故盘根熔断与全部 basename 级保护（插件契约文件、受保护元数据、凭据名）不被拼法绕过。
 - **build/test 与版本探测快径目标守卫**：快径仅保留给「写目标全为 discard sink 或工作区内非敏感非受保护非运行态路径」——区外/敏感/受保护/运行态目标一律脱离快径进入正常评估（`categoryMode: aggressive` 与 trustedDirs 放宽模式同样生效）。
 
 ## 3.4　路径保护清单 <span class="lnum">paths.ts#</span>
