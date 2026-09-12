@@ -298,13 +298,17 @@ export function createApprovalStatusStore(now: () => number = Date.now): Approva
       let changed = false
       for (const [key, record] of records) {
         if (record.sessionId !== sessionId) continue
+        // Finished-ask memory deliberately survives leaving the session: the
+        // host keeps listing a settled ask for its own window, so dropping the
+        // record alone let the same outcome light up again when the reader came
+        // back within that window (and a late resolve re-created the record for
+        // a full terminal TTL). Recording the tombstone here is what makes that
+        // memory a property of clearing the session rather than a side effect of
+        // the render path having pruned it first. The set stays FIFO-bounded.
+        if (record.phase === 'follow') rememberTombstone(key)
         records.delete(key)
         changed = true
       }
-      // Finished-ask memory deliberately survives leaving the session: the host
-      // keeps listing a settled ask for its own window, so clearing it here let
-      // the same outcome light up again when the reader came back within that
-      // window. The set stays FIFO-bounded, and ask ids are unique.
       if (changed) notify()
     },
 

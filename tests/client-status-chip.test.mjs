@@ -98,8 +98,11 @@ test('each follow source maps to its own settled chip state', () => {
     [{ source: 'abort', action: 'reject' }, { kind: 'cancelled' }],
     [{ action: 'reject' }, { kind: 'rejected', by: 'host' }],
   ]
-  for (const [status, expected] of cases) {
-    store.resolve('s1', 'c1', status.source, status.action)
+  for (const [index, [status, expected]] of cases.entries()) {
+    // One callId per case: `clearSession` now tombstones finished asks (leaving
+    // a session must not let a settled outcome revive), so reusing an id after
+    // the reset would make the case inert instead of testing the mapping.
+    store.resolve('s1', `c${index}`, status.source, status.action)
     assert.deepEqual(chipState(store.activeFor('s1', 1_000), 1_000, false), expected, JSON.stringify(status))
     store.clearSession('s1')
   }
