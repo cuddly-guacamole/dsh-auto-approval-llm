@@ -10,6 +10,7 @@ import { computeTextNodeRewrites, createBreakerGuard, isLinkDown, revealApproval
 import { approvalStatusStore, chipState, coarseMinutes } from './approvals/status-store.js'
 import type { ChipState } from './approvals/status-store.js'
 import { watchSessionApprovals } from './approvals/session-watch.js'
+import { markerTextOutsidePreview } from './approvals/marker-text.js'
 import { watchRemoteApprovals } from './approvals/remote.js'
 import { buildToolChips, applyChipToList, type ToolChip, type ToolStatsPayload, type ToolStatsEntry } from './tool-chips.js'
 
@@ -187,6 +188,16 @@ function installApprovalPanelDecorations(): () => void {
     return out
   }
 
+  /** Whether a text node lives inside the rendered edit-diff preview block. */
+  const nodeInsidePreview = (node: any, panel: any): boolean => {
+    let el = node.parentNode
+    while (el && el !== panel) {
+      if (typeof el.hasAttribute === 'function' && el.hasAttribute('data-dsa-edit-diff')) return true
+      el = el.parentNode
+    }
+    return false
+  }
+
   const applyTextNodeRewrites = (el: any) => {
     const nodes = collectTextNodes(el, [])
     if (!nodes.length) return
@@ -227,16 +238,23 @@ function installApprovalPanelDecorations(): () => void {
       if (!key) continue
       liveKeys.add(key)
       enablePreLine(panel)
-      // The raw preview block is hidden before anything reads the panel text,
-      // so a marker literal inside preview content can never arm a guard (the
-      // host strips it too; this is the second fence).
+      // The preview block is file content, and the rows rendered from it stay
+      // in the panel text after the raw block is hidden — so they are excluded
+      // on EVERY scan, not just the first one. Judging them would let a
+      // preview line arm the breaker guard (disabling the human's Reject /
+      // Allow buttons) or forge the status-less copy. The host strips the
+      // markers as well; this is the second fence.
       const rawText = panel.textContent ?? ''
       const block = extractDiffBlock(rawText)
       if (block) {
         renderDiffBlock(panel, block)
         hideDiffBlock(panel)
       }
-      const text = panel.textContent ?? ''
+      const markerSource = markerTextOutsidePreview(collectTextNodes(panel, []).map((node: any) => ({
+        text: node.data ?? '',
+        inPreview: nodeInsidePreview(node, panel),
+      })))
+      const text = computeTextNodeRewrites([markerSource], DIFF_START, DIFF_END)[0]
       if (text.includes(AWAITING_MARKER)) renderAwaitingNote(panel)
       if (hasBreakerNote(text)) breaker.apply(panel, key)
     }
