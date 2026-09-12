@@ -1594,6 +1594,33 @@ export function guardDenyDecision(exec: any, roots: Roots): string | undefined {
 }
 
 /**
+ * Pure: may a `dsa_request_user` target use the human-only channel, and if not,
+ * why? `undefined` means the target may.
+ *
+ * The channel exists to hand a human an operation the static policy leaves to
+ * the ordinary pipeline, so every verdict the ordinary pipeline would have
+ * reached on its own must refuse here: a HIGH tier, an explicit `deny`
+ * directive (the operator's denial, which `applyCategoryDirective` turns into
+ * the terminal DENY regardless of tier), and a LOCKED category (the one the
+ * answerer refuses to auto-answer at all). Only the tier used to be read, so a
+ * `{risk:'LOW', directive:'deny'}` target and every locked target slipped past
+ * the gate into a channel whose granted approval also trains the confirmation
+ * layer for the target signature.
+ */
+export function directHumanTargetRefusal(input: {
+  risk?: string
+  directive?: string
+  lockedCategory?: boolean
+}): string | undefined {
+  if (input.risk !== 'LOW' && input.risk !== 'MEDIUM') {
+    return `graded ${input.risk ?? 'UNKNOWN'}`
+  }
+  if (input.directive === 'deny') return 'the policy denies the target'
+  if (input.lockedCategory === true) return 'the target category is locked'
+  return undefined
+}
+
+/**
  * Fail-closed downgrade for an allow verdict whose audit record could not be
  * persisted: leave an honest feedback trail (surfaced to the model through
  * the post-execute injection on the denied result) and let the caller answer
@@ -4727,14 +4754,34 @@ export function apply(ctx: Context, rawConfig: Config): void {
       const targetClassified = classifyStaticRisk(targetReq, targetArgsPayload)
       const targetRisk = targetClassified.risk
       const targetCategory = targetClassified.category
-      if ((targetRisk !== 'LOW' && targetRisk !== 'MEDIUM') || (targetRisk === 'MEDIUM' && targetClassified.directive === 'deny')) {
-        recordDecisionFeedback(req.callId, `[dsh-auto-approval-llm] direct human request target "${targetTool}" is high-risk and cannot use this channel; it takes the ordinary approval pipeline`)
+      // The channel serves only operations the static policy leaves to the
+      // ordinary pipeline. A target the policy grades DENY carries that verdict
+      // in `directive` (a deny directive is what `applyCategoryDirective` turns
+      // into the terminal DENY), and a LOCKED category is what the answerer
+      // would have handed to a human with no auto-answer path at all. Both were
+      // read as "low/medium risk" and let through: a `{risk:'LOW', directive:
+      // 'deny'}` target skipped the refusal clause, and a locked target
+      // (delete/protected/privilege/disk) was never consulted, so an explicitly
+      // denied or locked operation could train the confirmation layer through
+      // this shortcut. The predicate is one place, and it is contract-tested.
+      const targetLocked = isLockedCategory(
+        targetCategory,
+        targetClassified.assessment?.sessionArtifactDeletion === true,
+        targetClassified.assessment?.credentialRead === true,
+      )
+      const refusal = directHumanTargetRefusal({
+        risk: targetRisk,
+        directive: targetClassified.directive,
+        lockedCategory: targetLocked,
+      })
+      if (refusal !== undefined) {
+        recordDecisionFeedback(req.callId, `[dsh-auto-approval-llm] direct human request target "${targetTool}" cannot use this channel (${refusal}); it takes the ordinary approval pipeline`)
         pushHistory({
           sessionId: sessionKey,
           toolName,
           outcome: 'rejected',
           source: 'direct-human-refused',
-          llmReason: `target ${targetTool} graded ${targetRisk ?? 'UNKNOWN'}`,
+          llmReason: `target ${targetTool} graded ${targetRisk ?? 'UNKNOWN'}${targetLocked ? ' locked' : ''}`,
           category: targetCategory,
         })
         return 'rejected'
