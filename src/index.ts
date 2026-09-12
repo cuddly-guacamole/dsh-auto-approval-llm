@@ -3891,6 +3891,11 @@ export function apply(ctx: Context, rawConfig: Config): void {
         mode: config.categoryMode,
       })
       debugLog({ ev: 'category', callId: exec.callId ?? null, toolName: exec.name, category, decision: 'deny', mode: config.categoryMode })
+      // The pre-execute plane is the primary terminal for a category deny (the
+      // answerer's copy is defense-in-depth), so it owes the model the same
+      // user-role guidance the rule/denyList denies give: the same target or
+      // effect stays denied under any rewording, and the user is the way out.
+      maybeInjectRejectGuidance(exec.agent, exec.callId, config, buildRejectGuidanceText('category', category))
       return { kind: 'deny', reason: `[dsh-auto-approval-llm] category deny ${exec.name}` }
     }
     if (directive === 'ask') {
