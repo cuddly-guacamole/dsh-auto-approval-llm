@@ -8,6 +8,15 @@ import { sanitizeClassifierText } from './classifier.js';
 import { isArtifactArea, isWithin, normalizePath } from './paths.js';
 /** How many workspace-relative recent creates the parallel index keeps per owner. */
 const RECENT_CREATES_CAP = 8;
+/**
+ * Upper bound on un-settled planned creates. Only `settle()` removes an entry,
+ * and a call the pre-execute handler refuses — or one whose execution is
+ * aborted — never reaches `tools/result`, so without a bound a long-lived
+ * process accumulated one entry (execution token + session object) per refused
+ * planned create. Eviction only costs a live call its provenance promotion,
+ * which is the stricter direction.
+ */
+export const PENDING_PLAN_CAP = 256;
 /** In-memory provenance for exact paths created successfully during the live session. */
 export class ArtifactRegistry {
     created = new WeakMap();
@@ -34,8 +43,15 @@ export class ArtifactRegistry {
         const eligible = paths
             .map(path => normalizePath(path, roots.workspace, roots.home))
             .filter(path => isArtifactArea(path, roots) && !existsSync(path));
-        if (eligible.length > 0)
+        if (eligible.length > 0) {
             this.pending.set(exec.token, { owner, paths: eligible });
+            while (this.pending.size > PENDING_PLAN_CAP) {
+                const oldest = this.pending.keys().next();
+                if (oldest.done === true)
+                    break;
+                this.pending.delete(oldest.value);
+            }
+        }
         return eligible;
     }
 
