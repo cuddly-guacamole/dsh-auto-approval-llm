@@ -17,10 +17,12 @@
 | `/llm-latency` | DELETE | 清空 LLM 延迟遥测窗口 + 文件（不动审批历史；与 history DELETE 互不清） | trustedHosts |
 | `/tool-stats` | GET | 精确名单页签的候选工具统计（最近工具 chips） | trustedHosts |
 | `/learning-store` | GET/DELETE | 已学习条目列表（键哈希+脱敏骨架+计数）/ 吊销单条（即时生效，落 `learning-revoked` 审计） | trustedHosts |
-| `/review-status` | GET | 单审批 countdown/follow 状态；callId 走 `x-auto-approval-call-id` 头（防 URL/devtools 泄漏）。状态对象可选带 `category?`（类别层闭集标签，供该 ask 的终局审计记录署名；客户端不消费，无该字段时行为不变） | trustedHosts |
+| `/review-status` | GET | 单审批 countdown/follow 状态；callId 走 `x-auto-approval-call-id` 头（防 URL/devtools 泄漏）。可选 `x-auto-approval-wait-ms` 进入**长轮询**：held 至该 ask 的 `revision` 变化或预算（上限 20s）用尽，客户端断开即释放。状态对象带单调 `revision`、`expiresAt`（宿主时钟）与 `remainingMs`（按宿主时钟算出的剩余），可选带 `category?`（类别层闭集标签，供该 ask 的终局审计记录署名） | trustedHosts |
+| `/session-review-status` | GET | 会话级发现：列出该会话当前全部待审（`{callId, phase, action, seconds, remainingMs, revision, source?}[]`）；sessionId 走 `x-auto-approval-session-id` 头，缺失返 400。官方面板被 `panelDelayMs` 推迟期间，客户端靠它渲染芯片/胶囊 | trustedHosts |
+| `/reveal-approval` | POST | 提前放行被推迟的官方面板（「现在查看」）；callId 走 `x-auto-approval-call-id` 头。未知或已结算的 ask 返 `{ok:true,value:{revealed:false}}`，不伪造面板 | trustedHosts |
 | `/session-mode` | GET | 查会话权限 preset（mode）；本进程无该会话 live agent 时同样返 **200 + `mode: null`**（会话在历史里但 agent 尚未实例化属正常状态，不以错误状态表达——与 `/stats` 同口径，也避免浏览器对失败请求的不可抑制记录） | trustedHosts |
 | `/stats` | GET | 会话统计 {mode, reviewMode, counts{total,allow,deny,timeout,breaker}, breaker{…tripped}}；sessionId 走 `x-auto-approval-session-id` 头 | trustedHosts |
 
 ::: tip 「特权平面」是什么意思
-settings / reviewer-credential / feedback / test 与模型目录三路由（providers / llm-models / reasoning-efforts）传 `[]`（空白名单）→ 强制**仅回环同源**（Host 头须回环 + TCP 对端须真回环）。前四者是「能改状态或驱动 host 发请求」的配置域——LAN 用户即使进了白名单也**不能**改配置、读密钥或把 host 当 SSRF 探针；后三者与消费它们的设置卡同处回环平面，LAN 设备不可读取模型目录。其余 7 条查询路由走 `trustedHosts`（webRuntime 配置 → `--trusted-host` → 绑定 0.0.0.0 时枚举的 LAN IPv4）。早前文档列过的 `/models` 已退役（代码注释 <span class="lnum">index.ts:LLLM_MODELS_ROUTE</span>「Named llm-models (not /models) so the retired /models route…」→ 拆为 providers + llm-models）、`/history/export` 从未实现，均不在上表。
+settings / reviewer-credential / feedback / test 与模型目录三路由（providers / llm-models / reasoning-efforts）传 `[]`（空白名单）→ 强制**仅回环同源**（Host 头须回环 + TCP 对端须真回环）。前四者是「能改状态或驱动 host 发请求」的配置域——LAN 用户即使进了白名单也**不能**改配置、读密钥或把 host 当 SSRF 探针；后三者与消费它们的设置卡同处回环平面，LAN 设备不可读取模型目录。其余 9 条查询路由走 `trustedHosts`（webRuntime 配置 → `--trusted-host` → 绑定 0.0.0.0 时枚举的 LAN IPv4）。早前文档列过的 `/models` 已退役（代码注释 <span class="lnum">index.ts:LLLM_MODELS_ROUTE</span>「Named llm-models (not /models) so the retired /models route…」→ 拆为 providers + llm-models）、`/history/export` 从未实现，均不在上表。
 :::

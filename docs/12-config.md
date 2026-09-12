@@ -37,6 +37,8 @@
 | `autoModeNoticeEnabled` | true | 自动审批模式进入/退出时向 agent 注入英文上下文声明（独立开关） |
 | `showSessionPanel` | off | on/auto/off（客户端消费） |
 | `breakerAntiHijackMs` | 0 | 熔断弹窗防误点（客户端消费）；设置卡可配（计时器与熔断子卡） |
+| `panelDelayMs` | 3000 | 倒计时审批先只显示状态、推迟官方审批面板出现的时长（毫秒，0–10000，0=立即出现）；host 消费（决定何时 `next()`），客户端消费（决定何时显示胶囊）；设置卡可配 |
+| `capsulePlacement` | header | 延迟期间倒计时位置：`header`（会话标题栏芯片，默认）或 `composer`（输入框上方 `conversation.input.dock`）；纯客户端呈现键 |
 | `aiButtonPosition` | header | header/floating（客户端消费） |
 | `workspaceRoot / dshHome / tempRoots` | ''/''/[] | 路径根（DSH_HOME 默认保护；host-only） |
 | `reviewMaxRetries` | 1 | LLM 审查首次失败后的额外重试次数（0-2；0=单次，1=默认；滚动剩余预算，见 src/auto/retry.ts）——**普通键**，安全规则卡可改 |
