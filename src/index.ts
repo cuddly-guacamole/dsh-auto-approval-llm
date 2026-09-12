@@ -28,7 +28,7 @@ import { AGGRESSIVE_BUILTIN, applyCategoryDirective, CATEGORY_KEYS, categoryDire
 import { sanitizeClassifierArguments, sanitizeClassifierText, sanitizeReviewReason } from './auto/classifier.js'
 import { DIRECT_HUMAN_TOOL, THRESHOLD_DEFAULTS } from './auto/constants.js'
 import { createDshClassifier, createEndpointClassifier } from './auto/dsh-classifier.js'
-import { type RaceHumanHandle, type ReviewResult, type StaticRisk, REVIEW_TIMEOUT_NOTICE, applyBreaker, approvalSource, assembleReviewerSystem, breakerNote, breakerTripped, countdownNote, createKeyedMutex, DENY_CIRCUMVENTION_GUIDANCE, extractToolPath, followResolution, formatDenyFeedback, frameReviewerInput, lowRiskReviewOutcome, parseReview, unattendedMustFailClosed, preserveHostKeys, raceHumanDecision, reviewSuggestionNote, reviewerAutoAllowBlocked, riskFromAssessment, staticListDecision, type ContextSummary } from './auto/decision.js'
+import { type RaceHumanHandle, type ReviewResult, type StaticRisk, AWAITING_MARKER, REVIEW_TIMEOUT_NOTICE, applyBreaker, approvalSource, assembleReviewerSystem, breakerNote, breakerTripped, createKeyedMutex, DENY_CIRCUMVENTION_GUIDANCE, extractToolPath, followResolution, formatDenyFeedback, frameReviewerInput, lowRiskReviewOutcome, parseReview, unattendedMustFailClosed, preserveHostKeys, raceHumanDecision, reviewSuggestionNote, reviewerAutoAllowBlocked, riskFromAssessment, staticListDecision, type ContextSummary } from './auto/decision.js'
 import { LATENCY_SUMMARY_WINDOW, clearLatencySamples, loadLatencySamples, pushLatencySample, summarizeLatency, type LatencySample } from './auto/latency.js'
 import { RECENT_REJECTION_CAP, baselineFromPermissionState, observePermissionChange, permissionChangeFromEvent, recentRejectionPointers, type PermissionState } from './auto/permission-change.js'
 import { buildAskReason, buildEditDiff, buildEditDiffText, EDIT_DIFF_ARGS_MAX_CHARS, EDIT_DIFF_TOOLS } from './auto/editdiff.js'
@@ -109,6 +109,10 @@ export interface Config {
   /** Auto-mode enter/exit agent announcements; false disables them. */
   autoModeNoticeEnabled?: boolean
   breakerAntiHijackMs: number
+  /** Hold the official panel back for countdown asks; 0 = show it immediately. */
+  panelDelayMs?: number
+  /** Where the pre-panel countdown is rendered. */
+  capsulePlacement?: 'header' | 'composer'
   aiButtonPosition: 'header' | 'floating'
   workspaceRoot?: string
   dshHome?: string
@@ -226,6 +230,13 @@ export const Config: z<Config> = z.object({
   // Auto-mode enter/exit announcements to the agent (independent switch).
   autoModeNoticeEnabled: z.boolean().default(true),
   breakerAntiHijackMs: z.number().default(0).min(0),
+  // Hold the official approval panel back for countdown asks; 0 = the panel
+  // appears immediately. Bounded so a mis-set value cannot hide an ask for
+  // longer than the shortest countdown can settle it.
+  panelDelayMs: z.number().default(THRESHOLD_DEFAULTS.panelDelayMs).min(0).max(10_000),
+  // Where the pre-panel countdown is shown: the session header chip (default,
+  // no new composer row) or the composer dock.
+  capsulePlacement: z.union(['header', 'composer'] as const).default('header'),
   aiButtonPosition: z.union(['header', 'floating'] as const).default('header'),
   workspaceRoot: z.string().default(''),
   dshHome: z.string().default(''),
@@ -1681,6 +1692,8 @@ const TOOL_STATS_ROUTE = '/_dsh/auto-approval-llm/tool-stats'
 const TEST_ROUTE = '/_dsh/auto-approval-llm/test'
 const SESSION_MODE_ROUTE = '/_dsh/auto-approval-llm/session-mode'
 const REVIEW_STATUS_ROUTE = '/_dsh/auto-approval-llm/review-status'
+const SESSION_REVIEW_STATUS_ROUTE = '/_dsh/auto-approval-llm/session-review-status'
+const REVEAL_ROUTE = '/_dsh/auto-approval-llm/reveal-approval'
 const STATS_ROUTE = '/_dsh/auto-approval-llm/stats'
 // Provider/model catalog feeds the Issue #5 model-source pickers in the
 // settings card. Named llm-models (not /models) so the retired /models route
@@ -1790,9 +1803,72 @@ interface ReviewStatus {
    * command string.
    */
   category?: string
+  /**
+   * Monotonic per-ask revision, allocated at the single publish choke point.
+   * A client that receives a replayed or out-of-order payload compares it
+   * against the revision it already holds and ignores the older one.
+   */
+  revision?: number
+  /**
+   * Host epoch ms the countdown expires. Carried so a client that observes the
+   * ask mid-countdown (page reload, panel held back, late poll) shows the time
+   * that is actually left instead of restarting from the published seconds.
+   */
+  expiresAt?: number
 }
 
 const reviewStates = new Map<string, ReviewStatus>()
+// Session association for the session-scoped discovery route: review states
+// are keyed by callId only, and the client has to find a pending ask before
+// the official panel exists (it is held back for `panelDelayMs`).
+const reviewSessions = new Map<string, string>()
+// Monotonic revision source for published review states.
+let reviewRevisionSeq = 0
+// Held official panels, keyed by callId: the release callback lets the panel
+// appear before the delay elapsed (the client's "show it now" entry).
+const pendingPanelReleases = new Map<string, () => void>()
+
+/** Hard ceiling for the panel hold, independent of what settings carry. */
+const MAX_PANEL_DELAY_MS = 10_000
+/** Longest a review-status long poll may be held open. */
+export const REVIEW_STATUS_HOLD_MS = 20_000
+
+export interface PanelGate {
+  /** Resolves when the panel may appear (delay elapsed or released). */
+  wait(): Promise<void>
+  /** Whether the ask settled while the panel was still held back. */
+  isCancelled(): boolean
+  cancel(): void
+}
+
+/**
+ * Hold the official panel back for `delayMs` so a short-lived ask cannot take
+ * over the composer. The gate is resolved by the delay, by the user asking to
+ * see the panel, or by {@link PanelGate.cancel} when the ask settles first —
+ * a settled ask must never forward its request to the client afterwards.
+ */
+export function createPanelGate(callId: string | undefined, delayMs: number): PanelGate | undefined {
+  const bounded = Math.max(0, Math.min(Math.round(delayMs), MAX_PANEL_DELAY_MS))
+  if (callId === undefined || bounded === 0) return undefined
+  let cancelled = false
+  let resolveOpen: () => void = () => {}
+  const opened = new Promise<void>((resolve) => { resolveOpen = resolve })
+  const release = () => {
+    clearTimeout(timer)
+    pendingPanelReleases.delete(callId)
+    resolveOpen()
+  }
+  const timer = setTimeout(release, bounded)
+  pendingPanelReleases.set(callId, release)
+  return {
+    wait: () => opened,
+    isCancelled: () => cancelled,
+    cancel: () => {
+      cancelled = true
+      release()
+    },
+  }
+}
 
 // Follow-phase statuses are retained briefly after the host resolution so the
 // client's poll can observe the follow and close the official panel with the
@@ -1856,6 +1932,7 @@ function sweepFollowPhase(now = Date.now()): void {
     if (expiry <= now) {
       followExpiry.delete(callId)
       reviewStates.delete(callId)
+      reviewSessions.delete(callId)
     }
   }
   for (const [callId, at] of resolvedCallIds) {
@@ -2324,10 +2401,125 @@ export function installReviewStatusRoute(ctx: any): void {
       // Call id travels in a request header (not the URL query) so it does not
       // leak into devtools/logs/Referer. Same-origin + loopback-trusted plan.
       const callId = String(req.headers?.['x-auto-approval-call-id'] ?? '').trim()
+      // Long poll: the client asks to be woken when this ask changes instead of
+      // waking up every 500ms. `0`/absent keeps the short-poll behaviour.
+      const holdMs = boundedHoldMs(req.headers?.['x-auto-approval-wait-ms'])
+      if (callId && holdMs > 0) {
+        await holdWhileUnchanged(callId, holdMs, res)
+        if (res.writableEnded === true) return
+      }
       const status = callId ? reviewStates.get(callId) : undefined
-      responseJson(res, 200, status ? { ok: true, value: status } : { ok: false, error: 'not-found' })
+      responseJson(res, 200, status ? { ok: true, value: withRemaining(status) } : { ok: false, error: 'not-found' })
     },
   }), 'dsh-auto-approval-llm: review status route')
+}
+
+/** Clamp a requested hold to the server's own ceiling; 0 disables the hold. */
+export function boundedHoldMs(raw: unknown): number {
+  const value = Number(String(raw ?? '').trim())
+  if (!Number.isFinite(value) || value <= 0) return 0
+  return Math.min(Math.round(value), REVIEW_STATUS_HOLD_MS)
+}
+
+/**
+ * Hold a review-status response until the ask's revision changes or the hold
+ * budget elapses. The check runs in-process (no HTTP traffic), the timer is
+ * released on client disconnect, and the route answers with the current state
+ * either way — a hold timeout is a heartbeat, never a resolution.
+ */
+export function holdWhileUnchanged(callId: string, holdMs: number, res: any): Promise<void> {
+  const startedAt = Date.now()
+  const startRevision = reviewStates.get(callId)?.revision
+  return new Promise((resolve) => {
+    let done = false
+    let timer: any
+    const finish = () => {
+      if (done) return
+      done = true
+      if (timer !== undefined) clearInterval(timer)
+      res.off?.('close', finish)
+      resolve()
+    }
+    res.on?.('close', finish)
+    timer = setInterval(() => {
+      if (done) return
+      if ((reviewStates.get(callId)?.revision) !== startRevision || Date.now() - startedAt >= holdMs) finish()
+    }, 200)
+  })
+}
+
+/** The status as the client sees it: remaining time derived from the host clock. */
+export function withRemaining(status: ReviewStatus): ReviewStatus & { remainingMs: number } {
+  const remainingMs = status.phase === 'countdown'
+    ? Math.max(0, Math.min((status.expiresAt ?? Date.now()) - Date.now(), Math.max(0, status.seconds) * 1000))
+    : 0
+  return { ...status, remainingMs }
+}
+
+/**
+ * Session-scoped discovery: every ask the host currently holds for one session.
+ * The official panel is held back for `panelDelayMs`, so during that window the
+ * client's only way to show the countdown is this route.
+ */
+export function installSessionReviewStatusRoute(ctx: any): void {
+  const webServer = ctx.get('webServer')
+  if (!webServer) return
+  ctx.effect(() => webServer.register({
+    kind: 'exact',
+    path: SESSION_REVIEW_STATUS_ROUTE,
+    handler: (req: any, res: any) => {
+      if (!isTrustedRequest(req, trustedHosts)) {
+        responseJson(res, 403, { ok: false, error: 'forbidden' })
+        return
+      }
+      if (req.method !== 'GET') {
+        res.setHeader('Allow', 'GET')
+        responseJson(res, 405, { ok: false, error: 'method-not-allowed' })
+        return
+      }
+      // Session id travels in a request header, same discipline as the call id.
+      const sessionId = String(req.headers?.['x-auto-approval-session-id'] ?? '').trim()
+      if (!sessionId) {
+        responseJson(res, 400, { ok: false, error: 'session-id-required' })
+        return
+      }
+      const reviews: unknown[] = []
+      for (const [callId, status] of reviewStates) {
+        if (reviewSessions.get(callId) !== sessionId) continue
+        reviews.push({ ...withRemaining(status), callId })
+      }
+      responseJson(res, 200, { ok: true, value: { reviews } })
+    },
+  }), 'dsh-auto-approval-llm: session review status route')
+}
+
+/**
+ * Release a held-back panel early ("show it now" from the client's countdown
+ * surface). Unknown or already-settled asks answer `revealed: false` rather
+ * than inventing a panel.
+ */
+export function installRevealRoute(ctx: any): void {
+  const webServer = ctx.get('webServer')
+  if (!webServer) return
+  ctx.effect(() => webServer.register({
+    kind: 'exact',
+    path: REVEAL_ROUTE,
+    handler: (req: any, res: any) => {
+      if (!isTrustedRequest(req, trustedHosts)) {
+        responseJson(res, 403, { ok: false, error: 'forbidden' })
+        return
+      }
+      if (req.method !== 'POST') {
+        res.setHeader('Allow', 'POST')
+        responseJson(res, 405, { ok: false, error: 'method-not-allowed' })
+        return
+      }
+      const callId = String(req.headers?.['x-auto-approval-call-id'] ?? '').trim()
+      const release = callId ? pendingPanelReleases.get(callId) : undefined
+      if (release) release()
+      responseJson(res, 200, { ok: true, value: { revealed: release !== undefined } })
+    },
+  }), 'dsh-auto-approval-llm: reveal route')
 }
 
 function installTestRoute(ctx: any, llm: any): void {
@@ -3714,6 +3906,8 @@ export function apply(ctx: Context, rawConfig: Config): void {
   installLatencyRoute(anyCtx)
   installToolStatsRoute(anyCtx)
   installReviewStatusRoute(anyCtx)
+  installSessionReviewStatusRoute(anyCtx)
+  installRevealRoute(anyCtx)
   installLearningStoreRoute(anyCtx, (key: string) =>
     // Serialize revoke + persist under the same per-key mutex the learning
     // writers use, so a concurrent recordConfirm cannot interleave.
@@ -3993,7 +4187,18 @@ export function apply(ctx: Context, rawConfig: Config): void {
     // Delegate to the official ApprovalPanel; the client half parses the
     // countdown marker and adds the visible countdown + auto-answer. Breaker
     // requests intentionally omit the marker so no automatic timeout runs.
-    if (status && req.callId !== undefined) reviewStates.set(req.callId, status)
+    if (status && req.callId !== undefined) {
+      // Single choke point: every countdown ask reaches the panel through this
+      // call, so the revision and the deadline are attached exactly once and
+      // stay consistent with what the client will be told.
+      if (status.phase === 'countdown' && status.revision === undefined) {
+        status.revision = ++reviewRevisionSeq
+        status.expiresAt = Date.now() + Math.max(0, status.seconds) * 1000
+      }
+      reviewStates.set(req.callId, status)
+      const sessionId = (req.agent as any)?.session?.id
+      if (typeof sessionId === 'string' && sessionId) reviewSessions.set(req.callId, sessionId)
+    }
     const notes: string[] = []
     let breakerReasons: string[] | undefined
     if (review) {
@@ -4011,14 +4216,13 @@ export function apply(ctx: Context, rawConfig: Config): void {
         ? `rejected ${config.maxConsecutiveDenials} times in a row`
         : `rejected ${config.maxTotalDenials} times in total`
       notes.push(breakerNote(limitText, reasons))
-    } else {
-      // Countdown marker only for status-bearing asks (countdown review-state
-      // published). Status-less asks (category ask / manual / human-only /
-      // breaker-free rules fallbacks) carry an explicit wait-for-human note
-      // instead — no marker, so the client renders no fake countdown and the
-      // panel never looks stuck at 0s when no timeout will ever fire.
-      const note = countdownNote(status)
-      notes.push(note ?? '⏸️ Awaiting human approval — no auto-countdown.')
+    } else if (!status) {
+      // Status-less asks (category ask / manual / human-only / breaker-free
+      // rules fallbacks) carry the machine marker: the client renders its
+      // localized sentence. Countdown asks carry no prose at all — the number
+      // lives on the session chip, and a static "in Ns" line in the panel body
+      // would contradict it a second later.
+      notes.push(AWAITING_MARKER)
     }
     const extra = notes.map((n) => `\n\n${n}`).join('')
     // Edit-class operations get a line-level diff preview of the target file
@@ -4045,6 +4249,9 @@ export function apply(ctx: Context, rawConfig: Config): void {
     // disposed or the request was cancelled. The follow published in the finally
     // must then never claim the human decided (source 'abort', action reject).
     let aborted = false
+    // Panel hold for this ask: undefined when the ask has no countdown or the
+    // hold is disabled, so status-less asks still reach the panel at once.
+    let panelGate: PanelGate | undefined
     const t0 = Date.now()
     const canTimeout = status !== undefined && req.callId !== undefined &&
       status.phase === 'countdown' && status.seconds > 0
@@ -4053,7 +4260,13 @@ export function apply(ctx: Context, rawConfig: Config): void {
         // Host-authoritative countdown: the official panel still receives the
         // request via next(), but an automatic outcome is produced here so a
         // closed tab / headless session can never hang an approval forever.
-        const raced = await raceHumanDecision(() => next(), {
+        panelGate = createPanelGate(req.callId, config.panelDelayMs ?? 0)
+        const delegate = () => {
+          if (!panelGate) return next()
+          const gate = panelGate
+          return gate.wait().then(() => (gate.isCancelled() ? undefined : next()))
+        }
+        const raced = await raceHumanDecision(delegate, {
           status: { seconds: status.seconds, action: status.action },
           callId: req.callId,
           recordTimeout: (id, text) => recordTimeoutFeedback(id, text),
@@ -4089,6 +4302,9 @@ export function apply(ctx: Context, rawConfig: Config): void {
       // maps are read RIGHT AFTER this block to compute the source, so they
       // are cleaned up later (after pushHistory), never here.
       if (status && req.callId !== undefined) {
+        // The ask is settled, so a held-back panel must never appear: releasing
+        // the gate without opening cancels the pending forward.
+        panelGate?.cancel()
         const current = reviewStates.get(req.callId)
         const resolution = followResolution(
           current?.phase,

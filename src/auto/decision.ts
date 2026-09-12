@@ -545,18 +545,19 @@ export function reviewSuggestionNote(review: {
 }
 
 /**
- * The countdown marker text appended to countdown-bearing asks. Only a
- * published review-status ask (status present) may carry the marker: the
- * client renders it as a visible timer on the panel buttons, while status-less
- * asks (category ask / manual / human-only) must return null so no fake timer
- * is ever rendered against an ask the host will never auto-settle — otherwise
- * the panel freezes at "0s" with no resolution ever coming.
+ * Machine-readable marker of a status-less ask: the host will publish no
+ * countdown for it, so a human has to decide. The host writes this marker
+ * instead of a prose sentence and the client replaces it with copy in the
+ * active interface language — the host stays single-language, the panel does
+ * not. It is stripped from any model-controlled reason first (see
+ * {@link stripCountdownMarkers}) so a forged marker can never make the panel
+ * claim a state the host never set.
  */
-export function countdownNote(status?: { seconds: number; action: 'allow' | 'reject' }): string | null {
-  if (!status) return null
-  const seconds = Math.max(1, Math.round(status.seconds))
-  const actionText = status.action === 'allow' ? 'approve' : 'reject'
-  return `[dsh-auto-approval-llm] ⏳ will auto-${actionText} in ${seconds}s if no response`
+export const AWAITING_MARKER = '[dsh-auto-approval-llm] ⏸ awaiting-human'
+
+/** Whether an approval text carries the status-less marker. */
+export function hasAwaitingNote(text: string | undefined): boolean {
+  return text !== undefined && text.includes(AWAITING_MARKER)
 }
 
 /**
@@ -582,17 +583,19 @@ export function hasBreakerNote(text: string | undefined): boolean {
 
 /**
  * Remove client-parseable markers from a base approval reason before the host
- * appends its own protocol notes. Both markers double as browser signals, so a
- * model-controlled base reason that embedded one could otherwise arm the
+ * appends its own protocol notes. Every marker doubles as a browser signal, so
+ * a model-controlled base reason that embedded one could otherwise arm the
  * client's local auto-answer on asks the host deliberately publishes without a
  * countdown (breaker / manual / human-only), or forge a breaker window that
- * disables the panel buttons on an ordinary ask.
+ * disables the panel buttons on an ordinary ask. The retired countdown marker
+ * stays in the pattern: it is no longer emitted, but a forged one must not
+ * reach the client either.
  */
 export function stripCountdownMarkers(reason: string): string {
   return reason.replace(
     /\[dsh-auto-approval-llm\]\s*⏳\s*will auto-(?:approve|reject) in \d+s/g,
     '',
-  ).split(BREAKER_MARKER).join('').replace(/[ \t]+$/gm, '').trim()
+  ).split(BREAKER_MARKER).join('').split(AWAITING_MARKER).join('').replace(/[ \t]+$/gm, '').trim()
 }
 
 // ── reviewer system assembly ─────────────────────────────────────────────────

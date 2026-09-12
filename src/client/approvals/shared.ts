@@ -7,6 +7,30 @@
 
 export const FEEDBACK_ROUTE = '/_dsh/auto-approval-llm/feedback'
 export const REVIEW_STATUS_ROUTE = '/_dsh/auto-approval-llm/review-status'
+export const SESSION_REVIEW_STATUS_ROUTE = '/_dsh/auto-approval-llm/session-review-status'
+export const REVEAL_ROUTE = '/_dsh/auto-approval-llm/reveal-approval'
+
+/**
+ * How long a review-status request may be held open before the host answers
+ * with the unchanged state. The client is woken by a revision change instead of
+ * a fixed 500ms timer; an unchanged answer is a heartbeat, not a resolution.
+ */
+export const REVIEW_WAIT_MS = 20_000
+
+/**
+ * Ask the host to show the official panel now, before the configured delay
+ * elapsed. Best-effort: a 404/403 (older host) leaves the panel to arrive on its
+ * own, and the answer never gates anything the client renders.
+ */
+export function revealApproval(callId: string | undefined): void {
+  if (!callId) return
+  const g = globalThis as any
+  void g.fetch(REVEAL_ROUTE, {
+    method: 'POST',
+    headers: { 'x-auto-approval-call-id': String(callId) },
+    credentials: 'same-origin',
+  }).catch(() => {})
+}
 
 import { approvalStatusStore } from './status-store.js'
 
@@ -154,6 +178,8 @@ export async function answerOnce(handle: ApprovalHandle, outcome: ApprovalOutcom
 export interface ReviewPollingOptions {
   /** Review-status poll interval (default 500ms; injectable for node tests). */
   pollMs?: number
+  /** Hold budget for one review-status request (default REVIEW_WAIT_MS). */
+  waitMs?: number
   /** Grace window after the countdown status vanishes (default FOLLOW_GRACE_MS). */
   graceMs?: number
   /** Notifies the watcher that the approval settled; the watcher tombstones the key. */
@@ -334,7 +360,12 @@ export function startReviewPolling(
         credentials: 'same-origin',
         // Call id travels in a header so it never lands in the URL query
         // (devtools/logs/Referer). The host route reads this header.
-        headers: { 'x-auto-approval-call-id': String(handle.callId) },
+        headers: {
+          'x-auto-approval-call-id': String(handle.callId),
+          // Long poll: the host answers when the ask's revision changes, so the
+          // standing interval only has to cover hosts that ignore the header.
+          'x-auto-approval-wait-ms': String(options.waitMs ?? REVIEW_WAIT_MS),
+        },
       })
       if (!res.ok) {
         // Transient server error: keep observing; never treat it as a

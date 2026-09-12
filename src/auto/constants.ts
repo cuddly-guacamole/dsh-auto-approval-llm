@@ -113,4 +113,10 @@ export const THRESHOLD_DEFAULTS = {
   learningMaxEntries: 100,
   /** Learned allows per root session before the learning layer sleeps. */
   learningSessionAllowCap: 50,
+  /**
+   * How long the official approval panel is held back for a countdown ask, so
+   * a short-lived interruption does not take over the composer. 0 disables the
+   * hold (the panel appears immediately).
+   */
+  panelDelayMs: 3_000,
 } as const

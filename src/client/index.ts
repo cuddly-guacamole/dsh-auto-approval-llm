@@ -1,14 +1,15 @@
 import React from 'react'
 import { Button, Input } from '@deepseek-ai/dsh-client-ui-primitives'
-import { normalizeTimeoutAction, hasBreakerNote, REVIEWER_SYSTEM, assembleReviewerSystem } from '../auto/decision.js'
+import { normalizeTimeoutAction, hasBreakerNote, AWAITING_MARKER, REVIEWER_SYSTEM, assembleReviewerSystem } from '../auto/decision.js'
 import { THRESHOLD_DEFAULTS, DEFAULT_ALLOW_TOOL_GROUPS } from '../auto/constants.js'
 import { parseRulesText } from '../auto/rules.js'
 import { installAutoPermissionIcon } from './auto-icon.js'
 import { createTrailingThrottle, MIN_PANEL_SCAN_INTERVAL_MS } from './throttle.js'
 import { zh, en } from './locale.js'
-import { computeTextNodeRewrites, createBreakerGuard, isLinkDown } from './approvals/shared.js'
+import { computeTextNodeRewrites, createBreakerGuard, isLinkDown, revealApproval } from './approvals/shared.js'
 import { approvalStatusStore, chipState, coarseMinutes } from './approvals/status-store.js'
 import type { ChipState } from './approvals/status-store.js'
+import { watchSessionApprovals } from './approvals/session-watch.js'
 import { watchRemoteApprovals } from './approvals/remote.js'
 import { buildToolChips, applyChipToList, type ToolChip, type ToolStatsPayload, type ToolStatsEntry } from './tool-chips.js'
 
@@ -32,6 +33,10 @@ const LLM_MODELS_ROUTE = '/_dsh/auto-approval-llm/llm-models'
 const REASONING_EFFORTS_ROUTE = '/_dsh/auto-approval-llm/reasoning-efforts'
 let sessionsRef: any
 let breakerAntiHijackMs = THRESHOLD_DEFAULTS.breakerAntiHijackMs
+// Where the pre-panel countdown is rendered; read from settings at apply and
+// refreshed by the settings card. The session header chip is always mounted —
+// this only decides whether the composer dock carries a second copy.
+let capsulePlacement: 'header' | 'composer' = 'header'
 let aiButtonPosition: 'header' | 'floating' = 'header'
 const MAX_PANEL_RECORDS = 10
 const LOCALE_NS = 'dsh-auto-approval-llm'
@@ -197,8 +202,7 @@ function installApprovalPanelDecorations(): () => void {
     }
   }
 
-  const hideDiffBlock = (panel: any) => {
-    for (const el of Array.from(panel.querySelectorAll('*')) as any[]) {
+  const hideDiffBlock = (panel: any) => {    for (const el of Array.from(panel.querySelectorAll('*')) as any[]) {
       const text = el.textContent ?? ''
       if (!text.includes(DIFF_START) || !text.includes(DIFF_END)) continue
       const childCarries = Array.from(el.children).some((c: any) =>
@@ -206,6 +210,17 @@ function installApprovalPanelDecorations(): () => void {
       if (childCarries) continue
       applyTextNodeRewrites(el)
       break
+    }
+  }
+
+  // A status-less ask carries the host's machine marker where the panel body
+  // would otherwise show an English sentence; the visible text is ours, in the
+  // reader's language. Rewriting text nodes keeps React's structure intact.
+  const renderAwaitingNote = (panel: any) => {
+    for (const node of collectTextNodes(panel, [])) {
+      const data = node.data ?? ''
+      if (!data.includes(AWAITING_MARKER)) continue
+      node.data = data.split(AWAITING_MARKER).join(t('panel.awaitingHuman'))
     }
   }
 
@@ -227,6 +242,7 @@ function installApprovalPanelDecorations(): () => void {
         hideDiffBlock(panel)
       }
       const text = panel.textContent ?? ''
+      if (text.includes(AWAITING_MARKER)) renderAwaitingNote(panel)
       if (hasBreakerNote(text)) breaker.apply(panel, key)
     }
     breaker.prune(liveKeys)
@@ -292,6 +308,8 @@ interface Draft {
   onboardingMessageEnabled: 'on' | 'off'
   autoModeNoticeEnabled: 'on' | 'off'
   breakerAntiHijackMs: string
+  panelDelayMs: string
+  capsulePlacement: 'header' | 'composer'
   reviewMaxRetries: string
   aiButtonPosition: 'header' | 'floating'
   directHumanEnabled: 'on' | 'off'
@@ -345,6 +363,8 @@ function draftOf(value: any): Draft {
     onboardingMessageEnabled: value?.onboardingMessageEnabled === false ? 'off' : 'on',
     autoModeNoticeEnabled: value?.autoModeNoticeEnabled === false ? 'off' : 'on',
     breakerAntiHijackMs: String(value?.breakerAntiHijackMs ?? THRESHOLD_DEFAULTS.breakerAntiHijackMs),
+    panelDelayMs: String(value?.panelDelayMs ?? THRESHOLD_DEFAULTS.panelDelayMs),
+    capsulePlacement: value?.capsulePlacement === 'composer' ? 'composer' : 'header',
     reviewMaxRetries: String(value?.reviewMaxRetries ?? THRESHOLD_DEFAULTS.reviewMaxRetries),
     aiButtonPosition: value?.aiButtonPosition === 'floating' ? 'floating' : 'header',
     directHumanEnabled: value?.directHumanEnabled === true ? 'on' : 'off',
@@ -394,6 +414,8 @@ function valueOf(draft: Draft): any {
     onboardingMessageEnabled: draft.onboardingMessageEnabled === 'off' ? false : true,
     autoModeNoticeEnabled: draft.autoModeNoticeEnabled === 'off' ? false : true,
     breakerAntiHijackMs: Math.max(0, Number(draft.breakerAntiHijackMs) || 0),
+    panelDelayMs: Math.max(0, Math.min(10_000, Number(draft.panelDelayMs) || 0)),
+    capsulePlacement: draft.capsulePlacement,
     reviewMaxRetries: Math.max(0, Math.min(2, Number(draft.reviewMaxRetries) || 0)),
     aiButtonPosition: draft.aiButtonPosition,
     directHumanEnabled: draft.directHumanEnabled === 'on',
@@ -481,7 +503,7 @@ function formatTookMs(ms: number | null): string {
 const INVALID_CONFIG_TYPES: Record<string, string> = {
   enabled: 'boolean', autoSwitchPolicyToAsk: 'boolean', rulesDryRun: 'boolean', notifyUser: 'boolean', debug: 'boolean', redactResults: 'boolean', editDiffPreview: 'boolean', rejectGuidance: 'boolean', learningEnabled: 'boolean',
   lowRiskSeconds: 'number', mediumRiskSeconds: 'number', highRiskSeconds: 'number', learningThreshold: 'number',
-  maxConsecutiveDenials: 'number', maxTotalDenials: 'number', breakerAntiHijackMs: 'number', reviewMaxRetries: 'number',
+  maxConsecutiveDenials: 'number', maxTotalDenials: 'number', breakerAntiHijackMs: 'number', panelDelayMs: 'number', reviewMaxRetries: 'number',
   maxArgsChars: 'number', classifierTimeoutMs: 'number', classifierMaxOutputTokens: 'number',
   workspaceRoot: 'string', dshHome: 'string', safetyPrompt: 'string', rulesText: 'string',
   reviewerModel: 'string', timeoutAction: 'string',
@@ -501,6 +523,7 @@ const INVALID_CONFIG_ENUMS: Record<string, string[]> = {
   defaultReviewMode: ['manual', 'smart', 'unattended'],
   showSessionPanel: ['on', 'auto', 'off'],
   aiButtonPosition: ['header', 'floating'],
+  capsulePlacement: ['header', 'composer'],
   endpointProtocol: ['openai', 'anthropic'],
   categoryMode: ['standard', 'aggressive'],
   classifierSource: ['session', 'preset', 'endpoint'],
@@ -511,6 +534,7 @@ const INVALID_CONFIG_ENUMS: Record<string, string[]> = {
 const INVALID_CONFIG_RANGES: Record<string, [number, number]> = {
   lowRiskSeconds: [1, Infinity], mediumRiskSeconds: [1, Infinity], highRiskSeconds: [1, Infinity],
   maxConsecutiveDenials: [0, Infinity], maxTotalDenials: [0, Infinity], breakerAntiHijackMs: [0, Infinity],
+  panelDelayMs: [0, 10_000],
   reviewMaxRetries: [0, 2],
   maxArgsChars: [1, Infinity], classifierTimeoutMs: [100, 60000], classifierMaxOutputTokens: [64, 4096],
   reviewerMaxTokens: [256, 16384],
@@ -1014,7 +1038,7 @@ function SettingsSection() {
   // overlaid on the last-saved baseline; other cards' unsaved edits are left
   // in the local draft and never accidentally persisted by another card.
   const TOP_KEYS = ['enabled', 'autoSwitchPolicyToAsk', 'timeoutAction', 'llmReviewScope', 'llmTakeoverScope', 'defaultReviewMode', 'showSessionPanel', 'aiButtonPosition', 'autoModeNoticeEnabled']
-  const TIMER_KEYS = ['breakerAntiHijackMs', 'lowRiskSeconds', 'mediumRiskSeconds', 'highRiskSeconds', 'maxConsecutiveDenials', 'maxTotalDenials', 'reviewWaitSeconds', 'directHumanEnabled', 'slashCommandsEnabled']
+  const TIMER_KEYS = ['breakerAntiHijackMs', 'panelDelayMs', 'capsulePlacement', 'lowRiskSeconds', 'mediumRiskSeconds', 'highRiskSeconds', 'maxConsecutiveDenials', 'maxTotalDenials', 'reviewWaitSeconds', 'directHumanEnabled', 'slashCommandsEnabled']
   const REVIEW_KEYS = ['classifierSource', 'classifierProvider', 'classifierModel', 'reviewerSource', 'reviewerProvider', 'reviewerModel', 'reviewerMaxTokens', 'reviewerReasoning', 'classifierReasoning', 'endpointUrl', 'endpointModel', 'endpointProtocol', 'reviewMaxRetries']
   const SECURITY_KEYS = ['safetyPrompt', 'allowlist', 'denyList', 'humanOnlyList', 'rulesText', 'rulesDryRun']
   const UTILITY_KEYS = ['onboardingMessageEnabled', 'redactResults', 'editDiffPreview', 'rejectGuidance']
@@ -1057,6 +1081,7 @@ function SettingsSection() {
 
   const broadcastSettings = (saved: any) => {
     breakerAntiHijackMs = saved?.value?.breakerAntiHijackMs ?? THRESHOLD_DEFAULTS.breakerAntiHijackMs
+    capsulePlacement = saved?.value?.capsulePlacement === 'composer' ? 'composer' : 'header'
     aiButtonPosition = saved?.value?.aiButtonPosition === 'floating' ? 'floating' : 'header'
     const g = globalThis as any
     if (typeof g.CustomEvent === 'function') {
@@ -1682,6 +1707,23 @@ function SettingsSection() {
       className: 'dsa-input',
       style: { width: 110 },
     }), t('settings.breakerAntiHijackHint')),
+    row(t('settings.panelDelay'), React.createElement('input', {
+      type: 'number',
+      min: 0,
+      max: 10000,
+      value: draft.panelDelayMs,
+      onChange: (e: any) => update({ panelDelayMs: e.target.value }),
+      className: 'dsa-input',
+      style: { width: 110 },
+    }), t('settings.panelDelayHint')),
+    row(t('settings.capsulePlacement'), React.createElement(CapsuleSelect, {
+      value: draft.capsulePlacement,
+      options: [
+        { value: 'header', label: t('option.capsule.header') },
+        { value: 'composer', label: t('option.capsule.composer') },
+      ],
+      onChange: (v: string) => update({ capsulePlacement: v as 'header' | 'composer' }),
+    }), t('settings.capsulePlacementHint')),
     row(t('settings.slashCommands.title'), React.createElement(CapsuleSelect, {
       value: draft.slashCommandsEnabled,
       options: onOffOptions(),
@@ -2478,8 +2520,7 @@ function ApprovalStatusChip(props: any) {
 }
 
 /** Localized copy for one chip state; null means nothing is displayed. */
-function chipLabel(state: ChipState): string | null {
-  switch (state.kind) {
+function chipLabel(state: ChipState): string | null {  switch (state.kind) {
     case 'empty':
       return null
     case 'countdown':
@@ -2505,6 +2546,42 @@ function chipLabel(state: ChipState): string | null {
     case 'cancelled':
       return t('chip.cancelled')
   }
+}
+
+/**
+ * Composer-dock copy of the same status. Mounted only when `capsulePlacement`
+ * asks for it: the session header chip is always the primary surface, and a
+ * second row above the composer is for readers who want the status next to the
+ * text they are typing. While the official panel is up the whole dock is
+ * hidden by the composer chain, so the two never share the screen.
+ */
+function ApprovalStatusCapsule(props: any) {
+  const sessionId = props?.sessionId ?? props?.session?.id ?? props?.zone?.session?.id
+  const [, setTick] = React.useState(0)
+  React.useEffect(() => {
+    const rerender = () => setTick((n: number) => n + 1)
+    const unsubscribe = approvalStatusStore.subscribe(rerender)
+    const timer = setInterval(rerender, 1000)
+    return () => {
+      unsubscribe()
+      clearInterval(timer)
+    }
+  }, [])
+  if (!sessionId || capsulePlacement !== 'composer') return null
+  const record = approvalStatusStore.activeFor(sessionId, Date.now())
+  const state = chipState(record, Date.now(), isLinkDown())
+  const label = chipLabel(state)
+  if (!record || label === null) return null
+  const pending = state.kind === 'countdown' || state.kind === 'imminent'
+  return React.createElement('div', { className: 'dsa-dockRow' },
+    React.createElement('span', { className: 'dsa-dockText' }, label),
+    pending
+      ? React.createElement('button', {
+          type: 'button',
+          className: 'dsa-dockAction',
+          onClick: () => revealApproval(record.callId),
+        }, t('chip.showNow'))
+      : null)
 }
 
 function SessionApprovalPanel(props: any) {
@@ -2991,6 +3068,11 @@ function installSettingsCardStyles(): () => void {
 .dsa-statusChip{display:inline-flex;align-items:center;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-secondary);border-radius:999px;flex:none;padding:1px 10px;font-size:12px;line-height:18px;font-variant-numeric:tabular-nums}
 .dsa-statusChipOk{color:var(--dsw-alias-state-success-primary)}
 .dsa-statusChipBad{color:var(--dsw-alias-state-error-primary)}
+.dsa-dockRow{display:flex;align-items:center;gap:8px;border:1px solid var(--dsw-alias-border-l2);border-radius:12px;background:var(--dsw-alias-bg-layer-2);padding:6px 10px;font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary)}
+.dsa-dockText{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-variant-numeric:tabular-nums}
+.dsa-dockAction{appearance:none;font:inherit;cursor:pointer;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:2px 10px;font-size:12px;line-height:18px;background:transparent;color:var(--dsw-alias-label-secondary);flex:none}
+.dsa-dockAction:hover:not(:disabled){color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-label-dimmed);background:var(--dsw-alias-interactive-bg-hover)}
+.dsa-dockAction:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}
 .dsa-nestedCard{border:1px solid var(--dsw-alias-border-l1);border-radius:14px;background:var(--dsw-alias-bg-layer-1);display:flex;flex-direction:column;overflow:hidden}
 .dsa-nestedHeader{appearance:none;display:flex;align-items:center;gap:8px;width:100%;padding:14px 16px;background:0 0;border:0;cursor:pointer;font:inherit;color:inherit;text-align:left}
 .dsa-nestedHeader:hover{background:var(--dsw-alias-interactive-bg-hover)}
@@ -3060,6 +3142,7 @@ export function apply(ctx: any): void {
     .then((data: any) => {
       if (data?.ok) {
         breakerAntiHijackMs = data.value.value?.breakerAntiHijackMs ?? THRESHOLD_DEFAULTS.breakerAntiHijackMs
+        capsulePlacement = data.value.value?.capsulePlacement === 'composer' ? 'composer' : 'header'
         aiButtonPosition = data.value.value?.aiButtonPosition === 'floating' ? 'floating' : 'header'
       }
     })
@@ -3069,6 +3152,7 @@ export function apply(ctx: any): void {
   ctx.effect(() => installFloatingApprovalButton(ctx), 'dsh-auto-approval-llm: floating button')
   ctx.effect(installSettingsCardStyles, 'dsh-auto-approval-llm: settings card styles')
   ctx.effect(() => watchRemoteApprovals(ctx), 'dsh-auto-approval-llm: approval watcher (remote)')
+  ctx.effect(() => watchSessionApprovals(ctx), 'dsh-auto-approval-llm: session approval watcher')
   watchSessionModeChanges(ctx)
   ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
     name: 'settings.plugin.item',
@@ -3078,6 +3162,23 @@ export function apply(ctx: any): void {
     label: () => t('plugin.name'),
     locale: LOCALE_NS,
   }, SettingsSection))
+  // The composer dock is a shared list slot whose entry order is owned by
+  // several plugins; a contract change there must degrade to "no capsule"
+  // instead of taking the whole client (settings card, approval watcher) down.
+  ctx.slots.inject('conversation.input.dock', () => {
+    try {
+      return ctx.slots.register({
+        name: 'conversation.input.dock',
+        id: 'auto-approval-llm-capsule',
+        order: 5,
+        label: () => t('plugin.name'),
+        locale: LOCALE_NS,
+      }, ApprovalStatusCapsule)
+    } catch (error) {
+      console.warn('[dsh-auto-approval-llm] composer capsule slot unavailable; countdown stays on the header chip', error)
+      return undefined
+    }
+  })
   ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register({
     name: 'conversation.session.header.utilities',
     id: 'auto-approval-llm-status-chip',
