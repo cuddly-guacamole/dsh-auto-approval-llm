@@ -311,6 +311,20 @@ export function hardDenyReason(exec: ExecLike, roots: Roots): string | undefined
     }
     return undefined;
 }
+/**
+ * An operator opening (`allowedDshSubpaths`) clears the DSH_HOME hard-deny,
+ * never the protected-metadata rule: `.env`/`.npmrc`/`.mcp.json` are
+ * credential material and `.git/**` (whose hooks git executes) is a
+ * persistent execution hook. The dev zone exists for `src/` and `tests/`, so
+ * a protected target keeps the same semantic review inside an opening that it
+ * gets outside one. Shared by every structured mutation branch so the write
+ * tool and its siblings cannot answer this differently.
+ */
+function openingProtectedMetadataReason(normalized: string, roots: Roots): string | undefined {
+    return isProtectedProjectPath(normalized, roots) || sensitiveBasenameAt(normalized, roots)
+        ? `mutation of protected project metadata requires semantic review: ${normalized}`
+        : undefined;
+}
 /** Deterministic first-pass classification for every normal tool call. */
 export function assessTool(exec: ExecLike, roots: Roots, artifacts: unknown): ToolAssessment {
     const hard = hardDenyReason(exec, roots);
@@ -385,6 +399,11 @@ export function assessTool(exec: ExecLike, roots: Roots, artifacts: unknown): To
             // countdown into an allow, silently rewriting the audit trail.
             if (runtimeStateTargetInZone(normalized, roots.allowedDshSubpaths))
                 return { decision: 'deny', reason: `mutation of ${runtimeStateTargetReason(normalized)} is not permitted`, classifierEligible: false };
+            // An opening relaxes the DSH_HOME hard-deny, never the protected
+            // metadata rule (see openingProtectedMetadataReason).
+            const protectedReason = openingProtectedMetadataReason(normalized, roots);
+            if (protectedReason !== undefined)
+                return { decision: 'ask', reason: protectedReason, classifierEligible: true };
             // Provenance is recorded here too. This branch is how a write into an
             // allowed DSH_HOME subtree is allowed, and the plugin's own
             // development zone is one — so omitting the planned create would
@@ -430,6 +449,17 @@ export function assessTool(exec: ExecLike, roots: Roots, artifacts: unknown): To
         if (patchState !== undefined)
             return { decision: 'deny', reason: `mutation of ${runtimeStateTargetReason(patchState)} is not permitted`, classifierEligible: false };
         if (normalized.every((n) => (roots.allowedDshSubpaths ?? []).some((root) => isWithin(root, n)))) {
+            // Same protected-metadata gate as the write/edit branch: a patch is
+            // another mutation vector onto the same target.
+            const guarded = normalized.find((n) => openingProtectedMetadataReason(n, roots) !== undefined);
+            if (guarded !== undefined) {
+                return {
+                    decision: 'ask',
+                    reason: openingProtectedMetadataReason(guarded, roots),
+                    classifierEligible: true,
+                    plannedCreates: [...normalized],
+                };
+            }
             // Same provenance requirement as the write/edit branch above and for
             // the same reason: this is how a patch into an allowed DSH_HOME
             // subtree is allowed, so a session-artifact deletion of what it
@@ -465,6 +495,11 @@ export function assessTool(exec: ExecLike, roots: Roots, artifacts: unknown): To
             // timeout allow under timeoutAction=allow.
             if (runtimeStateTargetInZone(normalized, roots.allowedDshSubpaths))
                 return { decision: 'deny', reason: `mutation of ${runtimeStateTargetReason(normalized)} is not permitted`, classifierEligible: false };
+            // Same protected-metadata gate as the write/edit branch: the tool
+            // name must not be the boundary.
+            const protectedReason = openingProtectedMetadataReason(normalized, roots);
+            if (protectedReason !== undefined)
+                return { decision: 'ask', reason: protectedReason, classifierEligible: true };
             // `create` makes a new file, so its provenance is recorded like the
             // other DSH_HOME allow branches; `str_replace`/`insert` require an
             // existing target and can create nothing.
