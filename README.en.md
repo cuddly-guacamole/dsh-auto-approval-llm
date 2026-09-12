@@ -167,8 +167,7 @@ Session approval stats — the "Auto Approval" header-button popup: totals / all
 | `rulesDryRun` | false | Dry-run: log rule hits without enforcing; configurable in the settings card (Safety rules list) |
 | `maxArgsChars` | 4000 | Max length of recovered tool arguments |
 | `notifyUser` | true | "Model approved" notice into the session |
-| `showSessionPanel` | `off` | Session-header button: Off / Auto only / On |
-| `aiButtonPosition` | `header` | Button position: header / floating |
+| `showSessionPanel` | `off` | Session-header button: Off / Auto only / On; the control also carries the approval status (name while idle, countdown/outcome while an ask is live) |
 | `workspaceRoot` / `dshHome` / `tempRoots` | ''/''/[] | Path roots (DSH_HOME is protected by default) |
 | `classifierTimeoutMs` / `classifierMaxOutputTokens` | 8000 / 1024 | Classifier timeout and output cap |
 | `reviewMaxRetries` | 1 | Extra review attempts after a failed review (0 single-shot / 1 default / 2 max; transient failures only — rate-limit, 5xx, transport, empty response, LOW-sync timeouts — bounded by the approval-countdown remainder; auth/config errors never retry) |

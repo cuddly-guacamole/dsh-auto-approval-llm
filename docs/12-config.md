@@ -38,7 +38,7 @@
 | `showSessionPanel` | off | on/auto/off（客户端消费） |
 | `breakerAntiHijackMs` | 0 | 熔断弹窗防误点（客户端消费）；设置卡可配（计时器与熔断子卡） |
 | `panelDelayMs` | 3000 | 倒计时审批先只在会话标题栏控件上显示状态、推迟官方审批面板出现的时长（毫秒，0–10000，0=立即出现）；host 消费（决定何时 `next()`）；设置卡可配 |
-| `aiButtonPosition` | header | header/floating（客户端消费） |
+| `showSessionPanel` | off | on/auto/off（客户端消费） |
 | `workspaceRoot / dshHome / tempRoots` | ''/''/[] | 路径根（DSH_HOME 默认保护；host-only） |
 | `reviewMaxRetries` | 1 | LLM 审查首次失败后的额外重试次数（0-2；0=单次，1=默认；滚动剩余预算，见 src/auto/retry.ts）——**普通键**，安全规则卡可改 |
 | `reviewWaitSeconds` | 5 | 每次 LLM 评审尝试的等待时间（秒，1–10）；官方通道 TTFB 慢时调大，建议不超过低风险倒计时 |
@@ -83,7 +83,7 @@
 3. **移除顶层配置键后，旧 settings.yaml 的残留键被静默忽略**：残留键不会被剥离，而是随解析结果原样透传进运行时配置、只是再没有任何代码读取它——无警告无报错（`{...raw}` 透传 <span class="lnum">index.ts:L"...raw"</span> 起；Config schema <span class="lnum">index.ts:L"export const Config"</span> 起）；弃用公告只能靠文档，不会有迁移提示。
 4. **`safetyPrompt` 与 `rulesText` 分工不同**：前者拼进评审 system 提示词，保存即热生效（<span class="lnum">index.ts:L"assembleReviewerSystem(config.safetyPrompt, config.rulesText)"</span>）；后者是声明式执法规则，先于内置 allowlist/denyList 终局裁决 allow/deny/human（<span class="lnum">index.ts:L"B1 declared rules"</span>）。
 5. **`reviewerProvider` 键名已复活（2026-09-05 用户拍板）**：作为深度评审通道 `preset` 档的 provider 键与 `reviewerModel` 成对。它不再是「在线路由的 provider」——在线/自定义端点由共享 `endpointUrl`/`endpointModel`/`endpointProtocol` 承载，两通道 `endpoint` 源共用一份；`endpointProtocol` 默认 openai 保留 anthropic。旧 `reviewerBaseUrl` / `reviewerProtocol` / 2 档 `classifierModelSource` / `reviewerModelSource` 等键已由新体系取代（未发版直接换代，无兼容层）。
-6. **`showSessionPanel` / `aiButtonPosition` / `breakerAntiHijackMs` 是纯客户端呈现键**：host 裁决路径从不读取，改它们不影响任何审批结论。
+6. **`showSessionPanel` / `breakerAntiHijackMs` 是纯客户端呈现键**：host 裁决路径从不读取，改它们不影响任何审批结论。
 :::
 
 ### 评审模式与命令

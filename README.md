@@ -173,8 +173,7 @@ npx tsdown                 # 构建 client bundle → lib/client.js
 | `rulesDryRun` | false | 规则干跑：只记命中不执法；设置卡可配（安全规则列表子卡） |
 | `maxArgsChars` | 4000 | 取回工具参数的最大长度 |
 | `notifyUser` | true | 「模型通过」通知进会话 |
-| `showSessionPanel` | `off` | 会话标题栏按钮：关 / 仅Auto / 开 |
-| `aiButtonPosition` | `header` | 按钮位置：标题栏 / 悬浮 |
+| `showSessionPanel` | `off` | 会话标题栏按钮：关 / 仅Auto / 开；控件同时承载审批状态（空闲显示名称，有事显示倒计时/结果） |
 | `workspaceRoot` / `dshHome` / `tempRoots` | ''/''/[] | 路径根（DSH_HOME 默认保护） |
 | `classifierTimeoutMs` / `classifierMaxOutputTokens` | 8000 / 1024 | 分类器超时与输出上限 |
 | `reviewMaxRetries` | 1 | LLM 复审失败后的额外重试次数（0 单次 / 1 默认 / 2 上限；仅瞬时故障重试——限流·5xx·传输·空响应，LOW 同步含超时——重试窗口受审批倒计时剩余约束，认证/配置错误不重试） |
