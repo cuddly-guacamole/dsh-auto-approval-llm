@@ -15,7 +15,7 @@
  */
 import { lstatSync, readFileSync, realpathSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { stripCountdownMarkers } from './decision.js'
+import { AWAITING_MARKER, BREAKER_MARKER, stripCountdownMarkers } from './decision.js'
 import { isProtectedProjectPath, isWithin, normalizePath } from './paths.js'
 
 /** Independent args-lookup cap for the diff preview (never maxArgsChars). */
@@ -42,10 +42,22 @@ const MAX_OUTPUT_BYTES = 32 * 1024
 const MAX_READ_BYTES = 1024 * 1024
 const ELLIPSIS = '…'
 const TRUNCATED_LINE = '…truncated'
-// Same marker the client watcher parses to arm its countdown; any occurrence
-// inside a preview line must be inert, so it is removed at block assembly
-// (mirror of decision.js stripCountdownMarkers, without its whitespace trim).
+// Same markers the client watcher parses; any occurrence inside a preview
+// line must be inert. The preview body is built from the model's own write
+// arguments and from existing file content, so a line spelling the breaker
+// marker would otherwise arm the client's anti-hijack guard (buttons disabled)
+// on an ordinary ask, and an awaiting marker would make it render the
+// status-less copy. Mirrors decision.js stripCountdownMarkers (its marker
+// literals are imported, not re-spelled) without its whitespace trim.
 const COUNTDOWN_MARKER_PATTERN = /\[dsh-auto-approval-llm\]\s*⏳\s*will auto-(?:approve|reject) in \d+s/g
+
+/** Remove every marker the client parses from a preview block. */
+export function stripPreviewMarkers(text: string): string {
+  return text
+    .replace(COUNTDOWN_MARKER_PATTERN, '')
+    .split(BREAKER_MARKER).join('')
+    .split(AWAITING_MARKER).join('')
+}
 
 /** Realpath of the deepest existing ancestor of `input` (probe.ts-style). */
 function resolveDeepest(input: string): string | undefined {
@@ -424,9 +436,9 @@ export function buildEditDiff(
 
 /**
  * Assemble the marked diff block appended to the ask reason. The block is
- * plain line-prefixed text (`- `/`+ `/`· `), and every countdown-marker
+ * plain line-prefixed text (`- `/`+ `/`· `), and every client-parseable marker
  * literal inside it is stripped so preview content can never arm the client
- * auto-answer.
+ * auto-answer guard or the status-less copy.
  */
 export function buildEditDiffText(diff: EditDiffResult): string {
   const block = [
@@ -435,7 +447,7 @@ export function buildEditDiffText(diff: EditDiffResult): string {
     ...diff.lines.map((l) => `${linePrefix(l.kind)}${l.text}`),
     '[/dsh-edit-diff]',
   ].join('\n')
-  return block.replace(COUNTDOWN_MARKER_PATTERN, '')
+  return stripPreviewMarkers(block)
 }
 
 /**
