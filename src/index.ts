@@ -3791,6 +3791,11 @@ export function apply(ctx: Context, rawConfig: Config): void {
     // (reason-field rules still bind ask-path calls in the answerer; a
     // reason-rule deny on a static-allow call is the one remaining gap,
     // inherent to the pre-execute plane).
+    // Category layer results, derived before the declared rules because a
+    // rule-allow matches on the TOOL name and therefore has to consult the same
+    // locked / credential floor the allowlist path consults. Pure and
+    // state-free: the same function both wiring points use, no state crossing.
+    const { directive, category } = categoryDirectiveFor(exec, roots, config, assessment)
     if (config.rulesText.trim() !== '') {
       const declared = parseRulesText(config.rulesText)
       if (declared.errors.length > 0) {
@@ -3821,6 +3826,20 @@ export function apply(ctx: Context, rawConfig: Config): void {
           } else if (matched.policy === 'human') {
             return { kind: 'ask', reason: `[dsh-auto-approval-llm] rule ask ${exec.name}` }
           } else {
+            // A declared allow rule matches on the TOOL name, so it is a
+            // name-based channel like the allowlist: the user decision behind
+            // the hard lock is that no name-based channel pre-authorizes
+            // delete/disk in either plane, and the credential-read floor rides
+            // the same predicate. The category layer runs below this block, so
+            // it is evaluated here for the one branch that would return first.
+            const ruleLock = nameChannelLockRefusal({
+              category,
+              sessionArtifactDeletion: assessment?.sessionArtifactDeletion === true,
+              credentialRead: assessment?.credentialRead === true,
+            })
+            if (ruleLock !== undefined) {
+              return { kind: 'ask', reason: `[dsh-auto-approval-llm] ${ruleLock} ${exec.name}` }
+            }
             const audited = pushHistory({
               sessionId: authorityKeyFor(exec),
               toolName: exec.name,
@@ -3857,8 +3876,9 @@ export function apply(ctx: Context, rawConfig: Config): void {
     // so a routine read/write cannot slip past a category deny/ask. deny
     // performs the full rejection dialogue (feedback + history) itself; ask
     // returns immediately so the LLM classifier fast path can never answer a
-    // category ask — a category ask is an explicit human decision.
-    const { directive, category } = categoryDirectiveFor(exec, roots, config, assessment)
+    // category ask — a category ask is an explicit human decision. The
+    // directive/category pair itself is derived above, before the declared
+    // rules, because a rule-allow has to consult the same locked predicate.
     if (directive === 'deny') {
       recordDecisionFeedback(exec.callId, formatDenyFeedback('category', { toolName: exec.name }))
       pushHistory({
@@ -4733,6 +4753,14 @@ export function apply(ctx: Context, rawConfig: Config): void {
 
     const toolName = req.toolName
     const args = findToolCallArguments(req.agent.session, req.callId, config.maxArgsChars)
+    // Category layer (Q2 order: denyList → category-deny → hard-locked gate →
+    // allowlist → humanOnly → category-ask → manual → breaker → risk
+    // application). Recomputed here from scratch (same pure function as
+    // pre-execute, no state crosses between the wiring points) and BEFORE the
+    // declared rules: a rule-allow is a name-based channel, so it must be able
+    // to ask the locked/credential floor the same question the allowlist path
+    // asks. The auto→LOW injection already happened inside classifyStaticRisk.
+    const classified = classifyStaticRisk(req, args)
 
     // B1 declared rules (Claude-style Tool(pattern)) — evaluated first so a
     // user-defined policy takes precedence over the built-in lists.
@@ -4765,6 +4793,27 @@ export function apply(ctx: Context, rawConfig: Config): void {
             maybeInjectRejectGuidance(req.agent, req.callId, config, buildRejectGuidanceText('rule'))
             return 'rejected'
           } else if (matched.policy === 'allow') {
+            // A declared allow rule matches on the TOOL name, so it is a
+            // name-based channel like the allowlist: the user decision behind
+            // the hard lock is that no name-based channel pre-authorizes
+            // delete/disk in either plane, and the credential-read floor rides
+            // the same predicate. Refused targets fall to the locked
+            // hard-reject countdown below instead of settling here.
+            const ruleLock = nameChannelLockRefusal({
+              category: classified.category,
+              sessionArtifactDeletion: classified.assessment?.sessionArtifactDeletion === true,
+              credentialRead: classified.assessment?.credentialRead === true,
+            })
+            if (ruleLock !== undefined) {
+              const lockedStatus: ReviewStatus = {
+                risk: 'HIGH',
+                phase: 'countdown',
+                action: 'reject',
+                seconds: Math.max(1, Math.round(config.highRiskSeconds)),
+                category: classified.category,
+              }
+              return askHuman(req, undefined, next, false, lockedStatus)
+            }
             // Declared-rule allow is an approval decision too: keep it in the
             // durable history/audit trail (same as rule-deny), no user notice.
             const audited = pushHistory({
@@ -4932,12 +4981,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       maybeInjectRejectGuidance(req.agent, req.callId, config, buildRejectGuidanceText('denyList'))
       return 'rejected'
     }
-    // Category layer (Q2 order: denyList → category-deny → hard-locked gate →
-    // allowlist → humanOnly → category-ask → manual → breaker → risk
-    // application). The directive is recomputed here from scratch (same pure
-    // function as pre-execute, no state crosses between the wiring points);
-    // the auto→LOW injection already happened inside classifyStaticRisk.
-    const classified = classifyStaticRisk(req, args)
+    // Category layer results were computed above, before the declared rules.
     const staticRisk = classified.risk
     const policyReason = classified.reason
     if (classified.directive === 'deny') {

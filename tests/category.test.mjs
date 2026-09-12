@@ -813,7 +813,7 @@ const ASK_SITE_ENUM = [
   { label: 'medium-countdown (learnable)', count: 1, matches: (a) => a.endsWith("classified, 'medium-countdown')") },
   { label: 'medium-llm-countdown (learnable)', count: 1, matches: (a) => a.endsWith("classified, 'medium-llm-countdown')") },
   { label: 'high-countdown (learnable)', count: 1, matches: (a) => a.endsWith("classified, 'high-countdown')") },
-  { label: 'locked countdown (hard-reject + hard-locked allowlist gate)', count: 2, matches: (a) => a === 'req, undefined, next, false, lockedStatus' },
+  { label: 'locked countdown (hard-reject + hard-locked allowlist and rule-allow gates)', count: 3, matches: (a) => a === 'req, undefined, next, false, lockedStatus' },
   { label: 'category-ask (audit label, status-less)', count: 1, matches: (a) => a === 'req, undefined, next, false, undefined, undefined, undefined, undefined, classified.category' },
   { label: 'breaker trip', count: 1, matches: (a) => a === 'req, undefined, next, true' },
   { label: 'direct-human target', count: 1, matches: (a) => a === 'req, undefined, next, false, undefined, undefined, false, undefined' },
@@ -857,16 +857,17 @@ test('LP3: exactly the registered learnable sites construct a learnable context'
   assert.ok(preSlot.includes("'direct-human-target'"), 'the pre-slot site is the registered direct-human target')
   assert.equal([...postSlot.matchAll(/, learnableContextFor\(/g)].length,
     LEARNABLE_HOOK_SITES.length - 2, 'the countdown ask sites carry every hook but the query gate and the direct-human target')
-  // 14 askHuman call sites: the five learnable countdown hooks (LOW llm /
+  // 15 askHuman call sites: the five learnable countdown hooks (LOW llm /
   // compressed-LOW close-in / MEDIUM / HIGH + the 2026-09-05 additions below),
-  // the LOCKED hard-reject countdown (added 2026-08-27, intentionally
-  // learnable-less), the hard-locked allowlist gate countdown (2026-09-05
-  // user decision, also learnable-less), the six status-less asks (rules
+  // the LOCKED hard-reject countdown plus the two locked hard-reject gates that
+  // route into it (the allowlist mirror, 2026-09-05 user decision, and the
+  // declared-rule allow gate, which is a name-based channel as well),
+  // the six status-less asks (rules
   // human / humanOnly / category-ask non-locked / manual / breaker /
   // status-less fallbacks), and the direct-human channel ask (2026-09-04,
   // learns the target explicitly after resolution).
   const sites = askHumanSites(HOST_SRC)
-  assert.equal(sites.length, 14, 'closed ask-site enum: 7 countdown + 6 status-less + 1 direct-human')
+  assert.equal(sites.length, 15, 'closed ask-site enum: 8 countdown + 6 status-less + 1 direct-human')
   const perLabel = new Map()
   for (const site of sites) {
     const hits = ASK_SITE_ENUM.filter((entry) => entry.matches(site))

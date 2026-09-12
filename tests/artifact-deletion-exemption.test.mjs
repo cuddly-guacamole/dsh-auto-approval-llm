@@ -283,7 +283,7 @@ test('the exemption lifts the hard-locked allowlist gates too', () => {
   const host = readFileSync(fileURLToPath(new URL('../lib/index.js', import.meta.url)), 'utf8')
   const gateRegex = /nameChannelLockRefusal\(\{/g
   const gates = [...host.matchAll(gateRegex)]
-  assert.equal(gates.length, 2, 'both name-based gates consult the locked predicate (pre-execute mirror and answerer)')
+  assert.equal(gates.length, 4, 'every name-based channel consults the locked predicate (rules + allowlist, both planes)')
   for (const gate of gates) {
     const window = host.slice(gate.index, gate.index + 260)
     assert.ok(

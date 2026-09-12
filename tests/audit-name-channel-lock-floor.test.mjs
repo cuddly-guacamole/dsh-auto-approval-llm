@@ -37,7 +37,7 @@ test('ordinary categories are still name-authorized', () => {
 test('the floor is wired in both planes (pre-execute mirror and answerer)', () => {
   const lib = readFileSync(fileURLToPath(new URL('../lib/index.js', import.meta.url)), 'utf8')
   const callSites = lib.match(/nameChannelLockRefusal\(\{/g) ?? []
-  assert.equal(callSites.length, 2, 'both name-based channels must consult the predicate')
+  assert.equal(callSites.length, 4, "every name-based channel must consult the predicate")
   assert.match(lib, /const mirrorRefusal = nameChannelLockRefusal\(\{/)
   assert.match(lib, /credentialRead: assessment\?\.credentialRead === true/)
   assert.match(lib, /credentialRead: classified\.assessment\?\.credentialRead === true/)
