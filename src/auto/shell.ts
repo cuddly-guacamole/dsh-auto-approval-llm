@@ -601,8 +601,13 @@ function tildeUserTarget(text) {
 function looksLikeExplicitPath(token) {
     // Dot-initial tokens are explicit too: without them a protected carve-out
     // like `.git/config` or `.env` would silently escape the routine gates.
+    // An interior `..` segment is explicit for the same reason: a token that
+    // only *starts* with a plain name (`b/../../../../Users/…`) climbs out of
+    // the workspace exactly like a leading `../`, and dropping it left the
+    // routine gate with an empty path list and a `true` answer.
     return token.startsWith('/') || token.startsWith('.')
-        || token.startsWith('~') || /^[A-Za-z]:[\\/]/.test(token) || /^\\\\/.test(token);
+        || token.startsWith('~') || /^[A-Za-z]:[\\/]/.test(token) || /^\\\\/.test(token)
+        || token.split(/[\\/]/).includes('..');
 }
 /**
  * Lift a path value out of a flag token. Long options carry it after `=`
