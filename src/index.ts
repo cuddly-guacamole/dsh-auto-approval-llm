@@ -413,7 +413,13 @@ export function resolveConfig(raw: Config): Config {
   // Named relative to DSH_HOME: session transcripts, credential files, and
   // the plugin tree whose runtime state is the audit trail (the plugin's own
   // dev zone is granted separately and keeps its narrower runtime-state deny).
-  const FENCED_DSH_SUBTREES = ['sessions', 'plugins', 'credentials', 'credentials.json']
+  // The two names the DSH tree really uses for credential material
+  // (`.credentials.yaml`) and its own configuration (`settings.yaml`) are
+  // listed alongside the legacy directory spellings: fencing only
+  // `credentials/` and `credentials.json`, neither of which exists in this
+  // tree, let an opening re-expose the credential store and the operator
+  // configuration file — the very trees the clamps exist to keep closed.
+  const FENCED_DSH_SUBTREES = ['sessions', 'plugins', 'credentials', 'credentials.json', '.credentials.yaml', 'settings.yaml']
   for (const dir of raw.trustedDshSubpaths ?? []) {
     if (typeof dir !== 'string' || dir.trim() === '' || !/^(?:[A-Za-z]:[\\/]|\\\\|\/|~[\\/])/.test(dir)) {
       console.warn(`[dsh-auto-approval-llm] ignoring non-absolute trustedDshSubpath "${String(dir)}"`)
