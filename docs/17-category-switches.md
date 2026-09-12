@@ -1,12 +1,13 @@
 # 17 · 类别开关与信任目录
 > *Tri-state category switches & trusted directories*
 
-静态引擎（§03）回答「**这一次调用**危不危险」，类别层回答「**这一类操作**要不要问」。工具与 shell 命令被归入 11 个类别，每类可配 `auto / ask / deny` 三态；未配置 = `inherit`，行为与没有这层时完全一致。全部实现是纯函数（<span class="lnum">src/auto/category.ts#</span>，786 行），宿主在两个接线点各自从零调用。
+静态引擎（§03）回答「**这一次调用**危不危险」，类别层回答「**这一类操作**要不要问」。工具与 shell 命令被归入 12 个类别，每类可配 `auto / ask / deny` 三态；未配置 = `inherit`，行为与没有这层时完全一致。全部实现是纯函数（<span class="lnum">src/auto/category.ts#</span>，786 行），宿主在两个接线点各自从零调用。
 
 ## 17.1　十一个类别与优先级 <span class="lnum">category.ts:LCATEGORY_PRECEDENCE</span>
 
 | 优先级 | 类别 | 典型内容 | 配置约束 |
 |---|---|---|---|
+| 12 | `dynamicPlugin` | 动态插件包激活（`cordis_run`）：跑模型写的宿主代码 | 三态可配；**未配置 = `inherit`**（默认与既有版本一致），显式 `ask` 落无倒计时的常驻人工 |
 | 11 | `privilege` | sudo/su、set-executionpolicy 等提权 | <span class="badgeerr">LOCKED：仅可 ask</span>（开启 `privilegeAutoReview` 后三态可配） |
 | 10 | `delete` | rm/del/Remove-Item 等删除 | <span class="badgeerr">LOCKED：仅可 ask</span> |
 | 9 | `disk` | format/bcdedit/磁盘镜像写 | <span class="badgeerr">LOCKED：仅可 ask</span> |

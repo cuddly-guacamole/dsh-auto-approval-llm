@@ -24,16 +24,16 @@ import { basename } from 'node:path'
 import { isProtectedProjectPath, isProtectedReadMetadata, isWithin, normalizePath } from './paths.js'
 import { decomposeCommandLine, isNullSink } from './shell.js'
 
-/** The 11 configurable category keys. */
+/** The 12 configurable category keys. */
 export type CategoryKey =
   | 'fileEdit' | 'gitLocal' | 'build' | 'readOnly'
   | 'delete' | 'protected' | 'privilege' | 'networkExec'
-  | 'gitPush' | 'publish' | 'disk'
+  | 'gitPush' | 'publish' | 'disk' | 'dynamicPlugin'
 
 export const CATEGORY_KEYS: readonly CategoryKey[] = [
   'fileEdit', 'gitLocal', 'build', 'readOnly',
   'delete', 'protected', 'privilege', 'networkExec',
-  'gitPush', 'publish', 'disk',
+  'gitPush', 'publish', 'disk', 'dynamicPlugin',
 ]
 
 /** Categories that can never be 'auto' (only 'ask', or inherit when unset). */
@@ -55,6 +55,7 @@ export const HARD_LOCKED_CATEGORIES: readonly CategoryKey[] = ['delete', 'disk']
  * line can never be dragged down to a lower tier by a trailing segment.
  */
 export const CATEGORY_PRECEDENCE: Record<CategoryKey, number> = {
+  dynamicPlugin: 12,
   privilege: 11,
   delete: 10,
   disk: 9,
@@ -266,6 +267,13 @@ export function categorizeTool(exec: CategoryExec, roots: CategoryRoots): Catego
     const command = record(exec?.arguments)?.['command']
     if (typeof command === 'string') return categorizeCommand(command, name, roots).category
     return 'unknown'
+  }
+  if (name === 'cordis_run') {
+    // Activating a Package runs model-written host code outside the tool
+    // pipeline. It carries its own category so an operator can reach it from
+    // the category switches; unset stays `inherit`, which is exactly the
+    // previous unrecognized-tool behaviour.
+    return 'dynamicPlugin'
   }
   if (SESSION_STATE_TOOLS.has(name) || HARNESS_READ_TOOLS.has(name)
     || OWNER_CONTROL_TOOLS.has(name) || AGENT_TEAMS_CONTROL_TOOLS.has(name)

@@ -54,7 +54,7 @@ hero:
   <a class="navcard" href="/dsh-auto-approval-llm/06-llm-reviewer"><span class="nn">06</span><span class="nt">LLM 评审器</span><span class="nd">reasoning-blind 双通道</span></a>
   <a class="navcard" href="/dsh-auto-approval-llm/07-human-race"><span class="nn">07</span><span class="nt">人机竞速与超时仲裁</span><span class="nd">谁说了算</span></a>
   <a class="navcard" href="/dsh-auto-approval-llm/08-breaker"><span class="nn">08</span><span class="nt">熔断器状态机</span><span class="nd">3 次连续 / 20 次累计</span></a>
-  <a class="navcard" href="/dsh-auto-approval-llm/17-category-switches"><span class="nn">17</span><span class="nt">类别开关与信任目录</span><span class="nd">11 类三态 · standard/aggressive</span></a>
+  <a class="navcard" href="/dsh-auto-approval-llm/17-category-switches"><span class="nn">17</span><span class="nt">类别开关与信任目录</span><span class="nd">12 类三态 · standard/aggressive</span></a>
   <a class="navcard" href="/dsh-auto-approval-llm/18-confirm-learning"><span class="nn">18</span><span class="nt">确认制学习</span><span class="nd">反复人工确认 → 学习放行（默认关）</span></a>
 </div>
 
@@ -72,7 +72,7 @@ hero:
 
 <div class="navgrid">
   <a class="navcard" href="/dsh-auto-approval-llm/14-code-map"><span class="nn">14</span><span class="nt">代码地图与构建发布</span><span class="nd">tsc + tsdown + patch 层</span></a>
-  <a class="navcard" href="/dsh-auto-approval-llm/15-quality"><span class="nn">15</span><span class="nt">质量保障体系</span><span class="nd">1420 测试 + 运行时验证</span></a>
+  <a class="navcard" href="/dsh-auto-approval-llm/15-quality"><span class="nn">15</span><span class="nt">质量保障体系</span><span class="nd">1427 测试 + 运行时验证</span></a>
   <a class="navcard" href="/dsh-auto-approval-llm/16-axioms"><span class="nn">16</span><span class="nt">设计公理</span><span class="nd">为什么不追求完美</span></a>
   <a class="navcard" href="/dsh-auto-approval-llm/19-platform-support"><span class="nn">19</span><span class="nt">平台支持与反馈</span><span class="nd">Windows 基线 · 非 Windows 欢迎反馈</span></a>
 </div>

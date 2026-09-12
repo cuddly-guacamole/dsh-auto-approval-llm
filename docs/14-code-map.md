@@ -10,7 +10,7 @@ src/
 ├─ auto/                 静态评估纯函数层（26 文件，按字母序）
 │    ├─ artifacts.ts     124  本会话成功创建路径登记（删除豁免依据）
 │    ├─ audit.ts         141  append-only 审批审计（清空留墓碑、5MiB 保尾）
-│    ├─ category.ts      801  11 类三态开关层：归类/优先级合并/指令钳制/信任目录模式
+│    ├─ category.ts      827  12 类三态开关层：归类/优先级合并/指令钳制/信任目录模式
 │    ├─ classifier.ts    100  预分类提示词、参数脱敏、严格响应解析
 │    ├─ constants.ts     116  数值默认唯一事实源（倒计时/熔断/截断/学习族阈值）
 │    ├─ decision.ts      852  纯决策函数：评审解析、人机竞速、来源标注、熔断、静态名单、host-only 键
@@ -56,7 +56,7 @@ tests/
 ├─ runtime-write-fallback.test.mjs（目录存在但拒绝写入：启动探针、写失败阶梯、粘滞降级、非白名单错误仍 fail-closed）
 ├─ audit-shell-symlink-guard.test.mjs（shell 操作数提取 + 收窄型逃逸裁定 + 等价拼写族 + 负向控制）
 ├─ perf-settings-rules-parse.test.mjs / perf-poll-backoff.test.mjs / perf-scan-throttle.test.mjs / perf-countdown-write.test.mjs（客户端开销：单次解析、轮询退避、扫描节流、倒计时条件写）
-└─ 合计 130 个 tests/*.test.mjs（node --test 全绿基线）
+└─ 合计 131 个 tests/*.test.mjs（node --test 全绿基线）
 scripts/
 ├─ build.sh             （DSH 源码仓库布局）tsc 编译 src→lib
 ├─ clean-lib.mjs        构建前清空 lib/（tsc 不删除已删源的旧产物）

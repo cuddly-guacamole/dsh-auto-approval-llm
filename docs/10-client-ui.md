@@ -62,7 +62,7 @@ li.dsa-card（可折叠；任一卡脏 → 头部「未保存」徽标）
 │    │                · rulesText(实时语法校验)
 │    ├─ [安全底线] 分类开关与信任模式   categoryMode(standard/aggressive，切 aggressive 弹放开范围警示)
     │                · privilegeAutoReview 开关（提权类别解锁，默认关；开启后 privilege 行可选 自动/拒绝）
-│    │                · 11 类逐行三态 CapsuleSelect（LOCKED 类只剩 继承/人工询问 可选；privilege 解锁后恢复三态）
+│    │                · 12 类逐行三态 CapsuleSelect（LOCKED 类只剩 继承/人工询问 可选；privilege 解锁后恢复三态）
 │    ├─ [安全底线] 确认制学习     learningEnabled(on/off) · learningThreshold(数字输入 min2 max10，保存钳回 2..10)（阈值行仅开关=on 时显示）（<span class="lnum">client/index.ts:L"const buildLearningBody"</span>）· 已学习条目区块（键哈希 + 脱敏骨架 + 计数，可单条吊销，落 `learning-revoked` 审计）
 │    ├─ 实用小功能    onboardingMessageEnabled（首次使用引导消息）· redactResults（成功结果二次脱敏）· editDiffPreview（默认关的增强开关）· rejectGuidance（拒绝引导提示）
 │    ├─ 在线评审模型   快速判断模型[来源: 跟随会话/DSH模型(catalog chips 填 Provider·Model)/自定义端点] · 深度评审模型[同构] · 自定义端点[共享：协议·API地址·模型·密钥(password型)「已配置|未配置」· 测试连接]（恢复默认=双通道回 session + 端点配置清空 + 清除密钥）；**端点块按需渲染**——仅当某通道来源=自定义端点，或端点地址/模型/密钥已有配置时出现（否则默认态少 4 行 + 密钥行 + 测试按钮）

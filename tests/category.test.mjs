@@ -32,7 +32,7 @@ const cat = (source, shell = 'bash', r = roots, c = stdCfg) => categorizeCommand
 const dir = (source, shell = 'bash', r = roots, c = stdCfg) => categorizeCommand(source, shell, r, c).directive
 const tool = (name, args = {}, r = roots) => categorizeTool({ name, arguments: args }, r)
 
-// ── 11-category mapping: tools ────────────────────────────────────────
+// ── 12-category mapping: tools ────────────────────────────────────────
 test('categorizeTool: write/edit/apply_patch/str_replace_editor map to fileEdit', () => {
   assert.equal(tool('write', { file_path: 'C:/ws/a.ts' }), 'fileEdit')
   assert.equal(tool('edit', { file_path: 'C:/ws/a.ts' }), 'fileEdit')
@@ -102,7 +102,7 @@ test('categorizeTool: bash executions delegate to the command classifier', () =>
   assert.equal(categorizeTool({ name: 'bash', arguments: {} }, roots), 'unknown')
 })
 
-// ── 11-category mapping: shell commands ───────────────────────────────
+// ── 12-category mapping: shell commands ───────────────────────────────
 test('categorizeCommand: fileEdit (creation / copy / move)', () => {
   assert.equal(cat('mkdir C:/ws/newdir'), 'fileEdit')
   assert.equal(cat('mkdir -p C:/ws/a/b'), 'fileEdit')
@@ -452,14 +452,14 @@ test('mergeCommandDecisions: directive strictness deny > ask > auto > inherit', 
 })
 
 test('CATEGORY_PRECEDENCE ordering is the documented ladder', () => {
-  const ordered = ['privilege', 'delete', 'disk', 'protected', 'networkExec', 'gitPush', 'publish', 'gitLocal', 'fileEdit', 'build', 'readOnly']
+  const ordered = ['dynamicPlugin', 'privilege', 'delete', 'disk', 'protected', 'networkExec', 'gitPush', 'publish', 'gitLocal', 'fileEdit', 'build', 'readOnly']
   for (let i = 1; i < ordered.length; i += 1) {
     assert.ok(CATEGORY_PRECEDENCE[ordered[i - 1]] > CATEGORY_PRECEDENCE[ordered[i]], ordered[i - 1])
   }
   assert.deepEqual([...LOCKED_CATEGORIES].sort(), ['delete', 'disk', 'privilege', 'protected'])
   assert.deepEqual([...HARD_LOCKED_CATEGORIES].sort(), ['delete', 'disk'], 'delete/disk are the name-unauthorizable subset')
   for (const hard of HARD_LOCKED_CATEGORIES) assert.ok(LOCKED_CATEGORIES.includes(hard), `${hard} must be LOCKED too`)
-  assert.equal(CATEGORY_KEYS.length, 11)
+  assert.equal(CATEGORY_KEYS.length, 12)
 })
 
 // ── trusted-directory dual mode (position predicate) ──────────────────
