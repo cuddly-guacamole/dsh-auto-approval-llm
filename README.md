@@ -155,7 +155,7 @@ npx tsdown                 # 构建 client bundle → lib/client.js
 | `llmTakeoverScope` | `medium-or-below` | 哪些档允许 LLM 结论直接接管（取值 `low` / `medium-or-below` / `high-or-below`；schema 接受 `high-or-below` 但行为与 `medium-or-below` 等同——HIGH 分支从不把控制权交给 LLM，高风险恒落人工，选它不会带来 HIGH 自动化） |
 | `defaultReviewMode` | `smart` | 每会话评审模式默认：人工 / 智能 / 无人值守 |
 | `lowRiskSeconds` / `mediumRiskSeconds` / `highRiskSeconds` | 5 / 8 / 10 | 三档倒计时（秒） |
-| `breakerAntiHijackMs` | 0 | 熔断弹窗按钮防误点禁用时长，0 不启用；设置卡可配（计时器与熔断子卡） |
+| `breakerAntiHijackMs` | 0 | 熔断弹窗按钮防误点禁用时长，0 不启用；仅 YAML 可配（设置卡无此控件） |
 | `panelDelayMs` | 3000 | 倒计时审批先只在会话标题栏控件上显示状态，推迟官方审批面板出现的时间（毫秒，0–10000，0 = 立即出现）；窗口内评审给出结论则面板不出现；设置卡可配（计时器与熔断子卡） |
 | `maxConsecutiveDenials` | 3 | 连续 LLM 拒绝熔断阈值，0 关闭 |
 | `maxTotalDenials` | 20 | 累计拒绝熔断阈值，0 关闭 |
@@ -170,13 +170,13 @@ npx tsdown                 # 构建 client bundle → lib/client.js
 | `safetyPrompt` | '' | 附加给评审模型的额外策略（保存即热生效） |
 | `allowlist` / `denyList` / `humanOnlyList` | [] | 工具名精确匹配 |
 | `rulesText` | '' | 声明式规则（优先于内置列表执行；支持 `[agent:main|subagent|名]`、`[workspace:路径]` 维度前缀，逗号组合=AND；解析错误=整段失效） |
-| `rulesDryRun` | false | 规则干跑：只记命中不执法；设置卡可配（安全规则列表子卡） |
+| `rulesDryRun` | false | 规则干跑：只记命中不执法；仅 YAML 可配（设置卡无此控件） |
 | `maxArgsChars` | 4000 | 取回工具参数的最大长度 |
 | `notifyUser` | true | 「模型通过」通知进会话 |
 | `showSessionPanel` | `auto` | 会话标题栏按钮：关 / 仅Auto / 开；控件同时承载审批状态（空闲显示名称，有事显示倒计时/结果） |
 | `workspaceRoot` / `dshHome` / `tempRoots` | ''/''/[] | 路径根（DSH_HOME 默认保护） |
 | `classifierTimeoutMs` / `classifierMaxOutputTokens` | 8000 / 1024 | 分类器超时与输出上限 |
-| `reviewMaxRetries` | 1 | LLM 复审失败后的额外重试次数（0 单次 / 1 默认 / 2 上限；仅瞬时故障重试——限流·5xx·传输·空响应，LOW 同步含超时——重试窗口受审批倒计时剩余约束，认证/配置错误不重试） |
+| `reviewMaxRetries` | 1 | LLM 复审失败后的额外重试次数（0 单次 / 1 默认 / 2 上限；仅瞬时故障重试——限流·5xx·传输·空响应，LOW 同步含超时——重试窗口受审批倒计时剩余约束，认证/配置错误不重试）；仅 YAML 可配（设置卡无此控件） |
 | `autoModeNoticeEnabled` | true | 自动审批模式进入/退出时向 agent 注入英文上下文声明（独立开关） |
 | `onboardingMessageEnabled` | true | 首次 Auto 会话向 agent 注入一次性英文引导消息（上下文声明，非用户横幅）；关掉后不再注入 |
 | `reviewWaitSeconds` | 5 | 每次 LLM 评审尝试的等待时间（秒，1–10）；官方通道 TTFB 慢时调大，建议不超过低风险倒计时 |
@@ -197,7 +197,7 @@ npx tsdown                 # 构建 client bundle → lib/client.js
 | `learningEnabled` | false | 确认制学习：同一操作被人工反复确认达阈值后自动放行（命中仍须过一次标准在线评审）；默认关 = 零行为差异。高风险/锁定四类/敏感路径永不参与（unknown 自 0.0.15 起可学）；每根会话学习放行上限 50 次 |
 | `learningThreshold` | 3 | 触发学习放行所需的人工确认次数（保存时钳入 2–10）；同签名操作被人工拒绝即清零计数 |
 
-> 顶层开关（启用/超时动作/评审·接管范围与 never 自动转 ask/默认模式/Auto 档进出提示/会话面板与按钮位置）改动即保存；每张子卡有独立的 保存/放弃修改 按钮（安全规则列表另有 恢复默认）。host-only 键（workspaceRoot 等）用 patch/YAML 配置，设置卡保存不会抹掉它们。
+> 顶层开关（启用 / 超时动作 / 评审·接管范围）改动即保存；「高级」子卡（默认模式 / never 自动转 ask / Auto 档进出提示 / 会话面板）同样即时保存。每张子卡有独立的 保存/放弃修改 按钮（安全规则列表另有 恢复默认）。host-only 键（workspaceRoot 等，以及未提供卡片的规则干跑 `rulesDryRun` / 防劫持窗口 `breakerAntiHijackMs` / 评审重试 `reviewMaxRetries`）用 patch/YAML 配置，设置卡保存不会抹掉它们。
 >
 > 设置卡子卡分组（仅标签，不移动控件）：计时器与熔断 / 安全规则列表 / 分类开关与信任模式 / 确认制学习 四卡带「安全底线」标签（倒计时秒数是决策窗口，属安全项）；实用小功能 / 在线评审模型 / 最近审批记录不加标签。
 

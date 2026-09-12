@@ -6,7 +6,7 @@
 | 键 | 默认 | 说明 |
 |---|---|---|
 | `enabled` | true | 总开关 |
-| `autoSwitchPolicyToAsk` | false | 仅 auto+override=never 时自动翻 ask（bundle 覆盖为 true）；设置卡可配（顶层开关，即时保存） |
+| `autoSwitchPolicyToAsk` | false | 仅 auto+override=never 时自动翻 ask（bundle 覆盖为 true）；设置卡可配（「高级」子卡，即时保存） |
 | `debug` | false | 写 approval-debug.jsonl + [debug] 日志 |
 | `classifierSource` | session | 快速判断通道模型来源：session · preset(DSH 模型) · endpoint(共享端点) |
 | `classifierProvider / classifierModel` | '' | preset 档成对必填 |
@@ -28,7 +28,7 @@
 | `safetyPrompt` | '' | 拼接进评审 system，即时热生效 |
 | `allowlist / denyList / humanOnlyList` | [] | 精确工具名 |
 | `rulesText` | '' | 声明式规则，优先于内置列表 |
-| `rulesDryRun` | false | 只记不罚；设置卡可配（安全规则列表子卡） |
+| `rulesDryRun` | false | 只记不罚；仅 YAML 可配（设置卡无此控件） |
 | `maxConsecutiveDenials` | 3 | 0=关闭 |
 | `maxTotalDenials` | 20 | 0=关闭 |
 | `maxArgsChars` | 4000 | 参数取回截断 |
@@ -36,15 +36,15 @@
 | `onboardingMessageEnabled` | true | 首次 Auto 会话向 agent 注入一次性英文引导消息（上下文声明，非用户横幅）；关掉后不再注入 |
 | `autoModeNoticeEnabled` | true | 自动审批模式进入/退出时向 agent 注入英文上下文声明（独立开关） |
 | `showSessionPanel` | auto | on/auto/off（客户端消费）；控件同时承载审批状态 |
-| `breakerAntiHijackMs` | 0 | 熔断弹窗防误点（客户端消费）；设置卡可配（计时器与熔断子卡） |
+| `breakerAntiHijackMs` | 0 | 熔断弹窗防误点（客户端消费）；仅 YAML 可配（设置卡无此控件） |
 | `panelDelayMs` | 3000 | 倒计时审批先只在会话标题栏控件上显示状态、推迟官方审批面板出现的时长（毫秒，0–10000，0=立即出现）；host 消费（决定何时 `next()`）；设置卡可配 |
 | `workspaceRoot / dshHome / tempRoots` | ''/''/[] | 路径根（DSH_HOME 默认保护；host-only） |
-| `reviewMaxRetries` | 1 | LLM 审查首次失败后的额外重试次数（0-2；0=单次，1=默认；滚动剩余预算，见 src/auto/retry.ts）——**普通键**，安全规则卡可改 |
+| `reviewMaxRetries` | 1 | LLM 审查首次失败后的额外重试次数（0-2；0=单次，1=默认；滚动剩余预算，见 src/auto/retry.ts）——**仅 YAML 可配**（设置卡无此控件） |
 | `reviewWaitSeconds` | 5 | 每次 LLM 评审尝试的等待时间（秒，1–10）；官方通道 TTFB 慢时调大，建议不超过低风险倒计时 |
 | `redactResults` | false | 开启后把成功工具结果也过一遍脱敏器再喂回模型（post-execute 侧） |
 | `reviewerContextFacts` | false | 上下文增强复审：给评审输入附加结构化工作区事实（只读元数据）；host-only 键：仅 settings.yaml 可配（设置卡无此控件） |
 | `editDiffPreview` | false | 编辑类工具进人工审批时展示行级红绿 diff（纯展示，不参与裁决） |
-| `rejectGuidance` | false | 拒绝引导：被拒时向 agent 注入白名单式短说明（来源/类别枚举，不含工具名与自由文本），减少盲目重试；同调用去重 + 60s 限 5 条，fail-closed。v0.0.17 起官方拒绝检测只认结构化错误形状（error.message/isError/官方 Error: 前缀）——read/grep 等成功工具输出里出现的 "user rejected tool" 字面量不再误触发（此前 13 次幽灵注入根因） |
+| `rejectGuidance` | true | 拒绝引导：被拒时向 agent 注入白名单式短说明（来源/类别枚举，不含工具名与自由文本），减少盲目重试；同调用去重 + 60s 限 5 条，fail-closed。v0.0.17 起官方拒绝检测只认结构化错误形状（error.message/isError/官方 Error: 前缀）——read/grep 等成功工具输出里出现的 "user rejected tool" 字面量不再误触发（此前 13 次幽灵注入根因） |
 | `maintenanceDshPaths` | [] | host-only 键：DSH_HOME 中供运维维护的子目录（绝对路径数组）。其内 guard 的 DSH_HOME 硬拒只对**非运行态文件**放宽（技能/配置/文档）；插件运行态文件（history/audit/learning…）在其内仍恒拒，shell 写向量仍恒拒，fenced 子树（sessions/plugins/credentials*）不可指名。仅 patch/YAML 可配 |
 | `categoryPolicy` | {} | 11 类三态开关 `{类别: auto\|ask\|deny}`；未配置=inherit 行为零变化；未知键 warn+丢弃（resolveConfig），LOCKED 类仅收 ask（privilege 在 `privilegeAutoReview=true`、protected 在 `protectedAutoReview=true` 时例外，可收 auto/deny） |
 | `categoryMode` | standard | standard/aggressive：信任目录模式。standard 常规位置=工作区 ∪ trustedDirs；aggressive 取消位置白名单（任意位置均视为常规位置；危险度门与敏感名 fuse 不动） |
@@ -56,7 +56,7 @@
 | `learningThreshold` | 3 | 触发学习放行所需的人工确认次数；保存时钳入 [2,10]（clampLearningThreshold），越界值由 resolveConfig 发 warn（<span class="lnum">index.ts:L"clamping learningThreshold"</span>） |
 | `directHumanEnabled` | false | 直接人工通道：agent 可调用 `dsa_request_user` 把后续操作路由给人工而非 LLM 分类器；默认关=零行为差异。工具仅在开启时于启动注册（工具集不可热换——开启需重启），审批通道读取实时，关掉立即停用已注册工具 |
 | `slashCommandsEnabled` | false | 命令面板注册 `/approval-mode` `/approval-reset` `/approval-reset-all`（评审模式查看/设置 + 熔断重置）。默认关=零命令表面积。命令集不可热换——仅在开启时于启动注册（开启需重启）；每个 handler 读取该开关实时，运行中关掉立即停用已注册命令 |
-| `<span class="badgeok">host-only ×11</span>` | — | workspaceRoot / dshHome / tempRoots / **trustedDirs** / **trustedDshSubpaths** / maintenanceDshPaths / classifierTimeoutMs(8s,100-60000) / classifierMaxOutputTokens(1024,64-4096) / maxArgsChars / notifyUser / **reviewerContextFacts**（<span class="lnum">decision.ts:LHOST_ONLY_KEYS</span>；preserveHostKeys 回填，卡片保存不抹掉）。注意 reviewMaxRetries **不在**此名单——它是可被设置卡修改的普通键 |
+| `<span class="badgeok">host-only ×14</span>` | — | workspaceRoot / dshHome / tempRoots / **trustedDirs** / **trustedDshSubpaths** / maintenanceDshPaths / classifierTimeoutMs(8s,100-60000) / classifierMaxOutputTokens(1024,64-4096) / maxArgsChars / notifyUser / **reviewerContextFacts** / **rulesDryRun** / **breakerAntiHijackMs** / **reviewMaxRetries**（<span class="lnum">decision.ts:LHOST_ONLY_KEYS</span>；preserveHostKeys 回填，卡片保存不抹掉）。**归属不变量**：没有设置卡控件的键必须在此名单内——否则下一次任意卡片保存（整命名空间 replace）会把它从 settings.yaml 物理删除并静默回落默认（<span class="lnum">settings-key-ownership.test.mjs:L"no silent-delete gap"</span>） |
 
 ### 三处设计亮点
 

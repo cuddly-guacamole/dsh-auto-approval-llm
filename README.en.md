@@ -149,7 +149,7 @@ Session approval stats — the "Auto Approval" header-button popup: totals / all
 | `llmTakeoverScope` | `medium-or-below` | Which tiers allow the LLM verdict to take over directly (values `low` / `medium-or-below` / `high-or-below`; the schema accepts `high-or-below`, but it behaves identically to `medium-or-below` — the HIGH branch never hands control to the LLM, high risk always lands on a human, so picking it does not buy HIGH automation) |
 | `defaultReviewMode` | `smart` | Default per-session review mode: Manual / Smart / Unattended |
 | `lowRiskSeconds` / `mediumRiskSeconds` / `highRiskSeconds` | 5 / 8 / 10 | Countdown seconds per tier |
-| `breakerAntiHijackMs` | 0 | Disable breaker panel buttons for this many ms; 0 disables; configurable in the settings card (Timers & breaker) |
+| `breakerAntiHijackMs` | 0 | Disable breaker panel buttons for this many ms; 0 disables; YAML only — no settings-card control |
 | `panelDelayMs` | 3000 | Countdown asks show status only on the session header control before the official approval panel opens (ms, 0–10000, 0 = open immediately); a review that settles inside the window means no panel appears; configurable in the settings card (Timers & breaker) |
 | `maxConsecutiveDenials` | 3 | Consecutive LLM-denial breaker threshold; 0 off |
 | `maxTotalDenials` | 20 | Cumulative denial breaker threshold; 0 off |
@@ -164,13 +164,13 @@ Session approval stats — the "Auto Approval" header-button popup: totals / all
 | `safetyPrompt` | '' | Extra policy appended to the review model (hot-applied after save) |
 | `allowlist` / `denyList` / `humanOnlyList` | [] | Exact tool-name match |
 | `rulesText` | '' | Declarative rules (take precedence over the built-in lists; optional `[agent:…]` / `[workspace:…]` dimension prefix, comma = AND; parse error voids the whole text) |
-| `rulesDryRun` | false | Dry-run: log rule hits without enforcing; configurable in the settings card (Safety rules list) |
+| `rulesDryRun` | false | Dry-run: log rule hits without enforcing; YAML only — no settings-card control |
 | `maxArgsChars` | 4000 | Max length of recovered tool arguments |
 | `notifyUser` | true | "Model approved" notice into the session |
 | `showSessionPanel` | `auto` | Session-header button: Off / Auto only / On; the control also carries the approval status (name while idle, countdown/outcome while an ask is live) |
 | `workspaceRoot` / `dshHome` / `tempRoots` | ''/''/[] | Path roots (DSH_HOME is protected by default) |
 | `classifierTimeoutMs` / `classifierMaxOutputTokens` | 8000 / 1024 | Classifier timeout and output cap |
-| `reviewMaxRetries` | 1 | Extra review attempts after a failed review (0 single-shot / 1 default / 2 max; transient failures only — rate-limit, 5xx, transport, empty response, LOW-sync timeouts — bounded by the approval-countdown remainder; auth/config errors never retry) |
+| `reviewMaxRetries` | 1 | Extra review attempts after a failed review (0 single-shot / 1 default / 2 max; transient failures only — rate-limit, 5xx, transport, empty response, LOW-sync timeouts — bounded by the approval-countdown remainder; auth/config errors never retry); YAML only — no settings-card control |
 | `autoModeNoticeEnabled` | true | Injects an English context notice to the agent on entering/leaving the auto approval mode (independent switch) |
 | `onboardingMessageEnabled` | true | Injects a one-time English onboarding message to the agent in the first Auto session (context notice, not a user banner); once off it is never injected again |
 | `reviewWaitSeconds` | 5 | Per-attempt LLM review wait time (s, 1–10); raise it when the official channel's TTFB is slow; recommended not to exceed the low-risk countdown |
@@ -191,7 +191,7 @@ Session approval stats — the "Auto Approval" header-button popup: totals / all
 | `learningEnabled` | false | Confirmation learning: an operation approved manually enough times gets auto-released (a hit still passes one standard online review); off by default = zero behavior change. High risk / LOCKED categories / sensitive paths never participate (unknown is learnable since 0.0.15); max 50 learned releases per root session |
 | `learningThreshold` | 3 | Manual confirmations required before a learned release (clamped to 2–10 on save); a manual denial resets that signature's count |
 
-> Top-level switches (enable / timeout action / review & takeover scopes and the flip-never-to-ask switch / default mode / auto-mode switch notice / session panel & button position) save instantly; each sub-card has independent Save/Discard buttons (the Safety rules card also has Restore defaults). Host-only keys (workspaceRoot etc.) are configured via patch/YAML; card saves won't wipe them.
+> Top-level switches (enable / timeout action / review & takeover scopes) save instantly, as does the Advanced sub-card (default mode / flip-never-to-ask / auto-mode switch notice / session panel). Each sub-card has independent Save/Discard buttons (the Safety rules card also has Restore defaults). Host-only keys (workspaceRoot etc., plus the control-less `rulesDryRun` / `breakerAntiHijackMs` / `reviewMaxRetries`) are configured via patch/YAML; card saves won't wipe them.
 
 ---
 

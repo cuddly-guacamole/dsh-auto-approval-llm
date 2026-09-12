@@ -88,7 +88,6 @@ const MOCK_CONFIG = {
   notifyUser: true,
   showSessionPanel: 'auto',
   breakerAntiHijackMs: 0,
-  aiButtonPosition: 'header',
   classifierTimeoutMs: 8000,
   classifierMaxOutputTokens: 1024,
 }
