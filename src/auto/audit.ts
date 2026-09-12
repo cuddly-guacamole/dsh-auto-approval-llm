@@ -35,6 +35,9 @@ export const MAX_AUDIT_BYTES = 5 * 1024 * 1024
  */
 let auditFileOverride: string | undefined
 
+/** One warning per process for a rotation that could not replace the file. */
+let warnedRotationFailure = false
+
 /** Test-only: point the audit file at `path` (pass undefined to restore the default). */
 export function setAuditFilePathForTests(path: string | undefined): void {
   auditFileOverride = path
@@ -106,21 +109,31 @@ export function auditRotateContent(content: string, maxBytes = MAX_AUDIT_BYTES, 
 export function appendAuditLine(line: string): boolean {
   const file = appendRuntimeLine(AUDIT_FILENAME, `${line}\n`, auditFileOverride)
   if (file === undefined) return false
+  // Rotation is best-effort and NEVER decides the append verdict. The line is
+  // already durable by the time the rotation runs, and the return value is the
+  // fail-closed commit gate every allow site branches on — so reporting false
+  // for a failed replace (a directory parked at the tmp path, EPERM/EBUSY from
+  // a scanner or backup agent, a full volume) denied a call that history.jsonl
+  // and the audit both already record as allowed.
   try {
     if (statSync(file).size > MAX_AUDIT_BYTES) {
       const content = readFileSync(file, 'utf8')
       const rotated = auditRotateContent(content)
-      if (rotated === content) return true
-      // Atomic replace (tmp + rename, same directory) so a crash mid-rotate
-      // can never leave a torn audit file; the original survives write errors.
-      const tmp = `${file}.tmp`
-      writeFileSync(tmp, rotated)
-      renameSync(tmp, file)
+      if (rotated !== content) {
+        // Atomic replace (tmp + rename, same directory) so a crash mid-rotate
+        // can never leave a torn audit file; the original survives write errors.
+        const tmp = `${file}.tmp`
+        writeFileSync(tmp, rotated)
+        renameSync(tmp, file)
+      }
     }
-    return true
   } catch {
-    return false
+    if (!warnedRotationFailure) {
+      warnedRotationFailure = true
+      console.warn('[dsh-auto-approval-llm] audit rotation failed; the append is kept and the file keeps growing until a later rotation succeeds')
+    }
   }
+  return true
 }
 
 /** Durable tombstone so a UI "clear history" leaves a recoverable trail. */
