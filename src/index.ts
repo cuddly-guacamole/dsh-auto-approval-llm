@@ -2428,8 +2428,18 @@ export function boundedHoldMs(raw: unknown): number {
  * either way — a hold timeout is a heartbeat, never a resolution.
  */
 export function holdWhileUnchanged(callId: string, holdMs: number, res: any): Promise<void> {
+  return holdWhileValue(() => reviewStates.get(callId)?.revision, holdMs, res)
+}
+
+/**
+ * Hold a response until `current()` changes or the hold budget elapses. The
+ * check runs in-process (no HTTP traffic), the timer is released on client
+ * disconnect, and the caller answers with the current state either way — a hold
+ * timeout is a heartbeat, never a resolution.
+ */
+export function holdWhileValue(current: () => unknown, holdMs: number, res: any): Promise<void> {
   const startedAt = Date.now()
-  const startRevision = reviewStates.get(callId)?.revision
+  const initial = current()
   return new Promise((resolve) => {
     let done = false
     let timer: any
@@ -2443,7 +2453,7 @@ export function holdWhileUnchanged(callId: string, holdMs: number, res: any): Pr
     res.on?.('close', finish)
     timer = setInterval(() => {
       if (done) return
-      if ((reviewStates.get(callId)?.revision) !== startRevision || Date.now() - startedAt >= holdMs) finish()
+      if (current() !== initial || Date.now() - startedAt >= holdMs) finish()
     }, 200)
   })
 }
@@ -2467,7 +2477,7 @@ export function installSessionReviewStatusRoute(ctx: any): void {
   ctx.effect(() => webServer.register({
     kind: 'exact',
     path: SESSION_REVIEW_STATUS_ROUTE,
-    handler: (req: any, res: any) => {
+    handler: async (req: any, res: any) => {
       if (!isTrustedRequest(req, trustedHosts)) {
         responseJson(res, 403, { ok: false, error: 'forbidden' })
         return
@@ -2483,6 +2493,13 @@ export function installSessionReviewStatusRoute(ctx: any): void {
         responseJson(res, 400, { ok: false, error: 'session-id-required' })
         return
       }
+      // Same long poll as the per-ask route: the client is woken by a change in
+      // this session's ask list instead of re-asking on a fixed cadence.
+      const holdMs = boundedHoldMs(req.headers?.['x-auto-approval-wait-ms'])
+      if (holdMs > 0) {
+        await holdWhileValue(() => sessionReviewFingerprint(sessionId), holdMs, res)
+        if (res.writableEnded === true) return
+      }
       const reviews: unknown[] = []
       for (const [callId, status] of reviewStates) {
         if (reviewSessions.get(callId) !== sessionId) continue
@@ -2491,6 +2508,19 @@ export function installSessionReviewStatusRoute(ctx: any): void {
       responseJson(res, 200, { ok: true, value: { reviews } })
     },
   }), 'dsh-auto-approval-llm: session review status route')
+}
+
+/**
+ * Identity of one session's ask list: any publish, settlement or removal
+ * changes it, which is exactly when a held discovery request must answer.
+ */
+export function sessionReviewFingerprint(sessionId: string): string {
+  const parts: string[] = []
+  for (const [callId, status] of reviewStates) {
+    if (reviewSessions.get(callId) !== sessionId) continue
+    parts.push(`${callId}:${status.revision ?? ''}:${status.phase}`)
+  }
+  return parts.sort().join('|')
 }
 
 /**

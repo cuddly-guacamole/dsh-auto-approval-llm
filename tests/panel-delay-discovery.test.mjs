@@ -21,9 +21,11 @@ import {
   boundedHoldMs,
   createPanelGate,
   holdWhileUnchanged,
+  holdWhileValue,
   installRevealRoute,
   installSessionReviewStatusRoute,
   installReviewStatusRoute,
+  sessionReviewFingerprint,
   withRemaining,
 } from '../lib/index.js'
 
@@ -146,6 +148,39 @@ test('the client-facing status derives remaining time from the host deadline', (
 })
 
 // ── routes: auth, method and shape fences ─────────────────────────────────
+
+test('the session discovery route holds the request until the ask list changes', async () => {
+  const handler = capture(installSessionReviewStatusRoute)[0].handler
+  const headers = { host: 'localhost:3080', 'x-auto-approval-session-id': 'no-such-session', 'x-auto-approval-wait-ms': '300' }
+  const { res, state } = fakeRes()
+  const started = Date.now()
+  await handler({ ...LOOPBACK, headers }, res)
+  const elapsed = Date.now() - started
+  assert.ok(elapsed >= 250, `the route must honour the hold header (waited ${elapsed}ms)`)
+  assert.equal(state.statusCode, 200)
+  assert.deepEqual(JSON.parse(state.body), { ok: true, value: { reviews: [] } })
+})
+
+test('holdWhileValue answers on change and on budget', async () => {
+  let value = 'a'
+  const changed = fakeRes()
+  const pending = holdWhileValue(() => value, 5_000, changed.res)
+  value = 'b'
+  await pending
+  const budget = fakeRes()
+  const started = Date.now()
+  await holdWhileValue(() => 'steady', 30, budget.res)
+  assert.ok(Date.now() - started >= 25, 'the budget path still answers')
+})
+
+test('sessionReviewFingerprint is stable for an unchanged ask list', () => {
+  assert.equal(typeof sessionReviewFingerprint('no-such-session'), 'string')
+  assert.equal(
+    sessionReviewFingerprint('no-such-session'),
+    sessionReviewFingerprint('no-such-session'),
+    'a stable list yields a stable fingerprint',
+  )
+})
 
 test('the session discovery route keeps the trust and method fences', async () => {
   const handler = capture(installSessionReviewStatusRoute)[0].handler
