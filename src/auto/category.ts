@@ -348,16 +348,21 @@ const GIT_LOCAL = new Set([
 ])
 const WRAPPERS = new Set(['env', 'nohup', 'setsid', 'stdbuf', 'command', 'time', 'timeout', 'xargs', 'nice', 'ionice'])
 const WRAPPER_VALUE_FLAGS: Record<string, RegExp> = {
-  xargs: /^-(?:n|I|i|P|L|s|d|E|a)$/,
-  stdbuf: /^-(?:i|o|e)$/,
-  nice: /^-(?:n)$/,
-  ionice: /^-(?:c|n|p)$/,
+  xargs: /^-(?:n|I|i|P|L|s|d|E|a)$|^--(?:max-args|replace|max-procs|max-lines|max-chars|delimiter|eof|arg-file|process-slot-var)$/,
+  stdbuf: /^-(?:i|o|e)$|^--(?:input|output|error)$/,
+  nice: /^-(?:n)$|^--adjustment$/,
+  ionice: /^-(?:c|n|p|P|u)$|^--(?:class|classdata|pid|pgid|uid)$/,
+  // env: `-u/--unset NAME`, `-S/--split-string S`, `-C/--chdir DIR` and
+  // `--argv0 NAME` consume the following word, so the separated spelling
+  // (`env -u FOO rm -rf X`) must not unwrap to the flag's value.
+  env: /^-(?:u|S|C)$|^--(?:unset|split-string|chdir|argv0)$/,
   // timeout: `-s/--signal <SIG>` and `-k/--kill-after <DUR>` take a value. This
   // table is a copy of the shell plane's authority (auto/shell.ts) and had lost
   // the entry: `timeout -s KILL 5 rm -rf X` unwrapped to `KILL` here (unknown)
   // while the shell plane saw `rm`, so the delete hard lock and the operator's
   // delete categoryPolicy never fired for that spelling. Keep the two in step.
   timeout: /^-(?:s|k)$|^--(?:signal|kill-after)$/,
+  time: /^-(?:o|f)$|^--(?:output|format)$/,
 }
 const NESTED_INTERPRETERS = new Set(['node', 'deno', 'bun', 'python', 'python3', 'perl', 'ruby', 'php', 'osascript'])
 const NESTED_SHELLS = new Set(['sh', 'bash', 'zsh', 'fish', 'ksh', 'dash', 'cmd', 'cmd.exe', 'powershell', 'powershell.exe', 'pwsh', 'pwsh.exe'])
@@ -438,7 +443,9 @@ function findHasDestructiveAction(words: SegmentWord[]): boolean {
     const terminator = words.findIndex((word, nestedIndex) => nestedIndex > index && (word.text === ';' || word.text === '+'))
     if (terminator < 0) return false
     const nested = words.slice(index + 1, terminator)
-    if (isDeletion(commandName(nested[0]?.text ?? ''), 'bash')) return true
+    // The nested body may start with a wrapper (`find . -exec env -u FOO rm -rf x +`):
+    // judge the effective command, exactly like the shell plane does.
+    if (isDeletion(commandName(unwrapWords(nested).words[0]?.text ?? ''), 'bash')) return true
     index = terminator
   }
   return false

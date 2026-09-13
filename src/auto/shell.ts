@@ -397,14 +397,21 @@ const WRAPPERS = new Set(['env', 'nohup', 'setsid', 'stdbuf', 'command', 'time',
 const PRIVILEGE_COMMANDS = new Set(['sudo', 'doas', 'su']);
 /** Wrapper flags that consume the following word as their value. */
 const WRAPPER_VALUE_FLAGS = {
-    xargs: /^-(?:n|I|i|P|L|s|d|E|a)$/,
-    stdbuf: /^-(?:i|o|e)$/,
-    nice: /^-(?:n)$/,
-    ionice: /^-(?:c|n|p)$/,
+    xargs: /^-(?:n|I|i|P|L|s|d|E|a)$|^--(?:max-args|replace|max-procs|max-lines|max-chars|delimiter|eof|arg-file|process-slot-var)$/,
+    stdbuf: /^-(?:i|o|e)$|^--(?:input|output|error)$/,
+    nice: /^-(?:n)$|^--adjustment$/,
+    ionice: /^-(?:c|n|p|P|u)$|^--(?:class|classdata|pid|pgid|uid)$/,
+    // env: `-u/--unset NAME`, `-S/--split-string S`, `-C/--chdir DIR` and
+    // `--argv0 NAME` consume the following word. Without them the effective
+    // command became the flag's VALUE (`env -u FOO rm -rf /` unwrapped to
+    // `FOO`), so the privilege, delete, write-operand and find fuses all
+    // skipped for the separated spelling while `--unset=FOO` stayed covered.
+    env: /^-(?:u|S|C)$|^--(?:unset|split-string|chdir|argv0)$/,
     // timeout: `-s/--signal <SIG>` and `-k/--kill-after <DUR>` take a value;
     // without them `timeout -s KILL 5 sudo …` unwraps to `KILL` as the
     // "effective command" and skips the privilege/delete fuses entirely.
     timeout: /^-(?:s|k)$|^--(?:signal|kill-after)$/,
+    time: /^-(?:o|f)$|^--(?:output|format)$/,
 };
 /** Strip prefix wrappers so the effective command is judged, not the wrapper. */
 function unwrapCommand(words) {
