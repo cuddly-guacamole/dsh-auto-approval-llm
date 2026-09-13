@@ -209,7 +209,11 @@ const { DESTRUCTIVE_TOOL, EXTERNAL_WRITE_TOOL, SECURITY_CHANGE_TOOL } = riskToke
 function isEgressChannelName(name: string): boolean {
     if (ORCHESTRATION_TOOLS.has(name) || AGENT_TEAMS_CONTROL_TOOLS.has(name))
         return false;
-    return /^(?:web_fetch|curl|wget)/i.test(name) || EXTERNAL_WRITE_TOOL.test(name);
+    // `web_search` sends its query to an external provider exactly like
+    // `web_fetch` sends its URL, and it carries a blanket read-only static
+    // allow, so leaving it out let the same credential-bearing payload through
+    // unreviewed.
+    return /^(?:web_fetch|web_search|curl|wget)/i.test(name) || EXTERNAL_WRITE_TOOL.test(name);
 }
 function riskyPluginToolReason(name: string): string | undefined {
     if (DESTRUCTIVE_TOOL.test(name))
