@@ -1036,6 +1036,17 @@ function readOnlyOutputFlagTargets(name, words, shell) {
             targets.push({ text: text.slice(eq + 1), dynamic: word.dynamic, glob: word.glob, quoted: word.quoted });
             continue;
         }
+        // The long form carries its value either with `=` (handled above) or as
+        // the NEXT word (`sort --output FILE`). Slicing after the first `o` of
+        // the flag name produced the literal target `utput`, so the real
+        // destination reached no fence at all: `sort --output <protected>`
+        // degraded from hard deny to a classifier-answerable ask.
+        if (text.startsWith('--')) {
+            const value = words[index + 1];
+            if (value !== undefined)
+                targets.push(value);
+            continue;
+        }
         const at = text.indexOf('o', 1);
         if (at === text.length - 1) {
             const value = words[index + 1];
