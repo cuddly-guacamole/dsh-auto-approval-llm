@@ -1,6 +1,6 @@
 # 15 · 质量保障体系
 
-> *1422 tests · runtime proofs*
+> *1440 tests · runtime proofs*
 
 ## 15.1　契约测试覆盖地图（按主题归纳）
 
@@ -27,8 +27,9 @@
 | 内置放行面 | agent-team-tools-allow.test.mjs：Agent Teams 九个真实工具全部落静态放行面（`assessTool`→allow 且 `classifierEligible:false`）与 `harnessInternal` 标签（任何 category 键都收紧不了）；**全六族**跨副本不变式（读取编译后的 policy/category/constants，逐族比对成员，故任何一族新增名字都被覆盖，只有这两个族被覆盖时会漏掉其余四族）；**负向**锚定「近似名不得同车放行」（子串/家族/大小写变体）与「包内非工具标识符永不入列」（systemPrompt section id、事件名）；以及「**风险升级显式例外表**」——集合成员在风险正则之前返回，故命中 `RISK_NAME_PATTERN` 的名字其升级通道被静默关闭，新名字必须显式登记理由否则测试失败（另配一条反向用例防止正则本身失效）；default-allow-catalog.test.mjs 钉 catalog→policy 单向，本文件补 policy→catalog 方向 |
 
 | 客户端开销 | perf-settings-rules-parse.test.mjs（声明规则每次渲染只解析一次）/ perf-poll-backoff.test.mjs（`nextPollDelayMs` 表驱动 + 阳性上界封顶 + 故障期次线性增长 + 恢复即回基准 + 负向「延迟恒正」）/ perf-scan-throttle.test.mjs（可注入时钟的 trailing 节流：合并、**尾随不丢**、dispose 取消、锚定 `@ts-nocheck` 的 auto-icon 编译产物真带接线）/ perf-countdown-write.test.mjs（后缀串未变不写；**任何真实变化必须写**，含离线冻结标记与回到净文本） |
+| 授权证据窗口与人工出手率 | trusted-intent-window.test.mjs：4 条证据窗口的溢出计数（slot cap 后重复候选=去重不计、独有候选=溢出计、inbox 先入、逐文本截断与预算的交互、经超长问题答案触达预算的真实路径、被拒文本重复出现计双）、拒因 note 的零/非零两分支与措辞纪律（无 retry/approve 字面、无 dangling 值）、deny 落点结构锚、trusted-intents 事件量化 `overflowed` 标志进去重签名、audit-query 对该字段的渲染与缺字段静默 / client-human-gate.test.mjs：人工来源名单与 `scripts/friction-report.mjs` **运行时 import 逐项相等**、空窗口判 vacuous 不作零声称、缺 source/非字符串 source 只进分母、round 边界、中英三键齐备且文案带窗口限定、bundle 装配锚（派生调用 + 三个浮层状态键） |
 
-137 个测试文件，合计 **1422 例**（node --test 全绿基线）。
+139 个测试文件，合计 **1440 例**（node --test 全绿基线）。
 
 ## 15.2　验收命令与运行时证据
 
@@ -47,7 +48,7 @@ npm run gate   # 清构建产物 → 类型 → 构建 → 全量测试 → 数�
 ```bash
 node_modules/.bin/tsc -p tsconfig.json   # 类型（policy/shell/paths 不再 @ts-nocheck）
 node_modules/.bin/tsdown                  # 客户端 bundle
-node --test "tests/**/*.test.mjs"        # 1422/1422 全绿
+node --test "tests/**/*.test.mjs"        # 1440/1440 全绿
 ```
 
 :::

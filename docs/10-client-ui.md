@@ -84,6 +84,6 @@ li.dsa-card（可折叠；任一卡脏 → 头部「未保存」徽标）
   <tr>
     <td>会话标题栏控件（React，slot utilities）</td>
     <td><code>panelMode≠off</code>；auto 模式还要求当前会话是 auto</td>
-    <td>GET /history 过滤本会话 slice(50)，算 <b>total/allow/deny/timeout/breaker</b> + 最近 ≤10 条记录；工具栏为「粗体标题 + 刷新 + 关闭」（图标取自官方 Agent Team 面板），settings overlay 打开时收起</td>
+    <td>GET /history 过滤本会话 slice(50)，算 <b>total/allow/deny/timeout/breaker</b> + 人工出手率派生行（<b>每 N 次需人工出手 1 次</b> / 0 次 / 暂无样本，人工来源=human-allow·human-deny，与 <code>scripts/friction-report.mjs</code> 同一名单；记录读取失败时不渲染该行）+ 最近 ≤10 条记录；工具栏为「粗体标题 + 刷新 + 关闭」（图标取自官方 Agent Team 面板），settings overlay 打开时收起</td>
   </tr>
 </table>

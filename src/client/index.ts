@@ -11,6 +11,7 @@ import { approvalStatusStore, chipState, coarseMinutes } from './approvals/statu
 import type { ChipState } from './approvals/status-store.js'
 import { watchSessionApprovals } from './approvals/session-watch.js'
 import { markerTextOutsidePreview } from './approvals/marker-text.js'
+import { humanGateStats } from './human-gate.js'
 import { watchRemoteApprovals } from './approvals/remote.js'
 import { buildToolChips, applyChipToList, type ToolChip, type ToolStatsPayload, type ToolStatsEntry } from './tool-chips.js'
 
@@ -2651,6 +2652,12 @@ function SessionApprovalPanel(props: any) {
   const deny = records.filter((r: any) => r.outcome === 'rejected').length
   const timeout = records.filter((r: any) => (r.source ?? '').startsWith('timeout')).length
   const breaker = records.filter((r: any) => r.breaker).length
+  const humanGate = humanGateStats(records)
+  const humanGateText = humanGate.empty
+    ? t('panel.humanGateEmpty')
+    : humanGate.everyNth !== null
+      ? t('panel.humanGate', { total, n: humanGate.everyNth })
+      : t('panel.humanGateNone', { total })
 
   const overlayStyle: React.CSSProperties = {
     position: 'fixed',
@@ -2737,6 +2744,7 @@ function SessionApprovalPanel(props: any) {
       React.createElement('div', null, historyUnavailable
         ? t('panel.historyUnavailable')
         : t('panel.stats', { total, allow, deny, timeout, breaker })),
+      !historyUnavailable ? React.createElement('div', null, humanGateText) : null,
       records.length === 0
         ? React.createElement('p', { style: { color: 'var(--dsw-alias-label-tertiary)', margin: 0 } },
             historyUnavailable ? t('panel.historyRetry') : t('panel.empty'))
