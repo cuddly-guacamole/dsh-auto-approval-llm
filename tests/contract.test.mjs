@@ -1456,11 +1456,12 @@ test('feedback route: a callId the plugin never issued is a 200 no-op, not a wri
   const lib = readFileSync(fileURLToPath(new URL('../lib/index.js', import.meta.url)), 'utf8')
   const guardAt = lib.indexOf('const knownCallId =')
   assert.ok(guardAt > 0, 'the known-callId guard exists in the feedback handler')
-  const scope = lib.slice(guardAt, guardAt + 700)
+  const scope = lib.slice(guardAt, guardAt + 1200)
   for (const map of ['timeoutFeedback', 'decisionFeedback', 'resolvedCallIds', 'reviewStates', 'followExpiry', 'reviewVerdicts']) {
     assert.ok(scope.includes(`${map}.has(`), `the guard consults ${map}`)
   }
   assert.ok(scope.includes('knownCallId && !decisionFeedback.has'), 'the timeout write only fires for known callIds')
+  assert.ok(scope.includes("reviewStatus?.phase !== 'follow'"), 'a settled follow-phase ask is never relabelled as a timeout')
 })
 
 test('feedback route: LAN peer forging Host+callId is rejected 403 with no state writes', async () => {

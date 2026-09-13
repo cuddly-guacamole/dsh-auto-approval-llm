@@ -2186,12 +2186,20 @@ export function installFeedbackRoute(ctx: any): void {
         const knownCallId = timeoutFeedback.has(body.callId) || decisionFeedback.has(body.callId) ||
           resolvedCallIds.has(body.callId) || reviewStates.has(body.callId) ||
           followExpiry.has(body.callId) || reviewVerdicts.has(body.callId)
-        if (knownCallId && !decisionFeedback.has(body.callId) && !resolvedCallIds.has(body.callId)) {
+        const reviewStatus = reviewStates.get(body.callId)
+        // A published `follow` phase means the host already resolved this ask —
+        // by a human click, an LLM takeover, or its own timer — and the timer
+        // records the timeout notice itself when it fires. The resolvedCallIds
+        // marker alone cannot carry that guarantee: it ages out (30s) before the
+        // follow window closes (120s), so an ACK landing in between relabelled a
+        // settled human/LLM decision as "no response".
+        if (knownCallId && !decisionFeedback.has(body.callId) && !resolvedCallIds.has(body.callId) &&
+          reviewStatus?.phase !== 'follow') {
           recordTimeoutFeedback(body.callId, `[dsh-auto-approval-llm] auto-${actionText} by the configured timeout action (timeout — not a user denial)`)
         }
         // The client has seen the follow phase and is answering: release the
         // follow state early instead of waiting for the TTL sweep.
-        if (reviewStates.get(body.callId)?.phase === 'follow') {
+        if (reviewStatus?.phase === 'follow') {
           reviewStates.delete(body.callId)
           followExpiry.delete(body.callId)
         }
