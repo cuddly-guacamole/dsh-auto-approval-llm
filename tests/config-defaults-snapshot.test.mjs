@@ -38,6 +38,7 @@ test('schema defaults snapshot: changing a default must be a reviewed diff', () 
       maxConsecutiveDenials: 3,
       maxTotalDenials: 20,
       maxArgsChars: 4000,
+      loopDetectionThreshold: 0,
       notifyUser: true,
       showSessionPanel: 'auto',
       onboardingMessageEnabled: true,

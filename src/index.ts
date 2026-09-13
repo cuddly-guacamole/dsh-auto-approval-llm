@@ -31,6 +31,7 @@ import { DIRECT_HUMAN_TOOL, THRESHOLD_DEFAULTS } from './auto/constants.js'
 import { createDshClassifier, createEndpointClassifier } from './auto/dsh-classifier.js'
 import { type RaceHumanHandle, type ReviewResult, type StaticRisk, AWAITING_MARKER, REVIEW_TIMEOUT_NOTICE, applyBreaker, approvalSource, assembleReviewerSystem, breakerNote, breakerTripped, createKeyedMutex, DENY_CIRCUMVENTION_GUIDANCE, extractToolPath, followResolution, formatDenyFeedback, frameReviewerInput, lowRiskReviewOutcome, parseReview, unattendedMustFailClosed, preserveHostKeys, raceHumanDecision, reviewSuggestionNote, reviewerAutoAllowBlocked, riskFromAssessment, staticListDecision, type ContextSummary } from './auto/decision.js'
 import { LATENCY_SUMMARY_WINDOW, clearLatencySamples, loadLatencySamples, pushLatencySample, summarizeLatency, type LatencySample } from './auto/latency.js'
+import { normalizeLoopThreshold } from './auto/loop-guard.js'
 import { RECENT_REJECTION_CAP, baselineFromPermissionState, observePermissionChange, permissionChangeFromEvent, recentRejectionPointers, type PermissionState } from './auto/permission-change.js'
 import { buildAskReason, buildEditDiff, buildEditDiffText, EDIT_DIFF_ARGS_MAX_CHARS, EDIT_DIFF_TOOLS } from './auto/editdiff.js'
 import {
@@ -143,6 +144,8 @@ export interface Config {
   endpointProtocol: 'openai' | 'anthropic'
   /** Extra LLM review attempts after the first (0 = single-shot, 1 = default). */
   reviewMaxRetries?: number
+  /** Loop guard: the Nth identical auto-allowed call in a row turns into a pinned ask (0 = off). */
+  loopDetectionThreshold?: number
   /** Seconds one reviewer attempt may wait (per-attempt timeout). */
   reviewWaitSeconds?: number
   debug: boolean
@@ -218,6 +221,7 @@ export const Config: z<Config> = z.object({
   maxConsecutiveDenials: z.number().default(THRESHOLD_DEFAULTS.maxConsecutiveDenials).min(0),
   maxTotalDenials: z.number().default(THRESHOLD_DEFAULTS.maxTotalDenials).min(0),
   maxArgsChars: z.number().default(THRESHOLD_DEFAULTS.maxArgsChars).min(1),
+  loopDetectionThreshold: z.number().min(0).max(20).default(0),
   notifyUser: z.boolean().default(true),
   showSessionPanel: z.union(['on', 'auto', 'off'] as const).default('auto'),
   // One-shot first-use notice injected into the session for the AGENT
@@ -331,6 +335,9 @@ export const Config: z<Config> = z.object({
 })
 
 const AUTO_PRESET = 'auto'
+
+/** One-time flag: the threshold=1 clamp warning fires once per process. */
+let loopThresholdWarned = false
 
 export function resolveConfig(raw: Config): Config {
   let timeoutAction = raw.timeoutAction
@@ -520,8 +527,16 @@ export function resolveConfig(raw: Config): Config {
     model: (raw as any).endpointModel,
     protocol: (raw as any).endpointProtocol,
   })
+  // Loop guard threshold: resolveConfig also consumes plain objects that never
+  // passed the schema, so the 1→2 clamp lives here, not only in zod.
+  const loopThreshold = normalizeLoopThreshold(raw.loopDetectionThreshold)
+  if (loopThreshold.warned && !loopThresholdWarned) {
+    loopThresholdWarned = true
+    console.warn('[dsh-auto-approval-llm] loopDetectionThreshold=1 would turn every auto-allowed call into an ask; clamped to 2')
+  }
   return {
     ...raw,
+    loopDetectionThreshold: loopThreshold.value,
     classifierSource: classifierLane.source,
     classifierProvider: classifierLane.presetProvider,
     classifierModel: classifierLane.presetModel,

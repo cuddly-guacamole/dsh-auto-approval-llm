@@ -299,6 +299,7 @@ export const HOST_ONLY_KEYS = [
   'rulesDryRun',
   'breakerAntiHijackMs',
   'reviewMaxRetries',
+  'loopDetectionThreshold',
 ]
 
 /**
