@@ -18,7 +18,7 @@
 
 - **静态规则 + LLM 分类器**：只读/会话/工作区常规操作直接放行；危险、外部写、凭据外泄、受保护路径直接拒绝；模糊操作交给 LLM 预分类（`tools/guard` + `tools/pre-execute`）。
 - **写向量完整性加固**：含真实文件写重定向（`>`/`>>`/`>|`/`&>``）的命令段脱离只读快径；build/test 与版本探测快径仅保留给 discard sink 或工作区内常规写目标（aggressive/trustedDirs 放宽模式同样生效）；POSIX 五头 `tee`/`dd of=`/`sed -i`/`truncate`/`install` 以操作数目标参与按目标闸门——直写插件运行态文件无条件硬拒。
-- **12 分类三态开关 + 信任目录双模式**：工具与 shell 命令归入 12 个类别（fileEdit / gitLocal / build / readOnly / delete / protected / privilege / networkExec / gitPush / publish / disk / dynamicPlugin），设置卡逐类配 `auto` / `ask` / `deny`；**默认全部 `inherit` = 行为零变化**。危险类（delete / protected / disk 及未解锁的 privilege）LOCKED 仅接受 `ask`，误配 `auto`/`deny` 会被钳制丢弃并告警；**`privilegeAutoReview` 与 `protectedAutoReview`（均默认关）分别解锁 privilege 与 protected**——解锁后该类别的锁定询问不再被恒拒倒计时钉死（protected 未显式配置时落常驻人工询问，不是静默放行；privilege 保留既有语义）。注意：类别询问在 pre-execute 即返回，**评审器不会被问到**，仍需人工作答；要自动放行须再把该类别显式设为 `auto`。`protectedAutoReview` 另设**凭据读取地板**——敏感文件名/目录与关键路径的读取无论本开关如何都保持锁定，解锁的只是非凭据工作区元数据（凭据树的写入本就硬拒）；**LOCKED 转人带硬拒倒计时**——超时自动拒绝，`timeoutAction` 任何配置都无法放行（无人值守不再挂起）；`trustedDirs` 在 standard 档把常规位置扩展到显式信任目录，`categoryMode: aggressive` 则取消位置白名单——任意位置均视为常规位置（敏感名 fuse、运行态硬拒、symlink 复检等危险度门全部不动）；复合命令按「类别枚举序 + directive 取严」双轨合并；类别拒绝与 denyList 同构为终端拒绝（提权重试不可绕过）；每次类别决策全量写入 history / audit（`category-allow` / `category-deny` source）。
+- **12 分类三态开关 + 信任目录双模式**：工具与 shell 命令归入 12 个类别（fileEdit / gitLocal / build / readOnly / delete / protected / privilege / networkExec / gitPush / publish / disk / dynamicPlugin），设置卡逐类配 `auto` / `ask` / `deny`；**默认全部 `inherit` = 行为零变化**。危险类（delete / protected / disk 及未解锁的 privilege）LOCKED 仅接受 `ask`，误配 `auto`/`deny` 会被钳制丢弃并告警；**`privilegeAutoReview` 与 `protectedAutoReview`（均默认关）分别解锁 privilege 与 protected**——解锁后该类别的锁定询问不再被恒拒倒计时钉死（protected 未显式配置时落常驻人工询问，不是静默放行；privilege 保留既有语义）。注意：类别询问在 pre-execute 即返回，**评审器不会被问到**，仍需人工作答；要自动放行须再把该类别显式设为 `auto`。`protectedAutoReview` 另设**凭据读取地板**——敏感文件名/目录与关键路径的读取无论本开关如何都保持锁定，解锁的只是非凭据工作区元数据（凭据树的写入本就硬拒）；**LOCKED 转人带硬拒倒计时**——超时自动拒绝，`timeoutAction` 无法放行；删除/磁盘在任何档位恒拒，受保护/提权在标准档下未显式配置时走正常评审管线、超时按 `timeoutAction` 结算（无人值守不再挂起）；`trustedDirs` 在 standard 档把常规位置扩展到显式信任目录，`categoryMode: aggressive` 则取消位置白名单——任意位置均视为常规位置（敏感名 fuse、运行态硬拒、symlink 复检等危险度门全部不动）；复合命令按「类别枚举序 + directive 取严」双轨合并；类别拒绝与 denyList 同构为终端拒绝（提权重试不可绕过）；每次类别决策全量写入 history / audit（`category-allow` / `category-deny` source）。
 - **双通道模型来源**：快速判断与深度评审各可独立选择模型来源——跟随会话模型（默认）/ DSH 已配置模型（从本机注册模型列表选）/ 自定义端点（直连自有 OpenAI/Anthropic 兼容端点，本地 mock、自建服务经此接入；不再维护但保留）。端点密钥存 DSH 凭据存储，前端只显示「已配置」，永不回显；端点未配密钥时评审 fail-closed，不静默回落会话模型。
 - **人工倒计时 + 超时兜底**：低/中/高三档倒计时（默认 5/8/10 秒）；超时按 `timeoutAction` 处理（`拒绝` / `通过` / `低风险自动同意`）。关浏览器也不悬挂（host 计时器独裁）。
 - **LLM 接管**：中风险且 LLM 在倒计时内给出明确结论时，客户端立即按 LLM 结论裁决，无需你点。
@@ -150,7 +150,7 @@ npx tsdown                 # 构建 client bundle → lib/client.js
 |---|---|---|
 | `enabled` | true | 总开关 |
 | `autoSwitchPolicyToAsk` | false | 仅 Auto 预设且 override=never 时自动切 ask（bundle 覆盖为 true）；设置卡可配（顶层开关，即时保存） |
-| `timeoutAction` | `reject` | 倒计时超时动作：`reject` 拒绝 / `allow` 全部通过 / `low-risk-allow` 仅低风险放行（**锁定类别除外**：删除/受保护/磁盘/未解锁提权恒拒，不受此键影响） |
+| `timeoutAction` | `reject` | 倒计时超时动作：`reject` 拒绝 / `allow` 全部通过 / `low-risk-allow` 仅低风险放行（**删除/磁盘除外**：任何档位恒拒，不受此键影响；受保护/未解锁提权仅激进档或显式人工时不受此键影响） |
 | `llmReviewScope` | `low-or-above` | LOW/MEDIUM/HIGH 哪些档送 LLM 复审 |
 | `llmTakeoverScope` | `medium-or-below` | 哪些档允许 LLM 结论直接接管（取值 `low` / `medium-or-below` / `high-or-below`；schema 接受 `high-or-below` 但行为与 `medium-or-below` 等同——HIGH 分支从不把控制权交给 LLM，高风险恒落人工，选它不会带来 HIGH 自动化） |
 | `defaultReviewMode` | `smart` | 每会话评审模式默认：人工 / 智能 / 无人值守 |
