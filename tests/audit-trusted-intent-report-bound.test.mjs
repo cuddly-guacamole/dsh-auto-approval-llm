@@ -27,7 +27,13 @@ test('the disposal handler drops the session signature', () => {
 
 test('the signature is still keyed by the session authority id', () => {
   assert.ok(host.includes('trustedIntentReported.set(key, signature)'), 'the map still records the last signature')
-  assert.ok(host.includes('reportTrustedIntentOrigins(authorityKeyFor(exec), trustedIntents)'), 'the writer still keys by the authority id')
+  assert.ok(
+    host.includes('reportTrustedIntentOrigins(authorityKeyFor(exec), trustedIntents, intentWindow.overflow > 0)'),
+    // Third arg added with the window-overflow flag: the assertion's purpose is
+    // unchanged — the report is written from the classifier boundary and keyed
+    // by the authority id.
+    'the writer still keys by the authority id at the classifier boundary',
+  )
 })
 
 test('the entry is not relocated into a shared cap it does not belong to', () => {

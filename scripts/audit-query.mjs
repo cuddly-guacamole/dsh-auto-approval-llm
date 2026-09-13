@@ -36,6 +36,7 @@ export const OBSERVATION_FIELDS = [
   'plane',
   'count',
   'origins',
+  'overflowed',
   'errors',
   'files',
   'agentKind',

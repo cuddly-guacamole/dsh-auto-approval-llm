@@ -3092,8 +3092,20 @@ export interface TrustedUserIntent {
   origin: 'user-message' | 'question-answer'
 }
 
+export interface TrustedIntentWindow {
+  admitted: TrustedUserIntent[]
+  /** Candidates the recency/budget window refused: a full 4-slot window or
+   *  the 4000-character cap. A repeat of an already-admitted text is no loss
+   *  and is not counted. */
+  overflow: number
+}
+
 export function trustedUserIntents(authority: any): TrustedUserIntent[] {
-  if (authority === undefined) return []
+  return trustedIntentWindow(authority).admitted
+}
+
+export function trustedIntentWindow(authority: any): TrustedIntentWindow {
+  if (authority === undefined) return { admitted: [], overflow: 0 }
   const events = sessionEventList(authority.session)
   // Steered/interjected prompts live in the agent inbox until the next step
   // consumes them; admit them as trusted user intents (genuine user sources
@@ -3134,6 +3146,9 @@ export function trustedUserIntents(authority: any): TrustedUserIntent[] {
   // Budget: at most 4 messages, newest first; deduped; 4000-char cap. Inbox
   // entries are the newest intents (they arrive after the last event), so
   // they are admitted first and appear last in the oldest-first output.
+  // Candidates the window refuses are counted in `overflow` so a denial can
+  // say "evidence exists but is older than the window" instead of claiming
+  // there was none; repeats of admitted texts are not loss.
   const chosen: TrustedUserIntent[] = []
   const remainingBudget = () => 4_000 - chosen.reduce((sum, t) => sum + t.text.length, 0)
   const tryPick = (intent: TrustedUserIntent): boolean => {
@@ -3143,15 +3158,17 @@ export function trustedUserIntents(authority: any): TrustedUserIntent[] {
     chosen.push(intent)
     return true
   }
-  for (const text of inboxTexts) tryPick({ text, origin: 'user-message' })
+  let overflow = 0
+  for (const text of inboxTexts) {
+    if (!tryPick({ text, origin: 'user-message' })) overflow += 1
+  }
   const eventOrdered = eventCandidates.sort((a, b) => b.seq - a.seq)
   for (const c of eventOrdered) {
-    if (chosen.length >= 4) break
-    tryPick({ text: c.text, origin: c.origin })
+    if (!tryPick({ text: c.text, origin: c.origin })) overflow += 1
   }
   const inboxChosen = chosen.filter((t) => inboxTexts.includes(t.text))
   const eventChosen = chosen.filter((t) => !inboxTexts.includes(t.text))
-  return [...eventChosen.reverse(), ...inboxChosen]
+  return { admitted: [...eventChosen.reverse(), ...inboxChosen], overflow }
 }
 
 export function trustedUserMessages(authority: any) {
@@ -3160,6 +3177,17 @@ export function trustedUserMessages(authority: any) {
 
 /** Last provenance signature reported per session (the event is deduped). */
 const trustedIntentReported = new Map<string, string>()
+
+/**
+ * States whether the deny reason describes a window with no authorization at
+ * all or one whose older evidence was dropped: the note is appended after a
+ * space and never parsed back — the structured breadcrumb for readers is the
+ * `trusted-intents` audit event's `overflowed` flag.
+ */
+export function withWindowOverflowNote(reason: string, overflow: number): string {
+  if (!Number.isFinite(overflow) || overflow <= 0) return reason
+  return `${reason} (and ${overflow} earlier user message(s) fell outside the 4-message evidence window — they are not treated as authorization; restate the authorization to cover this action)`
+}
 
 /**
  * Observational record of WHICH kinds of authorization evidence the classifier
@@ -3175,15 +3203,19 @@ const trustedIntentReported = new Map<string, string>()
  *
  * Only the ORIGIN COUNTS are recorded, never the user's text, and the row is
  * deduped per session: it appears when the mix changes — e.g. the first request
- * that finally carries a question answer. The classifier boundary is the right
+ * that finally carries a question answer. `overflowed` states whether older
+ * user messages fell outside the 4-message window; it is quantized on purpose
+ * (the dropped count only grows within a session, so an exact count in the
+ * dedup signature would append one row per user message). The classifier
+ * boundary is the right
  * place because it is the reader that authorizes state-changing calls, and it
  * reads the same function as the reviewer.
  */
-function reportTrustedIntentOrigins(sessionId: string | undefined, intents: readonly TrustedUserIntent[]): void {
+function reportTrustedIntentOrigins(sessionId: string | undefined, intents: readonly TrustedUserIntent[], overflowed: boolean): void {
   try {
     const origins: Record<string, number> = {}
     for (const intent of intents) origins[intent.origin] = (origins[intent.origin] ?? 0) + 1
-    const signature = `${intents.length}:${Object.entries(origins).sort().map(([k, v]) => `${k}=${v}`).join(',')}`
+    const signature = `${intents.length}:${Object.entries(origins).sort().map(([k, v]) => `${k}=${v}`).join(',')}:${overflowed ? 'overflow' : 'in-window'}`
     const key = String(sessionId ?? '')
     if (trustedIntentReported.get(key) === signature) return
     trustedIntentReported.set(key, signature)
@@ -3193,6 +3225,7 @@ function reportTrustedIntentOrigins(sessionId: string | undefined, intents: read
       sessionId: sessionId ?? null,
       count: intents.length,
       origins,
+      overflowed,
     }))
   } catch {
     // Observational only: it never touches the decision path.
@@ -3978,8 +4011,9 @@ export function apply(ctx: Context, rawConfig: Config): void {
       const route = resolveModelRoute(exec.agent) ?? resolveModelRoute(authority)
       const aggressiveAuto = config.categoryMode === 'aggressive' && 'auto' === directive && AGGRESSIVE_BUILTIN.includes(category as CategoryKey)
       const riskTier = riskFromAssessment(assessment, exec.name)
-      const trustedIntents = trustedUserIntents(authority)
-      reportTrustedIntentOrigins(authorityKeyFor(exec), trustedIntents)
+      const intentWindow = trustedIntentWindow(authority)
+      const trustedIntents = intentWindow.admitted
+      reportTrustedIntentOrigins(authorityKeyFor(exec), trustedIntents, intentWindow.overflow > 0)
       const classifierInput = {
         toolName: exec.name,
         arguments: sanitizeClassifierArguments(exec.arguments),
@@ -4068,7 +4102,12 @@ export function apply(ctx: Context, rawConfig: Config): void {
         }
         return next()
       }
-      if (decision.decision === 'deny') return { kind: 'deny', reason: `[dsh-auto-approval-llm] classifier deny ${decision.reason}\n${DENY_CIRCUMVENTION_GUIDANCE}` }
+      if (decision.decision === 'deny') {
+        return {
+          kind: 'deny',
+          reason: withWindowOverflowNote(`[dsh-auto-approval-llm] classifier deny ${decision.reason}`, intentWindow.overflow) + `\n${DENY_CIRCUMVENTION_GUIDANCE}`,
+        }
+      }
       return { kind: 'ask', reason: `[dsh-auto-approval-llm] classifier asks ${decision.reason}` }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
