@@ -191,12 +191,17 @@ export function approvalSource(input: {
   reviewerDecision?: string
   /** The claim settled a reviewer FAILURE (ESCALATE + failure), not a decisive verdict. */
   reviewerFailure?: boolean
+  /** The claim settled a rejection because the reviewer's ALLOW was CRITICAL-flagged and the auto-allow guard refused it. */
+  reviewerBlockedAllow?: boolean
 }): string {
   if (input.timedOut) return input.outcome === 'allowed-once' ? 'timeout-allow' : 'timeout-deny'
   if (input.claimed) {
     // A claim that ended the race with a reviewer failure is never labeled a
     // decided LLM denial: fail-closed outcomes must not feed the denial breaker.
     if (input.reviewerFailure === true) return 'llm-failed'
+    // A CRITICAL-flagged ALLOW the guard refused is a rejection the reviewer
+    // did not make: it must not read as an agreed 'llm-allow'.
+    if (input.reviewerBlockedAllow === true) return 'llm-blocked'
     // A claim is only ever made for a decidable ALLOW/DENY verdict; when the
     // verdict is somehow absent, fall back to the outcome rather than guessing.
     if (input.reviewerDecision === 'ALLOW') return 'llm-allow'

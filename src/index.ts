@@ -4530,6 +4530,11 @@ export function apply(ctx: Context, rawConfig: Config): void {
     // A claim that settled with a reviewer failure (ESCALATE + failure) is an
     // honest 'llm-failed' resolution: fail-closed, never an LLM denial streak.
     const followFailed = follow !== undefined && follow.decision === 'ESCALATE' && follow.failure !== undefined
+    // A claim that settled because the reviewer's ALLOW was CRITICAL-flagged
+    // and the auto-allow guard refused it is its own resolution kind: the
+    // reviewer said ALLOW but the policy refused it — labeled 'llm-blocked',
+    // distinct from a reviewer failure and from a decided 'llm-allow'.
+    const followBlocked = follow !== undefined && reviewerAutoAllowBlocked(follow)
     const llmMeta = follow && follow.decision
       ? {
           llmDecision: follow.decision,
@@ -4549,6 +4554,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       auto: false,
       reviewerDecision: followDecidable ? follow.decision : undefined,
       ...(followFailed ? { reviewerFailure: true } : {}),
+      ...(followBlocked ? { reviewerBlockedAllow: true } : {}),
     })
     // Breaker transition: a human answer resets the counters, a decided LLM
     // denial (only when this ask was an LLM takeover — never an advisory HIGH
@@ -5331,7 +5337,9 @@ export function apply(ctx: Context, rawConfig: Config): void {
             // CRITICAL-blocked ALLOW settles as rejected right away instead
             // of riding the countdown into riskTimedOutAction('MEDIUM', …,
             // unattended) = allow. The registered verdict keeps the
-            // resolution labeled 'llm-failed' so the breaker is not fed.
+            // resolution labeled 'llm-failed' (reviewer failure) or
+            // 'llm-blocked' (a CRITICAL-flagged ALLOW the guard refused) so
+            // the breaker is not fed.
             recordDecisionFeedback(req.callId, formatDenyFeedback('timeout'))
             mediumHandle.claim('rejected')
             reviewStates.set(req.callId, {

@@ -20,7 +20,7 @@
 | `human-allow / human-deny（人决定了）` | <span class="rk-low">清零</span> | <span class="rk-low">清零</span> | 清空 |
 | `llm-allow（LOW 放行 或 MEDIUM 接管放行）` | <span class="rk-low">清零</span> | <span class="rk-low">清零</span> | 清空 |
 | `llm-deny 且 llmDecided=true（真·LLM 拍板拒绝）` | <span class="rk-high">+1</span> | <span class="rk-high">+1</span> | push（超上限 shift） |
-| `timeout-* / auto-* / advisory 拒绝 / llm-failed / 静态名单` | 不变 | 不变 | 不变 |
+| `timeout-* / auto-* / advisory 拒绝 / llm-failed / llm-blocked / 静态名单` | 不变 | 不变 | 不变 |
 
 ::: tip 并发安全
 **并发安全**：计数器读-改-写（连续两个 await 之间）用 `createKeyedMutex`（<span class="lnum">decision.ts:LcreateKeyedMutex</span>，接口 <span class="lnum">decision.ts:LKeyedMutex</span>，per-key Promise 链）串行化——同会话并发审批不会丢失一次 +1；不同会话保持并发。
