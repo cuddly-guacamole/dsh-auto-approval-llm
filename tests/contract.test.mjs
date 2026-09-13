@@ -600,7 +600,7 @@ test('parseRulesText: reports per-line errors (bad policy / bad regex)', () => {
   assert.deepEqual(errors.map((e) => e.line), [1, 2, 3])
 })
 
-test('evaluateRules: first match wins by policy; tool scoping respected', () => {
+test('evaluateRules: strictest match wins by policy; tool scoping respected', () => {
   const { rules, errors } = parseRulesText('bash(git.push) | deny | arguments\nwrite | human | toolName')
   assert.equal(errors.length, 0)
   assert.equal(evaluateRules(rules, { toolName: 'bash', arguments: '{"command":"git push -f"}' }).policy, 'deny')

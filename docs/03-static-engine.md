@@ -139,7 +139,7 @@ bash(rm\s+-\s*rf) | deny
 ```
 
 - 工具作用域可逗号多选（含 `*` 通配）；无括号则适配所有工具；field 缺省 `arguments`。
-- **首条命中即胜**；`evaluateRules` 先用 `extractRuleTarget` 抽取命令文本（command/script/code/prompt/text/content），防锚定正则（如 `^git push`）被 JSON 信封击穿。
+- **最严命中即胜**：同时命中多条时按 `deny` > `human` > `allow` 取最严，与声明顺序无关；同严重度并列保持声明序、取首条作为审计对象。`evaluateRules` 先用 `extractRuleTarget` 抽取命令文本（command/script/code/prompt/text/content），防锚定正则（如 `^git push`）被 JSON 信封击穿；取严意味着遍历全部声明规则（不短路），扫描保持规则数线性。
 - ReDoS 防护：长度 ≤2000；拒绝嵌套无界量词 `(a+)+`、交替外套量词、嵌套重复组、`{n,}` 计数重复。
 - **host 与浏览器设置卡共用同一份 `parseRulesText`**（错误逐行红字显示）。
 - 干跑 `rulesDryRun`：只记命中不执法（host 端 `if (config.rulesDryRun)` 两处：pre-execute 与 answerer）。

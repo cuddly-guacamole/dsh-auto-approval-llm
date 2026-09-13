@@ -408,14 +408,21 @@ function matchDimensions(dimensions: RuleDimensions, subject: RuleSubject): bool
   return true
 }
 
+const RULE_POLICY_SEVERITY: Record<RulePolicy, number> = { deny: 3, human: 2, allow: 1 }
+
 /**
- * First matching rule wins. Scope dimensions gate first (a mismatch skips the
- * rule, same level as the tool scope); `tools` undefined matches every tool;
- * otherwise the rule only applies when the tool name matches one of the
- * entries (glob `*` supported). Returns the policy and the rule for audit, or
- * undefined.
+ * The strictest matching rule wins (deny > human > allow), independent of the
+ * order rules are declared in; equal severity keeps declaration order, so the
+ * first rule of the winning policy is the one reported for audit. Scope
+ * dimensions gate first (a mismatch skips the rule, same level as the tool
+ * scope); `tools` undefined matches every tool; otherwise the rule only
+ * applies when the tool name matches one of the entries (glob `*` supported).
+ * Every declared rule is evaluated (no short-circuit), so the scan stays
+ * linear in the rule count. Returns the policy and the winning rule for
+ * audit, or undefined.
  */
 export function evaluateRules(rules: DeclaredRule[], subject: RuleSubject): { policy: RulePolicy; rule: DeclaredRule } | undefined {
+  let winner: { policy: RulePolicy; rule: DeclaredRule } | undefined
   for (const rule of rules) {
     if (rule.dimensions !== undefined && !matchDimensions(rule.dimensions, subject)) continue
     if (rule.tools !== undefined) {
@@ -427,9 +434,10 @@ export function evaluateRules(rules: DeclaredRule[], subject: RuleSubject): { po
       })
       if (!hit) continue
     }
-    if (rule.pattern.test(renderSubject(rule, subject))) {
-      return { policy: rule.policy, rule }
+    if (!rule.pattern.test(renderSubject(rule, subject))) continue
+    if (winner === undefined || RULE_POLICY_SEVERITY[rule.policy] > RULE_POLICY_SEVERITY[winner.policy]) {
+      winner = { policy: rule.policy, rule }
     }
   }
-  return undefined
+  return winner
 }
