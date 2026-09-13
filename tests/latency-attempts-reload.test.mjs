@@ -17,7 +17,7 @@ import { setRuntimePathsForTests } from '../lib/auto/runtime-paths.js'
 
 function withStateDir(fn) {
   const dir = mkdtempSync(join(tmpdir(), 'dsa-latency-'))
-  setRuntimePathsForTests({ stateDir: dir, legacyRoot: join(dir, 'legacy') })
+  setRuntimePathsForTests({ stateDir: dir })
   try {
     fn(dir)
   } finally {

@@ -101,10 +101,10 @@ export function auditRotateContent(content: string, maxBytes = MAX_AUDIT_BYTES, 
  * to denied when this returns false, so no unaudited allow can take effect.
  *
  * The append itself is the writability check — no separate probe (a probe would
- * only add a TOCTOU window between check and write). Relocation when the
- * canonical directory refuses writes is `appendRuntimeLine`'s job, and it is
- * exactly that: relocate and keep auditing, never "skip the write and report
- * success". A location that fails for other reasons still fails closed here.
+ * only add a TOCTOU window between check and write). When the canonical
+ * directory cannot be created or refuses writes, `appendRuntimeLine` returns
+ * undefined and this function returns false — the caller then fails the verdict
+ * closed; nothing is relocated to a fallback location.
  */
 export function appendAuditLine(line: string): boolean {
   const file = appendRuntimeLine(AUDIT_FILENAME, `${line}\n`, auditFileOverride)

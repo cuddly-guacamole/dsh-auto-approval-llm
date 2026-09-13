@@ -29,7 +29,7 @@ src/
 │    ├─ review-mode.ts   52   每会话评审模式持久化快照
 │    ├─ risk-tokens.ts   24   HIGH 风险正则（NAME/REASON 单一事实源）
 │    ├─ rules.ts         434  声明式规则解析/求值（host 与浏览器共用）
-│    ├─ runtime-paths.ts 889  运行态文件唯一路径 owner（`<DSH_HOME>/auto-approval-llm/` 规范位置、包根回退读、目录不可用/拒绝写入回退写、仅追加型文件原子前搬、启动期写探针与写失败阶梯（同一错误码分级）、降级/恢复双向播种；迁移代码待退役）
+│    ├─ runtime-paths.ts 293  运行态文件唯一路径 owner（`<DSH_HOME>/auto-approval-llm/` 规范位置；目录无法创建/拒绝写入时 fail-closed——append 失败返回 undefined，由调用方拒绝裁决，不回退包根、不搬家；open 阶段错误允许同路径重试一次，写后错误不重试）
 │    ├─ shell.ts         1922 bash/pwsh 词法分解 + 整行熔断 + 逐段静态分类（最大单文件）
 │    ├─ symlink.ts       182  符号链接创建与目标校验
 │    ├─ tool-stats.ts    94   工具调用统计收集
@@ -53,7 +53,7 @@ tests/
 ├─ protected-read-credential-floor.test.mjs / protected-auto-review.test.mjs / audit-rejection-category.test.mjs
 ├─ docs-anchors.test.mjs / artifact-deletion-exemption.test.mjs / runtime-paths.test.mjs
 ├─ guard-deny-decision.test.mjs / feedback-route-write.test.mjs / history-route-clear.test.mjs
-├─ runtime-write-fallback.test.mjs（目录存在但拒绝写入：启动探针、写失败阶梯、粘滞降级、非白名单错误仍 fail-closed）
+├─ runtime-write-fallback.test.mjs（规范目录拒写：open 阶段失败继续 fail-closed 不搬家、非位置类错误不重试、重试集仅含 open 阶段错误、写失败阶梯重试同一路径且无 relocation 步骤）
 ├─ audit-shell-symlink-guard.test.mjs（shell 操作数提取 + 收窄型逃逸裁定 + 等价拼写族 + 负向控制）
 ├─ perf-settings-rules-parse.test.mjs / perf-poll-backoff.test.mjs / perf-scan-throttle.test.mjs / perf-countdown-write.test.mjs（客户端开销：单次解析、轮询退避、扫描节流、倒计时条件写）
 └─ 合计 135 个 tests/*.test.mjs（node --test 全绿基线）
