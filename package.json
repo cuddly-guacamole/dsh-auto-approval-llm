@@ -33,7 +33,6 @@
     "lib/auto/*.js",
     "lib/client.js",
     "lib/types/**/*.d.ts",
-    "assets",
     "cordis.patch.yml"
   ],
   "dsh": {

@@ -13,7 +13,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 // Anything npm adds implicitly (README.md, LICENSE, package.json) is listed here
 // as well so the whitelist is the single statement of the shipped surface.
 const SHIPPED_PATTERN =
-  /^(lib\/index\.js|lib\/auto\/[^/]+\.js|lib\/client\.js|lib\/types\/.*\.d\.ts|assets\/.*|cordis\.patch\.yml|README\.md|README\.en\.md|LICENSE|package\.json)$/
+  /^(lib\/index\.js|lib\/auto\/[^/]+\.js|lib\/client\.js|lib\/types\/.*\.d\.ts|cordis\.patch\.yml|README\.md|README\.en\.md|LICENSE|package\.json)$/
 
 function packManifest() {
   const res = spawnSync('npm', ['pack', '--dry-run', '--json'], { cwd: root, encoding: 'utf8', shell: true })
@@ -85,5 +85,5 @@ test('the pruned layout does not depend on files the tarball drops', () => {
 
 test('the files field states the shipped surface instead of a directory', () => {
   const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
-  assert.deepEqual(pkg.files, ['lib/index.js', 'lib/auto/*.js', 'lib/client.js', 'lib/types/**/*.d.ts', 'assets', 'cordis.patch.yml'])
+  assert.deepEqual(pkg.files, ['lib/index.js', 'lib/auto/*.js', 'lib/client.js', 'lib/types/**/*.d.ts', 'cordis.patch.yml'])
 })

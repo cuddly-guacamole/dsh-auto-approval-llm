@@ -104,39 +104,39 @@ With the repo loaded in a web profile as a `link:` dependency: host changes take
 
 Used under the Auto permission preset (`Settings → General settings → Permissions → Auto`; Read Only / Workspace Write / Auto / Full access):
 
-![Auto permission preset](assets/permission-auto-preset.png)
+![Auto permission preset](https://raw.githubusercontent.com/cuddly-guacamole/dsh-auto-approval-llm/main/assets/permission-auto-preset.png)
 
 Settings card overview — top-level switches save instantly, collapsible sub-cards below:
 
-![Settings overview](assets/settings-overview.png)
+![Settings overview](https://raw.githubusercontent.com/cuddly-guacamole/dsh-auto-approval-llm/main/assets/settings-overview.png)
 
 Timers & breaker — three countdown tiers, breaker anti-hijack and both breaker thresholds:
 
-![Timers & breaker](assets/settings-timers-breaker.png)
+![Timers & breaker](https://raw.githubusercontent.com/cuddly-guacamole/dsh-auto-approval-llm/main/assets/settings-timers-breaker.png)
 
 Online review model — API protocol / base URL / model / key (the key is never shown in the frontend):
 
-![Online review model](assets/settings-online-reviewer.png)
+![Online review model](https://raw.githubusercontent.com/cuddly-guacamole/dsh-auto-approval-llm/main/assets/settings-online-reviewer.png)
 
 Safety rules — safety prompt / allow & deny lists / declarative rules / dry-run:
 
-![Safety rules](assets/settings-safety-rules.png)
+![Safety rules](https://raw.githubusercontent.com/cuddly-guacamole/dsh-auto-approval-llm/main/assets/settings-safety-rules.png)
 
 Category switches & trust mode — standard/aggressive location modes, a switch to let privilege commands into LLM review, and per-category three-state overrides:
 
-![Category switches & trust mode](assets/settings-categories-trust.png)
+![Category switches & trust mode](https://raw.githubusercontent.com/cuddly-guacamole/dsh-auto-approval-llm/main/assets/settings-categories-trust.png)
 
 Confirmation-based learning — after N real human confirms of the same signature the action auto-passes (each pass still goes through one online review); learned entries can be viewed and revoked:
 
-![Confirmation-based learning](assets/settings-learning.png)
+![Confirmation-based learning](https://raw.githubusercontent.com/cuddly-guacamole/dsh-auto-approval-llm/main/assets/settings-learning.png)
 
 Approval panel — the countdown sits on the button that will auto-execute on timeout (here `timeoutAction=low-risk-allow` → a medium-risk request auto-**rejects** on timeout, so "Reject" runs the countdown and "Allow once" stays clean):
 
-![Approval panel · Reject countdown](assets/approval-panel-countdown-reject.png)
+![Approval panel · Reject countdown](https://raw.githubusercontent.com/cuddly-guacamole/dsh-auto-approval-llm/main/assets/approval-panel-countdown-reject.png)
 
 Session approval stats — the "Auto Approval" header-button popup: totals / allowed / rejected / timeout / breaker + recent records:
 
-![Session approval stats](assets/session-stats.png)
+![Session approval stats](https://raw.githubusercontent.com/cuddly-guacamole/dsh-auto-approval-llm/main/assets/session-stats.png)
 
 ---
 
