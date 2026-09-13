@@ -16,7 +16,7 @@
 
 ## 特性
 
-- **静态规则 + LLM 分类器**：只读/会话/工作区常规操作直接放行；危险、外部写、凭据外泄、受保护路径直接拒绝；模糊操作交给 LLM 预分类（`tools/guard` + `tools/pre-execute`）。
+- **静态规则 + LLM 分类器**：只读/会话/工作区常规操作直接放行；危险、外部写、凭据外泄、受保护路径直接拒绝；模糊操作交给 LLM 预分类（`tools/guard` + `tools/pre-execute`）。静态面经宿主 `tools/pre-execute` 瀑布征询生效：对端监听器若先行返回非决策对象且不带 `reason`，宿主直接派发执行，本插件静态面不被征询（三形态见 docs/09）。
 - **写向量完整性加固**：含真实文件写重定向（`>`/`>>`/`>|`/`&>``）的命令段脱离只读快径；build/test 与版本探测快径仅保留给 discard sink 或工作区内常规写目标（aggressive/trustedDirs 放宽模式同样生效）；POSIX 五头 `tee`/`dd of=`/`sed -i`/`truncate`/`install` 以操作数目标参与按目标闸门——直写插件运行态文件无条件硬拒。
 - **12 分类三态开关 + 信任目录双模式**：工具与 shell 命令归入 12 个类别（fileEdit / gitLocal / build / readOnly / delete / protected / privilege / networkExec / gitPush / publish / disk / dynamicPlugin），设置卡逐类配 `auto` / `ask` / `deny`；**默认全部 `inherit` = 行为零变化**。危险类（delete / protected / disk 及未解锁的 privilege）LOCKED 仅接受 `ask`，误配 `auto`/`deny` 会被钳制丢弃并告警；**`privilegeAutoReview` 与 `protectedAutoReview`（均默认关）分别解锁 privilege 与 protected**——解锁后该类别的锁定询问不再被恒拒倒计时钉死（protected 未显式配置时落常驻人工询问，不是静默放行；privilege 保留既有语义）。注意：类别询问在 pre-execute 即返回，**评审器不会被问到**，仍需人工作答；要自动放行须再把该类别显式设为 `auto`。`protectedAutoReview` 另设**凭据读取地板**——敏感文件名/目录与关键路径的读取无论本开关如何都保持锁定，解锁的只是非凭据工作区元数据（凭据树的写入本就硬拒）；**LOCKED 转人带硬拒倒计时**——超时自动拒绝，`timeoutAction` 无法放行；删除/磁盘在任何档位恒拒，受保护/提权在标准档下未显式配置时走正常评审管线、超时按 `timeoutAction` 结算（无人值守不再挂起）；`trustedDirs` 在 standard 档把常规位置扩展到显式信任目录，`categoryMode: aggressive` 则取消位置白名单——任意位置均视为常规位置（敏感名 fuse、运行态硬拒、symlink 复检等危险度门全部不动）；复合命令按「类别枚举序 + directive 取严」双轨合并；类别拒绝与 denyList 同构为终端拒绝（提权重试不可绕过）；每次类别决策全量写入 history / audit（`category-allow` / `category-deny` source）。
 - **双通道模型来源**：快速判断与深度评审各可独立选择模型来源——跟随会话模型（默认）/ DSH 已配置模型（从本机注册模型列表选）/ 自定义端点（直连自有 OpenAI/Anthropic 兼容端点，本地 mock、自建服务经此接入；不再维护但保留）。端点密钥存 DSH 凭据存储，前端只显示「已配置」，永不回显；端点未配密钥时评审 fail-closed，不静默回落会话模型。
@@ -48,6 +48,8 @@
        学习放行(learned-allow，命中仍须过一次标准在线评审) → 风险分档（LOW/MEDIUM/HIGH）→ LLM 复审 + 人工倒计时
   → tools/post-execute 把「超时/规则/模型拒绝」标记喂回模型
 ```
+
+上图中 `tools.guard` 与 `tools/pre-execute` 两层随宿主瀑布征询生效：另一插件若在瀑布中先行返回非决策对象且不带 `reason`，宿主直接派发执行、这两层不被征询（对端短路三形态与不可自检结论见 docs/09「可达性前提」）。
 
 - **LOW**：不送评审则静默放行；送评审时按 LLM 结论（ALLOW/DENY）直接裁决；LLM 无法决定（ESCALATE）转人工。
 - **MEDIUM**：弹面板 + 倒计时，同时并行跑 LLM；`llmTakeoverScope` 覆盖且 LLM 给出明确结论 → 立即跟随；否则只显示建议。
@@ -247,7 +249,7 @@ npx tsdown                 # 构建 client bundle → lib/client.js
 - **密钥不出 host**：在线评审密钥存 DSH 凭据，每操作解析、前端仅显「已配置」。
 - **倒计时按钮规则**：倒计时只贴在「会超时自动执行」的那个按钮上——`timeoutAction=通过` → 超时自动通过，「允许一次」倒计时、拒绝按钮干净；`timeoutAction=拒绝` / `低风险自动同意` → 中/高风险超时自动拒绝，「拒绝」按钮倒计时（低风险自动同意时仅低风险超时通过）。中风险默认 8 秒偏紧，建议按需调大。
 - **diff 预览只进人工面板**：编辑类 diff 文本只追加到 ask reason（人工面板可见），绝不进入 review payload / REVIEWER_SYSTEM（reasoning-blind）、不进 history/audit；diff 块内若含倒计时字面量会在注入前剥离，客户端也只解析隐藏后的文本——改不了任何自动应答路径。受保护/密钥文件（.env 等）不读旧内容（对比类整体省略；全量写类仅预览工具参数里的新内容，外层/受保护旧内容绝不上屏）；但旧内容与 tool arguments 一样随会话 approval/asked 日志明文持久化（官方契约 log-only、模型上下文不可见），与既有参数暴露面同级。
-- **guard 熔丝拒绝落审计**：`tools/guard` 的硬拒/符号链接逃逸拒绝会先以 `guard` 源记一条 `outcome=rejected` 的 decision 记录（reason 随行）再拒绝调用——审计写入失败也不软化拒绝（调用仍被拒）。
+- **guard 熔丝拒绝落审计**：`tools/guard` 的硬拒/符号链接逃逸拒绝会先以 `guard` 源记一条 `outcome=rejected` 的 decision 记录（reason 随行）再拒绝调用——审计写入失败也不软化拒绝（调用仍被拒）。该层随宿主瀑布征询生效，对端短路时本层不被征询（见 docs/09「可达性前提」）。
 - **rulesText 解析错误 loud 化**：pre-execute 与 answerer 两平面解析出错都会 `console.error` + debugLog，并在去重后落 `rules-parse-error` 审计事件——声明规则不再静默失效。
 - **读运行态文件默认审计**：读取插件运行态文件（history/audit/learning…，含 read/grep 等结构化读工具与 shell 读命令）默认落 `runtime-state-read` 非决策审计事件；纯观测，不拒绝、不改任何裁决。
 
