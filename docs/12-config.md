@@ -5,7 +5,7 @@
 
 | 键 | 默认 | 说明 |
 |---|---|---|
-| `enabled` | true | 总开关 |
+| `enabled` | true | answerer 总开关：关=本插件不再终结 approval/request（静态硬拒与 guard 仍生效） |
 | `autoSwitchPolicyToAsk` | false | 仅 auto+override=never 时自动翻 ask（bundle 覆盖为 true）；设置卡可配（「高级」子卡，即时保存） |
 | `debug` | false | 写 approval-debug.jsonl + [debug] 日志 |
 | `classifierSource` | session | 快速判断通道模型来源：session · preset(DSH 模型) · endpoint(共享端点) |

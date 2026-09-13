@@ -57,10 +57,10 @@ tests/
 ├─ guard-deny-decision.test.mjs / feedback-route-write.test.mjs / history-route-clear.test.mjs
 ├─ runtime-write-fallback.test.mjs（规范目录拒写：open 阶段失败继续 fail-closed 不搬家、非位置类错误不重试、重试集仅含 open 阶段错误、写失败阶梯重试同一路径且无 relocation 步骤）
 ├─ audit-shell-symlink-guard.test.mjs（shell 操作数提取 + 收窄型逃逸裁定 + 等价拼写族 + 负向控制）
-├─ perf-settings-rules-parse.test.mjs / perf-poll-backoff.test.mjs / perf-scan-throttle.test.mjs / perf-countdown-write.test.mjs（客户端开销：单次解析、轮询退避、扫描节流、倒计时条件写）
+├─ perf-settings-rules-parse.test.mjs / perf-poll-backoff.test.mjs / perf-scan-throttle.test.mjs （客户端开销：单次解析、轮询退避、扫描节流）
 ├─ trusted-intent-window.test.mjs（授权证据窗口溢出计数：slot cap/去重/预算交互、拒因 note 两分支、trusted-intents 事件量化 overflowed 标志）/ client-human-gate.test.mjs（浮层人工出手率：与 friction-report 同源名单、空窗口不作零声称、round 边界、中英三键、bundle 装配锚）
 ├─ loop-guard.test.mjs（循环键稳定性/回退、严格连续+fire-and-reset 状态机、FIFO 64、阈值钳制与 resolveConfig 映射）/ loop-guard-wiring.test.mjs（四站点成对锚、allowlist 与 rule-allow 豁免负向切片、跨面标记读位置与 one-shot、pinned 形状先于 learnAttempt、门不写 history 不碰熔断、disposal/sweep 有界、audit-query 渲染）
-└─ 合计 141 个 tests/*.test.mjs（node --test 全绿基线）
+└─ 合计 153 个 tests/*.test.mjs（node --test 全绿基线）
 scripts/
 ├─ build.sh             （DSH 源码仓库布局）tsc 编译 src→lib
 ├─ clean-lib.mjs        构建前清空 lib/（tsc 不删除已删源的旧产物）

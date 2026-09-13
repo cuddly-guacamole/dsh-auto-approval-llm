@@ -2,14 +2,14 @@
 
 > *Client ↔ Host 的唯一通道*
 
-**没有 RPC**：客户端是静态 bundle（非动态 Cordis Package），无法用 `host.call`，全部走同源 fetch。统一 `responseJson`（no-store + nosniff），body 强制 application/json ≤64KB，写操作全部带 `expectedRevision` 乐观并发。全站共 **14 条 `/_dsh/auto-approval-llm/*` 路由**（host 常量 <span class="lnum">index.ts:LFEEDBACK_ROUTE</span>；client 引用 <span class="lnum">client/index.ts:LSETTINGS_ROUTE</span>、<span class="lnum">client/approvals/shared.ts:LFEEDBACK_ROUTE</span>），每条入口第一行都过 `isTrustedRequest` 闸门，不存在无设防的「普通」路由。
+**没有 RPC**：客户端是静态 bundle（非动态 Cordis Package），无法用 `host.call`，全部走同源 fetch。统一 `responseJson`（no-store + nosniff），body 强制 application/json ≤64KB，写操作全部带 `expectedRevision` 乐观并发。全站共 **16 条 `/_dsh/auto-approval-llm/*` 路由**（host 常量 <span class="lnum">index.ts:LFEEDBACK_ROUTE</span>；client 引用 <span class="lnum">client/index.ts:LSETTINGS_ROUTE</span>、<span class="lnum">client/approvals/shared.ts:LFEEDBACK_ROUTE</span>），每条入口第一行都过 `isTrustedRequest` 闸门，不存在无设防的「普通」路由。
 
 | 路由 | 方法 | 用途 | 信任平面 |
 |---|---|---|---|
 | `/feedback` | POST | 客户端上报 outcome（auto:true）+ approval 完成 ACK | <span class="badgeerr">特权 [ ] 仅回环</span> |
 | `/settings` | GET/POST | 配置快照 {value,revision,writable,applies,configError} / 更新（preserveHostKeys） | <span class="badgeerr">特权 [ ] 仅回环</span> |
 | `/reviewer-credential` | GET/POST/DELETE | 端点密钥 {configured,writable}，永不回显 value | <span class="badgeerr">特权 [ ] 仅回环</span> |
-| `/test` | POST | 在线端点连通性探针（https 外网放行 + 公网地址强制 + fake-ip 豁免，8s 超时 max_tokens:1，非 2xx 带回错误摘要；空草稿密钥回退已存凭据）；模型库校验 modelFound | <span class="badgeerr">特权 [ ] 仅回环</span> |
+| `/test` | POST | 在线端点连通性探针（https 外网放行 + 公网地址强制 + fake-ip 豁免，8s 超时 max_tokens:1，非 2xx 带回错误摘要；仅当探针目标与已配置端点同址时才回退已存密钥）；模型库校验 modelFound | <span class="badgeerr">特权 [ ] 仅回环</span> |
 | `/providers` | GET | provider 目录 {id,name}（模型来源 picker 下拉） | <span class="badgeerr">特权 [ ] 仅回环</span> |
 | `/llm-models` | GET | `?provider=` 列某 provider 的模型 {provider,id,name} | <span class="badgeerr">特权 [ ] 仅回环</span> |
 | `/reasoning-efforts` | GET | `?provider=&model=` 列该模型的 reasoning efforts + defaultEffort（无 resolveModel 支持返回空列表） | <span class="badgeerr">特权 [ ] 仅回环</span> |

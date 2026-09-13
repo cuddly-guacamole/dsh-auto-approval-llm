@@ -110,7 +110,7 @@ The table below lists the common keys only; **every key, its full semantics and 
 
 | Key | Default | Description |
 |---|---|---|
-| `enabled` | true | Master switch |
+| `enabled` | true | Answerer master switch: off stops this plugin from settling approval/request (the static fuses and the guard still run) |
 | `timeoutAction` | `reject` | Timeout action: reject / allow / low-risk only (delete and disk are always denied regardless of this key) |
 | `llmReviewScope` | `low-or-above` | Which risk tiers go to LLM review |
 | `llmTakeoverScope` | `medium-or-below` | Which tiers let an explicit LLM verdict decide directly |

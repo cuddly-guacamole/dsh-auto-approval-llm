@@ -58,7 +58,34 @@ export const DECLARATION_POINTS = [
     pattern: /合计 (\d+) 个 tests\/\*\.test\.mjs/,
     values: match => ({ files: Number(match[1]) }),
   },
+  {
+    file: 'docs/13-http-api.md',
+    description: 'route count',
+    pattern: /全站共 \*\*(\d+) 条/,
+    values: match => ({ routes: Number(match[1]) }),
+  },
+  {
+    file: 'docs/index.md',
+    description: 'route count (feature table)',
+    pattern: /`(\d+) 条`（无 RPC）/,
+    values: match => ({ routes: Number(match[1]) }),
+  },
+  {
+    file: 'docs/index.md',
+    description: 'route count (nav card)',
+    pattern: /<span class="nd">(\d+) 条路由/,
+    values: match => ({ routes: Number(match[1]) }),
+  },
 ]
+
+/**
+ * Routes the host registers under the plugin prefix: one wiring constant each,
+ * the shape the route table and both landing-page statements describe.
+ */
+export function measuredRouteCount(root = ROOT) {
+  const source = readFileSync(join(root, 'src', 'index.ts'), 'utf8')
+  return [...source.matchAll(/^const [A-Z0-9_]*ROUTE = '/gm)].length
+}
 
 /** Static source of truth: how many test files exist and how many cases they declare. */
 export function measuredCounts(root = ROOT) {
@@ -69,7 +96,7 @@ export function measuredCounts(root = ROOT) {
     const source = readFileSync(join(dir, name), 'utf8')
     cases += [...source.matchAll(/^(?:test|it)\(/gm)].length
   }
-  return { files: files.length, cases }
+  return { files: files.length, cases, routes: measuredRouteCount(root) }
 }
 
 /**
@@ -132,10 +159,12 @@ export function check(measured, sources = {}, observed) {
  * Phrasings that state a suite-wide count. Used by the coverage test to notice a
  * new sentence that no declaration point watches. A per-file count ("12 例" for
  * one test file) is deliberately out of scope, so a bare `N 例` never matches on
- * its own — it needs a suite-wide marker next to it.
+ * its own — it needs a suite-wide marker next to it. Route counts belong here
+ * too: they are the other number a page states about the shipped surface, and
+ * they drifted the same way until each phrasing had a declaration point.
  */
 export const COUNT_CLAIM =
-  /\d+\s*个\s*(?:tests\/\*\.test\.mjs|测试文件|测试)|\d+\s*测试\s*(\+|例|\d)|测试\s*\d+\s*例|\d+\s*\/\s*\d+\s*(?:全绿|fail 0|通过|passing)|\d+\s+tests?\b|合计\s*\*{0,2}\d+\s*例|用例总数\s*\d+/
+  /\d+\s*个\s*(?:tests\/\*\.test\.mjs|测试文件|测试)|\d+\s*测试\s*(\+|例|\d)|测试\s*\d+\s*例|\d+\s*\/\s*\d+\s*(?:全绿|fail 0|通过|passing)|\d+\s+tests?\b|合计\s*\*{0,2}\d+\s*例|用例总数\s*\d+|\d+\s*条`（无 RPC）|\d+\s*条路由|全站共\s*\*\*\d+\s*条/
 
 /** Documents whose count claims must be covered by a declaration point. */
 export function watchedDocuments(root = ROOT) {

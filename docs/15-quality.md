@@ -1,6 +1,6 @@
 # 15 · 质量保障体系
 
-> *1455 tests · runtime proofs*
+> *1500 tests · runtime proofs*
 
 ## 15.1　契约测试覆盖地图（按主题归纳）
 
@@ -25,12 +25,11 @@
 | 权限变更观测 | permission-change.test.mjs：三种权限平面事件读成 `{scope,to}`（`permission/preset` / `sandbox/mode` / `approval/policy`，含 `never`↔`ask` 双向）、畸形与邻近事件不误判、被拒 decision 的 id 指针（最新优先/上限/仅 rejected）、装配锚钉「每一处 `permission-change` 都落在 `appendAuditLine(` 之后且不在 `pushHistory(` 内」 |
 | 审计轮转与测试隔离 | audit.test.mjs：`auditRotateContent` 双上界收敛（>5000 行取尾、长行再按字节回扫、单超长行整体保留）、原子替换无 tmp 残留、替换被阻断时原文件不受损、以及**默认审计路径锚定**（`auditFilePath()` 默认必须是 `runtime/audit.jsonl`）。轮转契约要写多兆字节夹具，故全部经测试接缝跑在 scratch 路径上：一旦指向 live 文件，快照/还原会删掉运行中进程在窗口内追加的行，还原 rename 还可能输给并发写入（Windows EPERM）而让 live 位置留下近乎空文件、真实线索困在 `.bak-test` 孤儿里 —— 跑一次测试即可清空审批审计 |
 | 内置放行面 | agent-team-tools-allow.test.mjs：Agent Teams 九个真实工具全部落静态放行面（`assessTool`→allow 且 `classifierEligible:false`）与 `harnessInternal` 标签（任何 category 键都收紧不了）；**全六族**跨副本不变式（读取编译后的 policy/category/constants，逐族比对成员，故任何一族新增名字都被覆盖，只有这两个族被覆盖时会漏掉其余四族）；**负向**锚定「近似名不得同车放行」（子串/家族/大小写变体）与「包内非工具标识符永不入列」（systemPrompt section id、事件名）；以及「**风险升级显式例外表**」——集合成员在风险正则之前返回，故命中 `RISK_NAME_PATTERN` 的名字其升级通道被静默关闭，新名字必须显式登记理由否则测试失败（另配一条反向用例防止正则本身失效）；default-allow-catalog.test.mjs 钉 catalog→policy 单向，本文件补 policy→catalog 方向 |
-
-| 客户端开销 | perf-settings-rules-parse.test.mjs（声明规则每次渲染只解析一次）/ perf-poll-backoff.test.mjs（`nextPollDelayMs` 表驱动 + 阳性上界封顶 + 故障期次线性增长 + 恢复即回基准 + 负向「延迟恒正」）/ perf-scan-throttle.test.mjs（可注入时钟的 trailing 节流：合并、**尾随不丢**、dispose 取消、锚定 `@ts-nocheck` 的 auto-icon 编译产物真带接线）/ perf-countdown-write.test.mjs（后缀串未变不写；**任何真实变化必须写**，含离线冻结标记与回到净文本） |
+| 客户端开销 | perf-settings-rules-parse.test.mjs（声明规则每次渲染只解析一次）/ perf-poll-backoff.test.mjs（`nextPollDelayMs` 表驱动 + 阳性上界封顶 + 故障期次线性增长 + 恢复即回基准 + 负向「延迟恒正」）/ perf-scan-throttle.test.mjs（可注入时钟的 trailing 节流：合并、**尾随不丢**、dispose 取消、锚定 `@ts-nocheck` 的 auto-icon 编译产物真带接线） |
 | 授权证据窗口与人工出手率 | trusted-intent-window.test.mjs：4 条证据窗口的溢出计数（slot cap 后重复候选=去重不计、独有候选=溢出计、inbox 先入、逐文本截断与预算的交互、经超长问题答案触达预算的真实路径、被拒文本重复出现计双）、拒因 note 的零/非零两分支与措辞纪律（无 retry/approve 字面、无 dangling 值）、deny 落点结构锚、trusted-intents 事件量化 `overflowed` 标志进去重签名、audit-query 对该字段的渲染与缺字段静默 / client-human-gate.test.mjs：人工来源名单与 `scripts/friction-report.mjs` **运行时 import 逐项相等**、空窗口判 vacuous 不作零声称、缺 source/非字符串 source 只进分母、round 边界、中英三键齐备且文案带窗口限定、bundle 装配锚（派生调用 + 三个浮层状态键） |
 | 循环防护 | loop-guard.test.mjs：循环键稳定（对象键序无关、工具名入键、缺参数回退工具级键）、严格连续状态机（`a→a→b→a` 永不触发、count===threshold 恰触发一次、fire-and-reset 人工放行不买豁免）、FIFO 64 有界（最旧淘汰）、阈值钳制（1→2 带 warned、非数值=关、floor 在钳制前）/ loop-guard-wiring.test.mjs：**恰四个**自动放行站点被门控（src+编译产物双计）、allowlist 与 rule-allow 通道负向切片零命中、跨面标记读位于 deny 终局之后且先于 static allow、one-shot 读即删、pinned 形状恰三处且先于 `learnAttempt`（无 takeover handle、无 learnable、reject 钉死）、门函数体无 pushHistory/无熔断、disposal 与 sweep 有界、audit-query 渲染 `consecutive`/`threshold` |
 
-141 个测试文件，合计 **1455 例**（node --test 全绿基线）。
+153 个测试文件，合计 **1500 例**（node --test 全绿基线）。
 
 ## 15.2　验收命令与运行时证据
 
@@ -49,7 +48,7 @@ npm run gate   # 清构建产物 → 类型 → 构建 → 全量测试 → 数�
 ```bash
 node_modules/.bin/tsc -p tsconfig.json   # 类型（policy/shell/paths 不再 @ts-nocheck）
 node_modules/.bin/tsdown                  # 客户端 bundle
-node --test "tests/**/*.test.mjs"        # 1455/1455 全绿
+node --test "tests/**/*.test.mjs"        # 1500/1500 全绿
 ```
 
 :::

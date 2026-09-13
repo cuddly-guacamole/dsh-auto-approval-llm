@@ -110,7 +110,7 @@ dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 
 | 键 | 默认 | 说明 |
 |---|---|---|
-| `enabled` | true | 总开关 |
+| `enabled` | true | answerer 总开关：关=本插件不再终结 approval/request（静态硬拒与 guard 仍生效） |
 | `timeoutAction` | `reject` | 超时动作：拒绝 / 通过 / 仅低风险放行（删除与磁盘恒拒，不受此键影响） |
 | `llmReviewScope` | `low-or-above` | 哪些风险档送 LLM 复审 |
 | `llmTakeoverScope` | `medium-or-below` | 哪些档允许 LLM 结论直接接管 |
