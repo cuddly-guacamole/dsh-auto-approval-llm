@@ -2454,7 +2454,15 @@ export function installLatencyRoute(ctx: any): void {
         responseJson(res, 405, { ok: false, error: 'method-not-allowed' })
         return
       }
-      clearLatencySamples(llmLatency)
+      // Clear only the LLM latency telemetry window + file. Approval history
+      // is deliberately untouched — the history DELETE leaves latency alone
+      // (telemetry is not an approval record), so this clear leaves history
+      // alone in turn. A file that cannot be truncated is a 500, never a
+      // success the next boot undoes.
+      if (!clearLatencySamples(llmLatency)) {
+        responseJson(res, 500, { ok: false, error: 'latency clear failed: the latency file could not be truncated' })
+        return
+      }
       responseJson(res, 200, { ok: true, value: { records: [] } })
     },
   }), 'dsh-auto-approval-llm: llm-latency route')

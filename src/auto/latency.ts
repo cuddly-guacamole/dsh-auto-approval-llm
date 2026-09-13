@@ -151,15 +151,19 @@ export function pushLatencySample(samples: LatencySample[], sample: LatencySampl
  * Clear the in-memory window and truncate the latency file. Approval history
  * is untouched — telemetry is not an approval record, so the two clear
  * surfaces stay separate (the history DELETE deliberately leaves latency
- * alone). Best-effort file truncation mirrors every other persist path; the
- * in-memory window is authoritative for the UI either way. `file` is a test
- * seam (defaults to the real latency file; contract tests pass a temp path).
+ * alone). The file is truncated FIRST and reported honestly: clearing the
+ * in-memory window while llm-latency.jsonl still holds the samples means the
+ * next boot resurrects them, and a 200 for that is a false success (the same
+ * discipline the history DELETE follows). `file` is a test seam (defaults to
+ * the real latency file; contract tests pass a temp path).
  */
-export function clearLatencySamples(samples: LatencySample[], file = latencyWritePath()): void {
-  samples.length = 0
+export function clearLatencySamples(samples: LatencySample[], file = latencyWritePath()): boolean {
   try {
     writeFileSync(file, '')
+    if (statSync(file).size !== 0) return false
   } catch {
-    // Best-effort clear; the in-memory window already reset.
+    return false
   }
+  samples.length = 0
+  return true
 }
