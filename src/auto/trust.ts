@@ -102,8 +102,10 @@ export function reviewerProbeTargetAllowed(probeUrl: URL): boolean {
  * ipaddr.js `range() === 'unicast'` (verified against the official
  * package's own tables): rejects private/link-local/loopback/unspecified/
  * CGNAT/multicast/reserved/documentation/testing 100.64/10, 127/8, 169.254/16,
- * 10/8, 172.16/12, 192.168/16, 198.18/15, 224/4, 240/4, 0/8, and the
- * documentation/test ranges 192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24.
+ * 10/8, 172.16/12, 192.168/16, 198.18/15, 224/4, 240/4, 0/8, the
+ * documentation/test ranges 192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24,
+ * and the special-purpose 192.88.99.0/24 (6to4 relay anycast), 192.175.48.0/24
+ * and 192.31.196.0/24 (AS112), 192.52.193.0/24 (AMT).
  */
 export function isPublicIpv4(text: string): boolean {
   const parts = text.split('.')
@@ -128,6 +130,10 @@ export function isPublicIpv4(text: string): boolean {
   if (a === 198 && (b === 18 || b === 19)) return false // 198.18/15 benchmarking
   if (a === 198 && b === 51 && c === 100) return false // 198.51.100/24 TEST-NET-2
   if (a === 203 && b === 0 && c === 113) return false // 203.0.113/24 TEST-NET-3
+  if (a === 192 && b === 88 && c === 99) return false // 192.88.99.0/24 6to4 relay anycast (reserved)
+  if (a === 192 && b === 175 && c === 48) return false // 192.175.48.0/24 AS112
+  if (a === 192 && b === 31 && c === 196) return false // 192.31.196.0/24 AS112
+  if (a === 192 && b === 52 && c === 193) return false // 192.52.193.0/24 AMT
   if (a >= 224) return false                      // 224/4 multicast + 240/4 reserved
   return true
 }
@@ -180,6 +186,10 @@ export function isPublicIpv6(text: string): boolean {
     const second = parseInt(hextets[1] ?? '', 16)
     if (Number.isFinite(second) && second <= 0x01ff) return false // 2001::/23
   }
+  // AS112 v6 anycast (2620:4f:8000::/48) is special-purpose too: the oracle
+  // refuses to call it unicast, and the earlier rules only listed the IPv4
+  // AS112 blocks.
+  if (hextets[0] === '2620' && /^0*4f$/.test(hextets[1] ?? '') && /^0*8000$/.test(hextets[2] ?? '')) return false
   return /^[0-9a-f:]+$/i.test(lower)
 }
 
