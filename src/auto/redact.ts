@@ -129,7 +129,10 @@ export function redactSecrets(value: string): string {
     // :password@): mask the credential part, keep scheme + host readable.
     // The lookahead demands a ':' before the '@' so a plain URL whose PATH
     // contains '@' (e.g. https://host/path@x) is never misread as userinfo.
-    .replace(/\b((?:postgres(?:ql)?|rediss?|mongodb(?:\+srv)?|mysql|mariadb|amqps?|nats|https?):\/\/)(?=[^\s/:]*:)(?:[^\s:/@]+:)?[^@\s]+@/gi, '$1[redacted:connection-string]')
+    // The scheme table covers the carriers that actually appear in commands and
+    // tool arguments: leaving one out let its userinfo through to the
+    // classifier/reviewer request (the parameter-side mask is on by default).
+    .replace(/\b((?:postgres(?:ql)?|rediss?|mongodb(?:\+srv)?|mysql|mariadb|amqps?|nats|https?|smtps?|ftps?|sftp|wss?|irimap|imaps?|pop3s?|ldaps?|ssh|git|kafka|nsq):\/\/)(?=[^\s/:]*:)(?:[^\s:/@]+:)?[^@\s]+@/gi, '$1[redacted:connection-string]')
 }
 
 /** Marker for a value whose field name matches SECRET_KEYS (result side). */
