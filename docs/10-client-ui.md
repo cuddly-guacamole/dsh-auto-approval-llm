@@ -74,7 +74,7 @@ li.dsa-card（可折叠；任一卡脏 → 头部「未保存」徽标）
 > 分组标签（只加标签不移动控件）：前四张子卡（计时器与熔断 / 安全规则列表 / 分类开关与信任模式 / 确认制学习）标题带「安全底线」标签（计时器含倒计时秒数——决策窗口属安全项；`settings.group.safetyBase` 键），实用小功能卡、评审模型卡、历史卡与「高级」卡保持现状。归组合约：后续新增设置键默认进安全底线组。
 
 - **保存语义**：每卡只 POST 自己拥有的键（`sliceValueOf`），叠加到「最后保存基线」上 —— 保存 A 卡不会吞掉 B 卡未保存的编辑；顶层开关即时保存（预设行一次提交两个键、其余单键；`expectedRevision` 乐观并发控制）。学习子卡只提交 `LEARNING_KEYS = ['learningEnabled','learningThreshold']` 两键（<span class="lnum">client/index.ts:L"const LEARNING_KEYS"</span>），threshold 保存时钳入 2..10。
-- **host-only 键保护**：14 员名单 `workspaceRoot / dshHome / tempRoots / trustedDirs / trustedDshSubpaths / maintenanceDshPaths / classifierTimeoutMs / classifierMaxOutputTokens / maxArgsChars / notifyUser / reviewerContextFacts / rulesDryRun / breakerAntiHijackMs / reviewMaxRetries`（<span class="lnum">decision.ts:LHOST_ONLY_KEYS</span>）走 patch/YAML 配置；保存时 `preserveHostKeys` 让存储值**恒胜出**，卡片改不掉它们。**归属不变量**：没有设置卡控件的键必须在此名单内——否则下一次任意卡片保存（整命名空间 replace）会把它从 settings.yaml 物理删除并静默回落默认（<span class="lnum">settings-key-ownership.test.mjs:L"no silent-delete gap"</span>）。
+- **host-only 键保护**：15 员名单 `workspaceRoot / dshHome / tempRoots / trustedDirs / trustedDshSubpaths / maintenanceDshPaths / classifierTimeoutMs / classifierMaxOutputTokens / maxArgsChars / notifyUser / reviewerContextFacts / rulesDryRun / breakerAntiHijackMs / reviewMaxRetries / loopDetectionThreshold`（<span class="lnum">decision.ts:LHOST_ONLY_KEYS</span>）走 patch/YAML 配置；保存时 `preserveHostKeys` 让存储值**恒胜出**，卡片改不掉它们。**归属不变量**：没有设置卡控件的键必须在此名单内——否则下一次任意卡片保存（整命名空间 replace）会把它从 settings.yaml 物理删除并静默回落默认（<span class="lnum">settings-key-ownership.test.mjs:L"no silent-delete gap"</span>）。
 - **密钥永不出现在 settings value**：独立 `/reviewer-credential` 路由；输入框 password + new-password 自动完成；保存后立即清空不回显。
 
 ## 10.3　会话标题栏「自动审批」统计
