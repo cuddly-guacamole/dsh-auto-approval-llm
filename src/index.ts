@@ -67,8 +67,6 @@ import {
   HISTORY_FILENAME,
   LEARNING_FILENAME,
   appendRuntimeLine,
-  probeRuntimeDirWritable,
-  reconcileRuntimeCopies,
   resolveRuntimeReadPath,
   resolveRuntimeWritePath,
   runtimeFilePath,
@@ -3393,18 +3391,6 @@ export function apply(ctx: Context, rawConfig: Config): void {
   // is always the directory the guard protects: a divergence would put the files
   // outside the protected subtree while the guard watched a different one.
   setRuntimeStateDir(join(resolveRoots(process.cwd(), rootOptions).dshHome, 'auto-approval-llm'))
-  // Prove the directory accepts writes before the first verdict. `mkdirSync`
-  // cannot answer this: a directory that already exists satisfies it while
-  // rejecting every write, and an append failing there makes the audit gate
-  // refuse every verdict. A rejection degrades the runtime files to the pre-move
-  // root once, with a warning saying where they went.
-  if (probeRuntimeDirWritable()) {
-    // A previous process may have degraded and appended there for a while. Once
-    // the canonical directory accepts writes again, the newer legacy copy holds
-    // records the canonical one never saw, and the read chain prefers the
-    // canonical copy — so carry it back before anything reads or writes.
-    reconcileRuntimeCopies()
-  }
   // Only now is the state directory known. Loading must happen after this call,
   // never at module load: the directory depends on `config.dshHome`, which does
   // not exist until here, and a load that ran earlier would read one directory
