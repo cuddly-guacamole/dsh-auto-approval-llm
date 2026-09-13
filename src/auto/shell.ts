@@ -1003,6 +1003,14 @@ const READ_ONLY_OUTPUT_FLAGS = {
     tree: /^(?:-[a-zA-Z]*o.*|--output(?:=.*)?)$/,
     git: /^--output(?:=.*)?$/,
 };
+/**
+ * Mutating `date` flags in every GNU spelling: the long form may carry its
+ * value with `=`, short options cluster, and a short flag may carry its value
+ * fused (`-s2020-01-01`, `-us2020-01-01`). Comparing whole tokens kept the
+ * read-only static allow for the fused spellings, so the clock-write guard now
+ * matches the flag family instead of two literals.
+ */
+const DATE_MUTATING_FLAG = /^(?:--set(?:=.*)?|-[a-zA-Z]*s.*)$/;
 /** The write targets a read-only command carries inside its own output flag. */
 function readOnlyOutputFlagTargets(name, words, shell) {
     if (shell !== 'bash')
@@ -1041,7 +1049,7 @@ function readOnlyCommand(name, words, shell) {
         if (name === 'rg' && tokens.slice(1).some(token => /^--pre(?:=.*)?$/.test(token)))
             return false;
         if (name === 'date')
-            return !tokens.slice(1).some(token => token === '-s' || token === '--set');
+            return !tokens.slice(1).some(token => DATE_MUTATING_FLAG.test(token));
         if (name === 'hostname')
             return tokens.length === 1;
         if (BASH_READ_ONLY.includes(name))
