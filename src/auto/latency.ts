@@ -51,8 +51,8 @@ export const MAX_LATENCY_SAMPLES = 200
 export const LATENCY_SUMMARY_WINDOW = 100
 
 // The runtime location, shared with the other persisted files (see
-// ./runtime-paths.ts). Reads prefer the canonical path and fall back to the
-// pre-move root path; writes create the runtime directory first.
+// ./runtime-paths.ts): one canonical path serves reads and writes, with no
+// fallback location (a directory that refuses writes fails the write closed).
 function latencyReadPath(): string {
   return resolveRuntimeReadPath(LATENCY_FILENAME)
 }

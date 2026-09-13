@@ -47,10 +47,11 @@ export function setAuditFilePathForTests(path: string | undefined): void {
  * The audit file this process is considered to be appending to.
  *
  * Deliberately reports the CANONICAL path and performs no side effect: asking
- * where the audit goes must not create a directory. The path actually appended
- * to can differ in one case only — when `runtime/` cannot be created at all, in
- * which case `appendAuditLine` falls back to the pre-move root path and warns.
- * Callers that need the literal target should use that write path instead.
+ * where the audit goes must not create a directory. It is the same path the
+ * append gate writes to — there is no fallback location, so a directory that
+ * refuses writes fails closed through `appendRuntimeLine` returning undefined.
+ * Callers that need the literal target of a completed append should use the
+ * path that call returned.
  */
 function auditPath(): string {
   return auditFileOverride ?? runtimeFilePath(AUDIT_FILENAME)

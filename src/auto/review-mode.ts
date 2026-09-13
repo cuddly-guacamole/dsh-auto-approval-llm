@@ -21,9 +21,8 @@ export function normalizeReviewMode(value: unknown): ReviewMode {
 }
 
 // The runtime location, shared with the other persisted files (see
-// ./runtime-paths.ts). The load prefers the canonical path and falls back to the
-// pre-move root file, so an upgraded install keeps its per-session modes until
-// the snapshot is next written.
+// ./runtime-paths.ts): one canonical path serves the load and the write, with
+// no fallback file.
 export function loadReviewModes(): Map<string, ReviewMode> {
   const map = new Map<string, ReviewMode>()
   try {
@@ -45,8 +44,8 @@ export function persistReviewModes(map: Map<string, ReviewMode>): void {
   // Persistence is best-effort by design (the mode still applies in-process),
   // but total silence meant a read-only DSH_HOME or a corrupt tmp file dropped
   // every session's mode on the next restart with no signal at all — so the
-  // failure is surfaced. Relocation to the pre-move root is handled inside
-  // runtime-paths.ts; reaching this warning means no location accepted the write.
+  // failure is surfaced. There is no relocation step (runtime-paths.ts owns the
+  // single location), so reaching this warning means no write attempt succeeded.
   if (writeRuntimeAtomic(REVIEW_MODE_FILENAME, JSON.stringify(obj, null, 2), '.tmp')) return
   console.warn('[dsh-auto-approval-llm] review-mode persistence failed: no writable runtime location for review-mode.json')
 }

@@ -1438,12 +1438,12 @@ export function setHistoryFilePathForTests(path: string | undefined): void {
   historyFileOverride = path
 }
 
-/** Where history is read from: the canonical path, falling back to the pre-move root file. */
+/** Where history is read from: the single canonical runtime path. */
 function historyReadPath(): string {
   return historyFileOverride ?? resolveRuntimeReadPath(HISTORY_FILENAME)
 }
 
-/** Where history is written to: the runtime directory, falling back when it cannot be created. */
+/** Where history is written to: the same canonical path (a directory that cannot be created fails the write closed). */
 function historyWritePath(): string {
   return historyFileOverride ?? resolveRuntimeWritePath(HISTORY_FILENAME)
 }
@@ -1588,9 +1588,9 @@ function pushHistory(entry: Omit<HistoryRecord, 'id' | 'at'>): boolean {
   try {
     const file = appendRuntimeLine(HISTORY_FILENAME, `${JSON.stringify(record)}\n`, historyFileOverride)
     // Rotate the on-disk log once it grows past 1 MB so it cannot grow without
-    // bound (the in-memory window is already capped at 200 records). The file
-    // that actually received the line is the one to rotate: after a relocation
-    // it is not the canonical path.
+    // bound (the in-memory window is already capped at 200 records). The append
+    // returns the file the line landed in, and that returned path is the one to
+    // rotate.
     if (file !== undefined && statSync(file).size > 1_048_576) {
       atomicWriteFile(file, `${approvalHistory.map((r) => JSON.stringify(r)).join('\n')}\n`)
     }
