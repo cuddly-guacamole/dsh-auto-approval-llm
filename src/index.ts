@@ -1766,18 +1766,21 @@ function loadRuntimeStores(): void {
   learningDiskFingerprint = learningFileFingerprint(resolveRuntimeReadPath(LEARNING_FILENAME))
 }
 
-const persistLearningGuarded = (): void => {
+const persistLearningGuarded = (): boolean => {
   const current = learningFileFingerprint(resolveRuntimeReadPath(LEARNING_FILENAME))
   if (!sameLearningFingerprint(current, learningDiskFingerprint)) {
     console.warn('[dsh-auto-approval-llm] learning.json changed outside the plugin process; the in-memory store overwrites it on this persist (audit trail: learning-tamper).')
     appendAuditLine(JSON.stringify({ type: 'learning-tamper', at: Date.now(), seen: current ?? null, expected: learningDiskFingerprint ?? null }))
   }
-  // Relocates to the pre-move root when the canonical directory refuses writes
-  // (see runtime-paths.ts). Silent on failure by design: the in-memory store
-  // still applies, and the boot probe has already warned once if the canonical
-  // location was unusable from the start.
-  writeRuntimeAtomic(LEARNING_FILENAME, JSON.stringify(learningStore), '.tmp')
+  // One atomic tmp+rename location, no relocation: a false return means the file
+  // still holds the previous content, so the in-memory store is ahead of the
+  // disk and the change is lost on restart. Report that instead of pretending.
+  const written = writeRuntimeAtomic(LEARNING_FILENAME, JSON.stringify(learningStore), '.tmp')
   learningDiskFingerprint = learningFileFingerprint(resolveRuntimeReadPath(LEARNING_FILENAME))
+  if (!written) {
+    console.warn('[dsh-auto-approval-llm] learning.json could not be written; the in-memory store is ahead of the file and this change is lost on restart.')
+  }
+  return written
 }
 
 // ── same-origin feedback route ────────────────────────────────────────────
@@ -2451,10 +2454,6 @@ export function installLatencyRoute(ctx: any): void {
         responseJson(res, 405, { ok: false, error: 'method-not-allowed' })
         return
       }
-      // Clear only the LLM latency telemetry window + file. Approval history
-      // is deliberately untouched — the history DELETE leaves latency alone
-      // (telemetry is not an approval record), so this clear leaves history
-      // alone in turn.
       clearLatencySamples(llmLatency)
       responseJson(res, 200, { ok: true, value: { records: [] } })
     },
@@ -2486,7 +2485,7 @@ export function installToolStatsRoute(ctx: any): void {
   }), 'dsh-auto-approval-llm: tool-stats route')
 }
 
-function installLearningStoreRoute(ctx: any, revoke: (key: string) => Promise<boolean>): void {
+export function installLearningStoreRoute(ctx: any, revoke: (key: string) => Promise<boolean>): void {
   const webServer = ctx.get('webServer')
   if (!webServer) return
   ctx.effect(() => webServer.register({
@@ -2530,7 +2529,16 @@ function installLearningStoreRoute(ctx: any, revoke: (key: string) => Promise<bo
             responseJson(res, 404, { ok: false, error: 'learning entry not found' })
             return
           }
-          persistLearningGuarded()
+          if (!persistLearningGuarded()) {
+            // The revoke applied in memory but not on disk, and the file is what
+            // the next boot loads: claiming success here would resurrect the
+            // entry silently (the same false success the history route refuses).
+            responseJson(res, 500, {
+              ok: false,
+              error: 'learning revoke could not be persisted: the entry was removed in memory only and returns after a restart',
+            })
+            return
+          }
           // Revoking a learned entry changes future decisions — leave a
           // recoverable audit trail (mirrors recordAuditClear's discipline).
           appendAuditLine(JSON.stringify({ type: 'learning-revoked', at: Date.now(), key: body.key }))
