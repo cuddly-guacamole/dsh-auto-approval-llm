@@ -8,7 +8,7 @@
   <li><span class="who">① 模型 → DSH</span><div class="cap">模型发出工具调用（如 `bash`、`write`、`apply_patch`、`web_fetch`）。</div></li>
 
   <li><span class="who">② 同步硬拒闸门 · <code>ctx.tools.guard()</code> <span class="lnum">index.ts:L"anyCtx.tools?.guard?.("</span></span>
-    <div class="cap">不是事件，而是 tools 服务的**同步注册守卫**：`isAutoExecution` 后先 `hardDenyReason`（凭据物质 / 受保护路径 / shell 熔断），再 `symlinkEscapeReason`（realpath 逃逸工作区）。命中即返回原因字符串 → 直接拒，**不弹窗**。这一层只做硬拒，永不挂类别分类。可达性边界：本层与 ③ 同随宿主 `tools/pre-execute` 瀑布征询生效——对端监听器若先行返回非决策对象且不带 `reason`，宿主直接派发执行，两层都不被征询（三形态与不可自检结论见 [§09](./09-defense-in-depth)）。</div></li>
+    <div class="cap">不是事件，而是 tools 服务的**同步注册守卫**：`isAutoExecution` 后先 `hardDenyReason`（凭据物质 / 受保护路径 / shell 熔断），再 `symlinkEscapeReason`（realpath 逃逸工作区）。命中即返回原因字符串 → 直接拒，**不弹窗**。这一层只做硬拒，永不挂类别分类；命中即拒、**不可被升级为放行**（与 Cedar `forbid` 同构）；宿主按注册序征询、首个返回原因的 guard 生效，同一 exec 至多征询一次（monotonic）。可达性边界：本层与 ③ 同随宿主 `tools/pre-execute` 瀑布征询生效——对端监听器若先行返回非决策对象且不带 `reason`，宿主直接派发执行，两层都不被征询（三形态与不可自检结论见 [§09](./09-defense-in-depth)）。</div></li>
 
   <li><span class="who">③ 静态评估 + 类别收紧 · <code>tools/pre-execute</code> <span class="lnum">index.ts:L"anyCtx.on('tools/pre-execute', async"</span></span>
     <div class="cap">`assessTool` → `deny`（硬拒 `[dsh-auto-approval-llm] hard deny`，**落 `hard-deny` 历史记录 + debug 行**）/ `allow`（直接放行）/ `ask`。中间还有一层**类别收紧**（<span class="lnum">index.ts:L"Category tightening"</span>）：三态开关配成 `deny` 的类别在这里终端拒绝、配成 `ask` 的无条件跳过 classifier 快径直接转人工（详见 [§17](./17-category-switches)）。之后若 `classifierEligible`，交给 LLM 预分类器（`classifier.classify`）再定 `allow | deny | ask` —— 快路径的放行/拒绝各自落 `classifier-allow` / `classifier-deny` 历史记录（`ask` 除外，留待 answerer 记终局）；分类器不可用 → 一律向人工（`classifier unavailable`）。</div></li>
