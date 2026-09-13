@@ -32,6 +32,7 @@
 | `maxConsecutiveDenials` | 3 | 0=关闭 |
 | `maxTotalDenials` | 20 | 0=关闭 |
 | `maxArgsChars` | 4000 | 参数取回截断 |
+| `loopDetectionThreshold` | 0 | 循环防护：同一调用（工具+参数哈希）被自动放行面连续静默放行 N 次后，第 N 次转**钉死拒绝倒计时**的人工询问（有人看=面板，无人看=超时自动拒）；0 关闭，1 自动钳到 2 并一次性告警；门只在自动放行面（static-allow / classifier-allow / 无评审 auto-allow 四个站点），allowlist 显式名单豁免；已学习签名的人工确认不被门控 ask 自动应答、门控 ask 也不可学习；仅 YAML 可配（设置卡无此控件） |
 | `notifyUser` | true | 「模型通过」通知进会话 |
 | `onboardingMessageEnabled` | true | 首次 Auto 会话向 agent 注入一次性英文引导消息（上下文声明，非用户横幅）；关掉后不再注入 |
 | `autoModeNoticeEnabled` | true | 自动审批模式进入/退出时向 agent 注入英文上下文声明（独立开关） |
@@ -56,7 +57,7 @@
 | `learningThreshold` | 3 | 触发学习放行所需的人工确认次数；保存时钳入 [2,10]（clampLearningThreshold），越界值由 resolveConfig 发 warn（<span class="lnum">index.ts:L"clamping learningThreshold"</span>） |
 | `directHumanEnabled` | false | 直接人工通道：agent 可调用 `dsa_request_user` 把后续操作路由给人工而非 LLM 分类器；默认关=零行为差异。工具仅在开启时于启动注册（工具集不可热换——开启需重启），审批通道读取实时，关掉立即停用已注册工具 |
 | `slashCommandsEnabled` | false | 命令面板注册 `/approval-mode` `/approval-reset` `/approval-reset-all`（评审模式查看/设置 + 熔断重置）。默认关=零命令表面积。命令集不可热换——仅在开启时于启动注册（开启需重启）；每个 handler 读取该开关实时，运行中关掉立即停用已注册命令 |
-| `<span class="badgeok">host-only ×14</span>` | — | workspaceRoot / dshHome / tempRoots / **trustedDirs** / **trustedDshSubpaths** / maintenanceDshPaths / classifierTimeoutMs(8s,100-60000) / classifierMaxOutputTokens(1024,64-4096) / maxArgsChars / notifyUser / **reviewerContextFacts** / **rulesDryRun** / **breakerAntiHijackMs** / **reviewMaxRetries**（<span class="lnum">decision.ts:LHOST_ONLY_KEYS</span>；preserveHostKeys 回填，卡片保存不抹掉）。**归属不变量**：没有设置卡控件的键必须在此名单内——否则下一次任意卡片保存（整命名空间 replace）会把它从 settings.yaml 物理删除并静默回落默认（<span class="lnum">settings-key-ownership.test.mjs:L"no silent-delete gap"</span>） |
+| `<span class="badgeok">host-only ×15</span>` | — | workspaceRoot / dshHome / tempRoots / **trustedDirs** / **trustedDshSubpaths** / maintenanceDshPaths / classifierTimeoutMs(8s,100-60000) / classifierMaxOutputTokens(1024,64-4096) / maxArgsChars / notifyUser / **reviewerContextFacts** / **rulesDryRun** / **breakerAntiHijackMs** / **reviewMaxRetries** / **loopDetectionThreshold**（<span class="lnum">decision.ts:LHOST_ONLY_KEYS</span>；preserveHostKeys 回填，卡片保存不抹掉）。**归属不变量**：没有设置卡控件的键必须在此名单内——否则下一次任意卡片保存（整命名空间 replace）会把它从 settings.yaml 物理删除并静默回落默认（<span class="lnum">settings-key-ownership.test.mjs:L"no silent-delete gap"</span>） |
 
 ### 三处设计亮点
 

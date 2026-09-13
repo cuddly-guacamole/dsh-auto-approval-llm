@@ -23,6 +23,7 @@
 - **人工倒计时 + 超时兜底**：低/中/高三档倒计时（默认 5/8/10 秒）；超时按 `timeoutAction` 处理（`拒绝` / `通过` / `低风险自动同意`）。关浏览器也不悬挂（host 计时器独裁）。
 - **LLM 接管**：中风险且 LLM 在倒计时内给出明确结论时，客户端立即按 LLM 结论裁决，无需你点。
 - **熔断**：连续 `maxConsecutiveDenials` 次或累计 `maxTotalDenials` 次被 LLM 拒绝 → 转人工、不再自动倒计时；`/approval-reset` 可重置。
+- **循环防护**（默认关）：同一调用（含参数）被自动放行面连续静默放行达到 `loopDetectionThreshold` 次 → 第 N 次转钉死拒绝倒计时的人工询问（无人值守超时自动拒）。熔断数的是「反复被拒」，循环防护数的是「反复被放」；只防卡死空转，微调参数即可绕过，不是安全边界。
 - **可靠的历史与审计**：内存 200 条 + `history.jsonl`，append-only `audit.jsonl`（清空留 tombstone）。
 - **LLM 响应时间统计**：「最近审批记录」子卡顶部显示最近 100 次 LLM 评审的真实响应耗时（MIN/AVG/MAX，秒），并单列「超时/无响应」次数——超时与中断不混入平均值，`llm-latency.jsonl` 持久化（1MB 轮转）。
 - **LLM 复审自动重试**：审查请求遇瞬时网关故障（限流 429 / 服务端 5xx / 传输中断 / 空响应；LOW 同步路径含审查超时）自动重试一次；重试只在审批窗口剩余内滚动——首次尝试保持原超时语义、绝不侵占倒计时——并尊重服务端 `Retry-After`；认证/配置类错误（401/403、NO_ADAPTER 等）绝不重发请求体与凭据；重试耗尽仍 fail-closed（转人 / 按 `timeoutAction` 兜底）。每次尝试的失败轨迹写入 `history.jsonl` / `audit.jsonl`（`attempts` 字段）与延迟统计。
@@ -174,6 +175,7 @@ npx tsdown                 # 构建 client bundle → lib/client.js
 | `rulesText` | '' | 声明式规则（优先于内置列表执行；支持 `[agent:main|subagent|名]`、`[workspace:路径]` 维度前缀，逗号组合=AND；解析错误=整段失效） |
 | `rulesDryRun` | false | 规则干跑：只记命中不执法；仅 YAML 可配（设置卡无此控件） |
 | `maxArgsChars` | 4000 | 取回工具参数的最大长度 |
+| `loopDetectionThreshold` | 0 | 循环防护：同一调用（工具+参数哈希）被自动放行面连续静默放行 N 次后，第 N 次转**钉死拒绝倒计时**的人工询问（有人看=面板，无人看=超时自动拒）；0 关闭，1 自动钳到 2 并告警；门槛只在自动放行面（静态放行/分类器放行/无评审放行），allowlist 显式名单豁免；已学习签名的人工确认不计入、也不被其自动应答；仅 YAML 可配（设置卡无此控件） |
 | `notifyUser` | true | 「模型通过」通知进会话 |
 | `showSessionPanel` | `auto` | 会话标题栏按钮：关 / 仅Auto / 开；控件同时承载审批状态（空闲显示名称，有事显示倒计时/结果） |
 | `workspaceRoot` / `dshHome` / `tempRoots` | ''/''/[] | 路径根（DSH_HOME 默认保护） |

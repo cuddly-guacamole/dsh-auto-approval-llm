@@ -104,6 +104,7 @@ flowchart TD
 - **写目标提取不吃相对拼法**：只读命令的 `..` 中段与工作区外相对目标一律进入显式路径判定（`cat b/../../../../x` 与 `cat ../../../../x` 同裁决）。
 - **win32 段归一覆盖别名拼法**：MSYS 裸盘根（`/c`、`//c`）、盘根通配（`C:\*`、`/c/*`）与 NTFS 默认数据流后缀（`file::$DATA`/`file:$DATA`）在 `normalizePath` 的同一处归一到 `C:\` / 文件名本体，故盘根熔断与全部 basename 级保护（插件契约文件、受保护元数据、凭据名）不被拼法绕过。
 - **build/test 与版本探测快径目标守卫**：快径仅保留给「写目标全为 discard sink 或工作区内非敏感非受保护非运行态路径」——区外/敏感/受保护/运行态目标一律脱离快径进入正常评估（`categoryMode: aggressive` 与 trustedDirs 放宽模式同样生效）。
+- **循环防护（`loopDetectionThreshold`，默认关）**：同一调用（工具名+脱敏参数哈希，独立于学习签名的循环键）在**自动放行面**（static-allow / classifier-allow 的 pre-execute 站点与 answerer 的 static-allow / 无评审 auto-allow 站点，共四处）连续静默放行达到阈值时，第 N 次在写 allow 记录**之前**改判为 ask，并经 one-shot 跨面标记在 answerer 落入 LOCKED 同款**钉死拒绝倒计时**形状（不接 LLM takeover、不可学习；有人看=面板可放行，无人值守=超时自动拒）。计数严格连续（不同键即断链）、触发即清零（人工放行不买永久豁免）；allowlist 显式名单豁免；门自身不写 history、不碰熔断计数（触发留 `loop-guard` 非决策审计行，见 docs/11）。**边界**：只防卡死空转，微调参数即换键，不是安全边界；已学习签名的人工确认不被门控 ask 自动应答。
 
 ## 3.4　路径保护清单 <span class="lnum">paths.ts#</span>
 
