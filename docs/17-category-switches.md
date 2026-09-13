@@ -1,9 +1,9 @@
 # 17 · 类别开关与信任目录
 > *Tri-state category switches & trusted directories*
 
-静态引擎（§03）回答「**这一次调用**危不危险」，类别层回答「**这一类操作**要不要问」。工具与 shell 命令被归入 12 个类别，每类可配 `auto / ask / deny` 三态；未配置 = `inherit`，行为与没有这层时完全一致。全部实现是纯函数（<span class="lnum">src/auto/category.ts#</span>，786 行），宿主在两个接线点各自从零调用。
+静态引擎（§03）回答「**这一次调用**危不危险」，类别层回答「**这一类操作**要不要问」。工具与 shell 命令被归入 12 个类别，每类可配 `auto / ask / deny` 三态；未配置 = `inherit`，行为与没有这层时完全一致（HARD_LOCKED 的 delete/disk 除外，见 17.4）。全部实现是纯函数（<span class="lnum">src/auto/category.ts#</span>，834 行），宿主在两个接线点各自从零调用。
 
-## 17.1　十一个类别与优先级 <span class="lnum">category.ts:LCATEGORY_PRECEDENCE</span>
+## 17.1　十二个类别与优先级 <span class="lnum">category.ts:LCATEGORY_PRECEDENCE</span>
 
 | 优先级 | 类别 | 典型内容 | 配置约束 |
 |---|---|---|---|
@@ -57,11 +57,11 @@ delete / protected / privilege / disk 四类在配置面上默认**只能收 `as
 
 **两档锁定分层**：`LOCKED_CATEGORIES`（delete/protected/privilege/disk，<span class="lnum">category.ts:LLOCKED_CATEGORIES</span>）之上还有更硬的 `HARD_LOCKED_CATEGORIES = ['delete','disk']`（<span class="lnum">category.ts:LHARD_LOCKED_CATEGORIES</span>）——后两者**任何按名授权的通道都不得预先放行**：allowlist、pre-execute 镜像、声明规则的 allow、显式配置一律无效，delete/disk 的批准只能来自人工逐次确认（带恒拒倒计时），绝不静默自动允许；protected/privilege 保留显式 operator override（分别由 `protectedAutoReview` / `privilegeAutoReview` 解锁）。理由：delete/disk 的破坏在大规模上不可逆。
 
-**哪一层决定「未配置的 LOCKED 询问」取决于 `categoryMode`（易误读，如实写明）**：`standard`（默认）下类别层对未显式配置的 LOCKED 类别给出 `inherit`，即**类别层不介入**，该询问由正常评审管线（classifier 快径 / LLM 评审 / 倒计时）裁决；`aggressive` 下同一询问由类别层接管为 `ask`，pre-execute 立即返回并 pin 成恒拒倒计时（`action:'reject'`，评审器不被问到）。任一模态下把 `categoryPolicy.<类别>` 显式设为 `ask` 都会得到锁定询问。因此「LOCKED 一定需要人工」只在 aggressive 档或显式配置时成立；`protectedAutoReview` 的解锁与 `HARD_LOCKED` 的按名通道禁令均不受该差异影响（后者覆盖两条平面共四个按名站点：规则 allow 与 allowlist 各两处）。
+**哪一层决定「未配置的 LOCKED 询问」**（如实写明）：`delete` / `disk`（HARD_LOCKED）与档位**解耦**——任何档位下类别层都把未显式配置的询问接管为 `ask`，pre-execute 立即返回并 pin 成恒拒倒计时（`action:'reject'`，评审器不被问到），`timeoutAction` 无法结算它们；`protected` / `privilege` 维持档位依赖：`standard`（默认）下未显式配置时类别层给出 `inherit`，即**类别层不介入**，该询问由正常评审管线（classifier 快径 / LLM 评审 / 倒计时）裁决、超时按 `timeoutAction` 结算；`aggressive` 下同一询问由类别层接管为 `ask`。任一模态下把 `categoryPolicy.<类别>` 显式设为 `ask` 都会得到锁定询问。因此「protected/privilege 一定需要人工」只在 aggressive 档或显式配置时成立，delete/disk 则在任何档位恒拒；`protectedAutoReview` 的解锁与 `HARD_LOCKED` 的按名通道禁令均不受该差异影响（后者覆盖两条平面共四个按名站点：规则 allow 与 allowlist 各两处）。
 
 **例外一：`privilegeAutoReview`（默认关，fail-closed）**。开启后 `privilege` 类别从 LOCKED 名单中剔除（delete / protected / disk 仍锁死）：配置面上 privilege 可设 auto/ask/deny，未配置时走 `inherit`——类别层不再强制转人，命令进入正常评审管线（classifier + LLM 评审 + 倒计时）。三层改动：schema 新键（<span class="lnum">index.ts:L"privilegeAutoReview: z.boolean().default(false)"</span>）、resolveConfig 解锁分支（<span class="lnum">index.ts:L"key === 'privilege' && raw.privilegeAutoReview === true"</span>）、categoryDirective 解锁判定（<span class="lnum">category.ts:L"const privilegeUnlocked = category === 'privilege'"</span>）；client 设置卡「分类开关与信任模式」子卡新增同名开关（locale 键 `settings.category.privilegeAutoReview`），开启后 privilege 行的下拉才出现 自动/拒绝 选项。
 
-**例外二：`protectedAutoReview`（默认关，fail-closed）**。解除 `protected` 的**非凭据**锁定钳制，但**不改变它仍是敏感类别**。先说清开关的实际效果：类别 ask 在 pre-execute 处即返回（`index.ts` 的 `directive === 'ask'` 分支，分类器快径不执行），所以**评审器始终不会被问到**；开启本键只是把原来那条「倒计时恒拒、无人能答」的询问换成**常驻人工询问**（status-less，不再自动拒绝），仍须人工作答。要自动放行必须再把 `categoryPolicy.protected` 显式设为 `auto`；直接 `inherit` 会让策略层的静态放行**无任何评审**地生效，故不采用。**两档的后果要分清（否则会误判成"面板卡住"）**：关（默认）走 LOCKED 分支——倒计时 `action:'reject'`，`highRiskSeconds` 后自动结算为 `timeout-deny`，`timeoutAction` 无法放行，无人盯守不挂起；开且未显式配置走 status-less 分支——**不发布倒计时状态、永不自动结算**，人不在就会一直等（面板显示 `⏸️ Awaiting human approval — no auto-countdown.` 正是这一档的标记，不是故障）。默认值为关，故未改动过该键的部署看到的仍是「10s 恒拒倒计时」。
+**例外二：`protectedAutoReview`（默认关，fail-closed）**。解除 `protected` 的**非凭据**锁定钳制，但**不改变它仍是敏感类别**。先说清开关的实际效果：类别 ask 在 pre-execute 处即返回（`index.ts` 的 `directive === 'ask'` 分支，分类器快径不执行），所以**评审器始终不会被问到**；开启本键只是把原来那条「倒计时恒拒、无人能答」的询问换成**常驻人工询问**（status-less，不再自动拒绝），仍须人工作答。要自动放行必须再把 `categoryPolicy.protected` 显式设为 `auto`；直接 `inherit` 会让策略层的静态放行**无任何评审**地生效，故不采用。**两档的后果要分清（否则会误判成"面板卡住"）**：关（默认）走 LOCKED 分支——`aggressive` 档或显式 `ask` 时倒计时 `action:'reject'`，`highRiskSeconds` 后自动结算为 `timeout-deny`，`timeoutAction` 无法放行，无人盯守不挂起；`standard` 档且未显式配置时该类别本就 `inherit`（见上段），走正常评审管线、超时按 `timeoutAction` 结算。开且未显式配置走 status-less 分支——**不发布倒计时状态、永不自动结算**，人不在就会一直等（面板显示 `⏸️ Awaiting human approval — no auto-countdown.` 正是这一档的标记，不是故障）。默认值为关；standard 档未显式配置的 protected 询问走正常评审管线，恒拒倒计时只出现在 aggressive 档或显式 `ask`。
 
 **凭据读取地板（本键不适用）**：`protected` 同时涵盖工作区敏感文件与受保护元数据（`.env` / `.npmrc` / `.git/*` / `.vscode/*` 等）**以及凭据树的读取**。这两半的风险不同，因此策略层把后者标成结构化字段 `credentialRead`（`sensitiveBasenameAt` 或 `isCriticalPath` 命中即置位），`categoryDirective` 与 answerer 的 `isLockedCategory` 都对它保持锁定——`~/.npmrc`、`~/.ssh/…`、`~/.aws/credentials` 这类凭据读取**在本开关开启时也不解锁**。启用本键真正解锁的只有**非凭据**的工作区元数据（`.git/`、`.vscode/` 等）。解锁判定读 `category.ts` 的 `protectedUnlocked`，answerer 的锁定谓词（`index.ts` 的 `isLockedCategory`）同读同一字段，两平面一致；设置卡开关（`settings.category.protectedAutoReview`）随分类卡一起保存。
 
@@ -69,7 +69,7 @@ delete / protected / privilege / disk 四类在配置面上默认**只能收 `as
 
 **例外三：已证实的会话自建物删除（无需配置，始终生效）**。`delete` 仍是 LOCKED，但策略层对「删除目标全部是本会话成功创建过的路径」有不依赖配置的出处豁免（`shell.ts` 的 artifact 分支 → `allowed('delete exact session-created artifacts')`）。该豁免以**结构化字段** `sessionArtifactDeletion` 带出，类别层的锁定钳制与 answerer 的锁定谓词都读它——否则类别层看不到 artifact 注册表，会把这条静态放行拦成锁定询问，使豁免在 aggressive 模式下**永远不可达**（修复见 commit `cb02a3d`）。红线遵守：授权性信号走结构化通道，**不从 reason 文本解析**。
 
-**LOCKED 类的转人行为**：LOCKED 类（delete / protected / disk；privilege 未解锁时）的类别 ask **不再是 status-less**——answerer 注入硬拒倒计时（`action:'reject'` 恒拒、秒数取 `highRiskSeconds` 默认 10），无 LLM 接管 handle、无学习上下文；超时未响应自动 `timeout-deny`（agent 收到「no response: auto-rejected」），**任何 timeoutAction 配置都无法把它变成自动放行**。无人值守会话不再因危险命令无限挂起；面板上拒绝按钮带 10s 倒计时可直接点击。
+**LOCKED 类的转人行为**：LOCKED 类（delete / protected / disk；privilege 未解锁时）的类别 ask **不再是 status-less**——answerer 注入硬拒倒计时（`action:'reject'` 恒拒、秒数取 `highRiskSeconds` 默认 10），无 LLM 接管 handle、无学习上下文；超时未响应自动 `timeout-deny`（agent 收到「no response: auto-rejected」），**任何 timeoutAction 配置都无法把它变成自动放行**。delete / disk 未显式配置时在**任何档位**都落这一形态（与档位解耦）；protected / privilege 在 standard 档未显式配置时走正常评审管线（见「哪一层决定未配置的 LOCKED 询问」段）。无人值守会话不再因危险命令无限挂起；面板上拒绝按钮带 10s 倒计时可直接点击。
 
 ## 17.5　复合命令：类别取先、指令取严
 

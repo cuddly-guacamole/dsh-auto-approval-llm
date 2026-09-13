@@ -751,8 +751,16 @@ export function categoryDirective(
   // forged through arguments — it is set only where the artifact registry was
   // consulted and every operand matched.
   const provenArtifactDeletion = category === 'delete' && assessment.sessionArtifactDeletion === true
+  const hardLocked = HARD_LOCKED_CATEGORIES.includes(category as CategoryKey)
   if (locked && !privilegeUnlocked && !protectedUnlocked && !provenArtifactDeletion) {
     if (explicit !== undefined) return 'ask'
+    // delete/disk are hard-locked: their unconfigured ask comes from the
+    // category layer in every mode, so it is always the locked hard-reject
+    // countdown the answerer pins to reject — no mode change and no
+    // timeoutAction settles it. protected/privilege keep the mode-dependent
+    // clamp: unconfigured under standard they inherit into the ordinary
+    // review pipeline, where the timeout action does settle the outcome.
+    if (hardLocked) return 'ask'
     return mode === 'aggressive' ? 'ask' : 'inherit'
   }
   // An unlocked protected category stays a sensitive one: unconfigured means

@@ -2137,7 +2137,7 @@ test('categorizeCommand: compound pipe/and keeps delete precedence over a write 
   const cfg = { categoryPolicy: {}, categoryMode: 'standard' }
   const label = categorizeCommand('cat a | tee b && rm c', 'bash', roots, cfg)
   assert.equal(label.category, 'delete')
-  assert.equal(label.directive, 'inherit')
+  assert.equal(label.directive, 'ask')
   // The write heads label fileEdit like cp; read-mode sed stays unknown and
   // dd keeps its stricter disk label.
   assert.equal(categorizeCommand('tee b', 'bash', roots, cfg).category, 'fileEdit')
@@ -2170,10 +2170,11 @@ test('double anchor: git reset/clean is delete (LOCKED) in the category layer wh
     assert.equal(verdict.decision, 'ask', cmd)
     assert.equal(verdict.classifierEligible, true, cmd)
     assert.equal(riskFromAssessment(verdict, 'bash'), 'MEDIUM', cmd)
-    // New layer: the category label is delete (LOCKED, never auto).
+    // New layer: the category label is delete (LOCKED, never auto); the
+    // hard-locked ask is mode-decoupled, so standard resolves it to 'ask'.
     const label = categorizeCommand(cmd, 'bash', roots, { categoryPolicy: {}, categoryMode: 'standard' })
     assert.equal(label.category, 'delete', cmd)
-    assert.equal(label.directive, 'inherit', cmd)
+    assert.equal(label.directive, 'ask', cmd)
   }
 })
 

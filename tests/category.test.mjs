@@ -245,14 +245,14 @@ test('reverse: assessTool contract unchanged for the same inputs', () => {
 })
 
 // ── directive derivation + precedence ─────────────────────────────────
-test('categoryDirective: LOCKED clamps auto/deny to ask, unset inherits', () => {
+test('categoryDirective: LOCKED clamps auto/deny to ask; delete/disk stay ask unset, protected/privilege inherit', () => {
   const askEligible = { decision: 'ask', classifierEligible: true }
   assert.equal(categoryDirective({ categoryPolicy: { delete: 'auto' } }, 'delete', askEligible), 'ask')
   assert.equal(categoryDirective({ categoryPolicy: { delete: 'deny' } }, 'delete', askEligible), 'ask')
   assert.equal(categoryDirective({ categoryPolicy: { protected: 'auto' } }, 'protected', askEligible), 'ask')
   assert.equal(categoryDirective({ categoryPolicy: { privilege: 'deny' } }, 'privilege', askEligible), 'ask')
   assert.equal(categoryDirective({ categoryPolicy: { disk: 'auto' } }, 'disk', askEligible), 'ask')
-  assert.equal(categoryDirective(stdCfg, 'delete', askEligible), 'inherit')
+  assert.equal(categoryDirective(stdCfg, 'delete', askEligible), 'ask')
   assert.equal(categoryDirective({ categoryPolicy: { delete: 'ask' } }, 'delete', askEligible), 'ask')
 })
 
@@ -289,7 +289,9 @@ test('categoryDirective: aggressive builtins and explicit-config precedence', ()
   // Explicit config always beats the builtin.
   assert.equal(categoryDirective({ categoryPolicy: { networkExec: 'deny' }, categoryMode: 'aggressive' }, 'networkExec', askEligible), 'deny')
   assert.equal(categoryDirective({ categoryPolicy: { gitPush: 'ask' }, categoryMode: 'aggressive' }, 'gitPush', askEligible), 'ask')
-  // LOCKED unconfigured: standard=inherit, aggressive=ask (UI: 删除/受保护/提权/磁盘仍人工).
+  // LOCKED unconfigured: delete/disk are mode-decoupled locked asks (every
+  // mode); protected/privilege are standard=inherit, aggressive=ask
+  // (UI: 删除/受保护/提权/磁盘仍人工).
   assert.equal(categoryDirective({ categoryPolicy: {}, categoryMode: 'aggressive' }, 'delete', askEligible), 'ask')
   assert.equal(categoryDirective({ categoryPolicy: {}, categoryMode: 'aggressive' }, 'privilege', askEligible), 'ask')
 })
