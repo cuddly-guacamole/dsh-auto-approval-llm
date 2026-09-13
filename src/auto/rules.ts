@@ -316,59 +316,67 @@ export interface RuleSubject {
  * call with none of those keys falls back to the full serialized arguments.
  */
 export function extractRuleTarget(args: unknown): string {
+  return extractRuleTargets(args)[0] ?? ''
+}
+
+/**
+ * Every projected action target of a call, primary first.
+ *
+ * A single projection (`command ?? path ?? payload`) is defeated by one extra
+ * argument field: the DSH schema keeps undeclared keys without complaint, so
+ * `write(secret.path) | deny | arguments` missed as soon as the call carried a
+ * harmless `command` field, and `str_replace_editor`, which declares both
+ * `command` and `path`, could never match a path rule at all. Deny/human rules
+ * therefore match the whole surface; allow rules stay on the primary
+ * projection so an allow is never widened by an unrelated field.
+ */
+export function extractRuleTargets(args: unknown): string[] {
   if (typeof args === 'string') {
     try {
       const parsed = JSON.parse(args)
-      if (parsed !== null && typeof parsed === 'object') {
-        const projected = commandText(parsed) ?? pathTarget(parsed) ?? payloadText(parsed)
-        if (projected !== undefined) return projected
-      }
+      if (parsed !== null && typeof parsed === 'object') return targetsOf(parsed, args)
     } catch {
-      // not JSON — fall through and use the raw string
+      // not JSON — the raw string is the whole action
     }
-    return args
+    return args === '' ? [] : [args]
   }
-  if (args !== null && typeof args === 'object') {
-    const record = args as Record<string, unknown>
-    const projected = commandText(record) ?? pathTarget(record) ?? payloadText(record)
-    if (projected !== undefined) return projected
+  if (args !== null && typeof args === 'object') return targetsOf(args as Record<string, unknown>, args)
+  const text = String(args ?? '')
+  return text === '' ? [] : [text]
+}
+
+function targetsOf(record: Record<string, unknown>, fallback: unknown): string[] {
+  const candidates: string[] = []
+  const push = (value: unknown): void => {
+    if (typeof value === 'string' && value !== '' && !candidates.includes(value)) candidates.push(value)
+  }
+  for (const key of ['command', 'script', 'code', 'prompt', 'text']) push(record[key])
+  for (const key of ['file_path', 'path', 'cwd', 'workdir']) push(record[key])
+  push(record['content'])
+  if (candidates.length === 0) {
     try {
-      return JSON.stringify(args)
+      const serialized = JSON.stringify(fallback)
+      if (typeof serialized === 'string' && serialized !== '') candidates.push(serialized)
     } catch {
-      return ''
+      // an unserializable argument envelope projects nothing
     }
   }
-  return String(args ?? '')
+  return candidates
 }
 
-function commandText(obj: Record<string, unknown>): string | undefined {
-  for (const key of ['command', 'script', 'code', 'prompt', 'text']) {
-    const value = obj[key]
-    if (typeof value === 'string' && value !== '') return value
-  }
-  return undefined
-}
-
-/** First path-shaped target of a structured tool call, whitelist order. */
-function pathTarget(obj: Record<string, unknown>): string | undefined {
-  for (const key of ['file_path', 'path', 'cwd', 'workdir']) {
-    const value = obj[key]
-    if (typeof value === 'string' && value !== '') return value
-  }
-  return undefined
-}
-
-/** Last textual resort before the full-JSON fallback: the payload body. */
-function payloadText(obj: Record<string, unknown>): string | undefined {
-  const value = obj['content']
-  return typeof value === 'string' && value !== '' ? value : undefined
-}
-
-function renderSubject(rule: DeclaredRule, subject: RuleSubject): string {
-  if (rule.field === 'toolName') return subject.toolName
-  if (rule.field === 'reason') return subject.reason ?? ''
-  if (rule.field === 'arguments') return extractRuleTarget(subject.arguments)
-  return ''
+/**
+ * Whether a declared rule matches its subject. Deny/human match every
+ * projected target (an extra argument field must never hide the value the rule
+ * was written for); allow matches only the primary projection (an allow is a
+ * deliberate pre-authorization and must not widen on unrelated field text).
+ */
+function ruleMatches(rule: DeclaredRule, subject: RuleSubject): boolean {
+  if (rule.field === 'toolName') return rule.pattern.test(subject.toolName)
+  if (rule.field === 'reason') return rule.pattern.test(subject.reason ?? '')
+  const targets = extractRuleTargets(subject.arguments)
+  if (targets.length === 0) return false
+  if (rule.policy === 'allow') return rule.pattern.test(targets[0])
+  return targets.some((target) => rule.pattern.test(target))
 }
 
 /**
@@ -434,7 +442,7 @@ export function evaluateRules(rules: DeclaredRule[], subject: RuleSubject): { po
       })
       if (!hit) continue
     }
-    if (!rule.pattern.test(renderSubject(rule, subject))) continue
+    if (!ruleMatches(rule, subject)) continue
     if (winner === undefined || RULE_POLICY_SEVERITY[rule.policy] > RULE_POLICY_SEVERITY[winner.policy]) {
       winner = { policy: rule.policy, rule }
     }
