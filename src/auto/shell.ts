@@ -1763,6 +1763,13 @@ function opaqueHardDenyReason(source, shell, roots) {
         if (reason !== undefined)
             return reason;
     }
+    // A read-only command that writes through its own output flag carries no
+    // redirection token, so the redirect scan below never sees it: on an opaque
+    // line (`sort -o <protected> in.txt; (:)`) the whole-line fuse lost the
+    // verdict every decomposable spelling still reaches.
+    const outputFlag = opaqueOutputFlagReason(source, shell, roots);
+    if (outputFlag !== undefined)
+        return outputFlag;
     for (const match of scan.matchAll(OPAQUE_REDIRECT_TARGET)) {
         const raw = match[1];
         const target = raw.length > 1 && ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'")))
@@ -1781,6 +1788,21 @@ function opaqueHardDenyReason(source, shell, roots) {
         const dshReason = shellWriteToDshHomeDenied(normalizePath(target, roots.workspace, roots.home), roots);
         if (dshReason !== undefined)
             return `redirection targets ${dshReason}`;
+    }
+    return undefined;
+}
+
+/** Output-flag write targets recovered from a line that cannot be decomposed. */
+function opaqueOutputFlagReason(source, shell, roots) {
+    if (shell !== 'bash')
+        return undefined;
+    for (const segment of opaqueSegmentWords(source)) {
+        const name = commandName(segment.words[0]?.text ?? '');
+        for (const target of readOnlyOutputFlagTargets(name, segment.words, shell)) {
+            const reason = hardDestructiveTargetReason(globRoot(target.text), roots);
+            if (reason !== undefined)
+                return `output flag writes ${reason}`;
+        }
     }
     return undefined;
 }
