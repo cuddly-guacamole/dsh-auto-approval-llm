@@ -5273,9 +5273,32 @@ export function apply(ctx: Context, rawConfig: Config): void {
             }
             return
           }
+          if (verdict.kind === 'ask' && autoUnattended && unattendedMustFailClosed(review)) {
+            // MEDIUM guard parity: an unattended session must not ride the LOW
+            // countdown into riskTimedOutAction('LOW', …, unattended) = allow
+            // for a CRITICAL-flagged ALLOW the policy refused. The verdict is
+            // registered so the continuation labels the resolution
+            // 'llm-blocked' — not an agreed 'llm-allow' and not a reviewer
+            // failure. Attended sessions keep the standing human ask below.
+            reviewVerdicts.set(req.callId, { ...review, attempts })
+            recordDecisionFeedback(req.callId, formatDenyFeedback('timeout'))
+            reviewStates.set(req.callId, {
+              risk: staticRisk,
+              phase: 'follow',
+              action: 'reject',
+              seconds: 0,
+              note: reviewSuggestionNote(review),
+              source: 'llm',
+            })
+            followExpiry.set(req.callId, Date.now() + FOLLOW_STATE_TTL_MS)
+            lowHandle.claim('rejected')
+            return
+          }
           // verdict.kind === 'ask' → genuine ESCALATE: never auto-answer from
           // a reviewer that could not decide — the human countdown continues
-          // and the timeout action applies when it expires.
+          // and the timeout action applies when it expires. (A CRITICAL-flagged
+          // ALLOW that reaches this point is the attended case: the unattended
+          // one was settled above.)
         })
         .catch((error) => {
           // The LOW review races the countdown exactly like MEDIUM/HIGH; an

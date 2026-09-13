@@ -64,7 +64,7 @@ Rules:
   <tr><td class="mono">DENY</td><td class="rk-high">拒绝；计数熔断；<code>llm-deny</code></td><td><b>可接管</b>：立即拒绝 <code>llm-deny</code></td><td>只建议</td></tr>
   <tr><td class="mono">ESCALATE（诚实说不知道）</td><td>转人（带倒计时），<b>绝不对不确定自动作答</b></td><td>只建议，等人工/超时</td><td>只建议</td></tr>
   <tr><td class="mono">评审失败 / 超时 / 垃圾输出</td><td class="rk-high">拒绝（<code>llm-failed</code>），<b>不计熔断</b></td><td>只建议（advisory）</td><td>只建议</td></tr>
-  <tr><td class="mono">ALLOW + CRITICAL</td><td colspan="3"><b>矛盾输出</b> → <code>reviewerAutoAllowBlocked</code> 强制转人，绝不自动放行</td></tr>
+  <tr><td class="mono">ALLOW + CRITICAL</td><td colspan="3"><b>矛盾输出</b> → <code>reviewerAutoAllowBlocked</code> 拦截，绝不自动放行：有人在场转人工询问（LOW 档保留其固有倒计时）；<b>无人值守立即拒绝</b>（<code>llm-blocked</code>，不计熔断）——LOW 与 MEDIUM 同构</td></tr>
 </table>
 
 - **解析严格性**（`parseReview`）：剥围栏→取 {…}→JSON.parse；decision 不在三值、risk_level 不在四档、reason 非字符串 → **一律 throw**，走 catch 的 fail-closed 路径。半个解析结果永不被信任。

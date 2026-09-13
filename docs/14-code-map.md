@@ -56,7 +56,7 @@ tests/
 ├─ runtime-write-fallback.test.mjs（规范目录拒写：open 阶段失败继续 fail-closed 不搬家、非位置类错误不重试、重试集仅含 open 阶段错误、写失败阶梯重试同一路径且无 relocation 步骤）
 ├─ audit-shell-symlink-guard.test.mjs（shell 操作数提取 + 收窄型逃逸裁定 + 等价拼写族 + 负向控制）
 ├─ perf-settings-rules-parse.test.mjs / perf-poll-backoff.test.mjs / perf-scan-throttle.test.mjs / perf-countdown-write.test.mjs（客户端开销：单次解析、轮询退避、扫描节流、倒计时条件写）
-└─ 合计 136 个 tests/*.test.mjs（node --test 全绿基线）
+└─ 合计 137 个 tests/*.test.mjs（node --test 全绿基线）
 scripts/
 ├─ build.sh             （DSH 源码仓库布局）tsc 编译 src→lib
 ├─ clean-lib.mjs        构建前清空 lib/（tsc 不删除已删源的旧产物）
