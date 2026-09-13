@@ -35,8 +35,24 @@ export function canonicalizeMsysPath(input, platform = process.platform) {
         return `${drive[1].toUpperCase()}:${input.length > 2 ? input.slice(2) : '\\'}`;
     return input;
 }
+/** A Win32 namespace alias this plugin canonicalizes instead of rejecting. */
+function isCanonicalNamespaceAlias(flat) {
+    return /^(?:\\\\\?\\|\\\\\?\?\\|\\\?\?\\)(?:unc\\|[a-z]:\\)/i.test(flat);
+}
 /** Literal prefix of a glob target: everything before the first `*`/`?` segment. */
 export function globRootOf(target) {
+    // A supported namespace alias (`\\?\C:\…`, `\\?\UNC\…`, `//??/C:/…`) is a
+    // prefix, not a wildcard segment: splitting it first made every long-path
+    // target collapse to a lone `\`, which the destructive fuse then reported
+    // as the filesystem root. Reduce the canonical spelling instead. An alias
+    // the namespace guard rejects keeps its own spelling so that guard owns the
+    // verdict and its reason.
+    const flat = target.replaceAll('/', '\\');
+    if (/^(?:\\\\\?\\|\\\\\?\?\\|\\\?\?\\)/.test(flat)) {
+        if (!isCanonicalNamespaceAlias(flat))
+            return target;
+        return globRootOf(canonicalizeWindowsNamespace(flat));
+    }
     const parts = target.split(/[\\/]/);
     const index = parts.findIndex(part => /[*?]/.test(part));
     if (index < 0)
