@@ -308,12 +308,13 @@ export interface RuleSubject {
 
 /**
  * Field projection for rule matching: command-like tools expose their actual
- * command text under command/script/code/prompt/text keys, and file tools
- * expose their target under file_path/path/cwd/workdir keys. Matching against
- * the raw argument JSON envelope would defeat anchored patterns like
- * `^git push` or `^src/` — and for file tools the payload (content) must not
- * masquerade as the action target, so the path projection outranks it. Only a
- * call with none of those keys falls back to the full serialized arguments.
+ * command text under command/script/code/prompt/text keys, file tools expose
+ * their target under file_path/path/cwd/workdir keys, and the payload body
+ * (content) is a candidate as well. Matching against the raw argument JSON
+ * envelope would defeat anchored patterns like `^git push` or `^src/`, and for
+ * a file tool the path must outrank the payload in the PRIMARY projection, so
+ * the command and path key groups are collected before `content`. Only a call
+ * with none of those keys falls back to the full serialized arguments.
  */
 export function extractRuleTarget(args: unknown): string {
   return extractRuleTargets(args)[0] ?? ''
@@ -327,8 +328,9 @@ export function extractRuleTarget(args: unknown): string {
  * `write(secret.path) | deny | arguments` missed as soon as the call carried a
  * harmless `command` field, and `str_replace_editor`, which declares both
  * `command` and `path`, could never match a path rule at all. Deny/human rules
- * therefore match the whole surface; allow rules stay on the primary
- * projection so an allow is never widened by an unrelated field.
+ * therefore match the whole surface (including the payload body); allow rules
+ * stay on the primary projection, so an allow needs its pattern to match the
+ * highest-priority field rather than any field of the call.
  */
 export function extractRuleTargets(args: unknown): string[] {
   if (typeof args === 'string') {
