@@ -37,6 +37,8 @@ export const OBSERVATION_FIELDS = [
   'count',
   'origins',
   'overflowed',
+  'consecutive',
+  'threshold',
   'errors',
   'files',
   'agentKind',

@@ -31,7 +31,7 @@ import { DIRECT_HUMAN_TOOL, THRESHOLD_DEFAULTS } from './auto/constants.js'
 import { createDshClassifier, createEndpointClassifier } from './auto/dsh-classifier.js'
 import { type RaceHumanHandle, type ReviewResult, type StaticRisk, AWAITING_MARKER, REVIEW_TIMEOUT_NOTICE, applyBreaker, approvalSource, assembleReviewerSystem, breakerNote, breakerTripped, createKeyedMutex, DENY_CIRCUMVENTION_GUIDANCE, extractToolPath, followResolution, formatDenyFeedback, frameReviewerInput, lowRiskReviewOutcome, parseReview, unattendedMustFailClosed, preserveHostKeys, raceHumanDecision, reviewSuggestionNote, reviewerAutoAllowBlocked, riskFromAssessment, staticListDecision, type ContextSummary } from './auto/decision.js'
 import { LATENCY_SUMMARY_WINDOW, clearLatencySamples, loadLatencySamples, pushLatencySample, summarizeLatency, type LatencySample } from './auto/latency.js'
-import { normalizeLoopThreshold } from './auto/loop-guard.js'
+import { normalizeLoopThreshold, loopKeyFor, createLoopState, recordLoopCall, type LoopGuardState } from './auto/loop-guard.js'
 import { RECENT_REJECTION_CAP, baselineFromPermissionState, observePermissionChange, permissionChangeFromEvent, recentRejectionPointers, type PermissionState } from './auto/permission-change.js'
 import { buildAskReason, buildEditDiff, buildEditDiffText, EDIT_DIFF_ARGS_MAX_CHARS, EDIT_DIFF_TOOLS } from './auto/editdiff.js'
 import {
@@ -1337,6 +1337,14 @@ function recordTimeoutFeedback(callId: string | undefined, text: string): void {
 
 const decisionFeedback = new Map<string, { text: string; at: number }>()
 
+// Loop guard state: per-session streaks of identical auto-allowed calls, plus
+// the one-shot cross-plane pin that routes the escalated ask into the locked
+// countdown shape in the answerer. Neither map writes history rows nor reads
+// or writes the breaker counters — the escalation rides the ordinary ask
+// vocabulary, so no new adjudicated source exists.
+const loopStates = new Map<string, LoopGuardState>()
+const loopGuardPinned = new Map<string, { consecutive: number; threshold: number; at: number }>()
+
 function recordDecisionFeedback(callId: string | undefined, text: string): void {
   if (!callId) return
   decisionFeedback.set(callId, { text, at: Date.now() })
@@ -1356,7 +1364,7 @@ function auditMaskFailed(callId: string | undefined, toolName: string | undefine
 // them without limit. Expired entries (older than ttlMs) are dropped first;
 // if still over maxEntries the oldest by `at` are evicted (FIFO).
 function sweepFeedback(
-  map: Map<string, { text: string; at: number }>,
+  map: Map<string, { at: number }>,
   opts: { ttlMs: number; maxEntries: number },
 ): void {
   const now = Date.now()
@@ -2061,6 +2069,7 @@ function sweepFollowPhase(now = Date.now()): void {
 function sweepFeedbackMaps(): void {
   sweepFeedback(timeoutFeedback, { ttlMs: 60_000, maxEntries: 256 })
   sweepFeedback(decisionFeedback, { ttlMs: 60_000, maxEntries: 256 })
+  sweepFeedback(loopGuardPinned, { ttlMs: 60_000, maxEntries: 256 })
 }
 
 // Trusted Host authorities for web-route fencing (RISK-01/02); resolved once
@@ -3617,6 +3626,46 @@ export function apply(ctx: Context, rawConfig: Config): void {
     return Math.max(1, Math.round(config.highRiskSeconds))
   }
 
+  // Loop guard gate, called ONLY at the auto-allow sites (both planes): the
+  // stream sequence advances per gated call, so the streak means "identical
+  // auto-allowed calls back to back". Threshold 0 short-circuits before the
+  // key is even built. A fire records the one-shot cross-plane pin, leaves a
+  // non-decision audit row for provenance (the eventual timeout-deny history
+  // row is generic), and never touches pushHistory or the breaker.
+  const loopGateFires = (sessionKey: string, toolName: string, args: unknown, callId: string | undefined): boolean => {
+    const threshold = config.loopDetectionThreshold ?? 0
+    if (threshold <= 0) return false
+    let state = loopStates.get(sessionKey)
+    if (state === undefined) {
+      state = createLoopState()
+      loopStates.set(sessionKey, state)
+    }
+    const { consecutive, fired } = recordLoopCall(state, loopKeyFor(toolName, args), threshold)
+    if (!fired) return false
+    if (callId) loopGuardPinned.set(callId, { consecutive, threshold, at: Date.now() })
+    debugLog({ ev: 'loop-guard', callId: callId ?? null, toolName, consecutive, threshold })
+    appendAuditLine(JSON.stringify({
+      type: 'loop-guard', at: Date.now(), callId: callId ?? null,
+      sessionId: sessionKey, toolName, consecutive, threshold,
+    }))
+    return true
+  }
+
+  // The pinned countdown shape the escalated ask settles into (LOCKED-category
+  // precedent: pinned reject action, no LLM takeover handle, no learnable
+  // context — so unattended it times out to deny and learning can neither
+  // answer nor feed on it).
+  const loopGuardStatus = (category: string | undefined): ReviewStatus => ({
+    risk: 'HIGH',
+    phase: 'countdown',
+    action: 'reject',
+    seconds: Math.max(1, Math.round(config.highRiskSeconds)),
+    category,
+  })
+
+  const loopGuardReason = (toolName: string): string =>
+    `[dsh-auto-approval-llm] loop guard: this exact ${toolName} call has been auto-allowed repeatedly (repetition guard, not a risk judgment)`
+
   const riskTakenOver = (risk: 'LOW' | 'MEDIUM' | 'HIGH', scope: Config['llmTakeoverScope']): boolean => {
     if (scope === 'low') return risk === 'LOW'
     if (scope === 'medium-or-below') return risk === 'LOW' || risk === 'MEDIUM'
@@ -3995,6 +4044,12 @@ export function apply(ctx: Context, rawConfig: Config): void {
       return next()
     }
     if (assessment.decision === 'allow') {
+      // Loop guard: the Nth identical auto-allowed call escalates to a pinned
+      // ask instead of silently dispatching again. The gate runs BEFORE the
+      // allow history row — a call the guard escalated was never allowed.
+      if (loopGateFires(authorityKeyFor(exec), exec.name, exec.arguments, exec.callId)) {
+        return { kind: 'ask', reason: loopGuardReason(exec.name) }
+      }
       // A static-assessment allow is a verdict like any other: it takes
       // effect only if its decision audit record persisted (APPROVAL-07).
       const fetchTarget = fetchAuditTarget(exec)
@@ -4095,6 +4150,12 @@ export function apply(ctx: Context, rawConfig: Config): void {
       // outcome downstream (recording here too would double-count it). The
       // sources are distinct from the answerer's so the two decision planes
       // stay separable in the history.
+      // Loop guard (classifier plane): the fast-path allow is exactly the
+      // silent repeat the guard exists for, so it escalates BEFORE the
+      // classifier-allow history row is written.
+      if (decision.decision === 'allow' && loopGateFires(authorityKeyFor(exec), exec.name, exec.arguments, exec.callId)) {
+        return { kind: 'ask', reason: loopGuardReason(exec.name) }
+      }
       let audited = true
       if (decision.decision !== 'ask') {
         audited = pushHistory({
@@ -4408,6 +4469,10 @@ export function apply(ctx: Context, rawConfig: Config): void {
       // no other owner: without this it kept one entry per Auto session that
       // ever reached the classifier, for the process lifetime.
       trustedIntentReported.delete(key)
+      // Loop-guard streaks are keyed by the same authority id; drop them with
+      // the other per-session state so a disposed session cannot leak its
+      // streak into a long-lived process.
+      loopStates.delete(key)
       // rejectGuidanceSeen keys are `${sessionId}:${callId}`; drop every key
       // of a disposed session wholesale (same L1 discipline — the Set is
       // additionally capped by insert-order FIFO in maybeInjectRejectGuidance).
@@ -5079,6 +5144,17 @@ export function apply(ctx: Context, rawConfig: Config): void {
       maybeInjectRejectGuidance(req.agent, req.callId, config, buildRejectGuidanceText('category', classified.category))
       return 'rejected'
     }
+    // Loop guard cross-plane pin (one-shot): a pre-execute allow site escalated
+    // this exact callId to the guard, so the ask must settle into the locked
+    // countdown shape — reject-pinned action, no takeover handle, no learnable
+    // context — instead of the static-allow answerer branch below. Read here,
+    // after the deny terminals (they must keep winning) and before the static
+    // allow that would otherwise swallow the call.
+    const loopPinned = req.callId !== undefined ? loopGuardPinned.get(req.callId) : undefined
+    if (loopPinned !== undefined) {
+      loopGuardPinned.delete(req.callId)
+      return askHuman(req, undefined, next, false, loopGuardStatus(classified.category))
+    }
     if (staticDecision.kind === 'allow'
       && nameChannelLockRefusal({
         category: classified.category,
@@ -5101,6 +5177,12 @@ export function apply(ctx: Context, rawConfig: Config): void {
       return askHuman(req, undefined, next, false, lockedStatus)
     }
     if (staticDecision.kind === 'allow') {
+      // Loop guard (answerer plane): calls can reach this branch without
+      // passing the pre-execute allow gate (the two planes use different
+      // authority predicates), so the streak counts here too.
+      if (loopGateFires(sessionKey, toolName, args, req.callId)) {
+        return askHuman(req, undefined, next, false, loopGuardStatus(classified.category))
+      }
       // Static-policy allow: the approval trail must not be silent about a
       // decision that permitted a tool call.
       const audited = pushHistory({
@@ -5210,6 +5292,11 @@ export function apply(ctx: Context, rawConfig: Config): void {
         //   signatures, so the learned-allow channel is unchanged.
         const compressed = classified.assessment?.decision === 'ask'
         if (!compressed) {
+          // Loop guard (answerer plane): the no-review auto-allow is the
+          // quietest repeat lane of all — gate it before its history row.
+          if (loopGateFires(sessionKey, toolName, args, req.callId)) {
+            return askHuman(req, undefined, next, false, loopGuardStatus(classified.category))
+          }
           const audited = pushHistory({
             sessionId: sessionKey,
             toolName,
