@@ -1,264 +1,188 @@
+<div align="center">
+
 # @quill507/dsh-auto-approval-llm
 
-> LLM-assisted auto approval with a timeout fallback for DeepSeek Harness's **Auto permission preset**.
+**LLM-assisted auto approval with a timeout fallback for the DeepSeek Harness Auto permission tier**
 
-`Auto` = `sandbox: danger-full-access` + `approval: ask`. This plugin is the **single terminal decision-maker** for `approval/request` inside Auto sessions: routine operations pass through static rules directly, risky/ambiguous ones go through the automatic pipeline `static rules → LLM classifier → LLM/human decision → countdown fallback → breaker` for a decision, with human and audit fallbacks kept throughout.
+*Routine calls pass statically · risky or ambiguous ones go through LLM review + a human countdown · fail-closed by default*
 
-> 🖥️ **Platform support**: primarily developed and tested on **Windows + Git Bash**; feedback from macOS / Linux / WSL is welcome (see [Platform support](#platform-support)). **Android-browser access collects UI feedback only, with no support promise; the Auto preset is not supported in Android-native environments** (Termux / root / adb / shizuku and the like).
+[![npm](https://img.shields.io/npm/v/@quill507%2Fdsh-auto-approval-llm?style=flat-square&label=npm&labelColor=454a54)](https://www.npmjs.com/package/@quill507/dsh-auto-approval-llm)
+[![downloads](https://img.shields.io/npm/dm/@quill507%2Fdsh-auto-approval-llm?style=flat-square&labelColor=454a54)](https://www.npmjs.com/package/@quill507/dsh-auto-approval-llm)
+![DSH](https://img.shields.io/badge/DSH-%3E%3D0.1.5--rc.2-4c6ef5?style=flat-square&labelColor=454a54)
+[![license](https://img.shields.io/badge/license-BSD--3--Clause-d29922?style=flat-square&labelColor=454a54)](https://opensource.org/licenses/BSD-3-Clause)
+[![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
+
+[Docs](https://cuddly-guacamole.github.io/dsh-auto-approval-llm/) · [简体中文](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/blob/main/README.md) · [Issues](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/issues)
+
+</div>
+
+`Auto tier` = `sandbox: danger-full-access` + `approval: ask`. In Auto sessions this plugin is the **single terminal answerer** for `approval/request`: routine calls pass through static rules, while dangerous or ambiguous ones follow "static rules → LLM classifier → LLM/human verdict → countdown fallback → breaker", with human and audit fallbacks kept throughout.
 
 ---
 
 ## Features
 
-- **Static rules + LLM classifier**: read-only / session / workspace routine operations pass directly; dangerous, external-write, credential-exfiltration and protected-path operations are denied directly; ambiguous ones go to the LLM pre-classifier (`tools/guard` + `tools/pre-execute`). The static plane is consulted through the host `tools/pre-execute` waterfall: if another listener returns a non-decision object without a `reason` ahead of it, the host dispatches the call directly and the static plane is never consulted (the three shapes: docs/09).
-- **Write-vector integrity hardening**: command segments carrying a real file write redirect (`>`/`>>`/`>|`/`&>`) leave the read-only fast path; the build/test and version-probe fast paths stay only for discard sinks or in-workspace routine targets (also under aggressive/trustedDirs broadening); the POSIX five heads `tee`/`dd of=`/`sed -i`/`truncate`/`install` join the per-target operand gates — writes to plugin runtime-state files are unconditionally hard-denied.
-- **Tri-state switches for 12 categories + trusted-directory mode**: tools and shell commands are grouped into 12 categories (fileEdit / gitLocal / build / readOnly / delete / protected / privilege / networkExec / gitPush / publish / disk / dynamicPlugin), each configurable in the settings card as `auto` / `ask` / `deny`; **the default is `inherit` for all — zero behavior change**. The dangerous categories (delete / protected / disk, plus privilege while its opt-out is off) are LOCKED to `ask` only — misconfiguring them as `auto`/`deny` is clamped away with a warning; **`privilegeAutoReview` and `protectedAutoReview` (both off by default) unlock privilege and protected respectively** — unlocking makes that category's locked ask answerable by the reviewer (an unconfigured protected call becomes an ordinary ask rather than a silent allow; privilege keeps its existing shape); protectedAutoReview's reach includes **reads** of credential trees (their writes stay hard-denied), so confirm that matches your expectations before enabling it; **LOCKED asks carry a hard-reject countdown** — they auto-reject on timeout and `timeoutAction` cannot auto-allow them; delete/disk stay pinned-reject in every mode, while protected/privilege under the standard mode without an explicit config go through the normal review pipeline and settle by `timeoutAction` on timeout (unattended sessions no longer hang). `trustedDirs` extends routine locations to explicitly trusted directories in `standard` mode, while `categoryMode: aggressive` drops the location whitelist entirely — any location counts as routine (the sensitive-name fuse, runtime-state hard-deny, symlink re-check and every other danger gate stay untouched); compound commands merge strictly along "category enum order + directive severity"; a category denial is terminal, same as the denyList (privilege re-escalation cannot bypass it); every category decision lands in history / audit (`category-allow` / `category-deny` sources).
-- **Online review model (optional)**: fill in the API protocol, base URL, model and key, and approval review hits your OpenAI / Anthropic-compatible endpoint directly; the key lives in DSH's credential store — the frontend only shows "Configured" and never echoes it. The direct trio (base URL / model / key) must be complete before direct review engages — save and test-connection run a client-side pre-check that blocks incomplete entries, and a legacy half-configured endpoint is treated as unconfigured at runtime so review follows the session model (still fail closed).
-- **Human countdown + timeout fallback**: low/medium/high countdowns (default 5/8/10 s); on timeout the action follows `timeoutAction` (`Reject` / `Allow` / `Auto-approve low-risk`). Closing the browser never hangs (the host timer is authoritative).
-- **LLM takeover**: for medium risk, if the LLM returns a decisive verdict within the countdown, the client follows it immediately — no click needed.
-- **Breaker**: after `maxConsecutiveDenials` consecutive or `maxTotalDenials` cumulative LLM denials → hand to a human with no auto-countdown; `/approval-reset` can reset it.
-- **Loop guard** (default off): once the same call (tool + arguments hash) has been silently auto-allowed `loopDetectionThreshold` times in a row, the Nth call turns into a human ask with a pinned reject countdown (unattended sessions deny on timeout). The breaker counts repeated denials; the loop guard counts repeated approvals. It catches stuck loops only — rewording the arguments sidesteps it, so it is an adjudication aid, not a security boundary.
-- **Reliable history & audit**: in-memory window of 200 records + `history.jsonl`; append-only `audit.jsonl` (clear leaves a tombstone).
-- **LLM response-time stats**: the "Recent approval history" sub-card shows min/avg/max real response times for the latest 100 LLM reviews (seconds) plus a separate "timed out / no response" count — timeouts and interruptions never pollute the average; persisted in `llm-latency.jsonl` (1 MB rotation).
-- **Automatic LLM review retry**: transient gateway failures (rate-limit 429 / server 5xx / transport hiccups / empty responses; the LOW sync path also includes review timeouts) retry once automatically. Retries only run inside the leftover approval window — the first attempt keeps the original timeout semantics and never eats into the countdown — and honor the server's `Retry-After`; auth/config-class errors (401/403, NO_ADAPTER, …) never resend the request body or credentials; when retries are exhausted the outcome still fails closed (human / `timeoutAction` fallback). The per-attempt failure trail lands in `history.jsonl` / `audit.jsonl` (`attempts` field) and the latency stats.
-- **Per-session review mode**: `/approval-mode manual|smart|unattended` persisted; `manual` always asks a human, `unattended` auto-answers; **high-risk timeouts still go to a human / fail closed**.
-- **Declarative rules**: `rulesText` uses Claude-style `Tool(pattern) | allow|deny|human [| field]`, validated live. Dimension prefixes narrow a rule to an agent identity or workspace: `[agent:main]` / `[agent:!subagent]` / `[workspace:D:/proj]` (comma = AND). Rules are evaluated only for tool calls that enter the approval chain — statically auto-allowed routines bypass them; a parse error voids the **whole** rulesText (fail-open direction, flagged in the settings card).
-- **Context-enhanced review (optional, off by default)**: with `reviewerContextFacts` on, the LLM review input gains structured workspace facts — target path existence/kind/size (read-only metadata, content is never read) plus this session's recently created files (up to 8, workspace-filtered and secret-redacted). Boundaries: out-of-workspace targets report existence/kind only (size is always null); a workspace symlink/junction resolving outside omits the whole facts block; temp-root files never enter recent_creates; any probe failure omits the whole block (fail closed); with the flag off the review payload stays byte-identical to previous releases.
-- **Edit-diff preview (off by default)**: with `editDiffPreview` on, edit-class tools (`write` / `edit` / `str_replace_editor` non-`view` / `apply_patch`) entering human approval show a line-level red/green diff of the target file in the approval panel (del red/left-bar, add green, ctx gray; multi-line blocks collapse by default). Display-only: it never touches any decision path, never enters the LLM review input (the reasoning-blind invariant is unaffected) and any failure omits the block automatically (fail closed). Boundaries: readable in-workspace non-protected targets diff against their current content; whole-file writes (`write` / `str_replace_editor` `create`) with an unreadable target (out-of-workspace / protected / new file) preview a pure-addition diff of the new content only — the material comes entirely from the tool arguments, the target is never read, so external/protected old content can never surface; compare-class tools (`edit` / `str_replace` / `insert` / `apply_patch`) omit entirely when the target is unreadable. Targets ≤1 MiB (lstat without following + post-read byte re-check, junction/symlink escapes omitted); LCS input ≤1024 lines per side, lines >200 chars are ellipsized, output ≤200 lines and ≤32 KiB total with a `…truncated` marker line; semantics mirror the official tools (ambiguous edit/str_replace omitted, insert via the official 0-based splice, create on an existing file omitted, apply_patch covers every target in order and any patch failure omits the whole preview); countdown-marker literals inside the diff block are stripped so preview content can never forge or hijack the client auto-answer. Off by default.
-- **Confirmation learning (optional, off by default)**: with `learningEnabled` on, an operation identified by a deterministic signature (command template / tool-argument shape, zero raw values) that you repeatedly approve manually in Auto sessions becomes eligible for automatic release once it reaches the threshold (`learningThreshold`, default 3, clamped to 2–10); **every learned release still runs one standard online review of the actual call first** — anything but a clean ALLOW (or carrying a CRITICAL contradiction) slides back into the ordinary human branch. Boundaries: only low/medium risk is learnable; high risk, the four LOCKED categories (delete/protected/privilege/disk) and sensitive paths never participate; unknown categories are learnable since 0.0.15 (a hit still runs one standard online review); commands containing variables/globs/quotes or dangerous heads (`tee`/`dd`/`sed`/`truncate`/`install`) are neither learned nor matched; a manual denial resets that signature's count immediately; up to 50 learned releases per root session (an audit alert lands on the very release that reaches the cap); entries live 30 days, at most 100, isolated per workspace; any failure anywhere is treated as "no hit" and falls back to the human path; the settings card's "Learned entries" block lists each entry (key hash and skeleton only, never signatures or raw values) and can revoke one immediately (audited).
-- **Native-looking settings card**: 7 collapsible sub-cards (Timers & breaker / Safety rules list / Category switches & trust mode / Confirmation learning / Utility features / Online review model / Recent approval history), a top-level "Review & takeover preset" single-select (Standard / Conservative / Strict / Custom) that writes the LLM-participation gate pair in one click, the three lists merged into a tabbed "Precise lists" editor, countdown tiers and the two breaker thresholds each condensed to one row; top-level switches save instantly, each card has independent Save/Discard; illegal config values show a red banner with a "Try to fix" button.
-- **Single-protocol DSH wiring (0.0.16+)**: the client auto-answer uses the DSH 0.1.5-rc.2+ (single-protocol contract line, floor raised as the host moves on) `uiSession.pendingInteractions` + `PendingApproval.answer` delivery protocol; the 0.1.1-rc.2 `snapshot.pending` compatibility adapter has been removed.
+1. **Static rules + LLM classifier** — read-only, session and workspace routine calls pass; dangerous calls, external writes, credential exfiltration and protected paths are denied; ambiguous calls go to the LLM pre-classifier.
+2. **Write-vector hardening** — command segments carrying a real file-write redirect leave the read-only fast path; the POSIX heads `tee` / `dd of=` / `sed -i` / `truncate` / `install` join the per-target gate through their operands; direct writes to plugin runtime-state files are unconditionally hard-denied.
+3. **Tri-state switches for 12 categories + trusted-directory mode** — each category is configurable as `auto` / `ask` / `deny`, and **every default is `inherit` = zero behavior change**; the dangerous categories (delete / protected / disk) are locked to `ask`; `trustedDirs` and `categoryMode` define what counts as a routine location. → [docs/17](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/blob/main/docs/17-category-switches.md)
+4. **Dual-channel model sources** — the fast classifier and the deep reviewer each pick their own source: the session model (default) / a DSH-configured model / a custom endpoint. Endpoint keys live in the DSH credential store; the frontend only shows "Configured" and never echoes them.
+5. **Tiered countdown + timeout fallback + LLM takeover** — low/medium/high countdowns (default 5 / 8 / 10 s); on timeout the action follows `timeoutAction` (reject / allow / auto-approve low-risk); at medium risk an explicit LLM verdict inside the window takes over. Closing the browser never hangs (the host timer is authoritative).
+6. **Breaker and loop guard** — consecutive or cumulative LLM denials hand the call to a human (`/approval-reset` resets); the **loop guard** (off by default) turns a call that the auto-allow surface keeps allowing into a pinned-reject countdown.
+7. **Declarative rules `rulesText`** — `tool(regex) | allow|deny|human [| field]`, with `[agent:…]` / `[workspace:…]` dimension prefixes; a parse error invalidates the whole block (the settings card warns).
+8. **Confirmation-based learning** (off by default) — once one signature has been confirmed by a human repeatedly, it auto-allows, **still running a standard online review before every allow**; entries can be viewed and revoked. → [docs/18](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/blob/main/docs/18-confirm-learning.md)
+9. **Edit-diff preview + reviewer context facts** (both off by default) — the approval panel shows a line-level diff of the target file, and the reviewer input can carry structured workspace facts. Both are display-only / read-only metadata and never enter any auto-answer path.
+10. **Auditable and observable** — `history.jsonl` plus an append-only `audit.jsonl`; real LLM review latency statistics; one automatic retry on transient gateway failures (auth-class errors never resend credentials).
 
 ---
 
 ## How it works
 
+```mermaid
+flowchart TD
+    A["Model issues a tool call"] --> B["② tools.guard: synchronous hard-deny gate<br/>credentials / protected paths / shell fuses / symlink escape"]
+    B -->|"hit"| X["Denied"]
+    B -->|"pass"| C["③ tools/pre-execute: static assessment + category tightening"]
+    C -->|"deny"| X
+    C -->|"allow"| Y["Executed"]
+    C -->|"ask"| D{"LLM pre-classifier fast path"}
+    D -->|"allow"| Y
+    D -->|"deny"| X
+    D -->|"uncertain"| E["④ approval/request: single terminal verdict<br/>rules → lists → category → review mode → breaker → learning → risk tier"]
+    E -->|"LOW / LLM takeover"| Y
+    E -->|"MEDIUM / HIGH"| G["Human panel + countdown<br/>LLM review in parallel, timeout per timeoutAction"]
+    G -->|"Allow once"| Y
+    G -->|"Reject / timeout"| X
+    Y --> H["⑥ tools/post-execute: result and denial reason fed back to the model"]
+    X --> H
 ```
-Tool call
-  → tools.guard        static hard-deny gate (hit = reject, no popup)
-  → tools/pre-execute  static assessment + category-switch tightening: allow / deny / ask (human or LLM classifier)
-  → approval/request   single terminal decision:
-       rulesText → denyList → category-deny → allowlist → humanOnlyList →
-       category-ask → review mode → breaker check → policy hard-deny →
-       learned-allow (a hit still passes one standard online review) → risk tier (LOW/MEDIUM/HIGH) → LLM review + countdown
-  → tools/post-execute feeds "timeout / rule / model denial" markers back
-```
 
-The `tools.guard` and `tools/pre-execute` layers above are consulted through the host waterfall: if another plugin returns a non-decision object without a `reason` ahead of them, the host dispatches the call directly and neither layer is consulted (the three peer-shortcut shapes and the no-boot-self-check conclusion: docs/09, "reachability").
+- **LOW**: allowed silently when no review is due; otherwise decided by the verdict; ESCALATE goes to a human.
+- **MEDIUM**: panel plus countdown with the LLM running in parallel; if `llmTakeoverScope` covers the tier and the verdict is explicit, it follows immediately.
+- **HIGH**: panel plus countdown, with the LLM advising only; on timeout `timeoutAction` applies strictly.
+- The timeout marker's only author is the host timer; the client only reports outcomes and cannot forge one.
 
-- **LOW**: silent pass when not reviewed; with review, decided directly by the LLM verdict (ALLOW/DENY); ESCALATE goes to a human.
-- **MEDIUM**: shows the panel with a countdown while the LLM reviews in parallel; if `llmTakeoverScope` covers it and the LLM is decisive → follow immediately; otherwise it's advice only.
-- **HIGH**: shows the panel with a countdown; the LLM only advises; on timeout it strictly follows `timeoutAction` (even under unattended, a HIGH timeout still goes to a human / fails closed).
-- **Automatic LLM review retry**: a review request that hits a transient failure (429 / 5xx / transport / empty response, etc.) retries once; retries are bounded by the leftover approval window (they never eat into the countdown), honor `Retry-After`, and auth/config-class errors never resend credentials; the failure trail is recorded in the `attempts` audit.
-- Every "needs a human" case delegates to the official panel for the countdown; **the timeout marker is written only by the host timer** — the client only reports an outcome, so it cannot be forged.
-
----
-
-## Platform support
-
-| Platform | Status | Notes |
-|---|---|---|
-| Windows (Git Bash) | ✅ primary dev/test environment | path decisions and shell parsing are developed and tested against this baseline |
-| macOS / Linux / WSL | 🟡 not yet validated by real users | the code is cross-platform: paths are dispatched by syntax (posix vs win32), bash is the primary parser (pwsh branches run on Windows only), and the macOS `/tmp→/private/tmp` alias plus POSIX critical-path protection are pinned by contract tests (`tests/posix-platform.test.mjs`). Real-world feedback is welcome |
-| Android browser access to dsh web | ⚠️ feedback only | UI experience of the settings card / approval panel on narrow viewports and touch screens can be reported, but **no support promise** (no phone-width adaptation of the official UI) |
-| Android-native environments (Auto preset) | ❌ explicitly unsupported | Termux / root / adb / shizuku and similar environments differ too much (custom paths are rampant across Chinese Android vendors); the Auto preset there is a hobbyist experiment at best |
-
-**Feedback**: report at [GitHub Issues](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/issues) with the platform, dsh version, plugin version, the exact command, and the expected behavior.
+> The full five-stage hook sequence (⑤ artifact registration, ⑦ notice delivery) is in [docs/02](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/blob/main/docs/02-tool-call-lifecycle.md); the two static layers are consulted through the host `tools/pre-execute` waterfall, and the peer-shortcut shapes are in [docs/09](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/blob/main/docs/09-defense-in-depth.md).
 
 ---
 
 ## Installation
 
-Published to npm (`@quill507/dsh-auto-approval-llm`) — install directly:
+**Prerequisites**: the session or preset is on the **Auto tier** (`danger-full-access` + `approval: ask`); DSH `0.1.5-rc.2`+; Node `^22.19.0 || >=24.0.0`.
 
 ```bash
 dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 ```
 
-Runtime: Node `^22.19.0 || >=24.0.0` (same value as `engines` in `package.json`).
-
-Local development build / injection:
-
-```bash
-npx tsc -p tsconfig.json   # compile host → lib/
-npx tsdown                 # build client bundle → lib/client.js
-```
-
-With the repo loaded in a web profile as a `link:` dependency: host changes take effect after recompiling and restarting dsh; client changes are hot-delivered after rebuilding.
-
-> Note: the plugin depends on DSH's `auto` permission preset (`danger-full-access` + `approval: ask`) and is the single terminal for `approval/request` — **do not enable it together with other approval plugins** (e.g. dsh-approval-llm / dsh-auto-review).
+- **Restart dsh** after installing, so the host side takes effect.
+- **Auto tier only** (other permission tiers are untouched); this plugin is the single terminal answerer for `approval/request` — **do not enable it alongside another approval plugin**.
+- **Platforms**: Windows + Git Bash is the primary development and test baseline; macOS / Linux / WSL are adapted in code but not verified by real users; Android native environments are unsupported. → [docs/19](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/blob/main/docs/19-platform-support.md)
+- **Feedback**: please file a [GitHub issue](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/issues) with your platform, dsh version, plugin version, reproduction command and expected behavior.
+- Local development: `npx tsc -p tsconfig.json` plus `npx tsdown`, loaded through a `link:` dependency (host changes need a restart; client changes hot-reload). → [docs/14](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/blob/main/docs/14-code-map.md)
 
 ---
 
 ## Quick start
 
-1. Make sure the session/preset is on the **Auto** preset.
-2. Open Settings → Plugins → Auto Approval and configure as needed; defaults work out of the box (empty config = static rules + session-model review + reject-style timeout fallback).
-3. To route approval through your own model: in the "Online review model" card fill in protocol / API base URL / model name / API key → Save → Test connection.
-4. If medium-risk popups are too frequent or timeouts slip through: raise "Medium-risk countdown", or set "Timeout action" to `Reject` / `Auto-approve low-risk`.
+1. Switch the session or preset to the **Auto tier**.
+2. Open Settings → Plugins → Auto approval. **The defaults already work** (routine calls pass statically; ambiguous ones go to session-model review; on timeout `timeoutAction` applies, reject by default).
+3. To route reviews through a specific model: set the channel's model source to "DSH model" in the Online review model card and pick one, or choose "Custom endpoint" and fill in protocol / base URL / model / key → save → test connection.
+4. If panels feel too frequent: raise the medium-risk countdown, or set the timeout action to `Reject` / `Auto-approve low-risk`.
 
-> 📚 Detailed documentation site: <https://cuddly-guacamole.github.io/dsh-auto-approval-llm/>
+> **Session commands** (not registered by default): `/approval-mode` to inspect the current session mode, `/approval-mode manual|smart|unattended` to set it, and `/approval-reset` / `/approval-reset-all` to reset the breaker — enable `slashCommandsEnabled` in the settings card and restart.
 
 ---
 
 ## Screenshots
 
-Used under the Auto permission preset (`Settings → General settings → Permissions → Auto`; Read Only / Workspace Write / Auto / Full access):
-
-![Auto permission preset](https://raw.githubusercontent.com/cuddly-guacamole/dsh-auto-approval-llm/main/assets/permission-auto-preset.png)
-
-Settings card overview — top-level switches save instantly, collapsible sub-cards below:
-
 ![Settings overview](https://raw.githubusercontent.com/cuddly-guacamole/dsh-auto-approval-llm/main/assets/settings-overview.png)
 
-Timers & breaker — three countdown tiers, breaker anti-hijack and both breaker thresholds:
-
-![Timers & breaker](https://raw.githubusercontent.com/cuddly-guacamole/dsh-auto-approval-llm/main/assets/settings-timers-breaker.png)
-
-Online review model — API protocol / base URL / model / key (the key is never shown in the frontend):
-
-![Online review model](https://raw.githubusercontent.com/cuddly-guacamole/dsh-auto-approval-llm/main/assets/settings-online-reviewer.png)
-
-Safety rules — safety prompt / allow & deny lists / declarative rules / dry-run:
-
-![Safety rules](https://raw.githubusercontent.com/cuddly-guacamole/dsh-auto-approval-llm/main/assets/settings-safety-rules.png)
-
-Category switches & trust mode — standard/aggressive location modes, a switch to let privilege commands into LLM review, and per-category three-state overrides:
-
-![Category switches & trust mode](https://raw.githubusercontent.com/cuddly-guacamole/dsh-auto-approval-llm/main/assets/settings-categories-trust.png)
-
-Confirmation-based learning — after N real human confirms of the same signature the action auto-passes (each pass still goes through one online review); learned entries can be viewed and revoked:
-
-![Confirmation-based learning](https://raw.githubusercontent.com/cuddly-guacamole/dsh-auto-approval-llm/main/assets/settings-learning.png)
-
-Approval panel — the countdown sits on the button that will auto-execute on timeout (here `timeoutAction=low-risk-allow` → a medium-risk request auto-**rejects** on timeout, so "Reject" runs the countdown and "Allow once" stays clean):
-
-![Approval panel · Reject countdown](https://raw.githubusercontent.com/cuddly-guacamole/dsh-auto-approval-llm/main/assets/approval-panel-countdown-reject.png)
-
-Session approval stats — the "Auto Approval" header-button popup: totals / allowed / rejected / timeout / breaker + recent records:
+![Approval panel](https://raw.githubusercontent.com/cuddly-guacamole/dsh-auto-approval-llm/main/assets/approval-panel-countdown-reject.png)
 
 ![Session approval stats](https://raw.githubusercontent.com/cuddly-guacamole/dsh-auto-approval-llm/main/assets/session-stats.png)
+
+The remaining surfaces (timers and breaker / safety rules / category switches and trust mode / confirmation-based learning / online review model / permission preset) are documented in [docs/10 · Client UI](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/blob/main/docs/10-client-ui.md).
 
 ---
 
 ## Configuration
 
+The table below lists the common keys only; **every key, its full semantics and its adjudication exceptions are in [docs/12 · Configuration](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/blob/main/docs/12-config.md)**.
+
 | Key | Default | Description |
 |---|---|---|
 | `enabled` | true | Master switch |
-| `autoSwitchPolicyToAsk` | false | Flip `never` to `ask` for the auto preset with override=never (patched to true at install); configurable in the settings card (top-level switch, saves instantly) |
-| `timeoutAction` | `reject` | Timeout action: `reject` / `allow` / `low-risk-allow` (auto-approve only LOW). delete / disk are exempt in every mode (pinned-reject on timeout); protected / privilege (while the privilege opt-out is off) escape this key only under the aggressive mode or an explicit ask |
-| `llmReviewScope` | `low-or-above` | Which tiers (LOW/MEDIUM/HIGH) are sent for LLM review |
-| `llmTakeoverScope` | `medium-or-below` | Which tiers allow the LLM verdict to take over directly (values `low` / `medium-or-below` / `high-or-below`; the schema accepts `high-or-below`, but it behaves identically to `medium-or-below` — the HIGH branch never hands control to the LLM, high risk always lands on a human, so picking it does not buy HIGH automation) |
-| `defaultReviewMode` | `smart` | Default per-session review mode: Manual / Smart / Unattended |
-| `lowRiskSeconds` / `mediumRiskSeconds` / `highRiskSeconds` | 5 / 8 / 10 | Countdown seconds per tier |
-| `breakerAntiHijackMs` | 0 | Disable breaker panel buttons for this many ms; 0 disables; YAML only — no settings-card control |
-| `panelDelayMs` | 3000 | Countdown asks show status only on the session header control before the official approval panel opens (ms, 0–10000, 0 = open immediately); a review that settles inside the window means no panel appears; configurable in the settings card (Timers & breaker) |
-| `maxConsecutiveDenials` | 3 | Consecutive LLM-denial breaker threshold; 0 off |
-| `maxTotalDenials` | 20 | Cumulative denial breaker threshold; 0 off |
-| `classifierSource` | `session` | Fast-decision lane model source: `session` (follow the conversation) / `preset` (DSH-configured model, with `classifierProvider`+`classifierModel`) / `endpoint` (shared custom endpoint, no longer maintained) |
-| `classifierProvider` / `classifierModel` | ''/'' | Fast-decision DSH preset model (required pair when `classifierSource=preset`) |
-| `reviewerSource` | `session` | Deep-review lane model source: `session` / `preset` (with `reviewerProvider`+`reviewerModel`) / `endpoint` (shared endpoint) |
-| `reviewerProvider` / `reviewerModel` | ''/'' | Deep-review DSH preset model (required pair when `reviewerSource=preset`) |
-| `reviewerReasoning` | '' | Deep-review reasoning effort for host-route models: `''` follows the adapter default; explicit values (off/minimal/low/medium/high/xhigh/max) are forwarded as the dsh reasoningEffort — a model that does not support it fails loudly, never silently |
-| `reviewerMaxTokens` | 2048 | Deep-review output cap (tokens, clamped 256–16384) |
-| `classifierReasoning` | '' | Fast-decision reasoning effort (same semantics as `reviewerReasoning`) |
-| `endpointUrl` / `endpointModel` / `endpointProtocol` | ''/''/`openai` | Shared custom endpoint (both lanes' `endpoint` source): OpenAI/Anthropic-compatible URL/model/protocol. Local mock and self-hosted services connect through it; without a resolved key the review fails closed rather than silently falling back |
-| `safetyPrompt` | '' | Extra policy appended to the review model (hot-applied after save) |
-| `allowlist` / `denyList` / `humanOnlyList` | [] | Exact tool-name match |
-| `rulesText` | '' | Declarative rules (take precedence over the built-in lists; optional `[agent:…]` / `[workspace:…]` dimension prefix, comma = AND; parse error voids the whole text) |
-| `rulesDryRun` | false | Dry-run: log rule hits without enforcing; YAML only — no settings-card control |
-| `maxArgsChars` | 4000 | Max length of recovered tool arguments |
-| `loopDetectionThreshold` | 0 | Loop guard: after the same call (tool + argument hash) has been silently auto-allowed N times in a row, the Nth call turns into a human ask with a **pinned reject countdown** (attended = a real panel; unattended = deny on timeout); 0 off, 1 clamps to 2 with a warning. **Enabling changes behavior for reads too: consecutive repetitions of read-only commands will be asked** (static-allow rides the gate); the gate only rides the auto-allow lanes (static / classifier / no-review allow, four sites), the explicit allowlist is exempt, and declared-rule allows, learned allows and attended timeout-approvals stay outside the gate; the escalated ask deliberately bypasses LLM takeover (the LLM already allowed it N times); human confirmations that feed the learning layer neither count toward the streak nor auto-answer the escalated ask; oversized arguments (>1000 chars / 25 items) can fold into one key (asks more, never less); streaks survive a disable/re-enable cycle; the manual review mode settles escalations as a plain status-less ask (no countdown, per its contract); YAML-only (no settings-card control) |
-| `notifyUser` | true | "Model approved" notice into the session |
-| `showSessionPanel` | `auto` | Session-header button: Off / Auto only / On; the control also carries the approval status (name while idle, countdown/outcome while an ask is live) |
-| `workspaceRoot` / `dshHome` / `tempRoots` | ''/''/[] | Path roots (DSH_HOME is protected by default) |
-| `classifierTimeoutMs` / `classifierMaxOutputTokens` | 8000 / 1024 | Classifier timeout and output cap |
-| `reviewMaxRetries` | 1 | Extra review attempts after a failed review (0 single-shot / 1 default / 2 max; transient failures only — rate-limit, 5xx, transport, empty response, LOW-sync timeouts — bounded by the approval-countdown remainder; auth/config errors never retry); YAML only — no settings-card control |
-| `autoModeNoticeEnabled` | true | Injects an English context notice to the agent on entering/leaving the auto approval mode (independent switch) |
-| `onboardingMessageEnabled` | true | Injects a one-time English onboarding message to the agent in the first Auto session (context notice, not a user banner); once off it is never injected again |
-| `reviewWaitSeconds` | 5 | Per-attempt LLM review wait time (s, 1–10); raise it when the official channel's TTFB is slow; recommended not to exceed the low-risk countdown |
-| `debug` | false | Debug mode: writes `approval-debug.jsonl` and `[debug]` logs |
-| `redactResults` | false | When on, successful tool results also pass through the redactor before being fed back to the model (post-execute side) |
-| `reviewerContextFacts` | false | YAML only — no settings-card control. Context-enhanced review: attach structured workspace facts (target existence/kind/size + up to 8 session-created files) to the LLM review input; off by default (payload stays identical to previous releases). Boundaries: out-of-workspace targets report existence/kind only, never size; temp-root files never enter recent_creates; any probe failure omits the whole facts block |
-| `editDiffPreview` | false | Edit-class tools (write/edit/str_replace_editor non-view/apply_patch) entering human approval show a line-level red/green diff of the target file in the approval panel. Display-only: never part of any decision or of the LLM review input; omitted automatically on any failure. Boundaries: readable in-workspace non-protected targets diff against current content; whole-file writes (write/create) with unreadable targets preview a pure-addition diff of the new content only (target never read); compare-class tools omit when unreadable; targets ≤1 MiB (lstat without following + post-read byte re-check, junction escapes omitted); LCS ≤1024 lines/side, lines >200 chars ellipsized, output ≤200 lines and ≤32 KiB (truncated marker `…truncated`); official semantics mirrored (ambiguous/existing/out-of-range → omitted); countdown literals inside the diff block are stripped |
-| `rejectGuidance` | true | Rejection guidance: when a tool call is rejected, the agent gets a short whitelist-only note (source/category enums — never tool names or free text) to cut blind retries. On by default. Fires on rule/denyList/category denials and the official "user rejected tool" shape; per-call dedup plus a 5/60s rate cap; fail-closed, injection never disturbs the approval path |
-| `maintenanceDshPaths` | [] | Host-only key: DSH_HOME subtrees for operator maintenance (absolute paths). Inside them the guard's DSH_HOME hard-deny is relaxed for NON-runtime-state files only (skills, profiles, docs); every plugin runtime-state basename (history/audit/learning…) stays hard-denied, shell write vectors stay hard-denied, and the fenced trees (sessions/plugins/credentials*) can never be named. Patch/YAML only |
-| `categoryPolicy` | `{}` | Tri-state switches for 12 categories: `{category: auto\|ask\|deny}`, missing = `inherit` (previous behavior); delete/protected/disk (and privilege/protected while their unlock key is off) are LOCKED to `ask` (other values warn + dropped); harnessInternal/unknown have no key and cannot be configured |
-| `categoryMode` | `standard` | Trusted-directory mode: in `standard`, routine locations = workspace ∪ `trustedDirs`; `aggressive` removes the location whitelist so any location counts as routine (the sensitive-name fuse, runtime-state hard-deny, symlink re-check and other danger gates stay untouched; the UI states what is opened when switching) |
-| `privilegeAutoReview` | false | Unlocks the privilege category clamp (off by default = fail closed): privilege can then be set to auto/ask/deny and flows through the classifier + LLM review + countdown pipeline; delete/protected/disk stay locked |
-| `protectedAutoReview` | false | Unlocks the protected category clamp (off by default = fail closed): an unconfigured protected call stops being pinned to an automatic reject and becomes a standing human ask instead — a category ask returns in pre-execute, so the **reviewer is still never asked** and a human must answer; set the category to `auto` explicitly to auto-allow it. **What the two states actually do**: off (the default) = LOCKED — under the **aggressive mode or an explicit `ask`** the ask carries a **hard-reject countdown** that settles as a rejection after `highRiskSeconds` (10 s) and that no `timeoutAction` can override — an unattended session never hangs; under the standard mode with nothing configured the category is already `inherit` and goes through the ordinary review pipeline, settling by `timeoutAction` on timeout; on with nothing configured = a **status-less ask that publishes no countdown state and never resolves automatically**, so it simply waits while nobody is there (the panel's `⏸️ Awaiting human approval — no auto-countdown.` marks this state) — that trades "reject automatically" for "wait for the human", so unattended use needs an explicit `categoryPolicy.protected`. **Credential material is unaffected**: reads of sensitive names/trees and of critical paths — including the read source of a write head such as `cp` / `tee` / `dd` — are flagged as credential reads and stay locked with this switch on, so only non-credential workspace metadata (`.git`, `.vscode`, …) is unlocked. Writes into credential trees stay hard-denied either way. The floor is scoped by the category layer: an opaque line (containing `(` / `{` / `$(` / a here-document) is `unknown`, so it is neither unlocked nor floored; shell commands now get a symlink-escape re-check too (see docs/03 §3.4: only escapes onto credential trees, `DSH_HOME` or the runtime state are hard-denied, while a plain external landing spot keeps its previous behaviour) |
-| `trustedDirs` | [] | Host-only key: extra trusted directory roots (array of absolute paths) — members of the `standard`-mode location whitelist and of the symlink re-check zone shared by both modes; credential/home/dshHome/critical paths are excluded; patch/YAML only — card saves won't wipe it |
-| `trustedDshSubpaths` | [] | Host-only key: DSH_HOME subtrees an Auto session may write (array of absolute paths). Empty by default = the whole DSH_HOME tree stays hard-denied (consistently across `edit`/`write`/`apply_patch`/`str_replace_editor`); a listed subtree gets the same allow as the plugin's own development zone. Patch/YAML only. Entries are dropped with a warning when they are not absolute, sit outside DSH_HOME, name DSH_HOME itself, cover `sessions`/`plugins`/`credentials*`, or normalize into a critical tree. **Know before enabling**: skill files are injected into the agent's context as instructions, so opening `skills` lets the agent durably rewrite its own constraints. The plugin's runtime-state hard-deny (history/audit/learning…) is orthogonal and unaffected |
-| `directHumanEnabled` | false | Direct-human channel: the agent may call `dsa_request_user` to route a follow-up operation to a human instead of the LLM classifier. Off by default = zero behavior change. The tool is REGISTERED only when the switch is on at boot (tool sets are not hot-swappable — enabling needs a restart); the answerer and execute checks read the switch live, so turning it off stops the channel at once |
-| `slashCommandsEnabled` | false | Registers `/approval-mode` `/approval-reset` `/approval-reset-all` in the command palette (review-mode show/set + breaker reset). Off by default = zero command surface. Command sets are not hot-swappable — they are REGISTERED only when the switch is on at boot (enabling needs a restart); every handler reads the switch live, so turning it off stops the already-registered commands at once |
-| `learningEnabled` | false | Confirmation learning: an operation approved manually enough times gets auto-released (a hit still passes one standard online review); off by default = zero behavior change. High risk / LOCKED categories / sensitive paths never participate (unknown is learnable since 0.0.15); max 50 learned releases per root session |
-| `learningThreshold` | 3 | Manual confirmations required before a learned release (clamped to 2–10 on save); a manual denial resets that signature's count |
+| `timeoutAction` | `reject` | Timeout action: reject / allow / low-risk only (delete and disk are always denied regardless of this key) |
+| `llmReviewScope` | `low-or-above` | Which risk tiers go to LLM review |
+| `llmTakeoverScope` | `medium-or-below` | Which tiers let an explicit LLM verdict decide directly |
+| `lowRiskSeconds` / `mediumRiskSeconds` / `highRiskSeconds` | 5 / 8 / 10 | The three countdowns (seconds) |
+| `defaultReviewMode` | `smart` | Per-session review mode: manual / smart / unattended |
+| `maxConsecutiveDenials` / `maxTotalDenials` | 3 / 20 | Breaker thresholds (0 disables) |
+| `loopDetectionThreshold` | 0 | Loop-guard threshold (0 = off; YAML only) |
+| `rulesText` | '' | Declarative rules (`[agent:…]` / `[workspace:…]` prefixes) |
+| `allowlist` / `denyList` / `humanOnlyList` | [] | Exact tool-name lists |
+| `classifierSource` / `reviewerSource` | `session` | Model source per channel: session / preset / endpoint |
+| `endpointUrl` / `endpointModel` / `endpointProtocol` | '' / '' / `openai` | Shared custom endpoint (no longer maintained, kept for compatibility) |
+| `categoryPolicy` / `categoryMode` / `trustedDirs` | `{}` / `standard` / [] | Category tri-states, location mode and trusted directories |
+| `privilegeAutoReview` / `protectedAutoReview` | false | Unlock privilege / protected respectively (differences in docs/17) |
+| `learningEnabled` / `learningThreshold` | false / 3 | Confirmation-based learning switch and threshold (2–10) |
+| `editDiffPreview` / `reviewerContextFacts` | false | Diff preview / reviewer context facts (YAML only) |
+| `slashCommandsEnabled` / `directHumanEnabled` | false | Register `/approval-*` commands / direct-human channel (the agent can route a call to a human; both need a restart) |
+| `debug` / `redactResults` / `notifyUser` | false / false / true | Debug log / redact successful results / approval notice in-session |
 
-> Top-level switches (enable / timeout action / review & takeover scopes) save instantly, as does the Advanced sub-card (default mode / flip-never-to-ask / auto-mode switch notice / session panel). Each sub-card has independent Save/Discard buttons (the Safety rules card also has Restore defaults). Host-only keys (workspaceRoot etc., plus the control-less `rulesDryRun` / `breakerAntiHijackMs` / `reviewMaxRetries`) are configured via patch/YAML; card saves won't wipe them.
+> The settings card is a set of collapsible sub-cards with immediate save for top-level switches, and invalid configuration values raise a red banner plus a "Try to fix" button → [docs/10](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/blob/main/docs/10-client-ui.md). host-only keys (`workspaceRoot`, `trustedDirs`, `trustedDshSubpaths`, `maintenanceDshPaths`, `rulesDryRun`, `breakerAntiHijackMs`, `reviewMaxRetries` and friends) are configured through patch / YAML, and saving the settings card never clears them.
 
 ---
 
-## Review modes and commands
+## Data files
 
-> The commands below are NOT registered by default: enable "Register /approval-mode /approval-reset /approval-reset-all commands" in the settings card (`slashCommandsEnabled`) and restart to get them in the palette; turning the switch off live disables the already-registered commands at once.
+Canonical location: `<DSH_HOME>/auto-approval-llm/` (**deliberately outside the plugin package directory** — an npm upgrade replaces the whole package directory).
 
-- `/approval-mode` — show the current session review mode
-- `/approval-mode manual|smart|unattended` — set it (persisted)
-- `/approval-reset` — reset breaker counters and in-flight approval state (session-scoped)
-- `/approval-reset-all` — reset breaker counters and in-flight approval state across sessions
-
----
-
-## Data files (canonical location: `<DSH_HOME>/auto-approval-llm/`)
-
-All six files are canonically located in the `auto-approval-llm/` directory under `DSH_HOME` (default `~/.dsh`), created on demand by the plugin. This is deliberately **outside the installed package**: an npm upgrade replaces the whole package directory, so state kept inside it is deleted on every version change.
-
-- **Reads** and **writes** target exactly one location: reads always return the canonical path (read and write must name the same path — a split brain would silently lose every persisted change on the next load), and the write path creates the directory on demand. The usability cache is re-checked on every resolution, so a directory deleted while the host runs is detected and recreated.
-- **When the directory cannot be created or refuses writes, the write fails closed**: `appendAuditLine` returning false turns every verdict into a rejection, and a one-time-per-process `console.warn` names the directory. There is no fallback and no migration — the earlier package-root chain (read fallback, carry-forward, write fallback, boot probe, copy reconciliation) was a one-way bridge for older installs and has been removed on its own retirement date (version 0.0.25): silently relocating the audit into the npm-owned package tree would point it at exactly the directory an upgrade replaces.
-- **Retry semantics**: the same-path retry happens only for errors raised while OPENING the target (`EBUSY`/`EAGAIN`/`EINTR` transient sharing conflicts plus the "location refuses writes" codes — no byte has moved yet); errors that can fail after bytes moved (`ENOSPC`/`EIO`/`EMFILE`) are never retried, because replaying the line would splice a fragment and a full line into one corrupt record.
-- **Protection is stronger**: the canonical directory sits under `DSH_HOME`, where the guard denies writes outright — not only for these six basenames — while reads still produce a `runtime-state-read` observation event.
-- **Older installs (≤ 0.0.24 wrote to the package root) do not migrate automatically**: records left in the package root are no longer read and are deleted when an upgrade replaces the package directory; move the six files into the canonical directory by hand before upgrading if they matter.
-
-| File | Meaning |
+| File | Semantics |
 |---|---|
-| `history.jsonl` | Approval history (in-memory window of 200 + on-disk; rotates >1 MB). Deleting the file neither reloads nor clears the memory window; the next decision recreates it |
-| `audit.jsonl` | Append-only audit: `decision` records + a `clear` tombstone + non-decision observation events (`result-redacted` / `mask-failed` / `learning-*` / `rules-context-missing` / `rules-parse-error` / `runtime-state-read` / `trusted-intents` / `permission-change` and others) |
+| `history.jsonl` | Approval history (200-entry memory window plus disk, >1 MB rotation) |
+| `audit.jsonl` | Append-only audit: decisions, clear tombstones and non-decision observation events |
 | `review-mode.json` | Per-session review-mode snapshot |
-| `llm-latency.jsonl` | Real LLM review/classify response-time stats (latest 100 MIN/AVG/MAX; rotates >1 MB) |
-| `approval-debug.jsonl` | Written only when debug mode is on: review/approval timeline (decision/risk/tookMs/outcome/source), rotated >1 MB |
-| `learning.json` | Confirmation-learning entries: SHA-256 signature keys + redacted template skeletons; 30-day TTL / max 100 entries evicted by last use, atomic tmp+rename writes, isolated per workspace (turning the switch off keeps the data) |
+| `llm-latency.jsonl` | Real LLM response latency statistics (last 100, >1 MB rotation) |
+| `approval-debug.jsonl` | Review/approval timeline, written only in debug mode |
+| `learning.json` | Learning entries (SHA-256 signature key plus a redacted skeleton; 30-day TTL, per-workspace isolation) |
 
-Query: `node scripts/audit-query.mjs [--last N|--tool X|--session S|--source S|--since ISO|--json]`
-
-Friction report (read-only): `node scripts/friction-report.mjs [--file <audit.jsonl>] [--latency <llm-latency.jsonl>] [--since ISO] [--window N] [--json]` — summarizes the panel-mediated rate (LLM takeovers included), how many answers a human gave, the countdown-settled rate, rejection sources, the cross-tab of human answers against the LLM verdict in hand, and how each review lane settled. It also evaluates the unattended-window criterion over the last N sessions (by last activity) and prints `PASS` / `FAIL` / `VACUOUS` / `INSUFFICIENT` with exit codes 0/1/2/3. A window with no LLM verdict to overturn reports `VACUOUS`, never a pass.
+When the directory cannot be written, the plugin **fails closed**: the audit gate turns every verdict into a denial and prints a one-time warning; there is no fallback and no migration. Query with `node scripts/audit-query.mjs`; read-only friction report with `node scripts/friction-report.mjs`. → [docs/11](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/blob/main/docs/11-data-persistence.md)
 
 ---
 
-## Security design
+## Security model summary
 
-- **Single terminal**: one decision-maker per approval (prepend + global), avoiding double popups / double writes / broken audit.
-- **Fail-closed**: reviewer timeout/garbage/failure → reject or hand to a human; ESCALATE always goes to a human and is never auto-allowed by `timeoutAction=allow`; reviewer failure doesn't count toward the breaker.
-- **Reasoning-blind**: the reviewer sees only the tool identity, structurally sanitized arguments, bounded direct user messages (the sole authorization evidence) and workspace facts — reviewer prose and tool output are stripped.
-- **Key never leaves the host**: the online-review key lives in DSH credentials, resolved per operation; the frontend only shows "Configured".
-- **Countdown button rule**: the countdown is attached only to the button that will auto-execute on timeout — `timeoutAction=Allow` → auto-approve, "Allow once" counts down and Reject stays clean; `timeoutAction=Reject` / `Auto-approve low-risk` → medium/high risk auto-reject on timeout, "Reject" counts down (with low-risk-auto-approve, only low risk auto-passes). The medium-risk default of 8 s is tight — raise it as needed.
-- **Diff preview lives only in the human panel**: the edit-diff text is appended only to the ask reason (visible to the human panel) — it never enters the review payload / REVIEWER_SYSTEM (reasoning-blind), never enters history/audit; countdown literals inside the block are stripped before injection and the client parses only the post-hide text, so it can never alter any auto-answer path. Protected/secret files (`.env` etc.) are never read for old content (compare-class tools omit entirely; whole-file writes preview only the new content from the tool arguments, so external/protected old content never surfaces); their old content persists in the session approval/asked log like the tool arguments do (official contract is log-only, invisible to the model context — the same exposure class as the existing arguments).
-- **Guard-fuse denials are audited**: a `tools/guard` hard-deny or symlink-escape refusal first records a `decision` row with `source: guard`, `outcome: rejected` (reason carried) and then rejects the call — a failed audit write never softens the denial (the call stays refused). The layer is consulted through the host waterfall and is skipped entirely when a peer shortcuts it (docs/09, "reachability").
-- **rulesText parse errors are loud**: on both planes (pre-execute and answerer) a parse error logs via `console.error` + debugLog and lands a deduplicated `rules-parse-error` audit event — declarative rules no longer lapse silently.
-- **Runtime-state reads are audited by default**: reading the plugin's runtime-state files (history/audit/learning… — structured read tools such as read/grep plus shell readers) appends a default-on `runtime-state-read` non-decision audit event; purely observational, it never denies or changes any verdict.
+- **Single terminal answerer**: one decision-maker per approval (prepend + global), so there are never two popups or two writes.
+- **fail-closed**: reviewer timeout / garbage / failure → reject or hand to a human; ESCALATE always goes to a human and is never auto-allowed by `timeoutAction=allow`.
+- **reasoning-blind**: the reviewer sees only the tool name, structurally sanitized arguments, bounded direct user messages (the sole authorization evidence) and workspace facts.
+- **Keys never leave the host**: the online-review key lives in DSH credentials, is resolved per operation, and the frontend only ever shows "Configured".
+- **The audit trail cannot be hand-edited**: append-only with tombstones on clear; even a `tools/guard` hard-deny is written to the audit before being rejected (a failed audit write never softens the denial).
+- **The timeout marker's only author is the host timer**; the client only reports outcomes and cannot forge one.
 
 ---
 
-## Acknowledgements
+## Known limitations
 
-This project references or derives from the following open-source projects — thanks to their authors and communities:
-
-- **[@nanmicoder/dsh-auto-mode](https://github.com/NanmiCoder/dsh-auto-mode)** — the core auto-approval pipeline (Auto preset + static rules → LLM classifier → human): protected paths, static assessment, shell safety parsing and LLM pre-classification were ported and re-implemented independently in `src/auto/` (the project works fine without it).
-- **[@anionex/dsh-vision-toolkit](https://github.com/Anionex/dsh-vision-toolkit)** — the settings UI patterns: online model fields (API protocol / base URL / model / key, with the key stored in DSH credentials and never shown in the frontend), the red error banner with a fix button, and the "reuse DSH native CSS and UI primitives" approach.
+- **When a peer plugin short-circuits, neither static layer nor the guard is consulted**: if another plugin returns a non-decision object without a `reason` first in the `tools/pre-execute` waterfall, the host dispatches the call directly — the plugin has no way to self-check this at startup. → [docs/09](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/blob/main/docs/09-defense-in-depth.md)
+- **The loop guard is not a security boundary**: it only stops a stuck loop, and a slightly different argument bypasses it.
+- **A `rulesText` parse error invalidates the whole block** (fail-open direction); the settings card warns but does not block saving.
+- **With `protectedAutoReview` on and no explicit category policy**, a protected ask becomes an untimed human ask that **never settles on its own** — an unattended session will wait forever.
+- **Credential material is unaffected by the unlock switches**: reading `.env` / `.npmrc` and similar stays locked even with `protectedAutoReview` on (stricter than needed, so it can over-deny).
+- **Opaque lines** (compound commands containing `(` / `{` / `$(` / heredoc) fall into `unknown` at the category layer: they are neither unlocked nor covered by the credential-read floor, i.e. neither tightened nor relaxed.
+- **Old content involved in a diff preview persists in plain text in the session approval/asked log** (the official contract is log-only, invisible to the model context).
+- **Platforms other than Windows have not been verified by real users.**
 
 ---
 
-## Version / publishing
+## Credits
 
-- Install: `dsh plugin --profile web add @quill507/dsh-auto-approval-llm`
-- License: BSD-3-Clause.
+- **Code derivation**: [@nanmicoder/dsh-auto-mode](https://github.com/NanmiCoder/dsh-auto-mode) (MIT License) — the core approval pipeline was ported from that project and re-implemented independently in `src/auto/`; the MIT copyright and permission notice is retained in the source files and the compiled artifacts `lib/auto/*.js` and `lib/client.js`.
+- **Design-pattern reference**: [@anionex/dsh-vision-toolkit](https://github.com/Anionex/dsh-vision-toolkit).
+- **Mechanism references**: [@moon09300731/dsh-approval-gate](https://github.com/moon09300731/dsh-approval-gate) (confirmation-based learning), [@a903067276-rgb/dsh-perm-guard](https://github.com/a903067276-rgb/dsh-perm-guard) (category tri-states + trusted directories), [@PerryLink/dsh-permission-rules](https://github.com/PerryLink/dsh-permission-rules) (rule dimensions).
+- **Contributors**: [@daveycodez](https://github.com/daveycodez), [@MikotoMyWife](https://github.com/MikotoMyWife).
+
+---
+
+## License
+
+BSD-3-Clause ｜ [LICENSE](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/blob/main/LICENSE)
