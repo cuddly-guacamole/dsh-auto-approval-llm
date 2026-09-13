@@ -1341,7 +1341,8 @@ const decisionFeedback = new Map<string, { text: string; at: number }>()
 // the one-shot cross-plane pin that routes the escalated ask into the locked
 // countdown shape in the answerer. Neither map writes history rows nor reads
 // or writes the breaker counters — the escalation rides the ordinary ask
-// vocabulary, so no new adjudicated source exists.
+// vocabulary, so no new adjudicated source exists. Streaks whose authority
+// cannot be resolved share the 'unknown' key (bounded by the per-state FIFO).
 const loopStates = new Map<string, LoopGuardState>()
 const loopGuardPinned = new Map<string, { consecutive: number; threshold: number; at: number }>()
 
@@ -3663,6 +3664,16 @@ export function apply(ctx: Context, rawConfig: Config): void {
     category,
   })
 
+  // Settlement for an escalated call. Manual mode keeps its contract — a human
+  // decides with no automatic countdown — so the escalation lands as a plain
+  // status-less ask there; every other mode rides the locked countdown shape.
+  const loopGuardAsk = (req: any, next: () => Promise<any>, sessionKey: string, category: string | undefined) => {
+    if ((reviewModes.get(sessionKey) ?? config.defaultReviewMode) === 'manual') {
+      return askHuman(req, undefined, next)
+    }
+    return askHuman(req, undefined, next, false, loopGuardStatus(category))
+  }
+
   const loopGuardReason = (toolName: string): string =>
     `[dsh-auto-approval-llm] loop guard: this exact ${toolName} call has been auto-allowed repeatedly (repetition guard, not a risk judgment)`
 
@@ -5153,7 +5164,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
     const loopPinned = req.callId !== undefined ? loopGuardPinned.get(req.callId) : undefined
     if (loopPinned !== undefined) {
       loopGuardPinned.delete(req.callId)
-      return askHuman(req, undefined, next, false, loopGuardStatus(classified.category))
+      return loopGuardAsk(req, next, sessionKey, classified.category)
     }
     if (staticDecision.kind === 'allow'
       && nameChannelLockRefusal({
@@ -5181,7 +5192,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       // passing the pre-execute allow gate (the two planes use different
       // authority predicates), so the streak counts here too.
       if (loopGateFires(sessionKey, toolName, args, req.callId)) {
-        return askHuman(req, undefined, next, false, loopGuardStatus(classified.category))
+        return loopGuardAsk(req, next, sessionKey, classified.category)
       }
       // Static-policy allow: the approval trail must not be silent about a
       // decision that permitted a tool call.
@@ -5295,7 +5306,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
           // Loop guard (answerer plane): the no-review auto-allow is the
           // quietest repeat lane of all — gate it before its history row.
           if (loopGateFires(sessionKey, toolName, args, req.callId)) {
-            return askHuman(req, undefined, next, false, loopGuardStatus(classified.category))
+            return loopGuardAsk(req, next, sessionKey, classified.category)
           }
           const audited = pushHistory({
             sessionId: sessionKey,

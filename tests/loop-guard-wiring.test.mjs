@@ -46,15 +46,20 @@ test('the cross-plane pin is read after the deny terminals and before the static
   assert.ok(oneShot.includes('loopGuardPinned.delete(req.callId)'), 'the pin is consumed on first read (no replay can re-pin a later ask)')
 })
 
-test('the escalated ask settles into the pinned locked shape, before the learning query', () => {
-  const shape = 'askHuman(req, undefined, next, false, loopGuardStatus(classified.category))'
-  assert.equal([...host.matchAll(new RegExp(shape.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'))].length, 3, 'one cross-plane read + two answerer-plane gates share the pinned shape')
+test('the escalated ask settles through the shared helper: pinned reject or manual status-less', () => {
+  const settle = 'loopGuardAsk(req, next, sessionKey, classified.category)'
+  assert.equal([...host.matchAll(new RegExp(settle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'))].length, 3, 'one cross-plane read + two answerer-plane gates share the settlement helper')
+  const helperAt = host.indexOf('const loopGuardAsk = (req: any, next: () => Promise<any>, sessionKey: string, category: string | undefined) => {')
+  assert.ok(helperAt > 0, 'the settlement helper is locatable')
+  const helper = host.slice(helperAt, helperAt + 600)
+  assert.ok(helper.includes("reviewModes.get(sessionKey) ?? config.defaultReviewMode) === 'manual'"), 'manual mode skips the pinned countdown (the manual contract forbids auto-countdown)')
+  assert.ok(helper.includes('askHuman(req, undefined, next)'), 'manual settles as a plain status-less ask')
   const statusAt = host.indexOf('const loopGuardStatus = (category: string | undefined): ReviewStatus => ({')
   const status = host.slice(statusAt, statusAt + 400)
   assert.ok(status.includes("action: 'reject'") && status.includes("phase: 'countdown'"), 'the countdown is pinned to reject — unattended it settles as timeout-deny')
   assert.ok(status.includes('config.highRiskSeconds') && !status.includes('riskSeconds('), 'the window mirrors the LOCKED precedent')
   assert.ok(!status.includes('learnable'), 'the pinned ask carries no learnable context')
-  const firstPinAt = host.indexOf('loopGuardStatus(classified.category)')
+  const firstPinAt = host.indexOf('loopGuardStatus(category)')
   const learnAttemptAt = host.indexOf('await learnAttempt(')
   assert.ok(firstPinAt > 0 && learnAttemptAt > firstPinAt, 'the escalation path precedes the learning query, so learning can neither answer nor feed on it')
 })

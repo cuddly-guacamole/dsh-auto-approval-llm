@@ -819,8 +819,8 @@ const ASK_SITE_ENUM = [
   { label: 'category-ask (audit label, status-less)', count: 1, matches: (a) => a === 'req, undefined, next, false, undefined, undefined, undefined, undefined, classified.category' },
   { label: 'breaker trip', count: 1, matches: (a) => a === 'req, undefined, next, true' },
   { label: 'direct-human target', count: 1, matches: (a) => a === 'req, undefined, next, false, undefined, undefined, false, undefined' },
-  { label: 'loop guard (pinned reject countdown)', count: 3, matches: (a) => a === 'req, undefined, next, false, loopGuardStatus(classified.category)' },
-  { label: 'status-less fallbacks', count: 4, matches: (a) => a === 'req, undefined, next' },
+  { label: 'loop guard (pinned reject countdown, shared settlement helper)', count: 1, matches: (a) => a === 'req, undefined, next, false, loopGuardStatus(category)' },
+  { label: 'status-less fallbacks', count: 5, matches: (a) => a === 'req, undefined, next' },
 ]
 
 test('LP3: exactly the registered learnable sites construct a learnable context', () => {
@@ -868,12 +868,13 @@ test('LP3: exactly the registered learnable sites construct a learnable context'
   // the six status-less asks (rules
   // human / humanOnly / category-ask non-locked / manual / breaker /
   // status-less fallbacks), and the direct-human channel ask (2026-09-04,
-  // learns the target explicitly after resolution). The three loop-guard
-  // sites (2026-09-13 design ruling) share one pinned-reject-countdown shape:
-  // the cross-plane marker read plus the two answerer-plane allow gates, and
-  // none of them carries a learnable context.
+  // learns the target explicitly after resolution). The loop guard (2026-09-13
+  // design ruling) settles through ONE shared helper carrying both shapes —
+  // the pinned reject countdown for auto modes and a plain status-less ask
+  // for manual (the manual contract forbids an automatic countdown) — so it
+  // contributes exactly two askHuman sites; none carries a learnable context.
   const sites = askHumanSites(HOST_SRC)
-  assert.equal(sites.length, 18, 'closed ask-site enum: 8 countdown + 6 status-less + 1 direct-human + 3 loop guard')
+  assert.equal(sites.length, 17, 'closed ask-site enum: 8 countdown + 7 status-less + 1 direct-human + 1 loop guard')
   const perLabel = new Map()
   for (const site of sites) {
     const hits = ASK_SITE_ENUM.filter((entry) => entry.matches(site))
