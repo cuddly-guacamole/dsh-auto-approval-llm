@@ -81,3 +81,12 @@ test('extractRuleTarget keeps its single projection contract', () => {
   assert.equal(extractRuleTarget('{"file_path":"C:/ws/a.ts","content":"body"}'), 'C:/ws/a.ts')
   assert.deepEqual(extractRuleTargets({ file_path: 'C:/ws/a.ts', command: 'noop' }), ['noop', 'C:/ws/a.ts'])
 })
+
+test('an envelope with no action keys keeps its serialized form verbatim', () => {
+  // The raw string is already the serialized envelope; re-serializing it would
+  // double-encode and change which rules an empty envelope matches.
+  assert.equal(extractRuleTarget('{}'), '{}')
+  assert.deepEqual(extractRuleTargets('{}'), ['{}'])
+  assert.equal(extractRuleTarget({}), '{}')
+  assert.deepEqual(extractRuleTargets({ other: 1 }), ['{"other":1}'])
+})

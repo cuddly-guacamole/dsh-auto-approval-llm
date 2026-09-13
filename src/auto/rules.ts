@@ -354,11 +354,18 @@ function targetsOf(record: Record<string, unknown>, fallback: unknown): string[]
   for (const key of ['file_path', 'path', 'cwd', 'workdir']) push(record[key])
   push(record['content'])
   if (candidates.length === 0) {
-    try {
-      const serialized = JSON.stringify(fallback)
-      if (typeof serialized === 'string' && serialized !== '') candidates.push(serialized)
-    } catch {
-      // an unserializable argument envelope projects nothing
+    // An envelope with none of the action keys falls back to its serialized
+    // form. When the caller already handed us a raw string, that string IS the
+    // serialized form — re-serializing it would double-encode (`'{}'` ->
+    // `'"{}"'`) and change which rules a rule-less envelope matches.
+    if (typeof fallback === 'string') {
+      push(fallback)
+    } else {
+      try {
+        push(JSON.stringify(fallback))
+      } catch {
+        // an unserializable argument envelope projects nothing
+      }
     }
   }
   return candidates
