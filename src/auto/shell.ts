@@ -525,7 +525,10 @@ function gitObjectReadProtected(words, roots) {
 }
 /** Deletion hidden behind an interpreter stays outside classifier authority. */
 function destructiveNestedSource(source) {
-    return /(?:^|[\s;&|()])(?:rm|rmdir|unlink|shred|remove-item|del|erase)(?:\s|$)|\b(?:shutil\.rmtree|os\.(?:remove|unlink|rmdir|removedirs)|file\.(?:delete|unlink)|directory\.delete)\s*\(|\.(?:rm|rmsync|unlink|unlinksync|rmdir|rmdirsync|delete)\s*\(|\b(?:delete\s+from|drop\s+(?:table|database)|truncate\s+table)\b/i.test(source);
+    // A backtick substitution is a segment boundary like `$(`, so it belongs in
+    // the anchor set: `` `rm -rf /` `` starts the nested source right after the
+    // backtick and used to miss every anchor here.
+    return /(?:^|[\s;&|()`])(?:rm|rmdir|unlink|shred|remove-item|del|erase)(?:\s|$)|\b(?:shutil\.rmtree|os\.(?:remove|unlink|rmdir|removedirs)|file\.(?:delete|unlink)|directory\.delete)\s*\(|\.(?:rm|rmsync|unlink|unlinksync|rmdir|rmdirsync|delete)\s*\(|\b(?:delete\s+from|drop\s+(?:table|database)|truncate\s+table)\b/i.test(source);
 }
 /**
  * Whether a visible nested-execution source combines a file-write function
@@ -541,7 +544,7 @@ export function nestedSourceWritesToDshHome(source, roots) {
     return WRITE_FN.test(source) && dshHomeExfil(source, roots) === true;
 }
 /** Redirect targets written inside a nested source: `>`, `>>`, `2>`, `&>`. */
-const NESTED_REDIRECT_TARGET = /(?:^|[\s;&|(])(?:\d*&?>{1,2})\s*([^\s;&|()<>]+)/g;
+const NESTED_REDIRECT_TARGET = /(?:^|[\s;&|(`])(?:\d*&?>{1,2})\s*([^\s;&|()<>`]+)/g;
 /**
  * Whether any redirect target inside a nested inline source is a hard-deny
  * target (DSH_HOME / runtime-state / critical paths). Same static heuristic
@@ -1732,7 +1735,7 @@ function shellSyntaxView(line) {
  */
 function opaqueSegmentWords(source) {
     const segments = [];
-    for (const chunk of stripHeredocBodies(source).split(/[\n;&|(){}]+/)) {
+    for (const chunk of stripHeredocBodies(source).split(/[\n;&|(){}`]+/)) {
         const words = [];
         for (const raw of chunk.split(/\s+/)) {
             if (raw === '')
@@ -1799,8 +1802,9 @@ export function hardDenyShellReason(source, shell, roots) {
     // (`echo sudo`) is not misjudged; the per-segment check below is the
     // authoritative guard for decomposed lines. `{` is included so a brace
     // group (`{ sudo ls; }`) is caught before decomposition (a `{` otherwise
-    // makes the line opaque and escapes both fuses).
-    if (/(?:^|[;&|({])\s*(?:sudo|doas|su)(?:\s|$)/i.test(flat))
+    // makes the line opaque and escapes both fuses), and a backtick is a
+    // segment start in the same sense (`` x=`sudo ls` ``).
+    if (/(?:^|[;&|({`])\s*(?:sudo|doas|su)(?:\s|$)/i.test(flat))
         return 'privilege escalation is not permitted by auto mode';
     if (/(?:set-executionpolicy|disable-windowsdefender|clear-disk|format-volume|remove-partition|bcdedit)(?:\s|$)/i.test(flat)) {
         return 'operating-system security or disk policy changes are not permitted';
