@@ -1125,8 +1125,9 @@ const READ_ONLY_OUTPUT_FLAGS = {
 };
 /**
  * Mutating `date` flags in every GNU spelling: the long form may carry its
- * value with `=`, and a short option cluster may fuse its value
- * (`-s2020-01-01`, `-us2020-01-01`). A cluster is a clock write only when `s`
+ * value with `=` and may be abbreviated (`--s`, `--se`), and a short option
+ * cluster may fuse its value (`-s2020-01-01`, `-us2020-01-01`). A cluster is a
+ * clock write only when `s`
  * is the first value-taking letter: `-I[FMT]`, `-d`, `-f` and `-r` swallow the
  * rest of their cluster as a READ-ONLY value, so `date -Iseconds` and
  * `date -Ins` are format spellings rather than `--set`.
