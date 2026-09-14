@@ -10,12 +10,12 @@ host 编排在 `src/index.ts`，真正「长脑子」的静态规则引擎在 `s
 | `constants.ts` <span class="lnum">constants.ts#</span> | 125 | 数值阈值默认值**唯一事实源**：5/8/10s、3/20、4000、8s/1024，及学习族（阈值 3/TTL 30d/100 条/会话放行帽 50）；同时承载设置卡「默认放行工具」显示目录（显示镜像，非放行面） |
 | `risk-tokens.ts` <span class="lnum">risk-tokens.ts#</span> | 24 | HIGH 风险正则（NAME/REASON），供分类器与 policy 共用，防漂移 |
 | `paths.ts` <span class="lnum">paths.ts#</span> | 386 | 路径规范化（Windows 命名空间/NT 别名折叠、~ 展开、win32 小写）、受保护/关键路径判定、运行态文件名单 |
-| `shell.ts` <span class="lnum">shell.ts#</span> | 2550 | Bash/PowerShell 词法分解（sticky 正则状态机）＋ 整行熔断 ＋ 逐段静态分类 |
+| `shell.ts` <span class="lnum">shell.ts#</span> | 2799 | Bash/PowerShell 词法分解（sticky 正则状态机）＋ 整行熔断 ＋ 逐段静态分类 |
 | `policy.ts` <span class="lnum">policy.ts#</span> | 641 | 每次工具调用的确定性第一遍分类 `assessTool`（推断型、保留类型检查） |
 | `rules.ts` <span class="lnum">rules.ts#</span> | 459 | Claude-Code 风格声明规则解析/求值（纯函数，host 与浏览器共用） |
 | `classifier.ts` <span class="lnum">classifier.ts#</span> | 100 | 预分类提示词、参数脱敏、严格响应解析 |
 | `dsh-classifier.ts` <span class="lnum">dsh-classifier.ts#</span> | 140 | 复用 `ctx.llm` 做低 token 分类请求（temperature 0） |
-| `decision.ts` <span class="lnum">decision.ts#</span> | 891 | 纯决策函数：评审解析、人机竞速、来源标注、熔断状态机、静态名单 |
+| `decision.ts` <span class="lnum">decision.ts#</span> | 910 | 纯决策函数：评审解析、人机竞速、来源标注、熔断状态机、静态名单 |
 | `trust.ts` <span class="lnum">trust.ts#</span> | 305 | web 路由信任平面（loopback/LAN 边界、Host 伪造防护、在线端点 URL 校验） |
 | `artifacts.ts` <span class="lnum">artifacts.ts#</span> | 140 | 本会话成功创建路径的内存出处登记（删除豁免依据） |
 | `audit.ts` <span class="lnum">audit.ts#</span> | 147 | append-only 审批审计（清空留墓碑、5MiB 裁剪；审计路径可被测试接缝重定向） |
@@ -92,7 +92,7 @@ flowchart TD
 ```mermaid
 flowchart TD
     B1["① 词法分解 decomposeCommandLine：单双引号状态机；反引号/$(... )/heredoc/() 分组/未闭合引号 → opaque（读不懂就不瞎判，转入工或语义复审） [lex]"]
-    B1 --> B2["② 整行硬拒 hardDenyShellReason：sudo/doas/su/pkexec/runuser/runas/gsudo 提权（锚定段起始，含 { brace group）；set-executionpolicy/clear-disk/format-volume/bcdedit 等系统策略；curl/wget/iwr 的凭据外传；动态删除直指 home [deny]"]
+    B1 --> B2["② 整行硬拒 hardDenyShellReason：sudo/doas/su/pkexec/runuser/runas/gsudo 提权（锚定段起始，含 { brace group）；set-executionpolicy/clear-disk/format-volume/bcdedit 等系统策略；curl/wget/iwr 的凭据外传；动态删除直指 home（四条熔断读「数据载荷剥离视图」，见下）[deny]"]
     B2 --> B3["③ 逐段结构判定：分解后每个段剥 wrapper（env/nohup/sudo 前缀/NAME=value）→ 命令名再验提权；重定向/删除目标过 hardDestructiveTargetReason；find 的 -delete/-exec 提权审查；date 的 -s/--set 时钟写（含缩写、融合与簇拼写；opaque 行内按同一 owner 回收）[segment]"]
     B3 --> B4["④ 分类 classifyEffectiveCommand：删除（只许删本会话自建产物 artifacts.has，否则交人工）→ 只读命令（BASH_READ_ONLY 42 个 / PWSH_READ_ONLY 12 个 + git 只读 + sed -n + find 只读）→ 版本探测 → build/test → 创建(mkdir/touch/new-item) → cp/mv → git 变更 / 网络 / 基建（psql/kubectl/terraform…）→ 兜底「未识别命令，独立分类」 [classify]"]
 ```
@@ -101,6 +101,7 @@ flowchart TD
 - **时钟写是终裁**：`date` 的 `-s`/`--set` 家族（含 `--s`/`--se` 缩写、`-s2020-01-01` 融合、`-us…` 簇、`date --set=` 取值形态，组内行内由 opaque 目标 owner 回收）判**硬拒**，不再只是脱离只读快径。理由：改系统时钟既非会话任务、也无法被会话恢复——它会重定所有记录的时间线并可能使凭据/会话失效；留在 `ask` 层意味着「分类器判对」+「运维未开 timeoutAction=allow」两个前提同时成立才安全，而实测中 `date --se=2020-01-01` 被分类器读成「malformed read-only invocation」并自动放行、真的改动了机器时钟。只读拼写（`date`、`-u`、`+%s`、`-d @0`、`-r f`、`-I…`、`--iso-8601=…`）维持静态放行。
 - `routineInlineProbe`：`python -c` 只放行 import/print 字面量，`node -e` 只放行 require/console.log(process.version) —— 内联代码只认可「绝对安全」形态。
 - 危险 token 提取：`sensitiveMarker`（.ssh/.env/密钥关键词）、`dshHomeExfil`（4 组模式抓 DSH_HOME 外传）、`dynamicHomeTarget`（$HOME 动态目标）→ 全部绕过静态判定。
+- **整行熔断读的是「数据载荷剥离视图」**（`fuseScanView`，<span class="lnum">shell.ts:LfuseScanView</span>）：只把**可证惰性**的跨度等长涂白——**仅限** commit 类命令（`git commit` / `tag` / `notes`）的 `-m`/`--message` 取值（含 `-mX`/`--message=X`/短簇 `-am`），且该 token 必须是完整引号跨度、内部无活替换。活替换（`$( )`、反引号、进程替换）、引号提前闭合或未闭合、无引号操作数、表外命令（`python -m`、`curl -m`）一律原样保留。**heredoc 正文不在剥离面**：定界符是否被引用、消费者如何使用 stdin、正文是否被同一行写盘后执行这三件事都无法在本层判定，故正文保持被判——要写含熔断目标的提交正文请用 `-F <file>`。（**既有边界，如实写明**：opaque 恢复面仍由既有 owner `stripHeredocBodies` 丢正文行，该 owner 的逐行引号状态与「动态解释器名」判定各有一处既有缺口，会把该类行从硬拒降为可应答 ask；不在本轮剥离面内，已登记 backlog。）定位器漏判只等于维持现状。**剥离视图只喂这四条整行熔断**；`decomposeCommandLine` 与逐段判据仍读原文，目标级熔断必须看到每个操作数。
 - **写重定向脱离只读快径**：命令含真实文件写重定向（`>`/`>>`/`>|`/`&>`/`N>`，非 discard sink）时，其段不得走只读命令快径放行——落入既有评估流；`/dev/null`、NUL、`$null` 等 discard sink 维持快径。**只读命令自带的输出 flag 同判**：`sort -o`（含 `-oFILE`/`-uo`）、`tree -o`、`git diff --output=` 等取出的值同样是写目标，先过同一组写目标熔断（破坏性目标 / 运行态文件 / 区内 DSH_HOME），命中即硬拒、未命中则脱离快径——按命令建表（`-o` 对 `rg`/`grep` 是 only-matching，不可共用短旗标表）。
 - **写目标提取不吃相对拼法**：只读命令的 `..` 中段与工作区外相对目标一律进入显式路径判定（`cat b/../../../../x` 与 `cat ../../../../x` 同裁决）。
 - **win32 段归一覆盖别名拼法**：MSYS 裸盘根（`/c`、`//c`）、盘根通配（`C:\*`、`/c/*`）与 NTFS 默认数据流后缀（`file::$DATA`/`file:$DATA`）在 `normalizePath` 的同一处归一到 `C:\` / 文件名本体，故盘根熔断与全部 basename 级保护（插件契约文件、受保护元数据、凭据名）不被拼法绕过。

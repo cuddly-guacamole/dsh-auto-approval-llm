@@ -6,16 +6,16 @@
 
 ```text
 src/
-├─ index.ts              宿主编排：apply()、四挂点接线、16 路由、命令、评审器、审计、学习接线  5789 行
+├─ index.ts              宿主编排：apply()、四挂点接线、16 路由、命令、评审器、审计、学习接线  5815 行
 ├─ auto/                 静态评估纯函数层（27 文件，按字母序）
 │    ├─ artifacts.ts     140  本会话成功创建路径登记（删除豁免依据）
 │    ├─ audit.ts         147  append-only 审批审计（清空留墓碑、5MiB 保尾）
 │    ├─ category.ts      860  12 类三态开关层：归类/优先级合并/指令钳制/信任目录模式
 │    ├─ classifier.ts    100  预分类提示词、参数脱敏、严格响应解析
 │    ├─ constants.ts     125  数值默认唯一事实源（倒计时/熔断/截断/学习族阈值）
-│    ├─ decision.ts      891  纯决策函数：评审解析、人机竞速、来源标注、熔断、静态名单、host-only 键
+│    ├─ decision.ts      910  纯决策函数：评审解析、人机竞速、来源标注、熔断、静态名单、host-only 键
 │    ├─ dsh-classifier.ts 140  复用 ctx.llm 的低 token 分类请求（temperature 0）
-│    ├─ editdiff.ts      468  编辑类工具行级 diff 预览（LCS、官方语义镜像、倒计时字面量剥离）
+│    ├─ editdiff.ts      469  编辑类工具行级 diff 预览（LCS、官方语义镜像、倒计时字面量剥离）
 │    ├─ endpoint-call.ts 256  共享端点连通性探测与模型校验
 │    ├─ latency.ts       169  LLM 评审耗时环形缓冲（settled/aborted 二分、1MB 轮转）
 │    ├─ learning.ts      584  确认制学习：签名、计数、回收、查找、消费闸
@@ -31,17 +31,17 @@ src/
 │    ├─ risk-tokens.ts   24   HIGH 风险正则（NAME/REASON 单一事实源）
 │    ├─ rules.ts         459  声明式规则解析/求值（host 与浏览器共用）
 │    ├─ runtime-paths.ts 293  运行态文件唯一路径 owner（`<DSH_HOME>/auto-approval-llm/` 规范位置；目录无法创建/拒绝写入时 fail-closed——append 失败返回 undefined，由调用方拒绝裁决，不回退包根、不搬家；open 阶段错误允许同路径重试一次，写后错误不重试）
-│    ├─ shell.ts         2550 bash/pwsh 词法分解 + 整行熔断 + 逐段静态分类（最大单文件）
+│    ├─ shell.ts         2799 bash/pwsh 词法分解 + 整行熔断 + 逐段静态分类（最大单文件）
 │    ├─ symlink.ts       182  符号链接创建与目标校验
 │    ├─ tool-stats.ts    94   工具调用统计收集
 │    └─ trust.ts         305  web 路由信任平面（loopback/LAN 边界、Host 伪造防护、在线端点 URL 校验）
 └─ client/
-     ├─ index.ts         React 客户端主体 2980 行（设置卡 8 子卡/面板增强/应答 watcher 装配/浮动按钮/CSS）
+     ├─ index.ts         React 客户端主体 2995 行（设置卡 8 子卡/面板增强/应答 watcher 装配/浮动按钮/CSS）
      ├─ approvals/       应答模块（0.0.12 起；0.0.16 起单协议——remote 源适配 + shared 协议无关核心；rc.2 legacy/feature 已删）
      │    ├─ remote.ts       221
      │    └─ shared.ts       597
      ├─ auto-icon.ts     权限菜单图标 + Auto 风险确认弹窗 642 行
-     ├─ locale.ts        zh/en 双语 550 行
+     ├─ locale.ts        zh/en 双语 552 行
      ├─ human-gate.ts    浮层「人工出手率」派生（HUMAN_SOURCES 与 scripts/friction-report 同源）
      └─ tool-chips.ts    150  工具芯片
 
@@ -60,7 +60,7 @@ tests/
 ├─ perf-settings-rules-parse.test.mjs / perf-poll-backoff.test.mjs / perf-scan-throttle.test.mjs （客户端开销：单次解析、轮询退避、扫描节流）
 ├─ trusted-intent-window.test.mjs（授权证据窗口溢出计数：slot cap/去重/预算交互、拒因 note 两分支、trusted-intents 事件量化 overflowed 标志）/ client-human-gate.test.mjs（浮层人工出手率：与 friction-report 同源名单、空窗口不作零声称、round 边界、中英三键、bundle 装配锚）
 ├─ loop-guard.test.mjs（循环键稳定性/回退、严格连续+fire-and-reset 状态机、FIFO 64、阈值钳制与 resolveConfig 映射）/ loop-guard-wiring.test.mjs（四站点成对锚、allowlist 与 rule-allow 豁免负向切片、跨面标记读位置与 one-shot、pinned 形状先于 learnAttempt、门不写 history 不碰熔断、disposal/sweep 有界、audit-query 渲染）
-└─ 合计 169 个 tests/*.test.mjs（node --test 全绿基线）
+└─ 合计 171 个 tests/*.test.mjs（node --test 全绿基线）
 scripts/
 ├─ build.sh             （DSH 源码仓库布局）tsc 编译 src→lib
 ├─ clean-lib.mjs        构建前清空 lib/（tsc 不删除已删源的旧产物）

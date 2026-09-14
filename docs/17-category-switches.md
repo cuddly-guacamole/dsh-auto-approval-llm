@@ -69,7 +69,7 @@ delete / protected / privilege / disk 四类在配置面上默认**只能收 `as
 
 **例外三：已证实的会话自建物删除（无需配置，始终生效）**。`delete` 仍是 LOCKED，但策略层对「删除目标全部是本会话成功创建过的路径」有不依赖配置的出处豁免（`shell.ts` 的 artifact 分支 → `allowed('delete exact session-created artifacts')`）。该豁免以**结构化字段** `sessionArtifactDeletion` 带出，类别层的锁定钳制与 answerer 的锁定谓词都读它——否则类别层看不到 artifact 注册表，会把这条静态放行拦成锁定询问，使豁免在 aggressive 模式下**永远不可达**（修复见 commit `cb02a3d`）。红线遵守：授权性信号走结构化通道，**不从 reason 文本解析**。
 
-**LOCKED 类的转人行为**：LOCKED 类（delete / protected / disk；privilege 未解锁时）的类别 ask **不再是 status-less**——answerer 注入硬拒倒计时（`action:'reject'` 恒拒、秒数取 `highRiskSeconds` 默认 10），无 LLM 接管 handle、无学习上下文；超时未响应自动 `timeout-deny`（agent 收到「no response: auto-rejected」），**任何 timeoutAction 配置都无法把它变成自动放行**。delete / disk 未显式配置时在**任何档位**都落这一形态（与档位解耦）；protected / privilege 在 standard 档未显式配置时走正常评审管线（见「哪一层决定未配置的 LOCKED 询问」段）。无人值守会话不再因危险命令无限挂起；面板上拒绝按钮带 10s 倒计时可直接点击。
+**LOCKED 类的转人行为**：LOCKED 类（delete / protected / disk；privilege 未解锁时）的类别 ask **不再是 status-less**——answerer 注入硬拒倒计时（`action:'reject'` 恒拒、秒数取 `highRiskSeconds` 默认 10），无 LLM 接管 handle、无学习上下文；超时未响应自动 `timeout-deny`（agent 收到「no response: auto-rejected」），**任何 timeoutAction 配置都无法把它变成自动放行**。delete / disk 未显式配置时在**任何档位**都落这一形态（与档位解耦）；protected / privilege 在 standard 档未显式配置时走正常评审管线（见「哪一层决定未配置的 LOCKED 询问」段）。无人值守会话不再因危险命令无限挂起；面板上拒绝按钮带 10s 倒计时可直接点击。**这类询问在面板文本里带 `LOCKED_ASK_MARKER`**（host 写 token、client 渲染本地化句子），明说「对话里给出的授权对该类询问不生效、只有在本面板点『允许一次』可放行」——此前它与普通倒计时在界面上无法区分，用户以为自己已经授权过而在等一个永远不会到来的答复（收到该提示最早在 `panelDelayMs` 后面板展开时）。
 
 ## 17.5　复合命令：类别取先、指令取严
 
