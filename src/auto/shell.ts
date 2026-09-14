@@ -1141,6 +1141,23 @@ function isDateClockWriteFlag(token) {
     const valueOption = cluster.search(/[dIfrs]/);
     return valueOption >= 0 && cluster[valueOption] === 's';
 }
+/**
+ * Whether a `date` invocation sets the system clock. Setting the clock is
+ * neither a task for an agent session nor recoverable by the session: it moves
+ * the timeline every other recorded event is dated against, it can expire or
+ * resurrect credentials and sessions, and no static rule can bound its effect.
+ * A clock write is therefore refused outright rather than handed to an
+ * independent classifier — one classifier mistake used to be enough to let an
+ * auto session move the machine clock, since such a call is otherwise an
+ * ordinary `ask` and the unattended countdown settles it.
+ */
+function dateClockWriteReason(name, tokens) {
+    if (name !== 'date')
+        return undefined;
+    return tokens.slice(1).some(token => isDateClockWriteFlag(token))
+        ? 'the system clock is not settable from agent sessions'
+        : undefined;
+}
 /** The write targets a read-only command carries inside its own output flag. */
 function readOnlyOutputFlagTargets(name, words, shell) {
     if (shell !== 'bash')
@@ -2009,6 +2026,18 @@ function opaqueOutputFlagReason(source, shell, roots) {
     return undefined;
 }
 
+/** Clock writes recovered from a line that cannot be decomposed. */
+function opaqueClockWriteReason(source, shell) {
+    if (shell !== 'bash')
+        return undefined;
+    for (const segment of opaqueSegmentWords(source)) {
+        const reason = dateClockWriteReason(commandName(segment.words[0]?.text ?? ''), segment.words.map(word => word.text));
+        if (reason !== undefined)
+            return reason;
+    }
+    return undefined;
+}
+
 /**
  * Interpreter boundaries inside a line that cannot be decomposed. The quoted
  * source is one opaque word, so the per-segment loop never saw it and the
@@ -2080,6 +2109,9 @@ export function hardDenyShellReason(source, shell, roots) {
         // target every other vector hard-denies. Recovering just that much (and
         // nothing else) keeps the strongest verdict reachable on opaque lines
         // while a line whose writes are ordinary paths keeps its `ask`.
+        const opaqueClock = opaqueClockWriteReason(compact, shell);
+        if (opaqueClock !== undefined)
+            return opaqueClock;
         return opaqueHardDenyReason(compact, shell, roots);
     }
     // Fuses resolve relative targets against the directory the segment really

@@ -10,9 +10,11 @@
  * reached the static allow with `classifierEligible === false` — a system-clock
  * write with no approval at all, not even a classifier review.
  *
- * The guard now matches the flag family in one place. Display-only spellings
- * must keep their static allow (a false reject here would turn every routine
- * timestamp read into an approval prompt).
+ * The guard now matches the flag family in one place, and that family is
+ * terminal (see tests/audit-r6-clock-write.test.mjs): a recognized clock write
+ * is refused instead of being reviewed. Display-only spellings must keep their
+ * static allow (a false reject here would turn every routine timestamp read into
+ * an approval prompt).
  *
  * Run: node --test tests/audit-r4-date-set-spellings.test.mjs
  */
@@ -34,7 +36,7 @@ const registry = new ArtifactRegistry()
 const owner = { id: 'session-a' }
 const shell = (command) => assessShell(command, 'bash', roots, registry, owner)
 
-test('date: every --set / -s spelling leaves the static allow', () => {
+test('date: every --set / -s spelling is refused outright', () => {
   for (const command of [
     "date -s '2020-01-01 00:00:00'",
     'date -s2020-01-01',
@@ -45,8 +47,12 @@ test('date: every --set / -s spelling leaves the static allow', () => {
     'date --set=2020-01-01T00:00:00',
   ]) {
     const verdict = shell(command)
-    assert.notEqual(verdict.decision, 'allow', `${command} must not be a static allow`)
-    assert.equal(verdict.classifierEligible, true, `${command} must reach semantic review, not a blind ask`)
+    // The clock write left the static allow first, and is now a terminal refuse
+    // (see tests/audit-r6-clock-write.test.mjs): the safety property used to
+    // rest on the classifier answering correctly and on the operator not
+    // running an unattended allow countdown.
+    assert.equal(verdict.decision, 'deny', `${command} must be refused outright`)
+    assert.equal(verdict.classifierEligible, false, `${command} must not reach semantic review`)
   }
 })
 

@@ -93,11 +93,12 @@ flowchart TD
 flowchart TD
     B1["① 词法分解 decomposeCommandLine：单双引号状态机；反引号/$(... )/heredoc/() 分组/未闭合引号 → opaque（读不懂就不瞎判，转入工或语义复审） [lex]"]
     B1 --> B2["② 整行硬拒 hardDenyShellReason：sudo/doas/su/pkexec/runuser/runas/gsudo 提权（锚定段起始，含 { brace group）；set-executionpolicy/clear-disk/format-volume/bcdedit 等系统策略；curl/wget/iwr 的凭据外传；动态删除直指 home [deny]"]
-    B2 --> B3["③ 逐段结构判定：分解后每个段剥 wrapper（env/nohup/sudo 前缀/NAME=value）→ 命令名再验提权；重定向/删除目标过 hardDestructiveTargetReason；find 的 -delete/-exec 提权审查 [segment]"]
+    B2 --> B3["③ 逐段结构判定：分解后每个段剥 wrapper（env/nohup/sudo 前缀/NAME=value）→ 命令名再验提权；重定向/删除目标过 hardDestructiveTargetReason；find 的 -delete/-exec 提权审查；date 的 -s/--set 时钟写（含缩写、融合与簇拼写；opaque 行内按同一 owner 回收）[segment]"]
     B3 --> B4["④ 分类 classifyEffectiveCommand：删除（只许删本会话自建产物 artifacts.has，否则交人工）→ 只读命令（BASH_READ_ONLY 42 个 / PWSH_READ_ONLY 12 个 + git 只读 + sed -n + find 只读）→ 版本探测 → build/test → 创建(mkdir/touch/new-item) → cp/mv → git 变更 / 网络 / 基建（psql/kubectl/terraform…）→ 兜底「未识别命令，独立分类」 [classify]"]
 ```
 
 - 只读名单刻意**不含** `cd`（会改变后续段 cwd 解析基准）。
+- **时钟写是终裁**：`date` 的 `-s`/`--set` 家族（含 `--s`/`--se` 缩写、`-s2020-01-01` 融合、`-us…` 簇、`date --set=` 取值形态，组内行内由 opaque 目标 owner 回收）判**硬拒**，不再只是脱离只读快径。理由：改系统时钟既非会话任务、也无法被会话恢复——它会重定所有记录的时间线并可能使凭据/会话失效；留在 `ask` 层意味着「分类器判对」+「运维未开 timeoutAction=allow」两个前提同时成立才安全，而实测中 `date --se=2020-01-01` 被分类器读成「malformed read-only invocation」并自动放行、真的改动了机器时钟。只读拼写（`date`、`-u`、`+%s`、`-d @0`、`-r f`、`-I…`、`--iso-8601=…`）维持静态放行。
 - `routineInlineProbe`：`python -c` 只放行 import/print 字面量，`node -e` 只放行 require/console.log(process.version) —— 内联代码只认可「绝对安全」形态。
 - 危险 token 提取：`sensitiveMarker`（.ssh/.env/密钥关键词）、`dshHomeExfil`（4 组模式抓 DSH_HOME 外传）、`dynamicHomeTarget`（$HOME 动态目标）→ 全部绕过静态判定。
 - **写重定向脱离只读快径**：命令含真实文件写重定向（`>`/`>>`/`>|`/`&>`/`N>`，非 discard sink）时，其段不得走只读命令快径放行——落入既有评估流；`/dev/null`、NUL、`$null` 等 discard sink 维持快径。**只读命令自带的输出 flag 同判**：`sort -o`（含 `-oFILE`/`-uo`）、`tree -o`、`git diff --output=` 等取出的值同样是写目标，先过同一组写目标熔断（破坏性目标 / 运行态文件 / 区内 DSH_HOME），命中即硬拒、未命中则脱离快径——按命令建表（`-o` 对 `rg`/`grep` 是 only-matching，不可共用短旗标表）。
