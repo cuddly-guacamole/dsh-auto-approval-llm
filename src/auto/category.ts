@@ -22,7 +22,7 @@
 
 import { basename } from 'node:path'
 import { isProtectedProjectPath, isProtectedReadMetadata, isWithin, normalizePath } from './paths.js'
-import { decomposeCommandLine, envSplitStringWords, isNullSink, wrapperValueFlag } from './shell.js'
+import { decomposeCommandLine, envSplitStringWords, isNullSink, perlEditsInPlace, perlInPlaceTargets, tarWriteTargets, tarWritesToDisk, unzipWriteTargets, wrapperValueFlag } from './shell.js'
 
 /** The 12 configurable category keys. */
 export type CategoryKey =
@@ -661,11 +661,25 @@ function classifySegmentBase(segment: Segment, shell: string, roots: CategoryRoo
   // input files, so they label exactly like a copy/move onto the same
   // target. dd deliberately keeps its disk label — stricter than fileEdit
   // and already pinned for whole-device spellings.
-  if (shell === 'bash' && (name === 'tee' || name === 'truncate' || name === 'install')) {
+  if (shell === 'bash' && (name === 'tee' || name === 'truncate' || name === 'install' || name === 'ln' || name === 'sponge')) {
     return copyMoveStyleCategory(unwrapped.words.slice(1), roots)
   }
   if (shell === 'bash' && name === 'sed' && sedEditsInPlace(unwrapped.words)) {
     return copyMoveStyleCategory(unwrapped.words.slice(1), roots)
+  }
+  // Write-vector heads whose destination is named by a value flag enter the
+  // same copy/move labelling only in a positively identified write mode, so
+  // read-mode spellings (`tar -tf`, `unzip -l`, `perl -e`) keep their original
+  // handling instead of being booked as writes.
+  if (shell === 'bash' && name === 'tar' && tarWritesToDisk(unwrapped.words)) {
+    return copyMoveStyleCategory(tarWriteTargets(unwrapped.words), roots)
+  }
+  if (shell === 'bash' && name === 'unzip') {
+    const unzipTargets = unzipWriteTargets(unwrapped.words)
+    if (unzipTargets.length > 0) return copyMoveStyleCategory(unzipTargets, roots)
+  }
+  if (shell === 'bash' && name === 'perl' && perlEditsInPlace(unwrapped.words)) {
+    return copyMoveStyleCategory(perlInPlaceTargets(unwrapped.words), roots)
   }
   if (segment.writeTargets.length > 0) {
     if (targetsHitProtectedMetadata(segment.writeTargets, roots)) return 'protected'

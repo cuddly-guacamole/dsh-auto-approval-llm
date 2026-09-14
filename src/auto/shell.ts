@@ -1306,9 +1306,16 @@ function ddInputTargets(words) {
     }
     return targets;
 }
-/** Whether a sed invocation edits files in place (`-i`, `-i.suffix`, `--in-place[=suffix]`). */
+/** Whether a sed invocation edits files in place (`-i`, `-ni`, `-i.suffix`, `--in-place[=suffix]`). */
 function sedEditsInPlace(words) {
-    return words.slice(1).some((word) => /^-i/.test(word.text) || /^--in-place(?:=|$)/.test(word.text));
+    // A short flag cluster may carry the in-place flag anywhere (`sed -ni` edits
+    // in place just like `sed -i -n`), so the whole cluster is scanned rather
+    // than only its first letter — the same entry-point family this batch
+    // closes for `perl -pi`.
+    return words.slice(1).some((word) => {
+        const text = wordText(word);
+        return /^-[a-zA-Z]*i/.test(text) || /^--in-place(?:=|$)/.test(text);
+    });
 }
 /**
  * Whether the flags supply sed's script explicitly (`-e`/`-f` in separate,
@@ -1326,20 +1333,155 @@ function sedInPlaceTargets(words) {
     const bare = words.slice(1).filter((word) => !word.text.startsWith('-'));
     return sedScriptFlagPresent(words) ? bare : bare.slice(1);
 }
+/** Text of one lexer word, spelled so the redaction pass cannot rewrite the assignment (see pit 39). */
+function wordText(word) {
+    return typeof word?.text === 'string' ? word.text : '';
+}
+/** Derived operand from one fused word, carrying the source word's dynamic/glob markers. */
+function derivedOperand(source, text) {
+    return { text, dynamic: source.dynamic, glob: source.glob, quoted: true };
+}
+/** tar disk modes: create (-c) and extract (-x) write; list (-t) and friends only read. */
+function tarDiskMode(words) {
+    for (let index = 1; index < words.length; index += 1) {
+        const text = wordText(words[index]);
+        if (text === '--create') return 'c';
+        if (text === '--extract' || text === '--get') return 'x';
+        if (text === '--list') return 't';
+        const cluster = /^-([a-zA-Z]+)$/.exec(text);
+        if (cluster !== null) {
+            for (const flag of cluster[1]) {
+                if (flag === 'c' || flag === 'x' || flag === 't') return flag;
+            }
+        }
+    }
+    return '';
+}
+export function tarWritesToDisk(words) {
+    const mode = tarDiskMode(words);
+    return mode === 'c' || mode === 'x';
+}
+/**
+ * Write targets of a tar invocation. In create mode the archive named by
+ * `-f`/`--file` is the destination (`-C` there only changes the source
+ * directory); in extract mode the destination is the directory named by
+ * `-C`/`--directory`, while `-f` names a READ. Spelling both directions
+ * separately keeps a `tar -cf out.tar -C src .` create from booking `src` as a
+ * write and a `tar -tf protected.tar` listing from being booked at all.
+ */
+export function tarWriteTargets(words) {
+    const mode = tarDiskMode(words);
+    const targets = [];
+    for (let index = 1; index < words.length; index += 1) {
+        const word = words[index];
+        const text = wordText(word);
+        if (text === '-f' || text === '--file' || text === '-C' || text === '--directory') {
+            const takesFile = text === '-f' || text === '--file';
+            if ((takesFile && mode === 'c') || (!takesFile && mode === 'x')) {
+                const value = words[index + 1];
+                if (value !== undefined) targets.push(value);
+            }
+            index += 1;
+            continue;
+        }
+        if (text.startsWith('--file=') || text.startsWith('--directory=')) {
+            const takesFile = text.startsWith('--file=');
+            if ((takesFile && mode === 'c') || (!takesFile && mode === 'x')) {
+                const value = text.slice(text.indexOf('=') + 1);
+                if (value !== '') targets.push(derivedOperand(word, value));
+            }
+            continue;
+        }
+        const fused = /^-([a-zA-Z]+)$/.exec(text);
+        if (fused !== null && fused[1].length > 1) {
+            const takesFile = fused[1].includes('f');
+            const takesDir = fused[1].includes('C');
+            if ((takesFile && mode === 'c') || (takesDir && mode === 'x')) {
+                const value = words[index + 1];
+                if (value !== undefined) {
+                    targets.push(value);
+                    index += 1;
+                }
+            }
+        }
+    }
+    return targets;
+}
+/** The extraction directory of `unzip -d DIR` (the only unzip destination the shallow lexer can name). */
+export function unzipWriteTargets(words) {
+    const targets = [];
+    for (let index = 1; index < words.length; index += 1) {
+        const word = words[index];
+        const text = wordText(word);
+        if (text === '-d') {
+            const value = words[index + 1];
+            if (value !== undefined) {
+                targets.push(value);
+                index += 1;
+            }
+            continue;
+        }
+        if (/^-d.+/.test(text)) targets.push(derivedOperand(word, text.slice(2)));
+    }
+    return targets;
+}
+/** Whether a perl invocation rewrites its file operands in place (`-i`, `-pi`, `-i.bak`, `--in-place`). */
+export function perlEditsInPlace(words) {
+    return words.slice(1).some((word) => {
+        const text = wordText(word);
+        return /^-[a-zA-Z]*i/.test(text) || /^--in-place(?:=|$)/.test(text);
+    });
+}
+/**
+ * File operands of an in-place perl edit. The program text is not a file: it is
+ * either the value of `-e`/`-E` (fused or separated) or the first bare operand
+ * (`perl -i script.pl target`). Everything left is rewritten in place.
+ */
+export function perlInPlaceTargets(words) {
+    const targets = [];
+    let programSeen = false;
+    for (let index = 1; index < words.length; index += 1) {
+        const text = wordText(words[index]);
+        if (text === '-e' || text === '-E') {
+            programSeen = true;
+            index += 1;
+            continue;
+        }
+        if (/^-[a-zA-Z]*[eE].+/.test(text)) {
+            programSeen = true;
+            continue;
+        }
+        if (text.startsWith('-')) continue;
+        if (!programSeen) {
+            programSeen = true;
+            continue;
+        }
+        targets.push(words[index]);
+    }
+    return targets;
+}
 /**
  * Bash heads beyond copy/move and creation whose own operands mutate files:
  * `tee` writes its operands outright, `dd` writes through `of=`, `sed -i`
  * rewrites its inputs in place, `truncate` resizes them, coreutils `install`
- * copies onto the destination. Read-mode spellings (`sed` without `-i`, `dd`
- * without `of=`) stay outside the family so their original handling is kept.
+ * copies onto the destination. `ln` and `sponge` always write their operand;
+ * `tar` / `unzip` / in-place `perl` enter the family only in a positively
+ * identified write mode (so `tar -tf`, `unzip -l` and `perl -e` keep their
+ * original handling and never get booked as writes).
  */
 function writesThroughOperands(name, words) {
-    if (name === 'tee' || name === 'truncate' || name === 'install')
+    if (name === 'tee' || name === 'truncate' || name === 'install' || name === 'ln' || name === 'sponge')
         return true;
     if (name === 'dd')
         return ddOutputTargets(words).length > 0;
     if (name === 'sed')
         return sedEditsInPlace(words);
+    if (name === 'tar')
+        return tarWritesToDisk(words);
+    if (name === 'unzip')
+        return unzipWriteTargets(words).length > 0;
+    if (name === 'perl')
+        return perlEditsInPlace(words);
     return false;
 }
 /**
@@ -1472,6 +1614,12 @@ function segmentHardDenyReason(segment, shell, roots) {
             writeOperands = ddOutputTargets(unwrapped.words);
         else if (name === 'sed')
             writeOperands = sedInPlaceTargets(unwrapped.words);
+        else if (name === 'tar')
+            writeOperands = tarWriteTargets(unwrapped.words);
+        else if (name === 'unzip')
+            writeOperands = unzipWriteTargets(unwrapped.words);
+        else if (name === 'perl')
+            writeOperands = perlInPlaceTargets(unwrapped.words);
         else
             writeOperands = unwrapped.words.slice(1).filter(word => !word.text.startsWith('-'));
     }
@@ -2574,9 +2722,15 @@ function classifyEffectiveCommand(name, words, segment, shell, roots, artifacts,
             ? ddOutputTargets(words)
             : name === 'sed'
                 ? sedInPlaceTargets(words)
-                : name === 'install' || name === 'cp' || name === 'mv'
-                    ? writeOperandCandidates(words)
-                    : words.slice(1).filter(word => !word.text.startsWith('-'));
+                : name === 'tar'
+                    ? tarWriteTargets(words)
+                    : name === 'unzip'
+                        ? unzipWriteTargets(words)
+                        : name === 'perl'
+                            ? perlInPlaceTargets(words)
+                            : name === 'install' || name === 'cp' || name === 'mv'
+                                ? writeOperandCandidates(words)
+                                : words.slice(1).filter(word => !word.text.startsWith('-'));
         if (writeTargets.some(word => word.dynamic || word.glob))
             return semanticReview('file write target is dynamic or globbed and cannot be statically proven inside the routine roots');
         // A write head can also READ. `tee out < secret` echoes stdin to its
