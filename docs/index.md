@@ -3,11 +3,14 @@ layout: home
 
 hero:
   name: dsh-auto-approval-llm
-  text: 工作原理详解
+  text: Auto 档审批的机制详解
   tagline: 从「模型发起一次工具调用」到「一条审计记录落盘」的完整旅程 —— 模块名与判定顺序逐条标注源码出处，文件行数、模块数、配置键数、路由数与测试计数由门禁从源码派生。
   actions:
     - theme: brand
-      text: 开始阅读
+      text: 快速开始
+      link: /00-quick-start
+    - theme: alt
+      text: 工作原理
       link: /01-system-overview
     - theme: alt
       text: GitHub

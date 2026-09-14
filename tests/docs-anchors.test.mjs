@@ -43,6 +43,7 @@ const checker = join(root, 'scripts', 'check-anchors.mjs')
  * silent regression, and this set is what makes that detectable.
  */
 const PAGES_WITHOUT_ANCHORS = new Set([
+  'docs/00-quick-start.md',
   'docs/09-defense-in-depth.md',
   'docs/14-code-map.md',
   'docs/15-quality.md',

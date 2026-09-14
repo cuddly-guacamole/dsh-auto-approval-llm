@@ -9,6 +9,7 @@ export default withMermaid(defineConfig({
   themeConfig: {
     nav: [
       { text: '首页', link: '/' },
+      { text: '快速开始', link: '/00-quick-start' },
       { text: '工作原理', link: '/01-system-overview' },
       { text: 'GitHub', link: 'https://github.com/cuddly-guacamole/dsh-auto-approval-llm' }
     ],
@@ -17,6 +18,7 @@ export default withMermaid(defineConfig({
         text: '开始',
         items: [
           { text: '首页', link: '/' },
+          { text: '00 快速开始', link: '/00-quick-start' },
           { text: '01 系统总览', link: '/01-system-overview' }
         ]
       },
