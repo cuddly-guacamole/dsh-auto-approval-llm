@@ -92,7 +92,7 @@ flowchart TD
 ```mermaid
 flowchart TD
     B1["① 词法分解 decomposeCommandLine：单双引号状态机；反引号/$(... )/heredoc/() 分组/未闭合引号 → opaque（读不懂就不瞎判，转入工或语义复审） [lex]"]
-    B1 --> B2["② 整行硬拒 hardDenyShellReason：sudo/doas/su 提权（锚定段起始，含 { brace group）；set-executionpolicy/clear-disk/format-volume/bcdedit 等系统策略；curl/wget/iwr 的凭据外传；动态删除直指 home [deny]"]
+    B1 --> B2["② 整行硬拒 hardDenyShellReason：sudo/doas/su/pkexec/runuser/runas/gsudo 提权（锚定段起始，含 { brace group）；set-executionpolicy/clear-disk/format-volume/bcdedit 等系统策略；curl/wget/iwr 的凭据外传；动态删除直指 home [deny]"]
     B2 --> B3["③ 逐段结构判定：分解后每个段剥 wrapper（env/nohup/sudo 前缀/NAME=value）→ 命令名再验提权；重定向/删除目标过 hardDestructiveTargetReason；find 的 -delete/-exec 提权审查 [segment]"]
     B3 --> B4["④ 分类 classifyEffectiveCommand：删除（只许删本会话自建产物 artifacts.has，否则交人工）→ 只读命令（BASH_READ_ONLY 42 个 / PWSH_READ_ONLY 12 个 + git 只读 + sed -n + find 只读）→ 版本探测 → build/test → 创建(mkdir/touch/new-item) → cp/mv → git 变更 / 网络 / 基建（psql/kubectl/terraform…）→ 兜底「未识别命令，独立分类」 [classify]"]
 ```
@@ -100,7 +100,7 @@ flowchart TD
 - 只读名单刻意**不含** `cd`（会改变后续段 cwd 解析基准）。
 - `routineInlineProbe`：`python -c` 只放行 import/print 字面量，`node -e` 只放行 require/console.log(process.version) —— 内联代码只认可「绝对安全」形态。
 - 危险 token 提取：`sensitiveMarker`（.ssh/.env/密钥关键词）、`dshHomeExfil`（4 组模式抓 DSH_HOME 外传）、`dynamicHomeTarget`（$HOME 动态目标）→ 全部绕过静态判定。
-- **写重定向脱离只读快径**：命令含真实文件写重定向（`>`/`>>`/`>|`/`&>`/`N>`，非 discard sink）时，其段不得走只读命令快径放行——落入既有评估流；`/dev/null`、NUL、`$null` 等 discard sink 维持快径。**只读命令自带的输出 flag 同判**：`sort -o`（含 `-oFILE`/`-uo`）、`tree -o`、`git diff --output=` 等取出的值同样是写目标，先过 `hardDestructiveTargetReason`，未命中则脱离快径——按命令建表（`-o` 对 `rg`/`grep` 是 only-matching，不可共用短旗标表）。
+- **写重定向脱离只读快径**：命令含真实文件写重定向（`>`/`>>`/`>|`/`&>`/`N>`，非 discard sink）时，其段不得走只读命令快径放行——落入既有评估流；`/dev/null`、NUL、`$null` 等 discard sink 维持快径。**只读命令自带的输出 flag 同判**：`sort -o`（含 `-oFILE`/`-uo`）、`tree -o`、`git diff --output=` 等取出的值同样是写目标，先过同一组写目标熔断（破坏性目标 / 运行态文件 / 区内 DSH_HOME），命中即硬拒、未命中则脱离快径——按命令建表（`-o` 对 `rg`/`grep` 是 only-matching，不可共用短旗标表）。
 - **写目标提取不吃相对拼法**：只读命令的 `..` 中段与工作区外相对目标一律进入显式路径判定（`cat b/../../../../x` 与 `cat ../../../../x` 同裁决）。
 - **win32 段归一覆盖别名拼法**：MSYS 裸盘根（`/c`、`//c`）、盘根通配（`C:\*`、`/c/*`）与 NTFS 默认数据流后缀（`file::$DATA`/`file:$DATA`）在 `normalizePath` 的同一处归一到 `C:\` / 文件名本体，故盘根熔断与全部 basename 级保护（插件契约文件、受保护元数据、凭据名）不被拼法绕过。
 - **build/test 与版本探测快径目标守卫**：快径仅保留给「写目标全为 discard sink 或工作区内非敏感非受保护非运行态路径」——区外/敏感/受保护/运行态目标一律脱离快径进入正常评估（`categoryMode: aggressive` 与 trustedDirs 放宽模式同样生效）。
