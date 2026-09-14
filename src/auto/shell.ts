@@ -1123,12 +1123,21 @@ const READ_ONLY_OUTPUT_FLAGS = {
 };
 /**
  * Mutating `date` flags in every GNU spelling: the long form may carry its
- * value with `=`, short options cluster, and a short flag may carry its value
- * fused (`-s2020-01-01`, `-us2020-01-01`). Comparing whole tokens kept the
- * read-only static allow for the fused spellings, so the clock-write guard now
- * matches the flag family instead of two literals.
+ * value with `=`, may be abbreviated (`--s`, `--se`), and a short option
+ * cluster may fuse its value (`-s2020-01-01`, `-us2020-01-01`). A cluster is a
+ * clock write only when `s` is the first value-taking letter: `-I[FMT]`, `-d`,
+ * `-f` and `-r` swallow the rest of their cluster as a READ-ONLY value, so
+ * `date -Iseconds` and `date -Ins` are format spellings rather than `--set`.
  */
-const DATE_MUTATING_FLAG = /^(?:--set(?:=.*)?|-[a-zA-Z]*s.*)$/;
+function isDateClockWriteFlag(token) {
+    if (/^--s(?:e(?:t)?)?(?:=.*)?$/.test(token))
+        return true;
+    if (!/^-[^-]/.test(token))
+        return false;
+    const cluster = token.slice(1);
+    const valueOption = cluster.search(/[dIfrs]/);
+    return valueOption >= 0 && cluster[valueOption] === 's';
+}
 /** The write targets a read-only command carries inside its own output flag. */
 function readOnlyOutputFlagTargets(name, words, shell) {
     if (shell !== 'bash')
@@ -1185,7 +1194,7 @@ function readOnlyCommand(name, words, shell) {
         if (name === 'sort' && tokens.slice(1).some(token => /^(?:--co|--te|-T)/.test(token)))
             return false;
         if (name === 'date')
-            return !tokens.slice(1).some(token => DATE_MUTATING_FLAG.test(token));
+            return !tokens.slice(1).some(token => isDateClockWriteFlag(token));
         if (name === 'hostname')
             return tokens.length === 1;
         if (BASH_READ_ONLY.includes(name))
@@ -1749,8 +1758,8 @@ function stripHeredocBodies(source) {
             // operator is matched in the view: a trailing `\s*` there would
             // swallow the original delimiter along with the blanked span.
             const rest = line.slice(introducer.index + introducer[0].length).replace(/^[ \t]*/, '');
-            const delimiter = /^(?:"([^"]*)"|'([^']*)'|([A-Za-z_][A-Za-z0-9_]*))/.exec(rest);
-            const value = delimiter?.[1] ?? delimiter?.[2] ?? delimiter?.[3];
+            const delimiter = /^(?:"([^"]*)"|'([^']*)'|\\([A-Za-z_][A-Za-z0-9_]*)|([A-Za-z_][A-Za-z0-9_]*))/.exec(rest);
+            const value = delimiter?.[1] ?? delimiter?.[2] ?? delimiter?.[3] ?? delimiter?.[4];
             if (value !== undefined && value !== '') {
                 pending.push({ delimiter: value, stripTabs: introducer[1] === '-' });
             }
@@ -2317,10 +2326,14 @@ export function assessShell(source, shell, roots, artifacts, owner) {
         return denied(hard);
     const decomposition = decomposeCommandLine(source, shell);
     if (decomposition.kind === 'opaque') {
-        const nested = opaqueNestedAssessment(source, shell, roots);
+        // A here-document body is data, not syntax: the same stripping owner the
+        // hard-deny plane uses keeps an ordinary commit message that names a
+        // fuse target out of the destructiveness heuristic.
+        const stripped = stripHeredocBodies(source);
+        const nested = opaqueNestedAssessment(stripped, shell, roots);
         if (nested !== undefined)
             return nested;
-        return destructiveNestedSource(source)
+        return destructiveNestedSource(stripped)
             ? manualReview(`${shell} destructive command cannot be read statically: ${decomposition.reason}`)
             : semanticReview(`${shell} command requires independent classification because it cannot be read statically: ${decomposition.reason}`);
     }

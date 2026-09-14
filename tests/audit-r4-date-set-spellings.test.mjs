@@ -70,5 +70,5 @@ test('date: display-only spellings keep the static allow', () => {
 test('date: the guard keys on the flag family, not on one literal spelling', () => {
   const source = readFileSync(new URL('../src/auto/shell.ts', import.meta.url), 'utf8')
   const guard = source.slice(source.indexOf("if (name === 'date')"), source.indexOf("if (name === 'hostname')"))
-  assert.match(guard, /DATE_MUTATING_FLAG/, 'the date guard must key on the shared flag-family pattern')
+  assert.match(guard, /isDateClockWriteFlag/, 'the date guard must key on the shared flag-family predicate')
 })
