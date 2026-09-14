@@ -471,11 +471,13 @@ const WRAPPER_VALUE_FLAGS = {
     stdbuf: /^-(?:i|o|e)$|^--(?:input|output|error)$/,
     nice: /^-(?:n)$|^--adjustment$/,
     ionice: /^-(?:c|n|p|P|u)$|^--(?:class|classdata|pid|pgid|uid)$/,
-    // env: `-u/--unset NAME`, `-S/--split-string S`, `-C/--chdir DIR` and
-    // `--argv0 NAME` consume the following word. Without them the effective
-    // command became the flag's VALUE (`env -u FOO rm -rf /` unwrapped to
-    // `FOO`), so the privilege, delete, write-operand and find fuses all
-    // skipped for the separated spelling while `--unset=FOO` stayed covered.
+    // env: `-u/--unset NAME`, `-C/--chdir DIR` and `--argv0 NAME` consume the
+    // following word; `-S/--split-string` is spliced as a command line before
+    // this table is consulted, and an empty split string falls back to
+    // consuming the value. Without these entries the effective command became
+    // the flag's VALUE (`env -u FOO rm -rf /` unwrapped to `FOO`), so the
+    // privilege, delete, write-operand and find fuses all skipped for the
+    // separated spelling while `--unset=FOO` stayed covered.
     env: /^-(?:u|S|C)$|^--(?:unset|split-string|chdir|argv0)$/,
     // timeout: `-s/--signal <SIG>` and `-k/--kill-after <DUR>` take a value;
     // without them `timeout -s KILL 5 sudo …` unwraps to `KILL` as the
@@ -1123,11 +1125,11 @@ const READ_ONLY_OUTPUT_FLAGS = {
 };
 /**
  * Mutating `date` flags in every GNU spelling: the long form may carry its
- * value with `=`, may be abbreviated (`--s`, `--se`), and a short option
- * cluster may fuse its value (`-s2020-01-01`, `-us2020-01-01`). A cluster is a
- * clock write only when `s` is the first value-taking letter: `-I[FMT]`, `-d`,
- * `-f` and `-r` swallow the rest of their cluster as a READ-ONLY value, so
- * `date -Iseconds` and `date -Ins` are format spellings rather than `--set`.
+ * value with `=`, and a short option cluster may fuse its value
+ * (`-s2020-01-01`, `-us2020-01-01`). A cluster is a clock write only when `s`
+ * is the first value-taking letter: `-I[FMT]`, `-d`, `-f` and `-r` swallow the
+ * rest of their cluster as a READ-ONLY value, so `date -Iseconds` and
+ * `date -Ins` are format spellings rather than `--set`.
  */
 function isDateClockWriteFlag(token) {
     if (/^--s(?:e(?:t)?)?(?:=.*)?$/.test(token))
@@ -1895,8 +1897,8 @@ function splitOpaqueChunks(source) {
 }
 /**
  * Words of an opaque chunk, with quoted runs kept as one word: an interpreter
- * source or a split string is written as a single quoted argument, and
- * splitting it on whitespace hides the boundary from every caller.
+ * source is written as a single quoted argument (`bash -c "cp a ~/.dsh/x"`),
+ * and splitting it on whitespace hid the boundary from every caller.
  */
 function splitOpaqueWords(chunk) {
     const words = [];
@@ -2010,7 +2012,7 @@ function opaqueOutputFlagReason(source, shell, roots) {
  * Interpreter boundaries inside a line that cannot be decomposed. The quoted
  * source is one opaque word, so the per-segment loop never saw it and the
  * plain spelling's tier was lost: `(bash -c "cp a.txt ~/.dsh/x")` stayed a
- * classifier-answerable ask while `bash -c "cp a.txt ~/.dsh/x"` hard-denies.
+ * classifier-answerable ask while `bash -c "cp a.txt ~/.dsh/x"` now hard-denies.
  * The same owners decide here in the same order as the decomposed path.
  */
 function opaqueNestedAssessment(source, shell, roots) {
@@ -2030,6 +2032,9 @@ function opaqueNestedAssessment(source, shell, roots) {
             const nestedHard = hardDenyShellReason(nested.source, shellPlaneOf(name), roots);
             if (nestedHard !== undefined)
                 return denied(nestedHard);
+            // A read-only command's own output flag writes a file without any
+            // redirection token, so the ladder above cannot see it
+            // (`bash -c "sort -o ~/.dsh/history.jsonl in.txt"`).
             const nestedOutput = opaqueOutputFlagReason(nested.source, shellPlaneOf(name), roots);
             if (nestedOutput !== undefined)
                 return denied(nestedOutput);
@@ -2141,8 +2146,8 @@ function assessSegment(segment, shell, roots, artifacts, owner) {
         // reaches on its own: `bash -c "cp a.txt ~/.dsh/history.jsonl"` writes
         // exactly what the top-level spelling hard-denies, and
         // `bash -c "sudo ls"` escalates exactly like `sudo ls`. Only
-        // `find -exec` consulted the write-operand, redirect, output-flag and
-        // privilege owners, so those families had no reachable owner behind an
+        // `find -exec` consulted the write-operand, redirect and privilege
+        // owners, so those families had no reachable owner behind an
         // interpreter. The nested-deletion heuristic above keeps its
         // manual-review tier, so the ladder runs last.
         if (SHELL_CODE_INTERPRETERS.has(name)) {

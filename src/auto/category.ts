@@ -352,9 +352,11 @@ const WRAPPER_VALUE_FLAGS: Record<string, RegExp> = {
   stdbuf: /^-(?:i|o|e)$|^--(?:input|output|error)$/,
   nice: /^-(?:n)$|^--adjustment$/,
   ionice: /^-(?:c|n|p|P|u)$|^--(?:class|classdata|pid|pgid|uid)$/,
-  // env: `-u/--unset NAME`, `-S/--split-string S`, `-C/--chdir DIR` and
-  // `--argv0 NAME` consume the following word, so the separated spelling
-  // (`env -u FOO rm -rf X`) must not unwrap to the flag's value.
+  // env: `-u/--unset NAME`, `-C/--chdir DIR` and `--argv0 NAME` consume the
+  // following word; `-S/--split-string` is spliced as a command line before
+  // this table is consulted, and an empty split string falls back to consuming
+  // the value. The separated spelling (`env -u FOO rm -rf X`) must not unwrap
+  // to the flag's value.
   env: /^-(?:u|S|C)$|^--(?:unset|split-string|chdir|argv0)$/,
   // timeout: `-s/--signal <SIG>` and `-k/--kill-after <DUR>` take a value. This
   // table is a copy of the shell plane's authority (auto/shell.ts) and had lost
