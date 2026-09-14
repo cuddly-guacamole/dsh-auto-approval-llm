@@ -45,6 +45,17 @@ test('the redirect spelling of the same target keeps the same verdict', () => {
   assert.equal(shell('printf x > C:/Users/u/.dsh/history.jsonl; (:)').decision, 'deny')
 })
 
+test('a bare runtime-state filename is the discriminating target', () => {
+  // The plugin repository is itself inside DSH_HOME, so a bare `history.jsonl`
+  // resolves into the runtime-state zone: the destructive-target predicate
+  // alone does not deny it, the state and in-zone DSH_HOME fuses do.
+  for (const command of ['sort -o history.jsonl in.txt', 'sort -o lib/index.js in.txt']) {
+    const verdict = shell(command)
+    assert.equal(verdict.decision, 'deny', `${command} must be hard-denied`)
+    assert.equal(verdict.classifierEligible, false, `${command} must not reach the classifier`)
+  }
+})
+
 test('routine output flags are not rejected', () => {
   for (const command of ['sort -o /tmp/x in.txt', 'tree -o /tmp/x', 'git diff --output=/tmp/x']) {
     assert.notEqual(shell(command).decision, 'deny', `${command} must not be hard-denied`)
