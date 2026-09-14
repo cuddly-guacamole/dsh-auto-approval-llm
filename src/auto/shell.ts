@@ -1792,6 +1792,24 @@ function opaqueHardDenyReason(source, shell, roots) {
     return undefined;
 }
 
+/**
+ * Hard-deny reason for a shell write target, using the same three predicates
+ * the redirection fuse uses. A read-only command's own output flag
+ * (`sort -o out`) is a write like any other: judging it with only the
+ * destructive-target predicate left `sort -o history.jsonl in.txt` a
+ * classifier-answerable ask while `printf x > history.jsonl` is hard-denied.
+ */
+function writeTargetHardDenyReason(target, roots) {
+    const destructive = hardDestructiveTargetReason(globRoot(target), roots);
+    if (destructive !== undefined)
+        return destructive;
+    const normalized = normalizePath(target, roots.workspace, roots.home);
+    const stateReason = runtimeStateWriteReason(normalized, roots);
+    if (stateReason !== undefined)
+        return stateReason;
+    return shellWriteToDshHomeDenied(normalized, roots);
+}
+
 /** Output-flag write targets recovered from a line that cannot be decomposed. */
 function opaqueOutputFlagReason(source, shell, roots) {
     if (shell !== 'bash')
@@ -1799,7 +1817,7 @@ function opaqueOutputFlagReason(source, shell, roots) {
     for (const segment of opaqueSegmentWords(source)) {
         const name = commandName(segment.words[0]?.text ?? '');
         for (const target of readOnlyOutputFlagTargets(name, segment.words, shell)) {
-            const reason = hardDestructiveTargetReason(globRoot(target.text), roots);
+            const reason = writeTargetHardDenyReason(target.text, roots);
             if (reason !== undefined)
                 return `output flag writes ${reason}`;
         }
@@ -1956,7 +1974,7 @@ function classifyEffectiveCommand(name, words, segment, shell, roots, artifacts,
     // static read-only allow.
     const outputFlagWrites = readOnlyOutputFlagTargets(name, words, shell);
     for (const target of outputFlagWrites) {
-        const reason = hardDestructiveTargetReason(globRoot(target.text), roots);
+        const reason = writeTargetHardDenyReason(target.text, roots);
         if (reason !== undefined)
             return denied(`output flag writes ${reason}`);
     }
