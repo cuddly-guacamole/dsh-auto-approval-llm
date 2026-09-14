@@ -1224,8 +1224,12 @@ function readOnlyCommand(name, words, shell) {
         // caller never wrote on the line: `sort --compress-program=PROG` runs
         // PROG over the sort temporaries and `-T` names a directory to write
         // them into, so those spellings leave the static allow exactly like
-        // `rg --pre` above.
-        if (name === 'sort' && tokens.slice(1).some(token => /^(?:--co|--te|-T)/.test(token)))
+        // `rg --pre` above. GNU accepts any unambiguous abbreviation of both
+        // long options, and the shortest one for the temporary directory is
+        // `--t` (only the short-option spelling `-t` shares that letter, and
+        // that is the field separator, which stays read-only), so matching
+        // `--te` alone left `sort --t=/tmp` inside the static allow.
+        if (name === 'sort' && tokens.slice(1).some(token => /^(?:--co|--t|-T)/.test(token)))
             return false;
         if (name === 'date')
             return !tokens.slice(1).some(token => isDateClockWriteFlag(token));
