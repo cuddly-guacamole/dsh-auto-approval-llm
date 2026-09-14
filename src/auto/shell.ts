@@ -396,12 +396,26 @@ const WRAPPERS = new Set(['env', 'nohup', 'setsid', 'stdbuf', 'command', 'time',
 /** Privilege-escalation commands: hard-denied at the whole-line fuse AND per segment. */
 const PRIVILEGE_COMMANDS = new Set(['sudo', 'doas', 'su', 'pkexec', 'runuser', 'runas', 'gsudo']);
 /**
+ * A Windows command name without its executable suffix.
+ *
+ * `sudo.exe`, `runas.exe` and `gsudo.exe` are the same programs as their bare
+ * spellings, and Windows ships `sudo.exe` and `runas.exe` in System32, so a
+ * privilege name set that only matched the bare spelling degraded an elevation
+ * attempt into "unrecognized command → independent classification". Only the
+ * privilege lookup normalizes this way: everywhere else the suffix is part of
+ * the name the caller actually invoked.
+ */
+function commandNameWithoutExe(name) {
+    return name.endsWith('.exe') ? name.slice(0, -4) : name;
+}
+/**
  * The whole-line privilege fuse. It is built from the same set the per-segment
  * check uses so the two spellings can never drift: the hand-written copy is
  * how `pkexec`, `runuser` and `runas` kept only an LLM-answerable ask while
- * `sudo` was hard-denied.
+ * `sudo` was hard-denied. The optional suffix keeps the `.exe` spelling of the
+ * same program inside the fuse.
  */
-const PRIVILEGE_COMMAND_PATTERN = new RegExp(`(?:^|[;&|({\`])\\s*(?:${[...PRIVILEGE_COMMANDS].join('|')})(?:\\s|$)`, 'i');
+const PRIVILEGE_COMMAND_PATTERN = new RegExp(`(?:^|[;&|({\`])\\s*(?:${[...PRIVILEGE_COMMANDS].join('|')})(?:\\.exe)?(?:\\s|$)`, 'i');
 /** Interpreters whose inline source runs as shell code on this plane. */
 const SHELL_CODE_INTERPRETERS = new Set(['sh', 'bash', 'zsh', 'fish', 'ksh', 'dash', 'cmd', 'cmd.exe', 'powershell', 'powershell.exe', 'pwsh', 'pwsh.exe', 'eval', 'iex', 'invoke-expression']);
 /** The plane a nested interpreter's own source belongs to. */
@@ -1429,7 +1443,7 @@ function segmentHardDenyReason(segment, shell, roots) {
     // `(A=1 sudo ls)` were classifier-answerable asks while the same text
     // without the grouping is hard-denied. Judging the effective name here
     // gives every caller the same owner.
-    if (PRIVILEGE_COMMANDS.has(name))
+    if (PRIVILEGE_COMMANDS.has(commandNameWithoutExe(name)))
         return 'privilege escalation is not permitted by auto mode';
     // Commands whose non-flag operands are write destinations (copy/move,
     // creation, pwsh output cmdlets): a runtime-state target inside the zone is
@@ -2137,8 +2151,11 @@ export function hardDenyShellReason(source, shell, roots) {
         // raw source; a decomposed segment lets us judge the effective command
         // after wrappers, so `echo hi; sudo ls` cannot dodge the hard deny.
         const segName = commandName(unwrapCommand(segment.words).words[0]?.text ?? '');
-        if (PRIVILEGE_COMMANDS.has(segName))
+        if (PRIVILEGE_COMMANDS.has(commandNameWithoutExe(segName)))
             return 'privilege escalation is not permitted by auto mode';
+        const clockWrite = dateClockWriteReason(segName, segment.words.map(word => word.text));
+        if (clockWrite !== undefined)
+            return clockWrite;
         const reason = segmentHardDenyReason(segment, shell, segmentRoots);
         if (reason !== undefined)
             return reason;

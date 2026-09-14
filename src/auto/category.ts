@@ -331,6 +331,13 @@ export function categorizeTool(exec: CategoryExec, roots: CategoryRoots): Catego
 // ── shell command classification (segment level, then strict merge) ─────────
 
 const PRIVILEGE_COMMANDS = new Set(['sudo', 'doas', 'su', 'pkexec', 'runuser', 'runas', 'gsudo'])
+/**
+ * `sudo.exe` is `sudo` on Windows (and Windows ships `sudo.exe`/`runas.exe` in
+ * System32), so the privilege set is matched against the name without its
+ * executable suffix. A miss here labeled an elevation attempt `unknown` and
+ * left the category lock unreachable.
+ */
+const commandNameWithoutExe = (name: string): string => (name.endsWith('.exe') ? name.slice(0, -4) : name)
 const BASH_READ_ONLY = new Set([
   'pwd', 'ls', 'rg', 'grep', 'egrep', 'fgrep', 'head', 'tail', 'cat', 'wc', 'od', 'du', 'df', 'stat', 'file', 'which', 'type',
   'echo', 'printf', 'true', 'false', ':', 'test', '[', 'basename', 'dirname', 'realpath', 'readlink', 'date', 'whoami', 'id',
@@ -601,7 +608,7 @@ function classifySegmentBase(segment: Segment, shell: string, roots: CategoryRoo
   const unwrapped = unwrapWords(segment.words)
   const name = commandName(unwrapped.words[0]?.text ?? '')
   if (name === '') return 'unknown'
-  if (PRIVILEGE_COMMANDS.has(name)) return 'privilege'
+  if (PRIVILEGE_COMMANDS.has(commandNameWithoutExe(name))) return 'privilege'
   if (nestedExecution(name, unwrapped.words) !== undefined) return 'privilege'
   if (isDeletion(name, shell)) return 'delete'
   if (name === 'find') {
