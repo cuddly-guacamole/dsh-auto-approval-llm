@@ -22,7 +22,7 @@
 
 import { basename } from 'node:path'
 import { isProtectedProjectPath, isProtectedReadMetadata, isWithin, normalizePath } from './paths.js'
-import { decomposeCommandLine, envSplitStringWords, isNullSink } from './shell.js'
+import { decomposeCommandLine, envSplitStringWords, isNullSink, wrapperValueFlag } from './shell.js'
 
 /** The 12 configurable category keys. */
 export type CategoryKey =
@@ -330,7 +330,7 @@ export function categorizeTool(exec: CategoryExec, roots: CategoryRoots): Catego
 
 // ── shell command classification (segment level, then strict merge) ─────────
 
-const PRIVILEGE_COMMANDS = new Set(['sudo', 'doas', 'su'])
+const PRIVILEGE_COMMANDS = new Set(['sudo', 'doas', 'su', 'pkexec', 'runuser', 'runas', 'gsudo'])
 const BASH_READ_ONLY = new Set([
   'pwd', 'ls', 'rg', 'grep', 'egrep', 'fgrep', 'head', 'tail', 'cat', 'wc', 'od', 'du', 'df', 'stat', 'file', 'which', 'type',
   'echo', 'printf', 'true', 'false', ':', 'test', '[', 'basename', 'dirname', 'realpath', 'readlink', 'date', 'whoami', 'id',
@@ -346,7 +346,7 @@ const GIT_LOCAL = new Set([
   'commit', 'merge', 'rebase', 'checkout', 'switch', 'branch', 'tag', 'restore',
   'stash', 'am', 'revert', 'cherry-pick', 'fetch', 'pull',
 ])
-const WRAPPERS = new Set(['env', 'nohup', 'setsid', 'stdbuf', 'command', 'time', 'timeout', 'xargs', 'nice', 'ionice'])
+const WRAPPERS = new Set(['env', 'nohup', 'setsid', 'stdbuf', 'command', 'time', 'timeout', 'xargs', 'nice', 'ionice', 'busybox', 'toybox', 'watch', 'unbuffer'])
 const WRAPPER_VALUE_FLAGS: Record<string, RegExp> = {
   xargs: /^-(?:n|I|i|P|L|s|d|E|a)$|^--(?:max-args|replace|max-procs|max-lines|max-chars|delimiter|eof|arg-file|process-slot-var)$/,
   stdbuf: /^-(?:i|o|e)$|^--(?:input|output|error)$/,
@@ -363,6 +363,7 @@ const WRAPPER_VALUE_FLAGS: Record<string, RegExp> = {
   // delete categoryPolicy never fired for that spelling. Keep the two in step.
   timeout: /^-(?:s|k)$|^--(?:signal|kill-after)$/,
   time: /^-(?:o|f)$|^--(?:output|format)$/,
+  watch: /^-(?:n)$/,
 }
 const NESTED_INTERPRETERS = new Set(['node', 'deno', 'bun', 'python', 'python3', 'perl', 'ruby', 'php', 'osascript'])
 const NESTED_SHELLS = new Set(['sh', 'bash', 'zsh', 'fish', 'ksh', 'dash', 'cmd', 'cmd.exe', 'powershell', 'powershell.exe', 'pwsh', 'pwsh.exe'])
@@ -397,13 +398,14 @@ function unwrapWords(words: SegmentWord[]): { words: SegmentWord[]; dynamicInput
       current = [...split.words, ...split.rest]
       continue
     }
-    const valueFlag = WRAPPER_VALUE_FLAGS[name]
     let index = 1
     while (index < current.length) {
       const token = current[index].text
       if (name === 'env' && /^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) { index += 1; continue }
       if (!token.startsWith('-')) break
-      if (valueFlag?.test(token) === true) index += 1
+      // The shared owner also resolves GNU long-option abbreviations, so both
+      // planes consume the same wrapper value for `env --uns FOO rm -rf X`.
+      if (wrapperValueFlag(name, token)) index += 1
       index += 1
     }
     if (name === 'timeout' && /^[0-9]+(?:\.[0-9]+)?[smhd]?$/.test(current[index]?.text ?? '')) index += 1

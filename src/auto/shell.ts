@@ -392,9 +392,16 @@ function deletionSpec(name, words, shell) {
     return undefined;
 }
 /** Commands whose real work is another command this policy cannot see yet. */
-const WRAPPERS = new Set(['env', 'nohup', 'setsid', 'stdbuf', 'command', 'time', 'timeout', 'xargs', 'nice', 'ionice']);
+const WRAPPERS = new Set(['env', 'nohup', 'setsid', 'stdbuf', 'command', 'time', 'timeout', 'xargs', 'nice', 'ionice', 'busybox', 'toybox', 'watch', 'unbuffer']);
 /** Privilege-escalation commands: hard-denied at the whole-line fuse AND per segment. */
-const PRIVILEGE_COMMANDS = new Set(['sudo', 'doas', 'su']);
+const PRIVILEGE_COMMANDS = new Set(['sudo', 'doas', 'su', 'pkexec', 'runuser', 'runas', 'gsudo']);
+/**
+ * The whole-line privilege fuse. It is built from the same set the per-segment
+ * check uses so the two spellings can never drift: the hand-written copy is
+ * how `pkexec`, `runuser` and `runas` kept only an LLM-answerable ask while
+ * `sudo` was hard-denied.
+ */
+const PRIVILEGE_COMMAND_PATTERN = new RegExp(`(?:^|[;&|({\`])\\s*(?:${[...PRIVILEGE_COMMANDS].join('|')})(?:\\s|$)`, 'i');
 /** Interpreters whose inline source runs as shell code on this plane. */
 const SHELL_CODE_INTERPRETERS = new Set(['sh', 'bash', 'zsh', 'fish', 'ksh', 'dash', 'cmd', 'cmd.exe', 'powershell', 'powershell.exe', 'pwsh', 'pwsh.exe', 'eval', 'iex', 'invoke-expression']);
 /** The plane a nested interpreter's own source belongs to. */
@@ -475,7 +482,38 @@ const WRAPPER_VALUE_FLAGS = {
     // "effective command" and skips the privilege/delete fuses entirely.
     timeout: /^-(?:s|k)$|^--(?:signal|kill-after)$/,
     time: /^-(?:o|f)$|^--(?:output|format)$/,
+    watch: /^-(?:n)$/,
 };
+/**
+ * Long options whose value is the following word, per wrapper. GNU getopt
+ * accepts any unambiguous abbreviation, and that abbreviation is an equivalent
+ * spelling: `env --uns FOO rm -rf /` unwrapped to the flag's value `FOO`, so
+ * the privilege, delete, write-operand and find fuses all skipped while
+ * `env --unset FOO rm -rf /` was hard-denied. The long spellings live here
+ * (shared by both planes) instead of being copied into each table.
+ */
+const WRAPPER_VALUE_LONG_OPTIONS = {
+    xargs: ['max-args', 'replace', 'max-procs', 'max-lines', 'max-chars', 'delimiter', 'eof', 'arg-file', 'process-slot-var'],
+    stdbuf: ['input', 'output', 'error'],
+    nice: ['adjustment'],
+    ionice: ['class', 'classdata', 'pid', 'pgid', 'uid'],
+    env: ['unset', 'split-string', 'chdir', 'argv0'],
+    timeout: ['signal', 'kill-after'],
+    time: ['output', 'format'],
+    watch: ['interval'],
+};
+/** Whether a wrapper flag consumes the following word, abbreviations included. */
+export function wrapperValueFlag(name, token) {
+    if (WRAPPER_VALUE_FLAGS[name]?.test(token) === true)
+        return true;
+    if (typeof token !== 'string' || !token.startsWith('--') || token.includes('='))
+        return false;
+    const option = token.slice(2);
+    if (option === '')
+        return false;
+    const names = WRAPPER_VALUE_LONG_OPTIONS[name];
+    return names !== undefined && names.some(full => full.startsWith(option));
+}
 /** Strip prefix wrappers so the effective command is judged, not the wrapper. */
 function unwrapCommand(words) {
     let current = words;
@@ -504,7 +542,6 @@ function unwrapCommand(words) {
             current = [...split.words, ...split.rest];
             continue;
         }
-        const valueFlag = WRAPPER_VALUE_FLAGS[name];
         let index = 1;
         while (index < current.length) {
             const token = current[index].text;
@@ -514,7 +551,7 @@ function unwrapCommand(words) {
             }
             if (!token.startsWith('-'))
                 break;
-            if (valueFlag?.test(token) === true)
+            if (wrapperValueFlag(name, token))
                 index += 1;
             index += 1;
         }
@@ -1080,8 +1117,8 @@ function findActionsAreReadOnly(words) {
  * through the long form (`--output`), not through `--output-indicator-*`.
  */
 const READ_ONLY_OUTPUT_FLAGS = {
-    sort: /^(?:-[a-zA-Z]*o.*|--output(?:=.*)?)$/,
-    tree: /^(?:-[a-zA-Z]*o.*|--output(?:=.*)?)$/,
+    sort: /^(?:-[a-zA-Z]*o.*|--o(?:u(?:t(?:p(?:u(?:t)?)?)?)?)?(?:=.*)?)$/,
+    tree: /^(?:-[a-zA-Z]*o.*|--o(?:u(?:t(?:p(?:u(?:t)?)?)?)?)?(?:=.*)?)$/,
     git: /^--output(?:=.*)?$/,
 };
 /**
@@ -1139,6 +1176,13 @@ function readOnlyCommand(name, words, shell) {
         // their read-only forms; every other spelling falls through to
         // independent classification instead of the static allow.
         if (name === 'rg' && tokens.slice(1).some(token => /^--pre(?:=.*)?$/.test(token)))
+            return false;
+        // A whitelisted read-only command can still hand work to a program the
+        // caller never wrote on the line: `sort --compress-program=PROG` runs
+        // PROG over the sort temporaries and `-T` names a directory to write
+        // them into, so those spellings leave the static allow exactly like
+        // `rg --pre` above.
+        if (name === 'sort' && tokens.slice(1).some(token => /^(?:--co|--te|-T)/.test(token)))
             return false;
         if (name === 'date')
             return !tokens.slice(1).some(token => DATE_MUTATING_FLAG.test(token));
@@ -2004,7 +2048,7 @@ export function hardDenyShellReason(source, shell, roots) {
     // group (`{ sudo ls; }`) is caught before decomposition (a `{` otherwise
     // makes the line opaque and escapes both fuses), and a backtick is a
     // segment start in the same sense (`` x=`sudo ls` ``).
-    if (/(?:^|[;&|({`])\s*(?:sudo|doas|su)(?:\s|$)/i.test(flat))
+    if (PRIVILEGE_COMMAND_PATTERN.test(flat))
         return 'privilege escalation is not permitted by auto mode';
     if (/(?:set-executionpolicy|disable-windowsdefender|clear-disk|format-volume|remove-partition|bcdedit)(?:\s|$)/i.test(flat)) {
         return 'operating-system security or disk policy changes are not permitted';
