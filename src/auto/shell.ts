@@ -2383,7 +2383,11 @@ function classifyEffectiveCommand(name, words, segment, shell, roots, artifacts,
  * body must not lower the line's tier.
  */
 function hereDocumentRunsAsCode(source) {
-    if (typeof source !== 'string' || !/<<-?[ \t]*["']?[A-Za-z_]/.test(source))
+    // The delimiter may be bare, single- or double-quoted, or backslash-escaped
+    // (`<<\EOF`, `<<-\EOF`): all four spellings name the same here-document to
+    // the shell, so a detector that misses the escaped one downgrades exactly
+    // the shape this predicate exists to keep at the manual tier.
+    if (typeof source !== 'string' || !/<<-?[ \t]*["'\\]?[A-Za-z_]/.test(source))
         return false;
     for (const segment of opaqueSegmentWords(source)) {
         const name = commandName(unwrapCommand(segment.words).words[0]?.text ?? '');
