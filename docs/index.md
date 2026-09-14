@@ -4,7 +4,7 @@ layout: home
 hero:
   name: dsh-auto-approval-llm
   text: 工作原理详解
-  tagline: 从「模型发起一次工具调用」到「一条审计记录落盘」的完整旅程 —— 每个数字、每个模块名、每个判定顺序均核对自源码。
+  tagline: 从「模型发起一次工具调用」到「一条审计记录落盘」的完整旅程 —— 模块名与判定顺序逐条标注源码出处，文件行数、模块数、配置键数、路由数与测试计数由门禁从源码派生。
   actions:
     - theme: brand
       text: 开始阅读
@@ -23,7 +23,7 @@ hero:
 </div>
 
 > 为 DeepSeek Harness 的 **Auto 权限档**提供 LLM 辅助自动审批 + 超时自动兜底。
-> Auto 档 = `sandbox: danger-full-access` + `approval: ask`。本插件在 Auto 会话里充当 `approval/request` 的**唯一终结裁决者**：常规操作放行、危险/模糊操作交给「静态规则 → LLM 分类 → LLM/人工裁决 → 倒计时兜底 → 熔断」的自动管线，把「自动但安全」的吞吐做高，同时保证有人工与审计兜底。
+> Auto 档 = `sandbox: danger-full-access` + `approval: ask`。本插件在 Auto 会话里充当 `approval/request` 的**唯一终结裁决者**：常规操作放行、危险/模糊操作交给「静态规则 → LLM 分类 → LLM/人工裁决 → 倒计时兜底 → 熔断」的自动管线，同时保证有人工与审计兜底。
 
 ## 核心数字
 
@@ -64,7 +64,7 @@ hero:
   <a class="navcard" href="/dsh-auto-approval-llm/09-defense-in-depth"><span class="nn">09</span><span class="nt">安全纵深九层</span><span class="nd">从预设门到审计碑</span></a>
   <a class="navcard" href="/dsh-auto-approval-llm/10-client-ui"><span class="nn">10</span><span class="nt">客户端 UI 结构</span><span class="nd">设置卡 + 面板劫持 + 轮询</span></a>
   <a class="navcard" href="/dsh-auto-approval-llm/11-data-persistence"><span class="nn">11</span><span class="nt">数据与持久化</span><span class="nd">六个运行态数据文件</span></a>
-  <a class="navcard" href="/dsh-auto-approval-llm/12-config"><span class="nn">12</span><span class="nt">配置全景</span><span class="nd">59 键 schema + bundle 覆盖</span></a>
+  <a class="navcard" href="/dsh-auto-approval-llm/12-config"><span class="nn">12</span><span class="nt">配置全景</span><span class="nd">60 键 schema + bundle 覆盖</span></a>
   <a class="navcard" href="/dsh-auto-approval-llm/13-http-api"><span class="nn">13</span><span class="nt">HTTP API 面</span><span class="nd">16 条路由与其信任平面</span></a>
 </div>
 
@@ -72,7 +72,7 @@ hero:
 
 <div class="navgrid">
   <a class="navcard" href="/dsh-auto-approval-llm/14-code-map"><span class="nn">14</span><span class="nt">代码地图与构建发布</span><span class="nd">tsc + tsdown + patch 层</span></a>
-  <a class="navcard" href="/dsh-auto-approval-llm/15-quality"><span class="nn">15</span><span class="nt">质量保障体系</span><span class="nd">1564 测试 + 运行时验证</span></a>
+  <a class="navcard" href="/dsh-auto-approval-llm/15-quality"><span class="nn">15</span><span class="nt">质量保障体系</span><span class="nd">1576 测试 + 运行时验证</span></a>
   <a class="navcard" href="/dsh-auto-approval-llm/16-axioms"><span class="nn">16</span><span class="nt">设计公理</span><span class="nd">为什么不追求完美</span></a>
   <a class="navcard" href="/dsh-auto-approval-llm/19-platform-support"><span class="nn">19</span><span class="nt">平台支持与反馈</span><span class="nd">Windows 基线 · 非 Windows 欢迎反馈</span></a>
 </div>

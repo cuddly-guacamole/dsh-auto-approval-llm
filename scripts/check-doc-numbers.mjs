@@ -1,8 +1,10 @@
 #!/usr/bin/env node
-// The published docs state a test count in several places. Those numbers drifted
+// The published docs state numbers in several places. Those numbers drifted
 // independently of each other because nothing recomputed them. This checker owns
-// the single source of truth: the counts derived from tests/*.test.mjs. Every
-// declaration point must exist and must agree with it.
+// the single source of truth: the counts derived from tests/*.test.mjs, and the
+// numbers derived from the source tree (per-module line counts, the module
+// count, the Config schema key count, the host route count). Every declaration
+// point must exist and must agree with it.
 //
 // Read-only by default. `--observed <tests> --observed-pass <pass>` additionally
 // requires the counts a real run reported, which is how the release gate uses it
@@ -247,6 +249,324 @@ export function checkPerFileClaims(sources, root = ROOT) {
   return { problems, lines }
 }
 
+/**
+ * Numbers the docs derive from the source tree rather than from the test suite.
+ * Each point scans one document for the shapes that carry such a number, asks
+ * the source tree what the number is, and reports every mismatch. The rewrite
+ * callback is what `sync-doc-numbers.mjs` applies, so the checker stays the only
+ * owner of what the numbers mean.
+ *
+ * The line counts intentionally pin the published tables to the working tree:
+ * prose that states "this file is N lines" is a claim about the source, and
+ * leaving it unwatched is how twelve of thirteen rows went stale at once.
+ */
+export const DERIVED_POINTS = [
+  {
+    file: 'docs/03-static-engine.md',
+    description: 'module line counts',
+    pattern: /^(\| `([a-z0-9-]+\.ts)` <span class="lnum">[^<]*<\/span> \| )(\d+)( \|)/gm,
+    // The table is a hand-kept subset of src/auto; losing a row would silently
+    // drop that module from the gate, so the floor is a ratchet.
+    minRows: 13,
+    label: match => match[2],
+    claimed: match => Number(match[3]),
+    expect: (match, measured) => measured.lines(`src/auto/${match[2]}`),
+    rewrite: (match, value) => `${match[1]}${value}${match[4]}`,
+  },
+  {
+    file: 'docs/14-code-map.md',
+    description: 'auto module line counts',
+    pattern: /^(│[ ]+[├└]─[ ]+)([a-z0-9-]+\.ts)([ ]+)(\d+)/gm,
+    // This one claims to list the whole layer, so it must hold one row per module.
+    minRows: measured => measured.autoFiles,
+    label: match => match[2],
+    claimed: match => Number(match[4]),
+    expect: (match, measured) => measured.lines(`src/auto/${match[2]}`),
+    rewrite: (match, value) => `${match[1]}${match[2]}${match[3]}${value}`,
+  },
+  {
+    file: 'docs/14-code-map.md',
+    description: 'auto module count',
+    pattern: /静态评估纯函数层（(\d+) 文件/,
+    label: () => 'src/auto',
+    claimed: match => Number(match[1]),
+    expect: (match, measured) => measured.autoFiles,
+    rewrite: (match, value) => `静态评估纯函数层（${value} 文件`,
+  },
+  {
+    file: 'docs/14-code-map.md',
+    description: 'host wiring route count',
+    pattern: /四挂点接线、(\d+) 路由/,
+    label: () => 'index.ts routes',
+    claimed: match => Number(match[1]),
+    expect: (match, measured) => measured.routes,
+    rewrite: (match, value) => `四挂点接线、${value} 路由`,
+  },
+  {
+    file: 'docs/14-code-map.md',
+    description: 'host entry line count',
+    pattern: /学习接线[ ]+(\d+) 行/,
+    label: () => 'src/index.ts',
+    claimed: match => Number(match[1]),
+    expect: (match, measured) => measured.lines('src/index.ts'),
+    rewrite: (match, value) => match[0].replace(/\d+ 行$/, `${value} 行`),
+  },
+  {
+    file: 'docs/14-code-map.md',
+    description: 'client entry line count',
+    pattern: /React 客户端主体 (\d+) 行/,
+    label: () => 'src/client/index.ts',
+    claimed: match => Number(match[1]),
+    expect: (match, measured) => measured.lines('src/client/index.ts'),
+    rewrite: (match, value) => match[0].replace(/\d+/, String(value)),
+  },
+  {
+    file: 'docs/14-code-map.md',
+    description: 'approval module line counts',
+    pattern: /^[ ]{5}│[ ]+[├└]─[ ]+(remote|shared)\.ts[ ]+(\d+)[ ]*$/gm,
+    minRows: 2,
+    label: match => `src/client/approvals/${match[1]}.ts`,
+    claimed: match => Number(match[2]),
+    expect: (match, measured) => measured.lines(`src/client/approvals/${match[1]}.ts`),
+    rewrite: (match, value) => match[0].replace(/\d+[ ]*$/, String(value)),
+  },
+  {
+    file: 'docs/14-code-map.md',
+    description: 'permission icon module line count',
+    pattern: /权限菜单图标 \+ Auto 风险确认弹窗 (\d+) 行/,
+    label: () => 'src/client/auto-icon.ts',
+    claimed: match => Number(match[1]),
+    expect: (match, measured) => measured.lines('src/client/auto-icon.ts'),
+    rewrite: (match, value) => match[0].replace(/\d+/, String(value)),
+  },
+  {
+    file: 'docs/14-code-map.md',
+    description: 'locale module line count',
+    pattern: /zh\/en 双语 (\d+) 行/,
+    label: () => 'src/client/locale.ts',
+    claimed: match => Number(match[1]),
+    expect: (match, measured) => measured.lines('src/client/locale.ts'),
+    rewrite: (match, value) => match[0].replace(/\d+/, String(value)),
+  },
+  {
+    file: 'docs/14-code-map.md',
+    description: 'tool chip module line count',
+    pattern: /tool-chips\.ts[ ]+(\d+)[ ]+工具芯片/,
+    label: () => 'src/client/tool-chips.ts',
+    claimed: match => Number(match[1]),
+    expect: (match, measured) => measured.lines('src/client/tool-chips.ts'),
+    rewrite: (match, value) => match[0].replace(/\d+/, String(value)),
+  },
+  {
+    file: 'docs/12-config.md',
+    description: 'config key count (subtitle)',
+    pattern: /\*(\d+) keys, one source of truth\*/,
+    label: () => 'Config schema',
+    claimed: match => Number(match[1]),
+    expect: (match, measured) => measured.configKeys,
+    rewrite: (match, value) => match[0].replace(/\d+/, String(value)),
+  },
+  {
+    file: 'docs/index.md',
+    description: 'config key count (nav card)',
+    pattern: /(\d+) 键 schema \+ bundle 覆盖/,
+    label: () => 'Config schema',
+    claimed: match => Number(match[1]),
+    expect: (match, measured) => measured.configKeys,
+    rewrite: (match, value) => match[0].replace(/\d+/, String(value)),
+  },
+  {
+    file: 'docs/17-category-switches.md',
+    description: 'category module line count',
+    pattern: /class="lnum">src\/auto\/category\.ts#<\/span>，(\d+) 行/,
+    label: () => 'src/auto/category.ts',
+    claimed: match => Number(match[1]),
+    expect: (match, measured) => measured.lines('src/auto/category.ts'),
+    rewrite: (match, value) => match[0].replace(/\d+ 行$/, `${value} 行`),
+  },
+  {
+    file: 'docs/01-system-overview.md',
+    description: 'audit rotation line cap',
+    pattern: />5MB 保尾 (\d+) 行/,
+    label: () => 'MAX_AUDIT_LINES',
+    claimed: match => Number(match[1]),
+    expect: (match, measured) => measured.auditLines,
+    rewrite: (match, value) => match[0].replace(/\d+ 行$/, `${value} 行`),
+  },
+  {
+    file: 'docs/11-data-persistence.md',
+    description: 'audit rotation line cap',
+    pattern: />5MiB 保尾 (\d+) 行/,
+    label: () => 'MAX_AUDIT_LINES',
+    claimed: match => Number(match[1]),
+    expect: (match, measured) => measured.auditLines,
+    rewrite: (match, value) => match[0].replace(/\d+ 行$/, `${value} 行`),
+  },
+  {
+    file: 'docs/15-quality.md',
+    description: 'audit rotation line cap',
+    pattern: />(\d+) 行取尾/,
+    label: () => 'MAX_AUDIT_LINES',
+    claimed: match => Number(match[1]),
+    expect: (match, measured) => measured.auditLines,
+    rewrite: (match, value) => match[0].replace(/\d+/, String(value)),
+  },
+  {
+    file: 'docs/index.md',
+    description: 'audit rotation line cap (core numbers row)',
+    pattern: /`200 条 \/ (\d+) 行`/,
+    label: () => 'MAX_AUDIT_LINES',
+    claimed: match => Number(match[1]),
+    expect: (match, measured) => measured.auditLines,
+    rewrite: (match, value) => match[0].replace(/\d+(?= 行)/, String(value)),
+  },
+  {
+    file: 'docs/14-code-map.md',
+    description: 'settings sub-card count',
+    pattern: /设置卡 (\d+) 子卡/,
+    label: () => 'settings sub-cards',
+    claimed: match => Number(match[1]),
+    expect: (match, measured) => measured.subcards,
+    rewrite: (match, value) => match[0].replace(/\d+/, String(value)),
+  },
+  {
+    file: 'docs/10-client-ui.md',
+    description: 'settings sub-card count',
+    pattern: /(\d+) 张可折叠子卡/,
+    label: () => 'settings sub-cards',
+    claimed: match => Number(match[1]),
+    expect: (match, measured) => measured.subcards,
+    rewrite: (match, value) => match[0].replace(/\d+/, String(value)),
+  },
+]
+
+/** Newline count, i.e. the same number `wc -l` reports. */
+export function countLines(text) {
+  return (text.match(/\n/g) ?? []).length
+}
+
+/**
+ * Top-level keys of the host Config schema, or null when the block cannot be
+ * read. Null is the honest answer: a parser that quietly returned 0 would make
+ * every page "agree" with a number nothing measured. The lower bound is a
+ * sanity floor — a schema that shrank below a fifth of its size means the parse
+ * broke, not that the product did.
+ */
+export function configKeyCount(source) {
+  const marker = 'export const Config: z<Config> = z.object({'
+  const start = source.indexOf(marker)
+  if (start === -1) return null
+  let depth = 1
+  let keys = 0
+  for (const raw of source.slice(start + marker.length).split('\n')) {
+    const line = raw.replace(/\/\/.*$/, '').replace(/'[^']*'/g, "''").replace(/"[^"]*"/g, '""')
+    if (depth === 1 && /^ {2}[A-Za-z_][A-Za-z0-9_]*[ ]*:/.test(line)) keys += 1
+    for (const char of line) {
+      if (char === '{') depth += 1
+      else if (char === '}') depth -= 1
+    }
+    if (depth <= 0) return keys >= 20 ? keys : null
+  }
+  return null
+}
+
+/** A named numeric constant read out of a source file, or null when it is absent. */
+function numericConstant(path, pattern) {
+  let source
+  try {
+    source = readFileSync(path, 'utf8')
+  } catch {
+    return null
+  }
+  const raw = pattern.exec(source)?.[1]
+  return raw === undefined ? null : Number(raw.replace(/_/g, ''))
+}
+
+/** How many times a pattern occurs in a source file, or null when it cannot be read. */
+function countMatches(path, pattern) {
+  let source
+  try {
+    source = readFileSync(path, 'utf8')
+  } catch {
+    return null
+  }
+  const count = [...source.matchAll(pattern)].length
+  return count > 0 ? count : null
+}
+
+/** What the source tree says the derived numbers are. */
+export function measuredDerived(root = ROOT) {
+  const cache = new Map()
+  const lines = path => {
+    if (!cache.has(path)) cache.set(path, countLines(readFileSync(join(root, path), 'utf8')))
+    return cache.get(path)
+  }
+  return {
+    lines,
+    autoFiles: readdirSync(join(root, 'src', 'auto')).filter(name => name.endsWith('.ts')).length,
+    configKeys: configKeyCount(readFileSync(join(root, 'src', 'index.ts'), 'utf8')),
+    routes: measuredRouteCount(root),
+    auditLines: numericConstant(join(root, 'src', 'auto', 'audit.ts'), /export const MAX_AUDIT_LINES = ([\d_]+)/),
+    subcards: countMatches(join(root, 'src', 'client', 'index.ts'), /^[ ]{4}subcard\(/gm),
+  }
+}
+
+/**
+ * Compare every derived declaration point against the source tree.
+ * `sources` maps a declared file path to its content; unlisted files are read.
+ */
+export function checkDerived(sources = {}, measured = measuredDerived()) {
+  const problems = []
+  const lines = []
+  for (const point of DERIVED_POINTS) {
+    let source
+    if (Object.hasOwn(sources, point.file)) source = sources[point.file]
+    else if (existsSync(join(ROOT, point.file))) source = readFileSync(join(ROOT, point.file), 'utf8')
+    else source = null
+    if (source === null) {
+      problems.push(`${point.file}: missing, so the numbers it states are not checked`)
+      lines.push(`  MISSING  ${point.file}  (${point.description})`)
+      continue
+    }
+    const flags = point.pattern.flags.includes('g') ? point.pattern.flags : `${point.pattern.flags}g`
+    const matches = [...source.matchAll(new RegExp(point.pattern.source, flags))]
+    if (matches.length === 0) {
+      problems.push(`${point.file}: ${point.description} not found — the wording moved, so the number is no longer checked`)
+      lines.push(`  MISSING  ${point.file}  (${point.description})`)
+      continue
+    }
+    // A multi-row point must keep covering every row it claims: one row losing
+    // the watched shape would leave that number ungated with nothing reported.
+    const floor = point.minRows === undefined ? 1 : (typeof point.minRows === 'function' ? point.minRows(measured) : point.minRows)
+    if (Number.isFinite(floor) && matches.length < floor) {
+      problems.push(`${point.file}: ${point.description} covers ${matches.length} row(s) but at least ${floor} are expected — a row left the gate`)
+      lines.push(`  SHRUNK   ${point.file}  (${point.description}: ${matches.length}/${floor} row(s))`)
+    }
+    let stale = 0
+    for (const match of matches) {
+      const claimed = point.claimed(match)
+      let expected = null
+      try {
+        expected = point.expect(match, measured)
+      } catch {
+        expected = null
+      }
+      if (!Number.isFinite(expected)) {
+        problems.push(`${point.file}: ${point.description} (${point.label(match)}) cannot be measured from the source tree`)
+        lines.push(`  UNREADABLE  ${point.file}  ${point.label(match)}`)
+        continue
+      }
+      if (claimed !== expected) {
+        stale += 1
+        problems.push(`${point.file}: ${point.description} says ${claimed} for ${point.label(match)}; measured ${expected}`)
+        lines.push(`  STALE    ${point.file}  ${point.label(match)}=${claimed} (actual ${expected})`)
+      }
+    }
+    if (stale === 0) lines.push(`  ok       ${point.file}  (${point.description}: ${matches.length} row(s))`)
+  }
+  return { problems, lines }
+}
+
 function parseArguments(argv) {
   const options = { observed: undefined, observedPass: undefined }
   for (let index = 0; index < argv.length; index += 1) {
@@ -258,17 +578,37 @@ function parseArguments(argv) {
   return options
 }
 
-export function main(argv = process.argv.slice(2)) {
+/**
+ * Run every check family over one set of document sources. `sources` defaults to
+ * the watched documents read from disk; passing a copy is how a test drives the
+ * failure path (and the exit code built from it) without touching the tree.
+ */
+export function runChecks(argv = [], sources) {
   const options = parseArguments(argv)
+  const documents = sources ?? watchedDocumentSources()
   const measured = measuredCounts()
   const observed = options.observed === undefined ? undefined : { tests: options.observed, pass: options.observedPass }
-  const { problems, lines } = check(measured, {}, observed)
-  const perFile = checkPerFileClaims(watchedDocumentSources())
-  for (const line of lines) console.log(line)
+  const suite = check(measured, documents, observed)
+  const perFile = checkPerFileClaims(documents)
+  const derived = checkDerived(documents)
+  return {
+    measured,
+    observed,
+    suite,
+    perFile,
+    derived,
+    failures: [...suite.problems, ...perFile.problems, ...derived.problems],
+  }
+}
+
+export function main(argv = process.argv.slice(2)) {
+  const { suite, perFile, derived, failures, measured } = runChecks(argv)
+  for (const line of suite.lines) console.log(line)
   for (const line of perFile.lines) console.log(line)
-  for (const problem of [...problems, ...perFile.problems]) console.error(`check-doc-numbers: ${problem}`)
-  if (problems.length + perFile.problems.length > 0) return 1
-  console.log('check-doc-numbers: all declaration points agree')
+  for (const line of derived.lines) console.log(line)
+  for (const problem of failures) console.error(`check-doc-numbers: ${problem}`)
+  if (failures.length > 0) return 1
+  console.log(`check-doc-numbers: all declaration points agree (${measured.files} files / ${measured.cases} cases, ${DECLARATION_POINTS.length} suite point(s), ${derived.lines.filter(line => line.includes('  ok')).length} derived point(s))`)
   return 0
 }
 

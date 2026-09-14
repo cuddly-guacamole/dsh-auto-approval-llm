@@ -1,5 +1,5 @@
 # 12 · 配置全景
-> *59 keys, one source of truth*
+> *60 keys, one source of truth*
 
 ### 全部配置键（src/index.ts Config schema Z.object 原文）
 
