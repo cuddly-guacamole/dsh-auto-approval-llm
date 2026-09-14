@@ -2091,8 +2091,257 @@ function opaqueNestedAssessment(source, shell, roots) {
     return undefined;
 }
 
+/**
+ * A same-length view of the command line with inert message payloads blanked.
+ *
+ * The unconditional whole-line fuses below read the raw line, so a commit
+ * message that merely NAMES a fuse target was refused as if it were the command
+ * being run — the plugin refused its own commits. One span class is provably
+ * inert: the `-m`/`--message` value of a commit-like command, complete as a
+ * quoted token with no live expansion inside it. Everything else — the inside of
+ * `$( )` and backticks, an unquoted operand, an unterminated or early-closed
+ * quote, a command outside the message table — stays verbatim.
+ *
+ * Here-document bodies are deliberately NOT blanked here. Whether a body is
+ * inert depends not only on the delimiter (a bare `<<EOF` leaves `$( )`,
+ * backticks and `$VAR` inside the body to the shell, so a substitution there
+ * really runs) but also on what the consumer does with its stdin, and the same
+ * line can persist the body and run it later. Judging that needs a data-flow
+ * model this layer does not have, so a body keeps its refusal: a message that
+ * has to spell a fuse target belongs in `-F <file>`.
+ *
+ * The direction of the error matters: a locator that misses a span leaves the
+ * line exactly as refused as it is today, while a span blanked by mistake would
+ * remove text a fuse still needs. So every uncertain branch keeps the raw text.
+ *
+ * The view feeds ONLY the four whole-line tests. Decomposition and the
+ * per-segment checks keep reading the raw line: they own the target-level fuses
+ * and must never be handed a blanked operand.
+ */
+function fuseScanView(source, shell) {
+    try {
+        const spans = messagePayloadSpans(source, shell);
+        if (spans.length === 0)
+            return source;
+        const chars = source.split('');
+        for (const span of spans) {
+            for (let index = span.start; index < span.end && index < chars.length; index += 1) {
+                if (chars[index] !== '\n' && chars[index] !== '\r')
+                    chars[index] = ' ';
+            }
+        }
+        return chars.join('');
+    }
+    catch {
+        return source;
+    }
+}
+/** git global options whose value is the NEXT word, so the subcommand scan skips both. */
+const GIT_GLOBAL_VALUE_FLAGS = new Set(['-c', '-C', '--git-dir', '--work-tree', '--namespace', '--exec-path', '--config-env']);
+/** Subcommands whose `-m`/`--message` value is data, never a command line. */
+const GIT_MESSAGE_SUBCOMMANDS = new Set(['commit', 'tag', 'notes']);
+const GIT_NOTES_ACTIONS = new Set(['add', 'append']);
+/**
+ * Split a command line into segments of word spans.
+ *
+ * Only OFFSETS are returned: the payload locator needs the original spelling of
+ * a span (the quote kind and its full extent, possibly across lines), and the
+ * word-based lexer keeps neither offsets nor the raw text of a quoted word.
+ */
+function shellWordSegments(source, backtickEscapes) {
+    const segments = [];
+    let current = [];
+    let start = -1;
+    let quote = null;
+    let index = 0;
+    const closeWord = (end) => {
+        if (start !== -1) {
+            current.push({ start, end });
+            start = -1;
+        }
+    };
+    const closeSegment = () => {
+        closeWord(index);
+        if (current.length > 0)
+            segments.push(current);
+        current = [];
+    };
+    while (index < source.length) {
+        const char = source[index];
+        if (quote === "'") {
+            if (char === "'")
+                quote = null;
+            index += 1;
+            continue;
+        }
+        if (quote === '"') {
+            // Powershell escapes with a backtick, bash with a backslash; using
+            // the wrong one pairs the quotes differently than the shell does,
+            // which is how a payload span would swallow a real command.
+            if (char === (backtickEscapes ? '`' : '\\')) {
+                index += 2;
+                continue;
+            }
+            if (char === '"')
+                quote = null;
+            index += 1;
+            continue;
+        }
+        if (char === (backtickEscapes ? '`' : '\\')) {
+            if (start === -1)
+                start = index;
+            index += 2;
+            continue;
+        }
+        if (char === "'" || char === '"') {
+            if (start === -1)
+                start = index;
+            quote = char;
+            index += 1;
+            continue;
+        }
+        if (char === ' ' || char === '\t' || char === '\n' || char === '\r') {
+            closeWord(index);
+            index += 1;
+            continue;
+        }
+        if (char === '#' && start === -1) {
+            const newline = source.indexOf('\n', index);
+            index = newline === -1 ? source.length : newline;
+            closeWord(index);
+            continue;
+        }
+        if (char === ';' || char === '&' || char === '|' || char === '(' || char === ')' || char === '{' || char === '}') {
+            closeSegment();
+            index += 1;
+            continue;
+        }
+        if (start === -1)
+            start = index;
+        index += 1;
+    }
+    closeSegment();
+    return segments;
+}
+/**
+ * Whether a payload token is a complete quoted span that cannot run anything.
+ *
+ * A single-quoted span is always literal. A double-quoted span stays literal
+ * only while it holds no live expansion — in bash an unescaped backtick, `$(`
+ * or `<(`; in powershell anything reading a variable or a `@(` subexpression —
+ * and only when its closing quote is the token's last character, so a span can
+ * never extend over following syntax.
+ */
+function isInertQuotedSpan(text, backtickEscapes) {
+    if (typeof text !== 'string' || text.length < 2)
+        return false;
+    if (text[0] === "'")
+        return text[text.length - 1] === "'" && !text.slice(1, -1).includes("'");
+    if (text[0] !== '"')
+        return false;
+    const escape = backtickEscapes ? '`' : '\\';
+    let index = 1;
+    while (index < text.length) {
+        const char = text[index];
+        if (char === escape) {
+            index += 2;
+            continue;
+        }
+        if (char === '"')
+            return index === text.length - 1;
+        if (backtickEscapes) {
+            if (char === '$' || (char === '@' && text[index + 1] === '('))
+                return false;
+        }
+        else if (char === '`' || (char === '$' && text[index + 1] === '(')
+            || (char === '<' && text[index + 1] === '(') || (char === '>' && text[index + 1] === '(')) {
+            return false;
+        }
+        index += 1;
+    }
+    return false;
+}
+/** The payload spans of a commit-like command's `-m`/`--message`, when inert. */
+function messagePayloadSpans(source, shell) {
+    const backtickEscapes = shell === 'pwsh' || shell === 'powershell';
+    const spans = [];
+    for (const tokens of shellWordSegments(source, backtickEscapes)) {
+        const words = tokens.map((token) => source.slice(token.start, token.end));
+        if (commandNameWithoutExe(commandName(words[0] ?? '')) !== 'git')
+            continue;
+        let at = 1;
+        let gaveUp = false;
+        while (at < words.length) {
+            const word = words[at];
+            if (GIT_GLOBAL_VALUE_FLAGS.has(word)) {
+                at += 2;
+                continue;
+            }
+            // An option before the subcommand that this owner does not model
+            // could take the next word as its value, so the subcommand position
+            // is no longer known: give up on the segment rather than guess.
+            if (word.startsWith('-')) {
+                if (word.includes('=')) {
+                    at += 1;
+                    continue;
+                }
+                gaveUp = true;
+                break;
+            }
+            break;
+        }
+        if (gaveUp || at >= words.length)
+            continue;
+        const subcommand = words[at];
+        if (!GIT_MESSAGE_SUBCOMMANDS.has(subcommand))
+            continue;
+        at += 1;
+        if (subcommand === 'notes' && GIT_NOTES_ACTIONS.has(words[at] ?? ''))
+            at += 1;
+        for (let index = at; index < tokens.length; index += 1) {
+            const word = words[index];
+            if (word === '--')
+                break;
+            let span;
+            if (word === '-m' || word === '--message') {
+                const next = tokens[index + 1];
+                if (next !== undefined)
+                    span = { start: next.start, end: next.end };
+                index += 1;
+            }
+            else {
+                const attached = /^--message=(.*)$/s.exec(word);
+                const cluster = /^-([A-Za-z]*)m(.*)$/s.exec(word);
+                if (attached !== null) {
+                    span = { start: tokens[index].start + '--message='.length, end: tokens[index].end };
+                }
+                else if (cluster !== null && cluster[2] !== undefined) {
+                    if (cluster[2] === '') {
+                        const next = tokens[index + 1];
+                        if (next !== undefined)
+                            span = { start: next.start, end: next.end };
+                        index += 1;
+                    }
+                    else {
+                        span = { start: tokens[index].end - cluster[2].length, end: tokens[index].end };
+                    }
+                }
+            }
+            if (span !== undefined && isInertQuotedSpan(source.slice(span.start, span.end), backtickEscapes))
+                spans.push(span);
+        }
+    }
+    return spans;
+}
+
 export function hardDenyShellReason(source, shell, roots) {
     const compact = source.trim();
+    // The four whole-line fuses below read this view, in which data payloads
+    // (a commit message body, a here-document body that is not a program) are
+    // blanked out. Everything after them — the decomposition and the per-segment
+    // checks — keeps reading `compact`: those own the target-level fuses and
+    // must see every operand exactly as written.
+    const fuseView = fuseScanView(compact, shell);
     // Newline-flattened copy for the whole-line fuses: `decomposeCommandLine`
     // treats `\n` as a segment separator, but an opaque grouping form such as
     // `(echo a\nsudo ls)` short-circuits before any per-segment check, and the
@@ -2100,7 +2349,7 @@ export function hardDenyShellReason(source, shell, roots) {
     // line inside a group previously escaped the unconditional fuse. Flattening
     // first makes `\n` behave exactly like the `;` separator the segment loop
     // already guards against.
-    const flat = compact.replace(/\r?\n/g, '; ');
+    const flat = fuseView.replace(/\r?\n/g, '; ');
     // Whole-line privilege fuse: also catches a compound line whose operator
     // separates a segment starting with sudo/doas/su (`echo hi;sudo ls`,
     // `cmd && sudo rm -rf /`), which the old `^|\s` anchor missed. Anchored on
@@ -2115,10 +2364,10 @@ export function hardDenyShellReason(source, shell, roots) {
     if (/(?:set-executionpolicy|disable-windowsdefender|clear-disk|format-volume|remove-partition|bcdedit)(?:\s|$)/i.test(flat)) {
         return 'operating-system security or disk policy changes are not permitted';
     }
-    if (/(?:curl|wget|invoke-webrequest|invoke-restmethod)/i.test(compact) && (sensitiveMarker(compact) || dshHomeExfil(compact, roots))) {
+    if (/(?:curl|wget|invoke-webrequest|invoke-restmethod)/i.test(fuseView) && (sensitiveMarker(fuseView) || dshHomeExfil(fuseView, roots))) {
         return 'credential or private-data exfiltration pattern is not permitted';
     }
-    if (dynamicHomeTarget(compact) && /(?:rm|remove-item|rmdir)\b/i.test(compact)) {
+    if (dynamicHomeTarget(fuseView) && /(?:rm|remove-item|rmdir)\b/i.test(fuseView)) {
         return 'dynamic deletion targeting the user home is not permitted';
     }
     const decomposition = decomposeCommandLine(compact, shell);
