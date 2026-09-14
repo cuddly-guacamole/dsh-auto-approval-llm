@@ -395,6 +395,12 @@ function deletionSpec(name, words, shell) {
 const WRAPPERS = new Set(['env', 'nohup', 'setsid', 'stdbuf', 'command', 'time', 'timeout', 'xargs', 'nice', 'ionice']);
 /** Privilege-escalation commands: hard-denied at the whole-line fuse AND per segment. */
 const PRIVILEGE_COMMANDS = new Set(['sudo', 'doas', 'su']);
+/** Interpreters whose inline source runs as shell code on this plane. */
+const SHELL_CODE_INTERPRETERS = new Set(['sh', 'bash', 'zsh', 'fish', 'ksh', 'dash', 'cmd', 'cmd.exe', 'powershell', 'powershell.exe', 'pwsh', 'pwsh.exe', 'eval', 'iex', 'invoke-expression']);
+/** The plane a nested interpreter's own source belongs to. */
+function shellPlaneOf(name) {
+    return /^(?:cmd|cmd\.exe|powershell|powershell\.exe|pwsh|pwsh\.exe|iex|invoke-expression)$/.test(name) ? 'powershell' : 'bash';
+}
 /**
  * `env -S/--split-string VALUE` runs VALUE as a command line (the shebang
  * spelling), so VALUE is the real argv rather than an opaque flag value.
@@ -1344,6 +1350,14 @@ function segmentHardDenyReason(segment, shell, roots) {
     }
     const unwrapped = unwrapCommand(segment.words);
     const name = commandName(unwrapped.words[0]?.text ?? '');
+    // The per-segment privilege check in `hardDenyShellReason` only runs on
+    // decomposable lines, so the opaque recovery and `find -exec` lost the
+    // fuse: `(env sudo ls)`, `(/usr/bin/sudo ls)`, `(timeout 5 sudo ls)` and
+    // `(A=1 sudo ls)` were classifier-answerable asks while the same text
+    // without the grouping is hard-denied. Judging the effective name here
+    // gives every caller the same owner.
+    if (PRIVILEGE_COMMANDS.has(name))
+        return 'privilege escalation is not permitted by auto mode';
     // Commands whose non-flag operands are write destinations (copy/move,
     // creation, pwsh output cmdlets): a runtime-state target inside the zone is
     // an unconditional hard deny, and the same normalization the allow path
@@ -1860,19 +1874,8 @@ function splitOpaqueWords(chunk) {
 }
 function opaqueSegmentWords(source) {
     const segments = [];
-    for (const chunk of stripHeredocBodies(source).split(/[\n;&|(){}`]+/)) {
-        const words = [];
-        for (const raw of chunk.split(/\s+/)) {
-            if (raw === '')
-                continue;
-            let text = raw;
-            let quoted = false;
-            if (text.length > 1 && ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'")))) {
-                text = text.slice(1, -1);
-                quoted = true;
-            }
-            words.push({ text, dynamic: /[$]|%[A-Za-z_]+%/.test(text), glob: /[*?]/.test(text), quoted });
-        }
+    for (const chunk of splitOpaqueChunks(stripHeredocBodies(source))) {
+        const words = splitOpaqueWords(chunk);
         if (words.length > 0)
             segments.push({ words, writeTargets: [], readTargets: [] });
     }
@@ -1945,6 +1948,38 @@ function opaqueOutputFlagReason(source, shell, roots) {
             const reason = writeTargetHardDenyReason(target.text, roots);
             if (reason !== undefined)
                 return `output flag writes ${reason}`;
+        }
+    }
+    return undefined;
+}
+
+/**
+ * Interpreter boundaries inside a line that cannot be decomposed. The quoted
+ * source is one opaque word, so the per-segment loop never saw it and the
+ * plain spelling's tier was lost: `(bash -c "cp a.txt ~/.dsh/x")` stayed a
+ * classifier-answerable ask while `bash -c "cp a.txt ~/.dsh/x"` hard-denies.
+ * The same owners decide here in the same order as the decomposed path.
+ */
+function opaqueNestedAssessment(source, shell, roots) {
+    for (const segment of opaqueSegmentWords(source)) {
+        const unwrapped = unwrapCommand(segment.words);
+        const name = commandName(unwrapped.words[0]?.text ?? '');
+        const nested = nestedExecution(name, unwrapped.words);
+        if (nested === undefined)
+            continue;
+        if (nested.source === undefined)
+            return manualReview('opaque nested execution requires manual review');
+        if (destructiveNestedSource(nested.source))
+            return manualReview('nested deletion requires manual review');
+        if (nestedSourceWritesToDshHome(nested.source, roots))
+            return denied('nested execution writes to DSH_HOME — use the write or edit tool instead');
+        if (SHELL_CODE_INTERPRETERS.has(name)) {
+            const nestedHard = hardDenyShellReason(nested.source, shellPlaneOf(name), roots);
+            if (nestedHard !== undefined)
+                return denied(nestedHard);
+            const nestedOutput = opaqueOutputFlagReason(nested.source, shellPlaneOf(name), roots);
+            if (nestedOutput !== undefined)
+                return denied(nestedOutput);
         }
     }
     return undefined;
@@ -2049,6 +2084,25 @@ function assessSegment(segment, shell, roots, artifacts, owner) {
             return manualReview('nested deletion requires manual review');
         if (nestedSourceWritesToDshHome(nested.source, roots))
             return denied('nested execution writes to DSH_HOME — use the write or edit tool instead');
+        // A nested inline source must not step below the tier the same text
+        // reaches on its own: `bash -c "cp a.txt ~/.dsh/history.jsonl"` writes
+        // exactly what the top-level spelling hard-denies, and
+        // `bash -c "sudo ls"` escalates exactly like `sudo ls`. Only
+        // `find -exec` consulted the write-operand, redirect, output-flag and
+        // privilege owners, so those families had no reachable owner behind an
+        // interpreter. The nested-deletion heuristic above keeps its
+        // manual-review tier, so the ladder runs last.
+        if (SHELL_CODE_INTERPRETERS.has(name)) {
+            const nestedHard = hardDenyShellReason(nested.source, shellPlaneOf(name), roots);
+            if (nestedHard !== undefined)
+                return denied(nestedHard);
+            // A read-only command's own output flag writes a file without any
+            // redirection token, so the ladder above cannot see it
+            // (`bash -c "sort -o ~/.dsh/history.jsonl in.txt"`).
+            const nestedOutput = opaqueOutputFlagReason(nested.source, shellPlaneOf(name), roots);
+            if (nestedOutput !== undefined)
+                return denied(nestedOutput);
+        }
         return semanticReview('visible nested or inline-code execution requires independent classification');
     }
     const base = classifyEffectiveCommand(name, words, segment, shell, roots, artifacts, owner, unwrapped.dynamicInput);
@@ -2219,6 +2273,9 @@ export function assessShell(source, shell, roots, artifacts, owner) {
         return denied(hard);
     const decomposition = decomposeCommandLine(source, shell);
     if (decomposition.kind === 'opaque') {
+        const nested = opaqueNestedAssessment(source, shell, roots);
+        if (nested !== undefined)
+            return nested;
         return destructiveNestedSource(source)
             ? manualReview(`${shell} destructive command cannot be read statically: ${decomposition.reason}`)
             : semanticReview(`${shell} command requires independent classification because it cannot be read statically: ${decomposition.reason}`);
