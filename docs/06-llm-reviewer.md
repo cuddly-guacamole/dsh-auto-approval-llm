@@ -60,7 +60,7 @@ Rules:
 
 <table>
   <tr><th>评审返回</th><th>LOW 语义</th><th>MEDIUM 语义</th><th>HIGH 语义</th></tr>
-  <tr><td class="mono">ALLOW</td><td class="rk-low">放行；清零熔断；<code>llm-allow</code></td><td><b>可接管</b>（scope 内）：立即放行 <code>llm-allow</code></td><td>只建议（不接管）</td></tr>
+  <tr><td class="mono">ALLOW</td><td class="rk-low">放行；<code>llm-allow</code>（**不清零熔断**，只有人工决定清零）</td><td><b>可接管</b>（scope 内）：立即放行 <code>llm-allow</code></td><td>只建议（不接管）</td></tr>
   <tr><td class="mono">DENY</td><td class="rk-high">拒绝；计数熔断；<code>llm-deny</code></td><td><b>可接管</b>：立即拒绝 <code>llm-deny</code></td><td>只建议</td></tr>
   <tr><td class="mono">ESCALATE（诚实说不知道）</td><td>转人（带倒计时），<b>绝不对不确定自动作答</b></td><td>只建议，等人工/超时</td><td>只建议</td></tr>
   <tr><td class="mono">评审失败 / 超时 / 垃圾输出</td><td class="rk-high">拒绝（<code>llm-failed</code>），<b>不计熔断</b></td><td>只建议（advisory）</td><td>只建议</td></tr>

@@ -18,7 +18,7 @@
 | 本次决议来源 | 连续 | 累计 | denialLog |
 |---|---|---|---|
 | `human-allow / human-deny（人决定了）` | <span class="rk-low">清零</span> | <span class="rk-low">清零</span> | 清空 |
-| `llm-allow（LOW 放行 或 MEDIUM 接管放行）` | <span class="rk-low">清零</span> | <span class="rk-low">清零</span> | 清空 |
+| `llm-allow（LOW 放行 或 MEDIUM 接管放行）` | 不变 | 不变 | 不变 |
 | `llm-deny 且 llmDecided=true（真·LLM 拍板拒绝）` | <span class="rk-high">+1</span> | <span class="rk-high">+1</span> | push（超上限 shift） |
 | `timeout-* / auto-* / advisory 拒绝 / llm-failed / llm-blocked / 静态名单` | 不变 | 不变 | 不变 |
 
@@ -39,4 +39,4 @@ flowchart TD
     A3["客户端防劫持：面板文本含「熔断」→ 两按钮禁用 breakerAntiHijackMs（默认 0 = 不启用） [anti-hijack]"]
 ```
 
-**恢复路径**：① 人做任何决定 → 双清零；② LOW 被 LLM 放行 → 双清零；③ `/approval-reset`（命令为可选注册，`slashCommandsEnabled` 默认关——未注册时熔断只能靠人工决定/会话销毁恢复）；④ 会话销毁 → 删键。评审失败（`llm-failed`）**不**计熔断 —— 失败怪线路/超时，不怪 LLM 判断。
+**恢复路径**：① 人做任何决定 → 双清零；② `/approval-reset`（命令为可选注册，`slashCommandsEnabled` 默认关——未注册时熔断只能靠人工决定/会话销毁恢复）；③ 会话销毁 → 删键。**LLM 放行不清零**：`applyBreaker` 对 `llm-allow` 返回「不变」——只有 `human-allow` / `human-deny` 清零，`llm-deny` 且 `llmDecided=true` 递增。评审失败（`llm-failed`）**不**计熔断 —— 失败怪线路/超时，不怪 LLM 判断。

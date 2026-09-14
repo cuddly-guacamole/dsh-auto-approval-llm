@@ -22,7 +22,7 @@ flowchart TD
 
 **🟢 LOW 低风险**
 - 不送评审 → 直接 **auto-allow** 放行（记录 `auto-allow`）
-- 送评审 → **阻塞等** LLM 结论：ALLOW→放行并**清零熔断**；DENY→拒绝并**计数**；评审失败→拒绝**不计熔断**；ESCALATE→转人（带倒计时）
+- 送评审 → **阻塞等** LLM 结论：ALLOW→放行（**不清零熔断**，只有人工决定清零）；DENY→拒绝并**计数**；评审失败→拒绝**不计熔断**；ESCALATE→转人（带倒计时）
 - ALLOW+CRITICAL → 不放行，转人（矛盾输出不信任）
 
 **🟡 MEDIUM 中等**
