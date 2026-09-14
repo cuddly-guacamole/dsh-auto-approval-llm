@@ -577,6 +577,24 @@ export function hasAwaitingNote(text: string | undefined): boolean {
 }
 
 /**
+ * Machine-readable marker for a LOCKED-category ask. The category layer pinned
+ * this countdown to reject: neither an authorization typed in the conversation
+ * nor the configured timeout action can release it — only a click in the panel
+ * can. The host writes this token and the client replaces it with copy in the
+ * active interface language, so a locked ask stops looking like an ordinary
+ * countdown the user thinks they already authorized.
+ *
+ * The token shares no complete literal with the other markers (`AWAITING_MARKER`
+ * detection is a substring test, so a shared literal would cross the branches).
+ */
+export const LOCKED_ASK_MARKER = '[dsh-auto-approval-llm] 🔒 locked-category-ask'
+
+/** Whether an approval text carries the locked-category ask marker. */
+export function hasLockedAskNote(text: string | undefined): boolean {
+  return text !== undefined && text.includes(LOCKED_ASK_MARKER)
+}
+
+/**
  * Machine-readable prefix of the breaker note. The browser guard keys the
  * anti-hijack window off this exact token, so the signal must NOT be carried
  * by prose: the note the host writes is English-only, and matching a localized
@@ -630,6 +648,7 @@ export function stripCountdownMarkers(reason: string): string {
     COUNTDOWN_MARKER_PATTERN,
     '',
   ).split(BREAKER_MARKER).join('').split(AWAITING_MARKER).join('')
+    .split(LOCKED_ASK_MARKER).join('')
     .split(EDIT_DIFF_BLOCK_START).join('').split(EDIT_DIFF_BLOCK_END).join('')
     .replace(/[ \t]+$/gm, '').trim()
 }

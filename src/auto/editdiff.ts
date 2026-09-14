@@ -15,7 +15,7 @@
  */
 import { lstatSync, readFileSync, realpathSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { AWAITING_MARKER, BREAKER_MARKER, COUNTDOWN_MARKER_PATTERN, EDIT_DIFF_BLOCK_END, EDIT_DIFF_BLOCK_START, stripCountdownMarkers } from './decision.js'
+import { AWAITING_MARKER, BREAKER_MARKER, COUNTDOWN_MARKER_PATTERN, EDIT_DIFF_BLOCK_END, EDIT_DIFF_BLOCK_START, LOCKED_ASK_MARKER, stripCountdownMarkers } from './decision.js'
 import { isProtectedProjectPath, isWithin, normalizePath } from './paths.js'
 
 /** Independent args-lookup cap for the diff preview (never maxArgsChars). */
@@ -57,6 +57,7 @@ export function stripPreviewMarkers(text: string): string {
     .replace(COUNTDOWN_MARKER_PATTERN, '')
     .split(BREAKER_MARKER).join('')
     .split(AWAITING_MARKER).join('')
+    .split(LOCKED_ASK_MARKER).join('')
     // Only the CLOSING delimiter is harmful inside the body: the client anchors
     // its parse on the block the host just opened (which precedes any body
     // line), so an opening delimiter in a preview line is inert and stays

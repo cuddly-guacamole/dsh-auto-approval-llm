@@ -1,6 +1,6 @@
 import React from 'react'
 import { Button, Input } from '@deepseek-ai/dsh-client-ui-primitives'
-import { normalizeTimeoutAction, hasBreakerNote, AWAITING_MARKER, REVIEWER_SYSTEM, assembleReviewerSystem, EDIT_DIFF_BLOCK_END, EDIT_DIFF_BLOCK_START } from '../auto/decision.js'
+import { normalizeTimeoutAction, hasBreakerNote, hasLockedAskNote, AWAITING_MARKER, LOCKED_ASK_MARKER, REVIEWER_SYSTEM, assembleReviewerSystem, EDIT_DIFF_BLOCK_END, EDIT_DIFF_BLOCK_START } from '../auto/decision.js'
 import { THRESHOLD_DEFAULTS, DEFAULT_ALLOW_TOOL_GROUPS } from '../auto/constants.js'
 import { parseRulesText } from '../auto/rules.js'
 import { installAutoPermissionIcon, SHIELD_PATH, BOLT_PATH } from './auto-icon.js'
@@ -227,9 +227,23 @@ function installApprovalPanelDecorations(): () => void {
   // reader's language. Rewriting text nodes keeps React's structure intact.
   const renderAwaitingNote = (panel: any) => {
     for (const node of collectTextNodes(panel, [])) {
+      if (nodeInsidePreview(node, panel)) continue
       const data = node.data ?? ''
       if (!data.includes(AWAITING_MARKER)) continue
       node.data = data.split(AWAITING_MARKER).join(t('panel.awaitingHuman'))
+    }
+  }
+
+  // A locked-category ask makes the same promise the awaiting copy does, but for
+  // the opposite reason: the countdown runs and rejects, and no authorization
+  // typed in the conversation can stop it — only a click here can. Same rewrite
+  // shape as above so React's structure survives.
+  const renderLockedAskNote = (panel: any) => {
+    for (const node of collectTextNodes(panel, [])) {
+      if (nodeInsidePreview(node, panel)) continue
+      const data = node.data ?? ''
+      if (!data.includes(LOCKED_ASK_MARKER)) continue
+      node.data = data.split(LOCKED_ASK_MARKER).join(t('panel.lockedAsk'))
     }
   }
 
@@ -259,6 +273,7 @@ function installApprovalPanelDecorations(): () => void {
       })))
       const text = computeTextNodeRewrites([markerSource], DIFF_START, DIFF_END)[0]
       if (text.includes(AWAITING_MARKER)) renderAwaitingNote(panel)
+      if (hasLockedAskNote(text)) renderLockedAskNote(panel)
       if (hasBreakerNote(text)) breaker.apply(panel, key)
     }
     breaker.prune(liveKeys)

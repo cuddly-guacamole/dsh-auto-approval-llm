@@ -29,7 +29,7 @@ import { AGGRESSIVE_BUILTIN, applyCategoryDirective, CATEGORY_KEYS, categoryDire
 import { sanitizeClassifierArguments, sanitizeClassifierText, sanitizeReviewReason } from './auto/classifier.js'
 import { DIRECT_HUMAN_TOOL, THRESHOLD_DEFAULTS } from './auto/constants.js'
 import { createDshClassifier, createEndpointClassifier } from './auto/dsh-classifier.js'
-import { type RaceHumanHandle, type ReviewResult, type StaticRisk, AWAITING_MARKER, REVIEW_TIMEOUT_NOTICE, applyBreaker, approvalSource, assembleReviewerSystem, breakerNote, breakerTripped, createKeyedMutex, DENY_CIRCUMVENTION_GUIDANCE, extractToolPath, followResolution, formatDenyFeedback, frameReviewerInput, lowRiskReviewOutcome, parseReview, unattendedMustFailClosed, preserveHostKeys, raceHumanDecision, reviewSuggestionNote, reviewerAutoAllowBlocked, riskFromAssessment, staticListDecision, type ContextSummary } from './auto/decision.js'
+import { type RaceHumanHandle, type ReviewResult, type StaticRisk, AWAITING_MARKER, LOCKED_ASK_MARKER, REVIEW_TIMEOUT_NOTICE, applyBreaker, approvalSource, assembleReviewerSystem, breakerNote, breakerTripped, createKeyedMutex, DENY_CIRCUMVENTION_GUIDANCE, extractToolPath, followResolution, formatDenyFeedback, frameReviewerInput, lowRiskReviewOutcome, parseReview, stripCountdownMarkers, unattendedMustFailClosed, preserveHostKeys, raceHumanDecision, reviewSuggestionNote, reviewerAutoAllowBlocked, riskFromAssessment, staticListDecision, type ContextSummary } from './auto/decision.js'
 import { LATENCY_SUMMARY_WINDOW, clearLatencySamples, loadLatencySamples, pushLatencySample, summarizeLatency, type LatencySample } from './auto/latency.js'
 import { normalizeLoopThreshold, loopKeyFor, createLoopState, recordLoopCall, type LoopGuardState } from './auto/loop-guard.js'
 import { RECENT_REJECTION_CAP, baselineFromPermissionState, observePermissionChange, permissionChangeFromEvent, recentRejectionPointers, type PermissionState } from './auto/permission-change.js'
@@ -1944,6 +1944,17 @@ interface ReviewStatus {
    * that is actually left instead of restarting from the published seconds.
    */
   expiresAt?: number
+  /**
+   * Set on the attached asks whose countdown is pinned to reject because a
+   * locked category (or the credential-read floor, or the by-name channel
+   * refusal) forbids every automatic release. It is a structural flag rather
+   * than something derived from the reason text, and the panel needs it:
+   * without it a locked ask is indistinguishable from an ordinary countdown, so
+   * a user who authorized the operation in the conversation waits for an answer
+   * that the design will never give. Only the STATUS carries the fact; the
+   * ask's outcome semantics are unchanged.
+   */
+  lockedAsk?: true
 }
 
 const reviewStates = new Map<string, ReviewStatus>()
@@ -4551,12 +4562,16 @@ export function apply(ctx: Context, rawConfig: Config): void {
     const notes: string[] = []
     let breakerReasons: string[] | undefined
     if (review) {
-      notes.push(reviewSuggestionNote(review))
+      // The reviewer's reason is model-authored text that this host relays to the
+      // panel, so it gets the same marker fence a model-controlled base reason
+      // does: a reason spelling a protocol marker must not be able to claim the
+      // locked, status-less or breaker state the host never set.
+      notes.push(stripCountdownMarkers(reviewSuggestionNote(review)))
     }
     if (breaker) {
       const key = authorityKeyFor({ agent: req.agent })
       const log = denialLog.get(key) ?? []
-      breakerReasons = log.map((d, i) => `${i + 1}. ${d.toolName}${d.reason ? ` — ${d.reason}` : ''}`)
+      breakerReasons = log.map((d, i) => `${i + 1}. ${stripCountdownMarkers(`${d.toolName}${d.reason ? ` — ${d.reason}` : ''}`)}`)
       const reasons = breakerReasons.join('\n')
       const concur = denials.get(key) ?? 0
       const total = totalDenials.get(key) ?? 0
@@ -4565,12 +4580,20 @@ export function apply(ctx: Context, rawConfig: Config): void {
         ? `rejected ${config.maxConsecutiveDenials} times in a row`
         : `rejected ${config.maxTotalDenials} times in total`
       notes.push(breakerNote(limitText, reasons))
+    } else if (status?.lockedAsk === true) {
+      // A locked ask is a countdown like any other — except that nothing but a
+      // click can release it, so it MUST carry a sentence of its own. Users read
+      // the countdown as "waiting for the reviewer / for me to answer", and the
+      // authorization they typed in the conversation has no effect on this
+      // category; the marker says so without repeating a number (the number
+      // lives on the session chip and would go stale in the panel body).
+      notes.push(LOCKED_ASK_MARKER)
     } else if (!status) {
       // Status-less asks (category ask / manual / human-only / breaker-free
       // rules fallbacks) carry the machine marker: the client renders its
-      // localized sentence. Countdown asks carry no prose at all — the number
-      // lives on the session chip, and a static "in Ns" line in the panel body
-      // would contradict it a second later.
+      // localized sentence. Other countdown asks carry no prose at all — the
+      // number lives on the session chip, and a static "in Ns" line in the panel
+      // body would contradict it a second later.
       notes.push(AWAITING_MARKER)
     }
     const extra = notes.map((n) => `\n\n${n}`).join('')
@@ -4990,6 +5013,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
                 action: 'reject',
                 seconds: Math.max(1, Math.round(config.highRiskSeconds)),
                 category: classified.category,
+                lockedAsk: true,
               }
               return askHuman(req, undefined, next, false, lockedStatus)
             }
@@ -5208,6 +5232,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
         action: 'reject',
         seconds: Math.max(1, Math.round(config.highRiskSeconds)),
         category: classified.category,
+        lockedAsk: true,
       }
       return askHuman(req, undefined, next, false, lockedStatus)
     }
@@ -5250,6 +5275,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
           action: 'reject',
           seconds: Math.max(1, Math.round(config.highRiskSeconds)),
           category: classified.category,
+          lockedAsk: true,
         }
         return askHuman(req, undefined, next, false, lockedStatus)
       }
