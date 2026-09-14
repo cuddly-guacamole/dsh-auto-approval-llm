@@ -1461,6 +1461,35 @@ export function perlInPlaceTargets(words) {
     return targets;
 }
 /**
+ * Whether one rsync operand names a REMOTE endpoint (`[user@]host:path` or
+ * `rsync://…`). A Windows drive spelling (`C:/ws`) also contains a colon, so
+ * the drive form is excluded first.
+ */
+function remoteRsyncOperand(text) {
+    if (/^[A-Za-z]:[\\/]/.test(text)) return false;
+    if (text.startsWith(':')) return false;
+    if (/^rsync:\/\//i.test(text)) return true;
+    return /^[^/\\]*[^/\\]:/.test(text);
+}
+/**
+ * Write target of an rsync invocation whose destination is a LOCAL path. A
+ * local mirror is a file write like any other and must be judged by the write
+ * targets (and labelled as such); a remote destination (upload) keeps the
+ * network classification, and `--dry-run`/`-n` writes nothing at all.
+ */
+export function rsyncWriteTargets(words) {
+    if (words.slice(1).some((word) => {
+        const text = wordText(word);
+        return text === '-n' || text === '--dry-run';
+    }))
+        return [];
+    const bare = words.slice(1).filter((word) => !wordText(word).startsWith('-'));
+    if (bare.length < 2)
+        return [];
+    const destination = bare[bare.length - 1];
+    return remoteRsyncOperand(wordText(destination)) ? [] : [destination];
+}
+/**
  * Bash heads beyond copy/move and creation whose own operands mutate files:
  * `tee` writes its operands outright, `dd` writes through `of=`, `sed -i`
  * rewrites its inputs in place, `truncate` resizes them, coreutils `install`
@@ -1482,6 +1511,8 @@ function writesThroughOperands(name, words) {
         return unzipWriteTargets(words).length > 0;
     if (name === 'perl')
         return perlEditsInPlace(words);
+    if (name === 'rsync')
+        return rsyncWriteTargets(words).length > 0;
     return false;
 }
 /**
@@ -1620,6 +1651,8 @@ function segmentHardDenyReason(segment, shell, roots) {
             writeOperands = unzipWriteTargets(unwrapped.words);
         else if (name === 'perl')
             writeOperands = perlInPlaceTargets(unwrapped.words);
+        else if (name === 'rsync')
+            writeOperands = rsyncWriteTargets(unwrapped.words);
         else
             writeOperands = unwrapped.words.slice(1).filter(word => !word.text.startsWith('-'));
     }
@@ -2728,7 +2761,9 @@ function classifyEffectiveCommand(name, words, segment, shell, roots, artifacts,
                         ? unzipWriteTargets(words)
                         : name === 'perl'
                             ? perlInPlaceTargets(words)
-                            : name === 'install' || name === 'cp' || name === 'mv'
+                            : name === 'rsync'
+                                ? rsyncWriteTargets(words)
+                                : name === 'install' || name === 'cp' || name === 'mv'
                                 ? writeOperandCandidates(words)
                                 : words.slice(1).filter(word => !word.text.startsWith('-'));
         if (writeTargets.some(word => word.dynamic || word.glob))

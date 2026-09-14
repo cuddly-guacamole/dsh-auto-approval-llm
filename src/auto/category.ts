@@ -22,7 +22,7 @@
 
 import { basename } from 'node:path'
 import { isProtectedProjectPath, isProtectedReadMetadata, isWithin, normalizePath } from './paths.js'
-import { decomposeCommandLine, envSplitStringWords, isNullSink, perlEditsInPlace, perlInPlaceTargets, tarWriteTargets, tarWritesToDisk, unzipWriteTargets, wrapperValueFlag } from './shell.js'
+import { decomposeCommandLine, envSplitStringWords, isNullSink, perlEditsInPlace, perlInPlaceTargets, rsyncWriteTargets, tarWriteTargets, tarWritesToDisk, unzipWriteTargets, wrapperValueFlag } from './shell.js'
 
 /** The 12 configurable category keys. */
 export type CategoryKey =
@@ -649,6 +649,14 @@ function classifySegmentBase(segment: Segment, shell: string, roots: CategoryRoo
   }
   if (PUSH_COMMANDS.has(name) && unwrapped.words[1]?.text.toLowerCase() === 'push') return 'publish'
   if (DISK_COMMANDS.has(name) || /^mkfs(?:\.|$)/.test(name)) return 'disk'
+  // A local rsync destination is a file write, not a network operation: left
+  // under `networkExec` it inherited the aggressive builtin's `auto` directive
+  // and a local mirror was silently allowed. The remote (upload) direction
+  // keeps the network label — its fs-write face is the remote side.
+  if (shell === 'bash' && name === 'rsync') {
+    const rsyncTargets = rsyncWriteTargets(unwrapped.words)
+    if (rsyncTargets.length > 0) return copyMoveStyleCategory(rsyncTargets, roots)
+  }
   if (NETWORK_COMMANDS.has(name)) return 'networkExec'
   if (DB_SERVICE_INFRA.test(name)) return 'privilege'
   const creation = creationCategory(name, unwrapped.words, shell, roots)
