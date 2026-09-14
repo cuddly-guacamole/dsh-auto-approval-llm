@@ -426,16 +426,20 @@ function unwrapWords(words: SegmentWord[]): { words: SegmentWord[]; dynamicInput
 }
 
 function nestedExecution(name: string, words: SegmentWord[]) {
-  if (NESTED_INTERPRETERS.has(name)) {
+  // Match the interpreter sets without the `.exe` suffix: `python.exe -c …`
+  // must be the same nested-execution boundary as `python -c …` (the shell
+  // plane's own nestedExecution applies the same normalization).
+  const base = commandNameWithoutExe(name)
+  if (NESTED_INTERPRETERS.has(base)) {
     const index = words.findIndex((word, wordIndex) => wordIndex > 0 && /^(?:-c|-e|-E|--eval|--exec|--command|--print)$/.test(word.text))
     return index >= 0 ? {} : undefined
   }
-  if (NESTED_SHELLS.has(name)) {
+  if (NESTED_SHELLS.has(base)) {
     const index = words.findIndex((word, wordIndex) => wordIndex > 0 && /^(?:-c|\/c|--command)$/.test(word.text))
     return {} // a bare outer shell is still a nested-execution boundary
   }
-  if (NESTED_EVAL.has(name)) return {}
-  if (NESTED_DELEGATE.has(name)) return {}
+  if (NESTED_EVAL.has(base)) return {}
+  if (NESTED_DELEGATE.has(base)) return {}
   return undefined
 }
 

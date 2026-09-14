@@ -582,20 +582,27 @@ function unwrapCommand(words) {
 }
 /** Describe an interpreter boundary and whether its inline source is visible. */
 function nestedExecution(name, words) {
-    if (['node', 'deno', 'bun', 'python', 'python3', 'perl', 'ruby', 'php', 'osascript'].includes(name)) {
+    // The interpreter lists are matched against the name without its `.exe`
+    // suffix: an interpreter spelled `python.exe` / `node.exe` (both real on a
+    // Windows box) already fell outside the privilege plane's own normalization
+    // and decayed to an LLM-answerable `unknown`, while the same program without
+    // the suffix was a nested-execution boundary. Normalizing here covers every
+    // caller of this owner at once.
+    const base = commandNameWithoutExe(name);
+    if (['node', 'deno', 'bun', 'python', 'python3', 'perl', 'ruby', 'php', 'osascript'].includes(base)) {
         const index = words.findIndex((word, wordIndex) => wordIndex > 0 && /^(?:-c|-e|-E|--eval|--exec|--command|--print)$/.test(word.text));
         if (index >= 0)
             return { ...(words[index + 1] === undefined ? {} : { source: words[index + 1].text }) };
         return undefined;
     }
-    if (['sh', 'bash', 'zsh', 'fish', 'ksh', 'dash', 'cmd', 'cmd.exe', 'powershell', 'powershell.exe', 'pwsh', 'pwsh.exe'].includes(name)) {
+    if (['sh', 'bash', 'zsh', 'fish', 'ksh', 'dash', 'cmd', 'powershell', 'pwsh'].includes(base)) {
         const index = words.findIndex((word, wordIndex) => wordIndex > 0 && /^(?:-c|\/c|--command)$/.test(word.text));
         return { ...(index < 0 || words[index + 1] === undefined ? {} : { source: words[index + 1].text }) };
     }
-    if (['eval', 'iex', 'invoke-expression'].includes(name)) {
+    if (['eval', 'iex', 'invoke-expression'].includes(base)) {
         return { ...(words.length < 2 ? {} : { source: words.slice(1).map(word => word.text).join(' ') }) };
     }
-    if (['exec', 'source', '.', 'invoke-command', 'start-process'].includes(name))
+    if (['exec', 'source', '.', 'invoke-command', 'start-process'].includes(base))
         return {};
     return undefined;
 }
@@ -2257,7 +2264,7 @@ function opaqueNestedAssessment(source, shell, roots) {
             return manualReview('nested deletion requires manual review');
         if (nestedSourceWritesToDshHome(nested.source, roots))
             return denied('nested execution writes to DSH_HOME — use the write or edit tool instead');
-        if (SHELL_CODE_INTERPRETERS.has(name)) {
+        if (SHELL_CODE_INTERPRETERS.has(commandNameWithoutExe(name))) {
             const nestedHard = hardDenyShellReason(nested.source, shellPlaneOf(name), roots);
             if (nestedHard !== undefined)
                 return denied(nestedHard);
@@ -2618,7 +2625,7 @@ function assessSegment(segment, shell, roots, artifacts, owner) {
     const name = commandName(words[0].text);
     const nested = nestedExecution(name, words);
     if (nested !== undefined) {
-        if (routineInlineProbe(name, nested.source))
+        if (routineInlineProbe(commandNameWithoutExe(name), nested.source))
             return allowed('routine inline package or version probe');
         if (nested.source === undefined)
             return manualReview('opaque nested execution requires manual review');
@@ -2634,7 +2641,7 @@ function assessSegment(segment, shell, roots, artifacts, owner) {
         // owners, so those families had no reachable owner behind an
         // interpreter. The nested-deletion heuristic above keeps its
         // manual-review tier, so the ladder runs last.
-        if (SHELL_CODE_INTERPRETERS.has(name)) {
+        if (SHELL_CODE_INTERPRETERS.has(commandNameWithoutExe(name))) {
             const nestedHard = hardDenyShellReason(nested.source, shellPlaneOf(name), roots);
             if (nestedHard !== undefined)
                 return denied(nestedHard);
@@ -2833,7 +2840,7 @@ function hereDocumentRunsAsCode(source) {
         return false;
     for (const segment of opaqueSegmentWords(source)) {
         const name = commandName(unwrapCommand(segment.words).words[0]?.text ?? '');
-        if (STDIN_SCRIPT_INTERPRETERS.has(name))
+        if (STDIN_SCRIPT_INTERPRETERS.has(commandNameWithoutExe(name)))
             return true;
     }
     return false;
