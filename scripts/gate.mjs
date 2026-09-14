@@ -217,6 +217,33 @@ function assertAssembly() {
   process.stdout.write('gate: the loader tree contains the plugin entry\n')
 }
 
+/**
+ * Decide what the docs step should do. A missing vitepress may skip visibly
+ * (the summary keeps its own skipped counter); a present one always runs, so a
+ * page that fails to build can never pass as "the dependency was absent".
+ * @returns {{kind: 'skip'|'run', reason?: string}}
+ */
+export function docsBuildVerdict({ vitepressPresent }) {
+  if (!vitepressPresent) return { kind: 'skip', reason: 'vitepress is not installed in this checkout' }
+  return { kind: 'run' }
+}
+
+/**
+ * Build the docs site. The published pages are part of the product surface and
+ * VitePress refuses to build on a dead link between pages, so this is the only
+ * local step that can catch one before Pages serves it. It needs vitepress,
+ * which a fresh clone may not have installed: a missing dependency must skip
+ * visibly rather than pass quietly.
+ */
+function buildDocsSite() {
+  const verdict = docsBuildVerdict({ vitepressPresent: existsSync(join(root, 'node_modules', 'vitepress', 'package.json')) })
+  if (verdict.kind === 'skip') {
+    skip('build the docs site', verdict.reason)
+    return
+  }
+  run('build the docs site', 'npx', ['vitepress', 'build', 'docs'])
+}
+
 export async function main() {
   // A gate run owns a scratch directory. Clear anything a previous run left and
   // register the interruption path before the first step touches the tree.
@@ -242,6 +269,7 @@ export async function main() {
   run('the packed tarball is complete', 'node', ['--test', 'tests/pack-contents.test.mjs'])
   run('the documented counts match', 'node', ['scripts/check-doc-numbers.mjs', '--observed', String(observed.tests), '--observed-pass', String(observed.pass)])
   run('the documentation anchors resolve', 'node', ['scripts/check-anchors.mjs'])
+  buildDocsSite()
   // Read-only, and it skips with a warning when the official packages are not
   // installed, so it holds no ordering requirement beyond running before the
   // release steps.

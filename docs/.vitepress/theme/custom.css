@@ -37,6 +37,15 @@
 .vp-doc .rk-low  { color: #3fb950; }
 .vp-doc .rk-high { color: #f85149; }
 
+/* 施力点标签（原 .pr-gray/.pr-purple）—— 与 .badgeok 组合使用，只加底纹不改文字色 */
+.vp-doc .pr-gray,
+.vp-doc .pr-purple { display: inline-block; padding: 0 6px; border-radius: 6px; }
+.vp-doc .pr-gray   { background: rgba(139, 148, 158, .16); }
+.vp-doc .pr-purple { background: rgba(188, 140, 255, .16); }
+
+/* 判定名等宽（原 .mono） */
+.vp-doc .mono { font-family: var(--vp-font-family-mono); font-size: .92em; }
+
 /* 时序步骤（原 .seq/.stmt/.who/.cap）—— 用在有序列表里 */
 .vp-doc ol.seq { list-style: none; counter-reset: seq; padding: 0; }
 .vp-doc ol.seq > li { counter-increment: seq; position: relative; padding: 10px 14px 10px 40px;

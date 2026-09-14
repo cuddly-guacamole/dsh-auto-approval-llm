@@ -1,7 +1,7 @@
 # 12 · 配置全景
 > *60 keys, one source of truth*
 
-### 全部配置键（src/index.ts Config schema Z.object 原文）
+## 全部配置键（src/index.ts Config schema Z.object 原文）
 
 | 键 | 默认 | 说明 |
 |---|---|---|
@@ -59,7 +59,7 @@
 | `slashCommandsEnabled` | false | 命令面板注册 `/approval-mode` `/approval-reset` `/approval-reset-all`（评审模式查看/设置 + 熔断重置）。默认关=零命令表面积。命令集不可热换——仅在开启时于启动注册（开启需重启）；每个 handler 读取该开关实时，运行中关掉立即停用已注册命令 |
 | `<span class="badgeok">host-only ×15</span>` | — | workspaceRoot / dshHome / tempRoots / **trustedDirs** / **trustedDshSubpaths** / maintenanceDshPaths / classifierTimeoutMs(8s,100-60000) / classifierMaxOutputTokens(1024,64-4096) / maxArgsChars / notifyUser / **reviewerContextFacts** / **rulesDryRun** / **breakerAntiHijackMs** / **reviewMaxRetries** / **loopDetectionThreshold**（<span class="lnum">decision.ts:LHOST_ONLY_KEYS</span>；preserveHostKeys 回填，卡片保存不抹掉）。**归属不变量**：没有设置卡控件的键必须在此名单内——否则下一次任意卡片保存（整命名空间 replace）会把它从 settings.yaml 物理删除并静默回落默认（<span class="lnum">settings-key-ownership.test.mjs:L"no silent-delete gap"</span>） |
 
-### 三处设计亮点
+## 三处设计亮点
 
 ::: tip 默认值单一事实源
 所有数值默认集中在 `src/auto/constants.ts` 的 `THRESHOLD_DEFAULTS`，host schema、host 回退、客户端草稿/重置三处引用同一常量 —— 改一处全同步。
@@ -86,7 +86,7 @@
 6. **`showSessionPanel` / `breakerAntiHijackMs` 是纯客户端呈现键**：host 裁决路径从不读取，改它们不影响任何审批结论。
 :::
 
-### 评审模式与命令
+## 评审模式与命令
 
 > 默认**不注册**：需在设置卡开启「注册 /approval-mode /approval-reset /approval-reset-all 命令」（`slashCommandsEnabled`）并重启；运行中关闭开关，已注册命令立即停用（handler 实时守卫）。
 

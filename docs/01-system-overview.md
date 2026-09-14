@@ -11,7 +11,7 @@
 - LLM / 模型侧
 - 数据落盘
 
-### 四个执行平面
+## 四个执行平面
 
 **🖥️ 浏览器（client.js）**
 
@@ -31,7 +31,7 @@
 - 评审可走**会话模型**（`ctx.llm.stream`）或**在线端点**（OpenAI/Anthropic 兼容）
 - 官方 ApprovalPanel 是唯一的人工交互面
 
-### 数据太平面（规范位置 `<DSH_HOME>/auto-approval-llm/`）
+## 数据太平面（规范位置 `<DSH_HOME>/auto-approval-llm/`）
 
 六个运行态文件的规范位置是 `DSH_HOME`（默认 `~/.dsh`）下的 `auto-approval-llm/`（插件写入前按需创建）——**刻意放在插件包目录之外**，因为 npm 升级会替换整个包目录，包内的运行态数据每次升级都会被删除。
 

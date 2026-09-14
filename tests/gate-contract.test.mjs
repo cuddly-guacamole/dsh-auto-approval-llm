@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { SHELL_METACHARACTERS, assemblyVerdict, cleanup, installSignalCleanup, shellArgument } from '../scripts/gate.mjs'
+import { SHELL_METACHARACTERS, assemblyVerdict, cleanup, docsBuildVerdict, installSignalCleanup, shellArgument } from '../scripts/gate.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -64,6 +64,16 @@ test('a healthy assembly passes only when the loader tree carries the entry', ()
   const missingId = assemblyVerdict({ cliPresent: true, status: 0, error: undefined, stdout: "name: '@quill507/dsh-auto-approval-llm'" })
   assert.equal(missingId.kind, 'fail')
   assert.match(missingId.reason, /id: auto-approval-llm/)
+})
+
+test('only an absent vitepress skips the docs build', () => {
+  // The step exists to catch a page that does not build. Skipping when the
+  // dependency IS present would turn that into a silent pass, so the two states
+  // must not collapse into one.
+  const absent = docsBuildVerdict({ vitepressPresent: false })
+  assert.equal(absent.kind, 'skip')
+  assert.match(absent.reason, /vitepress is not installed/)
+  assert.equal(docsBuildVerdict({ vitepressPresent: true }).kind, 'run')
 })
 
 test('an interrupted run leaves no scratch directory behind', () => {

@@ -81,11 +81,11 @@ flowchart TD
 ## 3.2　硬拒闸门 hardDenyReason <span class="lnum">policy.ts:LhardDenyReason</span>
 
 - **凭据物质**：`web_fetch/curl/wget` 或外部写工具，参数里含 PEM 私钥、`sk-` / `ghp_` / `github_pat_` / `xox*`、`AKIA[0-9A-Z]{16}`、aws 密钥赋值、`Bearer …`、`.ssh` 路径等 → 拒（判别点 <span class="lnum">policy.ts:LcontainsCredentialMaterial</span>）。**判通道而非判名字**：宿主机内部工具（`send_message` / `subagent` / `spawn_*` / `team_task_*` 等，名单复用既有 owner——<span class="lnum">category.ts:LORCHESTRATION_TOOLS</span> 与 `AGENT_TEAMS_CONTROL_TOOLS`，两份由跨副本契约测试钉成相等）的载荷出不了本机，其自由文本不参与该熔断；`send_email`/`upload_*`/`post_*` 一类真出网通道照拒。
-- **shell 熔断**：bash/pwsh 命令走 `hardDenyShellReason`（见 [§3.3](#33shell-命令分析管线)）。
+- **shell 熔断**：bash/pwsh 命令走 `hardDenyShellReason`（见 [§3.3](#shell-pipeline)）。
 - **变更目标不可读**：write/edit/apply_patch/str_replace_editor(≠view) 目标解析不出 → 拒（fail-closed，宁可误拒）。
 - **破坏性工具指向受保护路径** → 拒。
 
-## 3.3　shell 命令分析管线 <span class="lnum">shell.ts#</span>
+## 3.3　shell 命令分析管线 <span class="lnum">shell.ts#</span> {#shell-pipeline}
 
 管线入口 `assessShell`（<span class="lnum">shell.ts:LassessShell</span>）、词法分解 `decomposeCommandLine`（<span class="lnum">shell.ts:LdecomposeCommandLine</span>）、整行熔断 `hardDenyShellReason`（<span class="lnum">shell.ts:LhardDenyShellReason</span>）：
 

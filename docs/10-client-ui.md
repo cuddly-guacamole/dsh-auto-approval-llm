@@ -1,7 +1,7 @@
 # 10 · 客户端 UI 结构
 > *Browser side*
 
-### Slot 注册
+## Slot 注册
 
 | slot | id | order | 组件 |
 |---|---|---|---|
@@ -10,7 +10,7 @@
 
 另有：会话标题栏的自动审批控件（分离按钮：左主区显示状态并在有倒计时时提前展开面板，右下箭头打开审批记录浮层）、`auto-icon.ts`（给权限菜单的 Auto 注入盾形图标 + 选择时的风险确认弹窗「我已了解风险」）、`locale.ts`（zh/en）。
 
-### 关键设计：客户端不自绘审批卡片
+## 关键设计：客户端不自绘审批卡片
 
 官方面板由 DSH 渲染，本插件通过 `MutationObserver` 盯 `document.body`，扫描 `[data-approval-key]` 面板做 DOM 增强：
 
