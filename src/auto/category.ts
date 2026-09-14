@@ -22,7 +22,7 @@
 
 import { basename } from 'node:path'
 import { isProtectedProjectPath, isProtectedReadMetadata, isWithin, normalizePath } from './paths.js'
-import { decomposeCommandLine, isNullSink } from './shell.js'
+import { decomposeCommandLine, envSplitStringWords, isNullSink } from './shell.js'
 
 /** The 12 configurable category keys. */
 export type CategoryKey =
@@ -389,6 +389,14 @@ function unwrapWords(words: SegmentWord[]): { words: SegmentWord[]; dynamicInput
     const name = commandName(current[0]?.text ?? '')
     if (!WRAPPERS.has(name)) break
     if (name === 'xargs') dynamicInput = true
+    // `env -S/--split-string VALUE` carries a whole command line: splice it in
+    // instead of consuming it as an opaque flag value, so this plane labels the
+    // command that really runs and its delete/privilege locks stay armed.
+    const split = name === 'env' ? envSplitStringWords(current) : undefined
+    if (split !== undefined && split.words.length > 0) {
+      current = [...split.words, ...split.rest]
+      continue
+    }
     const valueFlag = WRAPPER_VALUE_FLAGS[name]
     let index = 1
     while (index < current.length) {

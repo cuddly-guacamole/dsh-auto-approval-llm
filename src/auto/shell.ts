@@ -395,6 +395,63 @@ function deletionSpec(name, words, shell) {
 const WRAPPERS = new Set(['env', 'nohup', 'setsid', 'stdbuf', 'command', 'time', 'timeout', 'xargs', 'nice', 'ionice']);
 /** Privilege-escalation commands: hard-denied at the whole-line fuse AND per segment. */
 const PRIVILEGE_COMMANDS = new Set(['sudo', 'doas', 'su']);
+/**
+ * `env -S/--split-string VALUE` runs VALUE as a command line (the shebang
+ * spelling), so VALUE is the real argv rather than an opaque flag value.
+ * Consuming it as a value made `env` itself the effective command, which left
+ * `env -S "rm -rf /"` a classifier-answerable ask while `rm -rf /` and
+ * `sh -c "rm -rf /"` are hard-denied. Returns the words VALUE expands to plus
+ * the words that follow it, or undefined when this is not the split spelling.
+ */
+export function envSplitStringWords(words) {
+    for (let index = 1; index < words.length; index += 1) {
+        const token = typeof words[index]?.text === 'string' ? words[index].text : '';
+        const following = typeof words[index + 1]?.text === 'string' ? words[index + 1].text : '';
+        // `--split-string`, any unambiguous abbreviation of it, and its `=`
+        // value; GNU getopt accepts `--s`, `--sp`, … exactly like the full
+        // spelling.
+        const eq = token.indexOf('=');
+        if (eq > 2 && SPLIT_STRING_LONG.test(token.slice(0, eq)))
+            return { words: inlineCommandWords(token.slice(eq + 1)), rest: words.slice(index + 1) };
+        if (SPLIT_STRING_LONG.test(token)) {
+            if (words[index + 1] === undefined)
+                return undefined;
+            return { words: inlineCommandWords(following), rest: words.slice(index + 2) };
+        }
+        if (token.startsWith('--')) {
+            if (token === '--unset' || token === '--chdir' || token === '--argv0')
+                index += 1;
+            continue;
+        }
+        if (!token.startsWith('-')) {
+            if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(token))
+                continue;
+            return undefined;
+        }
+        // A short-option cluster: `-S VALUE`, `-Svalue`, `-iS VALUE`, `-iSvalue`
+        // and the other env flags. A value-taking letter swallows the rest of
+        // the cluster, so only an `S` reached first names the split string.
+        const cluster = token.slice(1);
+        for (let at = 0; at < cluster.length; at += 1) {
+            const letter = cluster[at];
+            if (letter === 'S')
+                return cluster.length > at + 1
+                    ? { words: inlineCommandWords(cluster.slice(at + 1)), rest: words.slice(index + 1) }
+                    : { words: inlineCommandWords(following), rest: words.slice(index + 2) };
+            if (letter === 'u' || letter === 'C')
+                break;
+        }
+        if (/^-[A-Za-z0-9]*[uC]$/.test(token))
+            index += 1;
+    }
+    return undefined;
+}
+/** The `--split-string` long option, including its GNU abbreviations. */
+const SPLIT_STRING_LONG = /^--(?:s|sp|spl|spli|split|split-|split-s|split-st|split-str|split-stri|split-strin|split-string)$/;
+/** Split a split-string value the way `env -S` does: on whitespace, quotes kept. */
+function inlineCommandWords(value) {
+    return splitOpaqueWords(String(value));
+}
 /** Wrapper flags that consume the following word as their value. */
 const WRAPPER_VALUE_FLAGS = {
     xargs: /^-(?:n|I|i|P|L|s|d|E|a)$|^--(?:max-args|replace|max-procs|max-lines|max-chars|delimiter|eof|arg-file|process-slot-var)$/,
@@ -433,6 +490,14 @@ function unwrapCommand(words) {
             break;
         if (name === 'xargs')
             dynamicInput = true;
+        // `env -S/--split-string VALUE` carries a whole command line, so its
+        // value is spliced in as the effective command instead of being
+        // consumed as an opaque flag value.
+        const split = name === 'env' ? envSplitStringWords(current) : undefined;
+        if (split !== undefined && split.words.length > 0) {
+            current = [...split.words, ...split.rest];
+            continue;
+        }
         const valueFlag = WRAPPER_VALUE_FLAGS[name];
         let index = 1;
         while (index < current.length) {
@@ -1733,6 +1798,66 @@ function shellSyntaxView(line) {
  * false positive as a quoted redirect target, in the same fail-closed
  * direction.
  */
+/** Separators that end an opaque chunk when they are not inside quotes. */
+function splitOpaqueChunks(source) {
+    const chunks = [];
+    let current = '';
+    let quote = '';
+    for (let index = 0; index < source.length; index += 1) {
+        const char = source[index];
+        if (quote !== '') {
+            if (char === quote)
+                quote = '';
+            current += char;
+            continue;
+        }
+        if (char === '"' || char === "'") {
+            quote = char;
+            current += char;
+            continue;
+        }
+        if (/[\n;&|(){}`]/.test(char)) {
+            chunks.push(current);
+            current = '';
+            continue;
+        }
+        current += char;
+    }
+    chunks.push(current);
+    return chunks;
+}
+/**
+ * Words of an opaque chunk, with quoted runs kept as one word: an interpreter
+ * source or a split string is written as a single quoted argument, and
+ * splitting it on whitespace hides the boundary from every caller.
+ */
+function splitOpaqueWords(chunk) {
+    const words = [];
+    let index = 0;
+    while (index < chunk.length) {
+        if (/\s/.test(chunk[index])) {
+            index += 1;
+            continue;
+        }
+        let text = '';
+        let quoted = false;
+        while (index < chunk.length && !/\s/.test(chunk[index])) {
+            const quote = chunk[index];
+            if (quote === '"' || quote === "'") {
+                const end = chunk.indexOf(quote, index + 1);
+                text += end < 0 ? chunk.slice(index + 1) : chunk.slice(index + 1, end);
+                index = end < 0 ? chunk.length : end + 1;
+                quoted = true;
+                continue;
+            }
+            text += chunk[index];
+            index += 1;
+        }
+        if (text !== '')
+            words.push({ text, dynamic: /[$]|%[A-Za-z_]+%/.test(text), glob: /[*?]/.test(text), quoted });
+    }
+    return words;
+}
 function opaqueSegmentWords(source) {
     const segments = [];
     for (const chunk of stripHeredocBodies(source).split(/[\n;&|(){}`]+/)) {
