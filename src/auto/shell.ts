@@ -2325,6 +2325,26 @@ function classifyEffectiveCommand(name, words, segment, shell, roots, artifacts,
  * semantic classification. Only destructive targets hidden behind dynamic or
  * opaque execution stay on the one-shot human approval path.
  */
+/**
+ * Whether an opaque line feeds a here-document into an interpreter that runs
+ * its program from stdin (`python3 <<EOF … EOF`, `cat <<EOF | node`). The body
+ * is data for most commands — `git commit -m "$(cat <<EOF … EOF)"` names a fuse
+ * target in a message — but such an interpreter executes it, so stripping the
+ * body must not lower the line's tier.
+ */
+function hereDocumentRunsAsCode(source) {
+    if (typeof source !== 'string' || !/<<-?[ \t]*["']?[A-Za-z_]/.test(source))
+        return false;
+    for (const segment of opaqueSegmentWords(source)) {
+        const name = commandName(unwrapCommand(segment.words).words[0]?.text ?? '');
+        if (STDIN_SCRIPT_INTERPRETERS.has(name))
+            return true;
+    }
+    return false;
+}
+/** Interpreters that read their program from stdin. */
+const STDIN_SCRIPT_INTERPRETERS = new Set(['python', 'python3', 'pythonw', 'ruby', 'perl', 'node', 'nodejs', 'php', 'lua', 'bun', 'deno', 'osascript', 'sh', 'bash', 'zsh', 'fish', 'ksh', 'dash', 'cmd', 'cmd.exe', 'powershell', 'powershell.exe', 'pwsh', 'pwsh.exe']);
+
 export function assessShell(source, shell, roots, artifacts, owner) {
     const hard = hardDenyShellReason(source, shell, roots);
     if (hard !== undefined)
@@ -2333,12 +2353,14 @@ export function assessShell(source, shell, roots, artifacts, owner) {
     if (decomposition.kind === 'opaque') {
         // A here-document body is data, not syntax: the same stripping owner the
         // hard-deny plane uses keeps an ordinary commit message that names a
-        // fuse target out of the destructiveness heuristic.
+        // fuse target out of the destructiveness heuristic. It is code when the
+        // line feeds it to an interpreter that reads its program from stdin, so
+        // that shape keeps the manual-review tier instead of losing it.
         const stripped = stripHeredocBodies(source);
         const nested = opaqueNestedAssessment(stripped, shell, roots);
         if (nested !== undefined)
             return nested;
-        return destructiveNestedSource(stripped)
+        return destructiveNestedSource(stripped) || hereDocumentRunsAsCode(source)
             ? manualReview(`${shell} destructive command cannot be read statically: ${decomposition.reason}`)
             : semanticReview(`${shell} command requires independent classification because it cannot be read statically: ${decomposition.reason}`);
     }

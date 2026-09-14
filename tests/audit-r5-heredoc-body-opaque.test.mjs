@@ -64,3 +64,32 @@ test('a destructive command outside the body still fires', () => {
   assert.equal(afterBody.decision, 'deny', 'the deletion after the body must still be denied')
   assert.equal(afterBody.classifierEligible, false)
 })
+
+test('a here-document fed to a stdin interpreter keeps its code tier', () => {
+  for (const command of [
+    `python3 <<EOF\nimport shutil\nshutil.rmtree('/x')\nEOF`,
+    `python3 - <<EOF\nimport os\nos.remove('/x')\nEOF`,
+    `ruby <<EOF\nFile.delete('/x')\nEOF`,
+    `node <<EOF\nrequire('fs').unlinkSync('/x')\nEOF`,
+    `cat <<EOF | python3\nimport os\nos.remove('/x')\nEOF`,
+    `cat <<EOF | node\nrequire('fs').unlinkSync('/x')\nEOF`,
+    `bash <<EOF\nrm -rf C:/Users/u/.dsh\nEOF`,
+    `sh - <<EOF\nrm -rf C:/Users/u/.dsh\nEOF`,
+  ]) {
+    const verdict = shell(command)
+    assert.notEqual(verdict.decision, 'allow', `${command} must not be allowed`)
+    assert.equal(verdict.classifierEligible, false, `${command} must not reach the classifier`)
+  }
+})
+
+test('a body that is only data for a non-interpreter keeps the ordinary tier', () => {
+  const control = shell(`cat <<'EOF'\nnote\nEOF`)
+  assert.equal(control.classifierEligible, true, 'a bare here-document stays reviewable')
+  for (const command of [
+    `git commit -m "$(cat <<'EOF'\nrm -rf x\nEOF\n)"`,
+    `printf '%s' "$(cat <<'EOF'\nrm -rf x\nEOF\n)"`,
+    `echo "$(cat <<'EOF'\nrm -rf x\nEOF\n)"`,
+  ]) {
+    assert.equal(shell(command).classifierEligible, control.classifierEligible, `${command} body is data, not code`)
+  }
+})
