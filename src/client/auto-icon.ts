@@ -7,12 +7,14 @@
 //   - menu item:  <span class=itemIcon><svg aria-hidden/></span><span class=itemLabel>label</span>
 //   - trigger:    <span class=triggerIcon><svg aria-hidden/></span><span class=triggerLabel>label</span><span chevron/>
 //   - /permission tooltip rows and the settings selector carry the label only (official shows no glyph there).
-// The label is localized: zh → 自动审批, everything else → Auto.
+// The label is localized: zh → 自动审批, everything else → Auto approval.
 const PLUGIN_ID = 'dsh-auto-approval-llm';
 import { createTrailingThrottle, MIN_DECORATE_INTERVAL_MS } from './throttle.js';
 const ICON_ATTRIBUTE = 'data-dsh-auto-mode-icon';
 const LABEL_ATTRIBUTE = 'data-dsh-auto-mode-label';
 const DIALOG_ATTRIBUTE = 'data-dsh-auto-mode-risk-dialog';
+const ORIGINAL_LABEL_ATTRIBUTE = 'data-dsh-auto-mode-original-label';
+const ORIGINAL_ARIA_ATTRIBUTE = 'data-dsh-auto-mode-original-aria';
 // Both locales of the four presets; a permission menu matches when every
 // preset slot is present in either language (the ported implementation only
 // shipped the English set, which silently dropped the zh menu).
@@ -21,15 +23,18 @@ export const PERMISSION_LABEL_SETS = {
     // rc.1 reworded the workspace-write preset in zh ("工作区内修改");
     // the rc.2 variant is gone.
     workspaceWrite: ['Workspace Write', '工作区内修改'],
-    auto: ['Auto', '自动审批'],
+    // Host label is `Auto approval`; `Auto` stays for the legacy-patch /
+    // mixed-bundle compatibility window.
+    auto: ['Auto approval', '自动审批', 'Auto'],
     fullAccess: ['Full access', '完全权限'],
 };
 // Shield outline + bolt, drawn 1:1 like the official 16px permission glyphs
 // (stroke currentColor / fill currentColor, aria-hidden wrapper).
 export const SHIELD_PATH = 'M8.20554 0.899994L14.7901 3.36857V7.01026C14.7901 12 11.0466 14.2103 8.20554 15.3C5.36446 14.2103 1.62012 12 1.62012 7.01026V3.36857L8.20554 0.899994Z';
 export const BOLT_PATH = 'M8.75 3.65 5.95 8.2h2.08l-.78 4.15 2.82-4.9H8.12l.63-3.8Z';
-// The official preset name for `auto` in this deployment's patch (cordis.patch.yml).
-const CONFIGURED_AUTO_NAME = 'Auto';
+// The host-supplied name of the plugin-owned `auto-approval` preset
+// (cordis.patch.yml); zh renders 自动审批 through autoName().
+const CONFIGURED_AUTO_NAME = 'Auto approval';
 function autoName(document) {
     const language = document.documentElement.lang || document.defaultView?.navigator.language || '';
     return /^zh(?:-|$)/i.test(language) ? '自动审批' : CONFIGURED_AUTO_NAME;
@@ -207,16 +212,16 @@ function iconStyles() {
 `;
 }
 const EN_RISK_COPY = {
-    title: 'Enable Auto?',
-    description: 'Auto keeps the Full access filesystem scope and adds an automatic policy layer to assess tool calls. This policy is not an operating-system sandbox: classifier mistakes and operations performed by plugins or other code outside the DSH tool pipeline can escape its checks. Only use Auto when you trust the current task, workspace, and installed plugins. High-risk operations still require a human. Locked-category operations (delete / protected / disk, and privilege unless enabled) need one in the aggressive category mode or under an explicit category policy — in the default standard mode the automatic classifier decides their unconfigured asks.',
+    title: 'Enable Auto approval?',
+    description: 'Auto approval keeps the Full access filesystem scope and adds an automatic policy layer to assess tool calls. This policy is not an operating-system sandbox: classifier mistakes and operations performed by plugins or other code outside the DSH tool pipeline can escape its checks. Only use Auto approval when you trust the current task, workspace, and installed plugins. High-risk operations still require a human. Locked-category operations (delete / protected / disk, and privilege unless enabled) need one in the aggressive category mode or under an explicit category policy — in the default standard mode the automatic classifier decides their unconfigured asks.',
     acknowledge: 'I understand the risks and want to continue',
     cancel: 'Cancel',
-    confirm: 'Enable Auto',
+    confirm: 'Enable Auto approval',
     close: 'Close',
 };
 const ZH_RISK_COPY = {
     title: '确认启用自动审批？',
-    description: '自动审批保留“完全权限”的文件访问范围，并通过自动策略层判断工具调用。该策略不是操作系统级沙箱：分类器可能误判，且插件或 DSH 工具链之外的代码执行的操作不受其检查。仅当你信任当前任务、工作区与已安装插件时才可启用 Auto。高风险操作仍需人工确认。锁定类别操作（delete / protected / disk，以及未开启的 privilege）仅在「激进」类别档或显式配置类别策略时需人工；默认「标准」档下，未显式配置的这类询问由自动分类器裁决。',
+    description: '自动审批保留“完全权限”的文件访问范围，并通过自动策略层判断工具调用。该策略不是操作系统级沙箱：分类器可能误判，且插件或 DSH 工具链之外的代码执行的操作不受其检查。仅当你信任当前任务、工作区与已安装插件时才可启用自动审批。高风险操作仍需人工确认。锁定类别操作（delete / protected / disk，以及未开启的 privilege）仅在「激进」类别档或显式配置类别策略时需人工；默认「标准」档下，未显式配置的这类询问由自动分类器裁决。',
     acknowledge: '我已了解风险，并愿意继续',
     cancel: '取消',
     confirm: '启用自动审批',
@@ -323,11 +328,11 @@ function activeAutoPermissionOption(target) {
 function isAutoPermissionChoice(element) {
     return isAutoMenuItem(element) || isAutoPermissionOption(element);
 }
-function isAutoTrigger(element) {
+export function isAutoTrigger(element) {
     if (!element.matches('button[aria-label]'))
         return false;
     const label = element.getAttribute('aria-label') ?? '';
-    return /(?:访问模式|Access mode)[\s\S]*(?:Auto|自动审批)\s*$/i.test(label);
+    return /(?:访问模式|Access mode)[\s\S]*(?:Auto approval|Auto|自动审批)\s*$/i.test(label);
 }
 /** The direct text node(s) of an element (used by the settings selector). */
 function directText(element) {
@@ -363,6 +368,8 @@ function decorateSurface(document, container, label, kind) {
     }
     if (label === null)
         return;
+    if (!label.hasAttribute(ORIGINAL_LABEL_ATTRIBUTE))
+        label.setAttribute(ORIGINAL_LABEL_ATTRIBUTE, label.textContent ?? '');
     label.setAttribute(LABEL_ATTRIBUTE, '');
     const text = autoName(document);
     if (label.textContent !== text)
@@ -370,7 +377,9 @@ function decorateSurface(document, container, label, kind) {
 }
 /** Localize the settings PermissionRow selector text node (official has no glyph there). */
 function decorateSelector(document, button) {
-    if (directText(button) === 'Auto' || directText(button) === '自动审批') {
+    if (PERMISSION_LABEL_SETS.auto.includes(directText(button))) {
+        if (!button.hasAttribute(ORIGINAL_LABEL_ATTRIBUTE))
+            button.setAttribute(ORIGINAL_LABEL_ATTRIBUTE, directText(button));
         const text = autoName(document);
         for (const node of button.childNodes) {
             if (node.nodeType === 3 && node.data.trim() !== '') {
@@ -442,7 +451,9 @@ export function decorateAutoPermissionIcons(document) {
             const label = Array.from(button.children).find(child => child.tagName === 'SPAN' && child.querySelector('svg') === null && autoNames.includes(normalizedText(child))) ?? null;
             decorateSurface(document, button, label, 'trigger');
             const aria = button.getAttribute('aria-label') ?? '';
-            const localized = aria.replace(/(?:Auto|自动审批)\s*$/i, autoName(document));
+            if (!button.hasAttribute(ORIGINAL_ARIA_ATTRIBUTE))
+                button.setAttribute(ORIGINAL_ARIA_ATTRIBUTE, aria);
+            const localized = aria.replace(/(?:Auto approval|Auto|自动审批)\s*$/i, autoName(document));
             if (localized !== aria)
                 button.setAttribute('aria-label', localized);
         }
@@ -465,7 +476,7 @@ export function decorateAutoPermissionIcons(document) {
     for (const button of document.querySelectorAll('button[aria-haspopup="menu"]')) {
         if (button.getAttribute('aria-label') !== null)
             continue;
-        if (directText(button) === 'Auto' || directText(button) === '自动审批')
+        if (PERMISSION_LABEL_SETS.auto.includes(directText(button)))
             decorateSelector(document, button);
     }
     // Sweep abandoned glyphs: a mode switch whose marker was already dropped
@@ -616,14 +627,18 @@ export function installAutoPermissionIcon(document) {
         }
         for (const labelled of document.querySelectorAll(`[${LABEL_ATTRIBUTE}]`)) {
             labelled.removeAttribute(LABEL_ATTRIBUTE);
+            const original = labelled.getAttribute(ORIGINAL_LABEL_ATTRIBUTE);
+            labelled.removeAttribute(ORIGINAL_LABEL_ATTRIBUTE);
+            if (original === null)
+                continue;
             if (labelled.tagName === 'SPAN') {
-                if (labelled.textContent !== CONFIGURED_AUTO_NAME)
-                    labelled.textContent = CONFIGURED_AUTO_NAME;
+                if (labelled.textContent !== original)
+                    labelled.textContent = original;
             }
-            else if (directText(labelled) === '自动审批') {
+            else {
                 for (const node of labelled.childNodes) {
                     if (node.nodeType === 3 && node.data.trim() !== '') {
-                        node.data = CONFIGURED_AUTO_NAME;
+                        node.data = original;
                         break;
                     }
                 }
@@ -633,11 +648,11 @@ export function installAutoPermissionIcon(document) {
             marked.removeAttribute(ICON_ATTRIBUTE);
         }
         // Restore the trigger aria-label the decorate pass localized.
-        for (const button of document.querySelectorAll('button[aria-label]')) {
-            const label = button.getAttribute('aria-label') ?? '';
-            if (/访问模式，当前：自动审批$/.test(label)) {
-                button.setAttribute('aria-label', label.replace(/(?:Auto|自动审批)\s*$/, CONFIGURED_AUTO_NAME));
-            }
+        for (const button of document.querySelectorAll(`[${ORIGINAL_ARIA_ATTRIBUTE}]`)) {
+            const original = button.getAttribute(ORIGINAL_ARIA_ATTRIBUTE);
+            button.removeAttribute(ORIGINAL_ARIA_ATTRIBUTE);
+            if (original !== null)
+                button.setAttribute('aria-label', original);
         }
     };
 }

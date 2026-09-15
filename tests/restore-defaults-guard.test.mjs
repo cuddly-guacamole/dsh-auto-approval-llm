@@ -2,9 +2,9 @@
  * dsh-auto-approval-llm · restore-defaults guard anchors (compiled bundle).
  *
  * "Restore defaults" and the per-card resets must never flip a key the user
- * cannot see or undo from the card. Two mechanisms carry that promise now:
- *   - a deliberate omission inside each reset literal (autoSwitchPolicyToAsk,
- *     breakerAntiHijackMs); and
+ * cannot see or undo from the card. Three mechanisms carry that promise now:
+ *   - a deliberate omission inside each reset literal (breakerAntiHijackMs);
+ *     the retired autoSwitchPolicyToAsk is absent from the client; and
  *   - host ownership for every control-less key (decision.ts HOST_ONLY_KEYS),
  *     which makes a card save structurally unable to reach it.
  * This file pins both, plus the honest-label anchors for the `enabled` gate.
@@ -16,6 +16,7 @@ import { readFileSync } from 'node:fs'
 
 const client = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
 const src = readFileSync(new URL('../src/client/index.ts', import.meta.url), 'utf8')
+const hostSrc = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
 
 /** One reset handler's source body, up to the closing brace at its own indent. */
 function handlerBody(marker) {
@@ -35,8 +36,18 @@ test('restore defaults: autoSwitchPolicyToAsk is not in the defaults literal', (
   assert.ok(!scope.includes('autoSwitchPolicyToAsk'), 'the defaults literal must not flip autoSwitchPolicyToAsk')
 })
 
-test('restore defaults: the deliberate-omission rationale is in the source', () => {
-  assert.ok(src.includes('autoSwitchPolicyToAsk is deliberately NOT restored'), 'the why-comment guards against re-adding the key')
+test('the retired autoSwitchPolicyToAsk is gone from the client and stays host-owned', () => {
+  assert.ok(!src.includes('autoSwitchPolicyToAsk'), 'the retired control must not reappear in the client')
+  const decision = readFileSync(new URL('../src/auto/decision.ts', import.meta.url), 'utf8')
+  const start = decision.indexOf('HOST_ONLY_KEYS')
+  const end = decision.indexOf(']', start)
+  assert.ok(start > 0 && end > start, 'HOST_ONLY_KEYS is declared')
+  assert.ok(decision.slice(start, end).includes("'autoSwitchPolicyToAsk'"), 'the retired key must stay host-owned so a card save cannot reach it')
+})
+
+test('the retired host key warns and normalises to false', () => {
+  assert.match(hostSrc, /autoSwitchPolicyToAsk is retired and ignored/, 'the host must explain the retired key')
+  assert.match(hostSrc, /autoSwitchPolicyToAsk: false/, 'the host must normalise the retired key to false')
 })
 
 test('every reset path leaves the control-less keys alone', () => {

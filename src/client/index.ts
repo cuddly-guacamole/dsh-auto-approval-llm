@@ -6,6 +6,7 @@ import { parseRulesText } from '../auto/rules.js'
 import { installAutoPermissionIcon, SHIELD_PATH, BOLT_PATH } from './auto-icon.js'
 import { createTrailingThrottle, MIN_PANEL_SCAN_INTERVAL_MS } from './throttle.js'
 import { zh, en } from './locale.js'
+import { computePanelVisible } from './panel-visibility.js'
 import { computeTextNodeRewrites, createBreakerGuard, isLinkDown, revealApproval } from './approvals/shared.js'
 import { approvalStatusStore, chipState, coarseMinutes } from './approvals/status-store.js'
 import type { ChipState } from './approvals/status-store.js'
@@ -306,7 +307,6 @@ interface SettingsSnapshot {
 
 interface Draft {
   enabled: 'on' | 'off'
-  autoSwitchPolicyToAsk: 'on' | 'off'
   timeoutAction: string
   llmReviewScope: 'low-or-above' | 'medium-or-above' | 'high'
   llmTakeoverScope: 'low' | 'medium-or-below' | 'high-or-below'
@@ -359,7 +359,6 @@ interface Draft {
 function draftOf(value: any): Draft {
   return {
     enabled: value?.enabled === false ? 'off' : 'on',
-    autoSwitchPolicyToAsk: value?.autoSwitchPolicyToAsk === true ? 'on' : 'off',
     timeoutAction: normalizeTimeoutAction(value?.timeoutAction),
     llmReviewScope: value?.llmReviewScope ?? 'low-or-above',
     llmTakeoverScope: value?.llmTakeoverScope ?? 'medium-or-below',
@@ -420,7 +419,6 @@ function valueOf(draft: Draft): any {
   }
   const value: any = {
     enabled: draft.enabled === 'on',
-    autoSwitchPolicyToAsk: draft.autoSwitchPolicyToAsk === 'on',
     timeoutAction: draft.timeoutAction,
     llmReviewScope: draft.llmReviewScope,
     llmTakeoverScope: draft.llmTakeoverScope,
@@ -487,21 +485,6 @@ function normalizeShowSessionPanel(value: any): 'on' | 'auto' | 'off' {
   return 'off'
 }
 
-/**
- * Single source of truth for session-panel visibility, consumed by the session
- * header control. Pure.
- *
- * Note: `sessionMode` can arrive as `null` from the host (an unknown session or
- * an unresolvable preset are both reported as a null mode). This predicate only
- * compares, so `null` and `undefined` land on the same answer by construction;
- * callers normalize to `undefined` to match the declared state type.
- */
-function computePanelVisible(panelMode: 'on' | 'auto' | 'off', sessionMode: string | undefined): boolean {
-  if (panelMode === 'off') return false
-  if (panelMode === 'auto' && sessionMode !== 'auto') return false
-  return true
-}
-
 function formatShortDateTime(at: number): string {
   const d = new Date(at)
   const pad = (n: number) => String(n).padStart(2, '0')
@@ -525,7 +508,7 @@ function formatTookMs(ms: number | null): string {
 // unknown enum, out-of-range number). The settings card shows a red banner and
 // offers to delete those keys so the schema defaults recover.
 const INVALID_CONFIG_TYPES: Record<string, string> = {
-  enabled: 'boolean', autoSwitchPolicyToAsk: 'boolean', rulesDryRun: 'boolean', notifyUser: 'boolean', debug: 'boolean', redactResults: 'boolean', editDiffPreview: 'boolean', rejectGuidance: 'boolean', learningEnabled: 'boolean',
+  enabled: 'boolean', rulesDryRun: 'boolean', notifyUser: 'boolean', debug: 'boolean', redactResults: 'boolean', editDiffPreview: 'boolean', rejectGuidance: 'boolean', learningEnabled: 'boolean',
   lowRiskSeconds: 'number', mediumRiskSeconds: 'number', highRiskSeconds: 'number', learningThreshold: 'number',
   maxConsecutiveDenials: 'number', maxTotalDenials: 'number', breakerAntiHijackMs: 'number', panelDelayMs: 'number', reviewMaxRetries: 'number',
   maxArgsChars: 'number', classifierTimeoutMs: 'number', classifierMaxOutputTokens: 'number',
@@ -1267,10 +1250,6 @@ function SettingsSection() {
 
   const restoreTopDefaults = async () => {
     const base = draftOf(snapshot.value)
-    // autoSwitchPolicyToAsk is deliberately NOT restored: its stored value is
-    // an install-time host fact (the patch pins it true) and the guard it
-    // drives is a session-policy safety rail, so restoring it would silently
-    // change a guard rather than a user preference.
     const defaults: Partial<Draft> = { enabled: 'on', timeoutAction: 'reject', llmReviewScope: 'low-or-above', llmTakeoverScope: 'medium-or-below', defaultReviewMode: 'smart', showSessionPanel: 'auto' }
     const merged = { ...base, ...defaults }
     setDraft({ ...draft, ...defaults })
@@ -1645,11 +1624,6 @@ function SettingsSection() {
       options: reviewModeOptions(),
       onChange: (v: string) => { void instantSaveKey('defaultReviewMode', v as any) },
     }), t('settings.defaultReviewModeHint')),
-    row(t('settings.autoSwitchPolicy'), React.createElement(CapsuleSelect, {
-      value: draft.autoSwitchPolicyToAsk,
-      options: onOffOptions(),
-      onChange: (v: string) => { void instantSaveKey('autoSwitchPolicyToAsk', v as 'on' | 'off') },
-    }), t('settings.autoSwitchPolicyHint')),
     row(t('settings.autoModeNotice'), React.createElement(CapsuleSelect, {
       value: draft.autoModeNoticeEnabled,
       options: onOffOptions(),
