@@ -21,7 +21,7 @@ src/
 │    ├─ learning.ts      584  确认制学习：签名、计数、回收、查找、消费闸
 │    ├─ loop-guard.ts    95   循环防护纯核：循环键（工具+脱敏参数哈希）、严格连续计数、fire-and-reset、阈值钳制（接线在 index.ts 的四个自动放行站点）
 │    ├─ model-channel.ts 119  模型通道路由与 provider 选择
-│    ├─ paths.ts         386  路径规范化、受保护/关键路径判定、受保护读取例外（Git ref 元数据）、运行态文件名单
+│    ├─ paths.ts         398  路径规范化、受保护/关键路径判定、受保护读取例外（Git ref 元数据）、运行态文件名单
 │    ├─ permission-change.ts 131  权限平面变更观测：逐平面基线门控 + 被拒 decision 指针
 │    ├─ policy.ts        641  assessTool 确定性第一遍分类（17 步）
 │    ├─ preset-migration.ts 423  auto-approval 重命名与存量迁移：多信号宿主能力探测、raw identity gate、同签名懒迁移、自有档 effective-never 归一回 ask
@@ -32,7 +32,7 @@ src/
 │    ├─ risk-tokens.ts   24   HIGH 风险正则（NAME/REASON 单一事实源）
 │    ├─ rules.ts         459  声明式规则解析/求值（host 与浏览器共用）
 │    ├─ runtime-paths.ts 293  运行态文件唯一路径 owner（`<DSH_HOME>/auto-approval-llm/` 规范位置；目录无法创建/拒绝写入时 fail-closed——append 失败返回 undefined，由调用方拒绝裁决，不回退包根、不搬家；open 阶段错误允许同路径重试一次，写后错误不重试）
-│    ├─ shell.ts         3056 bash/pwsh 词法分解 + 整行熔断 + 逐段静态分类（最大单文件）
+│    ├─ shell.ts         3327 bash/pwsh 词法分解 + 整行熔断 + 逐段静态分类（最大单文件）
 │    ├─ symlink.ts       182  符号链接创建与目标校验
 │    ├─ tool-stats.ts    94   工具调用统计收集
 │    └─ trust.ts         305  web 路由信任平面（loopback/LAN 边界、Host 伪造防护、在线端点 URL 校验）
@@ -61,7 +61,7 @@ tests/
 ├─ perf-settings-rules-parse.test.mjs / perf-poll-backoff.test.mjs / perf-scan-throttle.test.mjs （客户端开销：单次解析、轮询退避、扫描节流）
 ├─ trusted-intent-window.test.mjs（授权证据窗口溢出计数：slot cap/去重/预算交互、拒因 note 两分支、trusted-intents 事件量化 overflowed 标志）/ client-human-gate.test.mjs（浮层人工出手率：与 friction-report 同源名单、空窗口不作零声称、round 边界、中英三键、bundle 装配锚）
 ├─ loop-guard.test.mjs（循环键稳定性/回退、严格连续+fire-and-reset 状态机、FIFO 64、阈值钳制与 resolveConfig 映射）/ loop-guard-wiring.test.mjs（四站点成对锚、allowlist 与 rule-allow 豁免负向切片、跨面标记读位置与 one-shot、pinned 形状先于 learnAttempt、门不写 history 不碰熔断、disposal/sweep 有界、audit-query 渲染）
-└─ 合计 180 个 tests/*.test.mjs（node --test 全绿基线）
+└─ 合计 181 个 tests/*.test.mjs（node --test 全绿基线）
 scripts/
 ├─ build.sh             （DSH 源码仓库布局）tsc 编译 src→lib
 ├─ clean-lib.mjs        构建前清空 lib/（tsc 不删除已删源的旧产物）

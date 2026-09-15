@@ -9,8 +9,8 @@ host 编排在 `src/index.ts`，真正「长脑子」的静态规则引擎在 `s
 |---|---|---|
 | `constants.ts` <span class="lnum">constants.ts#</span> | 141 | 数值阈值默认值**唯一事实源**：5/8/10s、3/20、4000、8s/1024，及学习族（阈值 3/TTL 30d/100 条/会话放行帽 50）；同时承载设置卡「默认放行工具」显示目录（显示镜像，非放行面） |
 | `risk-tokens.ts` <span class="lnum">risk-tokens.ts#</span> | 24 | HIGH 风险正则（NAME/REASON），供分类器与 policy 共用，防漂移 |
-| `paths.ts` <span class="lnum">paths.ts#</span> | 386 | 路径规范化（Windows 命名空间/NT 别名折叠、~ 展开、win32 小写）、受保护/关键路径判定、运行态文件名单 |
-| `shell.ts` <span class="lnum">shell.ts#</span> | 3056 | Bash/PowerShell 词法分解（sticky 正则状态机）＋ 整行熔断 ＋ 逐段静态分类 |
+| `paths.ts` <span class="lnum">paths.ts#</span> | 398 | 路径规范化（Windows 命名空间/NT 别名折叠、~ 展开、win32 小写）、受保护/关键路径判定、运行态文件名单 |
+| `shell.ts` <span class="lnum">shell.ts#</span> | 3327 | Bash/PowerShell 词法分解（sticky 正则状态机）＋ 整行熔断 ＋ 逐段静态分类 |
 | `policy.ts` <span class="lnum">policy.ts#</span> | 641 | 每次工具调用的确定性第一遍分类 `assessTool`（推断型、保留类型检查） |
 | `rules.ts` <span class="lnum">rules.ts#</span> | 459 | Claude-Code 风格声明规则解析/求值（纯函数，host 与浏览器共用） |
 | `classifier.ts` <span class="lnum">classifier.ts#</span> | 100 | 预分类提示词、参数脱敏、严格响应解析 |
@@ -102,7 +102,7 @@ flowchart TD
 - `routineInlineProbe`：`python -c` 只放行 import/print 字面量，`node -e` 只放行 require/console.log(process.version) —— 内联代码只认可「绝对安全」形态。
 - 危险 token 提取：`sensitiveMarker`（.ssh/.env/密钥关键词）、`dshHomeExfil`（4 组模式抓 DSH_HOME 外传）、`dynamicHomeTarget`（$HOME 动态目标）→ 全部绕过静态判定。
 - **整行熔断读的是「数据载荷剥离视图」**（`fuseScanView`，<span class="lnum">shell.ts:LfuseScanView</span>）：只把**可证惰性**的跨度等长涂白——**仅限** commit 类命令（`git commit` / `tag` / `notes`）的 `-m`/`--message` 取值（含 `-mX`/`--message=X`/短簇 `-am`），且该 token 必须是完整引号跨度、内部无活替换。活替换（`$( )`、反引号、进程替换）、引号提前闭合或未闭合、无引号操作数、表外命令（`python -m`、`curl -m`）一律原样保留。**heredoc 正文不在剥离面**：定界符是否被引用、消费者如何使用 stdin、正文是否被同一行写盘后执行这三件事都无法在本层判定，故正文保持被判——要写含熔断目标的提交正文请用 `-F <file>`。（**既有边界，如实写明**：opaque 恢复面仍由既有 owner `stripHeredocBodies` 丢正文行，该 owner 的逐行引号状态与「动态解释器名」判定各有一处既有缺口，会把该类行从硬拒降为可应答 ask；不在本轮剥离面内，已登记 backlog。）定位器漏判只等于维持现状。**剥离视图只喂这四条整行熔断**；`decomposeCommandLine` 与逐段判据仍读原文，目标级熔断必须看到每个操作数。
-- **写重定向脱离只读快径**：命令含真实文件写重定向（`>`/`>>`/`>|`/`&>`/`N>`，非 discard sink）时，其段不得走只读命令快径放行——落入既有评估流；`/dev/null`、NUL、`$null` 等 discard sink 维持快径。**只读命令自带的输出 flag 同判**：`sort -o`（含 `-oFILE`/`-uo`）、`tree -o`、`git diff --output=` 等取出的值同样是写目标，先过同一组写目标熔断（破坏性目标 / 运行态文件 / 区内 DSH_HOME），命中即硬拒、未命中则脱离快径——按命令建表（`-o` 对 `rg`/`grep` 是 only-matching，不可共用短旗标表）。
+- **写重定向脱离只读快径**：命令含真实文件写重定向（`>`/`>>`/`>|`/`&>`/`N>`，非 discard sink）时，其段不得走只读命令快径放行——落入既有评估流；`/dev/null`、NUL、`$null` 等 discard sink 维持快径。**只读命令自带的输出 flag 同判**：`sort -o`（含 `-oFILE`/`-uo`）、`tree -o`、`git diff --output=` 等取出的值同样是写目标，先过同一组写目标熔断（破坏性目标 / 运行态文件 / 区内 DSH_HOME；区内熔断的唯一常量例外 = 插件自身开发区，见 §3.4），命中即硬拒、未命中则脱离快径——按命令建表（`-o` 对 `rg`/`grep` 是 only-matching，不可共用短旗标表）。
 - **写目标提取不吃相对拼法**：只读命令的 `..` 中段与工作区外相对目标一律进入显式路径判定（`cat b/../../../../x` 与 `cat ../../../../x` 同裁决）。
 - **win32 段归一覆盖别名拼法**：MSYS 裸盘根（`/c`、`//c`）、盘根通配（`C:\*`、`/c/*`）与 NTFS 默认数据流后缀（`file::$DATA`/`file:$DATA`）在 `normalizePath` 的同一处归一到 `C:\` / 文件名本体，故盘根熔断与全部 basename 级保护（插件契约文件、受保护元数据、凭据名）不被拼法绕过。
 - **build/test 与版本探测快径目标守卫**：快径仅保留给「写目标全为 discard sink 或工作区内非敏感非受保护非运行态路径」——区外/敏感/受保护/运行态目标一律脱离快径进入正常评估（`categoryMode: aggressive` 与 trustedDirs 放宽模式同样生效）。
@@ -114,7 +114,7 @@ flowchart TD
 
 | 类别 | 内容 | 判定 |
 |---|---|---|
-| 家目录根 / DSH_HOME 树 | `~` 、`~/.dsh`（env DSH_HOME 或默认） | `hardDestructiveTargetReason` → 硬拒（allowedDshSubpaths 白名单可豁免） |
+| 家目录根 / DSH_HOME 树 | `~` 、`~/.dsh`（env DSH_HOME 或默认） | `hardDestructiveTargetReason` → 硬拒（allowedDshSubpaths 白名单可豁免）；shell 写向量另过 `shellWriteToDshHomeDenied` → 区内硬拒，唯一例外 = 插件自身开发区（常量，非 operator 开口） |
 | 凭据根 | `.ssh` `.gnupg` `.aws` `.azure` `.kube` `.config/gcloud` | isCriticalPath |
 | shell 启动文件（12） | `.bashrc` `.bash_profile` `.bash_login` `.bash_logout` `.profile` `.zshrc` `.zprofile` `.zlogin` `.zlogout` `.kshrc` `.cshrc` `.tcshrc` | isCriticalPath（家目录变体硬拒；工作区变体 ask） |
 | 系统关键目录 | POSIX: `/etc` `/bin` `/sbin` `/usr` `/system` `/library` `/private/etc` `/boot` ；Win: `windows/program files/boot…` | isCriticalPath |
