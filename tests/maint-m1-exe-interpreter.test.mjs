@@ -54,17 +54,20 @@ test('an interpreter is a nested-execution boundary under both spellings', () =>
   }
 })
 
-test('the suffixed spelling settles exactly like the plain one', () => {
-  // The static assessment's own eligibility flag is true for the bare ask of a
-  // visible inline-code execution under both spellings; what keeps the reviewer
-  // away from it is the category layer's LOCKED clamp, which only applies once
-  // the command is labelled privilege. Before the fix the suffixed spelling was
-  // `unknown`, so no clamp applied at all.
+test('the suffixed spelling is never more permissive than the plain one', () => {
+  // The restriction lists are normalized; the allow-side routine-probe list is
+  // deliberately NOT (normalizing it would widen a static allow). So the suffixed
+  // spelling may come out STRICTER than the plain one, never more permissive —
+  // and the category label agrees either way.
   for (const [plain, exe] of PAIRS) {
     const plainAssessment = assessmentOf(plain)
     const exeAssessment = assessmentOf(exe)
-    assert.equal(exeAssessment.decision, plainAssessment.decision, `${exe} must settle like ${plain}`)
-    assert.equal(exeAssessment.classifierEligible, plainAssessment.classifierEligible, `${exe} must not differ from ${plain}`)
+    if (plainAssessment.decision === 'allow') {
+      assert.notEqual(exeAssessment.decision, 'allow', `${exe} must stay stricter than ${plain}`)
+    } else {
+      assert.equal(exeAssessment.decision, plainAssessment.decision, `${exe} must settle like ${plain}`)
+      assert.equal(exeAssessment.classifierEligible, plainAssessment.classifierEligible, `${exe} must not differ from ${plain}`)
+    }
     assert.equal(categoryOf(exe), categoryOf(plain), `${exe} must be labelled like ${plain}`)
   }
 })

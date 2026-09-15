@@ -1491,7 +1491,7 @@ export function sortWriteTargets(words, kinds = { output: true, temporary: true 
             if (kinds.output) pushValue(word, text.slice(text.indexOf('=') + 1));
             continue;
         }
-        if (/^-o[^-].+/.test(text)) {
+        if (/^-o[^-]/.test(text)) {
             if (kinds.output) pushValue(word, text.slice(2));
             continue;
         }
@@ -1504,7 +1504,7 @@ export function sortWriteTargets(words, kinds = { output: true, temporary: true 
             if (kinds.temporary) pushValue(word, text.slice(text.indexOf('=') + 1));
             continue;
         }
-        if (/^-T[^-].+/.test(text)) {
+        if (/^-T[^-]/.test(text)) {
             if (kinds.temporary) pushValue(word, text.slice(2));
         }
     }
@@ -1556,7 +1556,7 @@ function writesThroughOperands(name, words) {
     if (name === 'sed')
         return sedEditsInPlace(words);
     if (name === 'tar')
-        return tarWritesToDisk(words);
+        return tarWriteTargets(words).length > 0;
     if (name === 'unzip')
         return unzipWriteTargets(words).length > 0;
     if (name === 'perl')
@@ -2678,7 +2678,7 @@ function assessSegment(segment, shell, roots, artifacts, owner) {
     const name = commandName(words[0].text);
     const nested = nestedExecution(name, words);
     if (nested !== undefined) {
-        if (routineInlineProbe(commandNameWithoutExe(name), nested.source))
+        if (routineInlineProbe(name, nested.source))
             return allowed('routine inline package or version probe');
         if (nested.source === undefined)
             return manualReview('opaque nested execution requires manual review');

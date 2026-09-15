@@ -622,6 +622,17 @@ function classifySegmentBase(segment: Segment, shell: string, roots: CategoryRoo
   }
   if (name === 'git') {
     const sub = unwrapped.words[1]?.text.toLowerCase() ?? ''
+    // `git restore <paths>` rewrites the working tree at exactly those paths, so
+    // they are judged like a copy/move destination: a credential or protected
+    // path must not ride the git label into an LLM-answerable ask (this branch
+    // would otherwise return before the protected-name check below). `--staged`
+    // on its own only touches the index and keeps its previous handling.
+    if (sub === 'restore') {
+      const indexOnly = unwrapped.words.some((word) => word.text === '--staged' || word.text === '-S')
+        && !unwrapped.words.some((word) => word.text === '--worktree' || word.text === '-W')
+      const restorePaths = unwrapped.words.slice(2).filter((word) => !word.text.startsWith('-'))
+      if (!indexOnly && restorePaths.length > 0) return copyMoveStyleCategory(restorePaths, roots)
+    }
     if (GIT_READ_ONLY.has(sub)) return 'readOnly'
     if (sub === 'reset' || sub === 'clean') return 'delete'
     if (sub === 'push') {
@@ -692,7 +703,7 @@ function classifySegmentBase(segment: Segment, shell: string, roots: CategoryRoo
   // same copy/move labelling only in a positively identified write mode, so
   // read-mode spellings (`tar -tf`, `unzip -l`, `perl -e`) keep their original
   // handling instead of being booked as writes.
-  if (shell === 'bash' && name === 'tar' && tarWritesToDisk(unwrapped.words)) {
+  if (shell === 'bash' && name === 'tar' && tarWritesToDisk(unwrapped.words) && tarWriteTargets(unwrapped.words).length > 0) {
     return copyMoveStyleCategory(tarWriteTargets(unwrapped.words), roots)
   }
   if (shell === 'bash' && name === 'unzip') {

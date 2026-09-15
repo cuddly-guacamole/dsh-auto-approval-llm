@@ -114,7 +114,7 @@ test('categorizeCommand: fileEdit (creation / copy / move)', () => {
 test('categorizeCommand: gitLocal subcommand family', () => {
   for (const cmd of [
     'git commit -m x', 'git merge t', 'git checkout -b f', 'git switch f', 'git branch x',
-    'git tag v1', 'git fetch', 'git pull', 'git stash', 'git revert HEAD', 'git restore x',
+    'git tag v1', 'git fetch', 'git pull', 'git stash', 'git revert HEAD', 'git restore --staged x',
     'git cherry-pick abc', 'git am x.patch', 'git rebase main', 'git stash pop',
   ]) {
     assert.equal(cat(cmd), 'gitLocal', cmd)

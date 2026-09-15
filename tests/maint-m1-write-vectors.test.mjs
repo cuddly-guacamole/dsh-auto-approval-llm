@@ -110,8 +110,14 @@ test('read-mode spellings are never booked as writes', () => {
 })
 
 test('an extract without -C (destination is the cwd) stays outside the family', () => {
-  assert.equal(hardDeny('tar -xf C:/ws/a.tar'), undefined)
-  assert.equal(hardDeny('unzip -o C:/ws/a.zip'), undefined)
+  // Nameable destination absent ⇒ the head must not enter the family at all, or
+  // the allow face would grant a static allow to an extract into an unread
+  // directory (the independent review caught exactly that). The decision is
+  // asserted, not just the absence of a hard-deny reason.
+  for (const command of ['tar -xf C:/ws/a.tar', 'tar -xf ' + HOME + '/.dsh/a.tar', 'unzip -o C:/ws/a.zip']) {
+    assert.notEqual(assessmentOf(command).decision, 'allow', `${command} must not be a static allow`)
+    assert.equal(categoryOf(command), 'unknown', `${command} carries no label without a named destination`)
+  }
 })
 
 test('benign workspace writes through the new heads are not hard-denied', () => {
