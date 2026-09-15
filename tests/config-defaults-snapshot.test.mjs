@@ -84,28 +84,18 @@ test('schema defaults snapshot: changing a default must be a reviewed diff', () 
   )
 })
 
-test('patch pin consistency: the shipped insert pins match the schema defaults or the documented overrides', () => {
+test('patch pin consistency: every shipped insert pin equals its schema default', () => {
   // The patch pin block (comment-stripped rows under the insert config) must
-  // equal these values: "equals code default" rows drift loudly, and the one
-  // documented override (autoSwitchPolicyToAsk) stays deliberate.
+  // equal these values. The retired autoSwitchPolicyToAsk guard is not pinned
+  // at all: pinning it true would contradict the host-owned no-op contract.
   const lines = readFileSync(new URL('../cordis.patch.yml', import.meta.url), 'utf8')
     .split(/\r?\n/)
     .filter((line) => !/^\s*#/.test(line))
   const insertAt = lines.findIndex((line) => /^- insert:/.test(line))
   const block = lines.slice(insertAt).join('\n')
   const defaults = Config({})
-  // The one pin that deliberately diverges from the schema default: shipping
-  // the never->ask policy guard ON so a bundle install cannot run the auto
-  // preset unapproved. Every other pin below must equal BOTH the schema default
-  // and this table's value — the table used to be read for its keys only, so an
-  // entry could rot to a stale literal while the patch and the schema drifted
-  // together unnoticed.
-  const OVERRIDES = {
-    autoSwitchPolicyToAsk: true,
-  }
   const pinned = {
     enabled: true,
-    autoSwitchPolicyToAsk: true, // documented OVERRIDE of the schema default false
     timeoutAction: 'reject',
     allowlist: [],
     denyList: [],
@@ -115,9 +105,10 @@ test('patch pin consistency: the shipped insert pins match the schema defaults o
     maxArgsChars: 4000,
     notifyUser: true,
   }
+  assert.doesNotMatch(block, /autoSwitchPolicyToAsk/, 'the retired guard key must not be pinned')
   for (const [key, expected] of Object.entries(pinned)) {
     assert.ok(Object.hasOwn(defaults, key), `the pinned key ${key} must exist in the schema`)
-    const m = new RegExp(`^\\s+${key}: (.+)$`, 'm').exec(block)
+    const m = new RegExp('^[ ]+' + key + ':[ ]+(.+)$', 'm').exec(block)
     assert.ok(m, `the patch must still pin ${key}`)
     const actual = m[1].trim()
     let parsed = actual
@@ -125,11 +116,6 @@ test('patch pin consistency: the shipped insert pins match the schema defaults o
     else if (actual === 'true' || actual === 'false') parsed = actual === 'true'
     else if (/^-?\d+$/.test(actual)) parsed = Number(actual)
     else parsed = actual.replace(/^'(.*)'$/, '$1')
-    if (Object.hasOwn(OVERRIDES, key)) {
-      assert.deepEqual(parsed, OVERRIDES[key], `pin ${key} must carry the documented override`)
-      assert.notDeepEqual(defaults[key], OVERRIDES[key], `the ${key} pin no longer overrides the schema default — drop it from OVERRIDES`)
-      continue
-    }
     // Both directions participate: the table must equal the schema default
     // (a stale literal reddens) and the patch must equal the table (an
     // undocumented override reddens).

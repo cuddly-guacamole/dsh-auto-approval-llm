@@ -61,7 +61,6 @@ const MOCK_API_KEY = process.env.DSH_VERIFY_MOCK_KEY ?? 'dsh-verify-mock-key'
 // The deep-review lane rides the shared custom endpoint (mock reviewer).
 const MOCK_CONFIG = {
   enabled: true,
-  autoSwitchPolicyToAsk: true,
   debug: true,
   reviewerSource: 'endpoint',
   reviewerProvider: '',

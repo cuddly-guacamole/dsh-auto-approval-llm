@@ -23,7 +23,7 @@ function sessionModeHarness() {
     get: (name) => {
       if (name === 'webServer') return { register: (desc) => registrations.push(desc) }
       if (name === 'agents') return { get: (sid) => (sid === 'sess-1' ? agent : undefined) }
-      if (name === 'permissionPresets') return { current: () => 'auto' }
+      if (name === 'permissionPresets') return { permissionState: () => ({ preset: 'auto', sandbox: 'danger-full-access', approval: 'ask' }) }
       return undefined
     },
     effect: (fn) => fn(),
@@ -42,7 +42,7 @@ function noPresetHarness() {
     get: (name) => {
       if (name === 'webServer') return { register: (desc) => registrations.push(desc) }
       if (name === 'agents') return { get: (sid) => (sid === 'sess-1' ? agent : undefined) }
-      if (name === 'permissionPresets') return { current: () => undefined }
+      if (name === 'permissionPresets') return { permissionState: () => ({ preset: null }) }
       return undefined
     },
     effect: (fn) => fn(),
@@ -84,19 +84,44 @@ test('an unknown session id is a 200 with a null mode, never a 404', async () =>
   assert.equal(res.body.value.mode, null, 'the success shape expresses "no mode known" as null')
 })
 
-test('a known session still reports its real mode (no hardcoded null)', async () => {
+test('a known legacy auto session reports the normalized machine name', async () => {
   const handler = sessionModeHarness()
   const res = await callJson(handler, get('sess-1'))
   assert.equal(res.status, 200)
-  assert.equal(res.body.value.mode, 'auto', 'the lookup must still resolve a live agent')
+  assert.equal(res.body.value.mode, 'auto-approval', 'a legacy raw auto is normalized for the panel')
+})
+
+test('a modern upstream auto session stays auto (not the plugin preset)', async () => {
+  const registrations = []
+  const agent = { session: { id: 'sess-1' } }
+  const ctx = {
+    get: (name) => {
+      if (name === 'webServer') return { register: (desc) => registrations.push(desc) }
+      if (name === 'agents') return { get: (sid) => (sid === 'sess-1' ? agent : undefined) }
+      if (name === 'permissionPresets') {
+        return {
+          registerAuto: () => {},
+          catalog: () => ({ options: [] }),
+          permissionState: () => ({ preset: 'auto', sandbox: 'danger-full-access', approval: 'never' }),
+        }
+      }
+      return undefined
+    },
+    effect: (fn) => fn(),
+  }
+  installSessionModeRoute(ctx)
+  const spec = registrations.find((r) => r.path.includes('session-mode'))
+  const res = await callJson(spec.handler, get('sess-1'))
+  assert.equal(res.status, 200)
+  assert.equal(res.body.value.mode, 'auto', 'the upstream auto name is not the plugin preset')
 })
 
 test('a live agent with no resolvable preset already answered 200 + null', async () => {
-  // This is the pre-existing shape the unknown-agent answer now reuses: the
-  // success branch has always been `currentPreset(...) ?? null`, so "no mode
-  // known" on a 200 is not a new concept — and the client already treated it as
-  // "clear the remembered mode". Answering 200 for an unknown agent therefore
-  // makes both no-mode cases behave the same way instead of inventing a third.
+  // This is the pre-existing shape the unknown-agent answer reuses: the success
+  // branch has always expressed "no mode known" as null, so a 200 there is not
+  // a new concept — and the client already treated it as "clear the remembered
+  // mode". Answering 200 for an unknown agent therefore makes both no-mode
+  // cases behave the same way instead of inventing a third.
   const handler = noPresetHarness()
   const res = await callJson(handler, get('sess-1'))
   assert.equal(res.status, 200)

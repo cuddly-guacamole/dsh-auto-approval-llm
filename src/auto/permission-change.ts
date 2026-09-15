@@ -14,8 +14,9 @@
  *    back on a fresh session; with a full-access default one of them is
  *    `approval/policy: never`, i.e. exactly the signal this module exists to
  *    catch, fabricated on every new session.
- *  - this plugin's own counter-move, which appends `approval/policy: ask` from
- *    inside `ensureAsk`.
+ *  - this plugin's own counter-move: the legacy identity migration appends
+ *    `permission/preset`, and the own-spec restore appends
+ *    `approval/policy: ask`. Both are marked plugin-initiated while in flight.
  * Both are handled by keeping a per-plane baseline: the host only appends a
  * plane event when that plane actually changes (`apply` compares first), and
  * the creation pin is the first value a session ever shows, so the first value

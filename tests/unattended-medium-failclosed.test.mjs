@@ -16,6 +16,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { unattendedMustFailClosed, reviewerAutoAllowBlocked } from '../lib/auto/decision.js'
 import { riskTimedOutAction, autoPermissionAuthority } from '../lib/index.js'
+import { GATED_PRESET } from '../lib/auto/constants.js'
 
 test('unattendedMustFailClosed: reviewer failure and CRITICAL-blocked ALLOW must fail closed', () => {
   assert.equal(unattendedMustFailClosed({ decision: 'ESCALATE', failure: 'TIMEOUT' }), true)
@@ -59,28 +60,29 @@ test('reviewerAutoAllowBlocked: only the contradictory CRITICAL ALLOW is blocked
   assert.equal(reviewerAutoAllowBlocked({ decision: 'DENY', riskLevel: 'CRITICAL' }), false)
 })
 
-test('auto-switch guard: the never->ask flip leaves a debug trail', () => {
-  // The guard silently rewrites an Auto session's effective policy; an
-  // operator must be able to see why a session stopped auto-answering.
-  // Structural anchor on the compiled lib (the flip is a host closure).
+test('own-spec restore: the never->ask normalization leaves a durable line', () => {
+  // The restore runs inside the host closure; the decision layer emits the
+  // audit line and the host wires the helper. Both halves are pinned.
   const lib = readFileSync(fileURLToPath(new URL('../lib/index.js', import.meta.url)), 'utf8')
-  const setPolicyAt = lib.indexOf("approval.setPolicy(flip, 'ask')")
-  assert.ok(setPolicyAt > 0, 'the ensureAsk flip is wired')
-  const scope = lib.slice(setPolicyAt, setPolicyAt + 400)
-  assert.ok(scope.includes("ev: 'auto-switch-never-to-ask'"), 'the flip must emit the debug event')
+  const moduleLib = readFileSync(fileURLToPath(new URL('../lib/auto/preset-migration.js', import.meta.url)), 'utf8')
+  assert.ok(lib.includes('enforceOwnSpec('), 'the host wires the restore helper')
+  assert.ok(moduleLib.includes('preset-spec-restore'), 'the decision layer emits the restore audit line')
 })
 
-test('auto-switch guard: mid-flight preset and override events re-arm the checkpoint', () => {
-  // agent/created and the boot sweep only see a session at its birth; a live
-  // session switched into Auto (permission/preset) or handed a never override
-  // (approval/policy) must re-run the guard from the session/event listener.
+test('own-spec restore: a mid-flight never override is re-read after a deferred tick', () => {
+  // agent/created and the boot scan only see a session at its birth; a live
+  // session handed a never override must be re-checked from session/event, and
+  // the append deferred so it cannot re-enter the publishing append.
   const lib = readFileSync(fileURLToPath(new URL('../lib/index.js', import.meta.url)), 'utf8')
-  assert.ok(lib.includes('event.data?.preset === AUTO_PRESET'), 'the preset-switch checkpoint is wired')
-  assert.ok(lib.includes("event.data?.policy === 'never'"), 'the override checkpoint is wired')
+  const at = lib.lastIndexOf("event.data?.policy === 'never'")
+  assert.ok(at > 0, 'the override checkpoint is wired')
+  const scope = lib.slice(at, at + 900)
+  assert.ok(scope.includes('setTimeout('), 'the restore is deferred past the append reentrancy guard')
+  assert.ok(scope.includes('enforceOwnSpec('), 'the deferred callback re-reads the raw state before restoring')
 })
 
-test('auto-switch guard: the authority chain governs a subagent session', () => {
-  // A subagent session whose own preset is not auto must still be judged on
+test('autoPermissionAuthority: the raw gate walks the parent chain', () => {
+  // A subagent session whose own preset is not gated must still be judged on
   // the parent it inherits from — the same chain the answerer gate reads.
   const parentAgent = (id) => {
     if (id !== 'parent-1') return undefined
@@ -89,12 +91,14 @@ test('auto-switch guard: the authority chain governs a subagent session', () => 
   }
   const parent = parentAgent('parent-1')
   const child = { session: { id: 'child-1', header: { origin: 'subagent', parentSession: 'parent-1' } } }
-  const parentAuto = { current: (session) => (session?.id === 'parent-1' ? 'auto' : 'manual') }
-  assert.equal(autoPermissionAuthority({ agent: child }, parentAgent, parentAuto), parent)
-  // A plain session stands on its own preset; a subagent of a non-auto parent
-  // has no authority at all.
   const plain = { session: { id: 'solo' } }
-  const allAuto = { current: () => 'auto' }
-  assert.equal(autoPermissionAuthority({ agent: plain }, parentAgent, allAuto), plain)
-  assert.equal(autoPermissionAuthority({ agent: child }, parentAgent, { current: () => 'manual' }), undefined)
+  const parentGated = { permissionState: (session) => (session?.id === 'parent-1' ? { preset: GATED_PRESET } : { preset: 'manual' }) }
+  assert.equal(autoPermissionAuthority({ agent: child }, parentAgent, parentGated, [GATED_PRESET]), parent)
+  const allGated = { permissionState: () => ({ preset: GATED_PRESET }) }
+  assert.equal(autoPermissionAuthority({ agent: plain }, parentAgent, allGated, [GATED_PRESET]), plain)
+  assert.equal(autoPermissionAuthority({ agent: child }, parentAgent, { permissionState: () => ({ preset: 'manual' }) }, [GATED_PRESET]), undefined)
+  // The legacy alias is accepted only when the caller passes the alias set.
+  const legacyAuto = { permissionState: () => ({ preset: 'auto' }) }
+  assert.equal(autoPermissionAuthority({ agent: plain }, parentAgent, legacyAuto, [GATED_PRESET, 'auto']), plain)
+  assert.equal(autoPermissionAuthority({ agent: plain }, parentAgent, legacyAuto, [GATED_PRESET]), undefined)
 })

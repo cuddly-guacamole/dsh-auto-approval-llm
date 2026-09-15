@@ -12,8 +12,12 @@
  *   log by callId), then asks the human through `ctx.userQuestions.ask()` with
  *   a bounded countdown. On timeout it applies `timeoutAction`; the default is
  *   fail-closed `reject`.
- * - If `autoSwitchPolicyToAsk` is enabled it only switches sessions that are
- *   already in the `auto` preset and whose approval override is `never`.
+ * - The preset gate reads the durable raw permission identity: the plugin's
+ *   own `auto-approval` preset, plus the legacy `auto` alias only on hosts
+ *   whose capability probe reports the pre-reservation surface.
+ * - The retired `autoSwitchPolicyToAsk` key is a host-owned no-op. The raw
+ *   `auto-approval` identity is protected by an unconditional spec restore
+ *   (effective never -> ask), never by configuration.
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -27,7 +31,7 @@ import { ArtifactRegistry } from './auto/artifacts.js'
 import { appendAuditLine, recordAuditClear } from './auto/audit.js'
 import { AGGRESSIVE_BUILTIN, applyCategoryDirective, CATEGORY_KEYS, categoryDirectiveFor, type CategoryKey, HARD_LOCKED_CATEGORIES, LOCKED_CATEGORIES, realpathCriticalReason, sensitiveBasenameAt } from './auto/category.js'
 import { sanitizeClassifierArguments, sanitizeClassifierText, sanitizeReviewReason } from './auto/classifier.js'
-import { DIRECT_HUMAN_TOOL, THRESHOLD_DEFAULTS } from './auto/constants.js'
+import { DIRECT_HUMAN_TOOL, GATED_PRESET, THRESHOLD_DEFAULTS } from './auto/constants.js'
 import { createDshClassifier, createEndpointClassifier } from './auto/dsh-classifier.js'
 import { type RaceHumanHandle, type ReviewResult, type StaticRisk, AWAITING_MARKER, LOCKED_ASK_MARKER, REVIEW_TIMEOUT_NOTICE, applyBreaker, approvalSource, assembleReviewerSystem, breakerNote, breakerTripped, createKeyedMutex, DENY_CIRCUMVENTION_GUIDANCE, extractToolPath, followResolution, formatDenyFeedback, frameReviewerInput, lowRiskReviewOutcome, parseReview, stripCountdownMarkers, unattendedMustFailClosed, preserveHostKeys, raceHumanDecision, reviewSuggestionNote, reviewerAutoAllowBlocked, riskFromAssessment, staticListDecision, type ContextSummary } from './auto/decision.js'
 import { LATENCY_SUMMARY_WINDOW, clearLatencySamples, loadLatencySamples, pushLatencySample, summarizeLatency, type LatencySample } from './auto/latency.js'
@@ -79,12 +83,29 @@ import { isLoopbackHostname, isTrustedRequest, resolvePublicReviewerTarget, revi
 import { aggregateToolStats } from './auto/tool-stats.js'
 import { normalizeLane, normalizeSharedEndpoint, resolveTransport } from './auto/model-channel.js'
 import { callEndpointText, createPinnedLookup, requestEndpointText } from './auto/endpoint-call.js'
+import {
+  classifyForMigration,
+  detectHostCapability,
+  enforceOwnSpec,
+  gatePresetNames,
+  isUsableTargetSpec,
+  migrationAuditLine,
+  isGatedSession,
+  rawPresetOf,
+  rawStateOf,
+  rootAuthoritySessionId,
+  runPresetMigration,
+  safeResolveSpec,
+  scanAuditLine,
+  type MigrationScanCounts,
+} from './auto/preset-migration.js'
 
 export const name = 'dsh-auto-approval-llm'
-export const inject = ['approval', 'permissionPresets', 'tools', 'llm', 'agents', 'webServer', 'settings', 'commands']
+export const inject = ['approval', 'permissionPresets', 'sessions', 'tools', 'llm', 'agents', 'webServer', 'settings', 'commands']
 
 export interface Config {
   enabled: boolean
+  /** Retired host-owned no-op: resolveConfig warns and normalizes it to false. */
   autoSwitchPolicyToAsk: boolean
   timeoutAction: string
   llmReviewScope: 'low-or-above' | 'medium-or-above' | 'high'
@@ -195,6 +216,8 @@ export interface Config {
 
 export const Config: z<Config> = z.object({
   enabled: z.boolean().default(true),
+  // Retired host-owned no-op kept as a schema key so a stored value is not
+  // deleted by a card save; resolveConfig warns and normalizes it to false.
   autoSwitchPolicyToAsk: z.boolean().default(false),
   debug: z.boolean().default(false),
   timeoutAction: z.string().default('reject'),
@@ -334,12 +357,16 @@ export const Config: z<Config> = z.object({
   slashCommandsEnabled: z.boolean().default(false),
 })
 
-const AUTO_PRESET = 'auto'
-
 /** One-time flag: the threshold=1 clamp warning fires once per process. */
 let loopThresholdWarned = false
 
 export function resolveConfig(raw: Config): Config {
+  // Retired guard key: schemastery neither rejects nor strips unknown keys and
+  // resolveConfig spreads `...raw`, so the value must be explicitly read,
+  // warned, and normalized here so no later code path can act on it.
+  if ((raw as any).autoSwitchPolicyToAsk === true) {
+    console.warn('[dsh-auto-approval-llm] autoSwitchPolicyToAsk is retired and ignored; remove the key from settings/patch')
+  }
   let timeoutAction = raw.timeoutAction
   if (!['reject', 'allow', 'low-risk-allow'].includes(timeoutAction)) {
     if (timeoutAction === 'llm-low-risk-only') {
@@ -536,6 +563,7 @@ export function resolveConfig(raw: Config): Config {
   }
   return {
     ...raw,
+    autoSwitchPolicyToAsk: false,
     loopDetectionThreshold: loopThreshold.value,
     classifierSource: classifierLane.source,
     classifierProvider: classifierLane.presetProvider,
@@ -1245,26 +1273,26 @@ function flushNotices(session: any): void {
   }
 }
 
-function watchNotices(ctx: any, getConfig: () => Config): void {
-  // One telemetry map per session tracking the last permission preset so a
-  // mode switch into/out of Auto can announce itself to the agent (mirrors
-  // the official user-approval policy-change notice, in English like the
-  // onboarding notice — agent context, not a user banner).
+function watchNotices(ctx: any, getConfig: () => Config, getGateNames: () => readonly string[]): void {
+  // One telemetry map per session tracking the last raw permission identity so
+  // a mode switch into/out of the plugin's gated set can announce itself to
+  // the agent (mirrors the official user-approval policy-change notice, in
+  // English like the onboarding notice — agent context, not a user banner).
   const sessionPreset = new Map<string, string>()
-  const autoPolicyNotice = (session: any, preset: string): void => {
+  const autoPolicyNotice = (session: any, active: boolean): void => {
     if (getConfig().autoModeNoticeEnabled === false) return
     const agent = ctx.get('agents')?.get?.(session.id)
     if (!agent || typeof agent.inject !== 'function') return
     agent.inject(createUserMessage({
       content: [{
         type: 'text',
-        text: preset === 'auto'
+        text: active
           ? `(Auto-approval) is now ACTIVE for this session: ${autoApprovalSummary(getConfig().timeoutAction)}.`
           : '(Auto-approval) is now INACTIVE for this session: the official approval flow applies again.',
       }],
       source: { kind: 'plugin', plugin: 'dsh-auto-approval-llm' },
     }))
-    debugLog({ ev: 'auto-mode-notice', sessionId: session?.id ?? null, preset })
+    debugLog({ ev: 'auto-mode-notice', sessionId: session?.id ?? null, active })
   }
   // Reliable settle point: `tools/result` — its scope carrier keys on
   // exec.agent, the same chain `tools/pre-execute` proves to reach plugin
@@ -1296,13 +1324,16 @@ function watchNotices(ctx: any, getConfig: () => Config): void {
     // Diagnostic: does the scope carrier actually reach plugin contexts?
     debugLog({ ev: 'onboarding-event', via: 'session/event', sessionId: session?.id ?? null, type: event?.type ?? null })
     if (event?.type === 'permission/preset' && session?.id) {
-      // Announce Auto-mode entry/exit to the agent (one direction only:
-      // switching away from a preset we never saw as auto is not an exit).
+      // Announce gated-set entry/exit to the agent (one direction only:
+      // switching away from a preset we never saw as gated is not an exit).
       const preset = event.data?.preset ?? ''
+      const gateNames = getGateNames()
+      const active = gateNames.includes(preset)
       const last = sessionPreset.get(session.id)
+      const wasActive = last !== undefined && gateNames.includes(last)
       sessionPreset.set(session.id, preset)
-      if (preset === 'auto' && last !== undefined && last !== 'auto') autoPolicyNotice(session, 'auto')
-      else if (preset !== 'auto' && last === 'auto') autoPolicyNotice(session, 'other')
+      if (active && !wasActive) autoPolicyNotice(session, true)
+      else if (!active && wasActive) autoPolicyNotice(session, false)
       return
     }
     if (!pendingNotices.has(session?.id)) return
@@ -3035,8 +3066,13 @@ export function installSessionModeRoute(ctx: any): void {
         responseJson(res, 200, { ok: true, value: { mode: null } })
         return
       }
-      const mode = currentPreset(permissionPresets, agent.session) ?? null
-      responseJson(res, 200, { ok: true, value: { mode: mode ?? null } })
+      // Report the durable raw identity normalized to the plugin's machine
+      // name: a legacy `auto` session reads as auto-approval so the client
+      // panel stays visible, while a modern upstream `auto` stays `auto`.
+      const gateNames = gatePresetNames(detectHostCapability(permissionPresets).capability)
+      const raw = rawPresetOf(permissionPresets, agent.session)
+      const mode = raw !== undefined && gateNames.includes(raw) ? GATED_PRESET : (raw ?? null)
+      responseJson(res, 200, { ok: true, value: { mode } })
     },
   }), 'dsh-auto-approval-llm: session mode route')
 }
@@ -3292,14 +3328,18 @@ function reportTrustedIntentOrigins(sessionId: string | undefined, intents: read
   }
 }
 
-function isAutoPermissionExecution(exec: any, permissionPresets: any, presetName = AUTO_PRESET) {
-  const session = exec.agent?.session
-  if (session === undefined) return false
-  return currentPreset(permissionPresets, session) === presetName
+/**
+ * The gate reads the durable raw identity, never current(). current() folds an
+ * approval override back to the base policy, so a raw auto-approval session
+ * with a never override would derive as danger-full-access and silently skip
+ * every plugin gate.
+ */
+function isAutoPermissionExecution(exec: any, permissionPresets: any, presetNames: readonly string[] = [GATED_PRESET]) {
+  return isGatedSession(permissionPresets, exec.agent?.session, presetNames)
 }
 
-export function autoPermissionAuthority(exec: any, parentAgent: any, permissionPresets: any, presetName = AUTO_PRESET) {
-  if (isAutoPermissionExecution(exec, permissionPresets, presetName)) return exec.agent
+export function autoPermissionAuthority(exec: any, parentAgent: any, permissionPresets: any, presetNames: readonly string[] = [GATED_PRESET]) {
+  if (isAutoPermissionExecution(exec, permissionPresets, presetNames)) return exec.agent
   let session = exec.agent?.session
   const visited = new Set<string>()
   while (session?.header?.origin === 'subagent' && session.header.parentSession !== undefined) {
@@ -3310,7 +3350,7 @@ export function autoPermissionAuthority(exec: any, parentAgent: any, permissionP
     const parent = parentAgent(parentSessionId)
     if (parent === undefined) return undefined
     const parentExec = { ...exec, agent: parent }
-    if (isAutoPermissionExecution(parentExec, permissionPresets, presetName)) return parent
+    if (isAutoPermissionExecution(parentExec, permissionPresets, presetNames)) return parent
     session = parent.session
   }
   return undefined
@@ -3347,6 +3387,33 @@ export function apply(ctx: Context, rawConfig: Config): void {
     console.warn('[dsh-auto-approval-llm] base approval policy is never (DSH_PERMISSION_MODE=danger-full-access?): cold sessions will not be detected as Auto, so auto approval stays inactive until the base policy is ask.')
   }
   const permissionPresets = anyCtx.get('permissionPresets')
+  // Capability is probed once and frozen for the process: it decides the
+  // accepted gate names and whether the legacy `auto` identity may be migrated.
+  // A signal mismatch is intentionally fail-closed (no alias, no migration).
+  const hostCapability = detectHostCapability(permissionPresets)
+  const gateNames = gatePresetNames(hostCapability.capability)
+  // Boot diagnostics are collected here but appended only after
+  // setRuntimeStateDir below, so the line lands in the DSH_HOME this process
+  // actually resolves instead of the pre-config default.
+  let hostCapabilityAudit: string | undefined
+  let presetConfigAudit: string | undefined
+  if (hostCapability.capability === 'unknown') {
+    console.warn(`[dsh-auto-approval-llm] host permission-preset surface is unknown (${hostCapability.reason}); the legacy "auto" alias and migration stay disabled (fail-closed)`)
+    hostCapabilityAudit = JSON.stringify({ type: 'host-capability', at: Date.now(), capability: 'unknown', reason: hostCapability.reason })
+  }
+  // Boot self-check: the composed permission table must carry the plugin's own
+  // preset as danger-full-access + ask. The gate is raw-identity based, so a
+  // missing preset cannot be selected for new sessions; the check makes the
+  // deployment gap loud instead of showing up as "the plugin never runs".
+  {
+    const targetSpec = safeResolveSpec(permissionPresets, GATED_PRESET)
+    const names = permissionPresets?.names
+    const listed = Array.isArray(names) ? names.includes(GATED_PRESET) : undefined
+    if (!isUsableTargetSpec(targetSpec) || listed === false) {
+      console.warn(`[dsh-auto-approval-llm] preset "${GATED_PRESET}" is missing or is not danger-full-access+ask in the composed permission table; define it in the bundle patch/profile or the plugin cannot gate`)
+      presetConfigAudit = JSON.stringify({ type: 'preset-config-missing', at: Date.now(), preset: GATED_PRESET })
+    }
+  }
   const tools = anyCtx.get('tools')
   const llm = anyCtx.get('llm')
   const settings = anyCtx.get('settings')
@@ -3489,6 +3556,8 @@ export function apply(ctx: Context, rawConfig: Config): void {
   // not exist until here, and a load that ran earlier would read one directory
   // while every write went to another.
   loadRuntimeStores()
+  if (hostCapabilityAudit !== undefined) appendAuditLine(hostCapabilityAudit)
+  if (presetConfigAudit !== undefined) appendAuditLine(presetConfigAudit)
   const parentAgent = (sessionId: any) => anyCtx.get('agents')?.get(sessionId)
   // Every roots consumer re-reads mode/trustedDirs from the LIVE config (G4):
   // neither key enters the frozen rootOptions, so a settings/updated hot swap
@@ -3518,7 +3587,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
     roots.trustedDirs = (config.trustedDirs ?? []).map((dir) => normalizePath(dir, roots.workspace, roots.home))
     return roots
   }
-  const authorityFor = (exec: any) => autoPermissionAuthority(exec, parentAgent, permissionPresets, AUTO_PRESET)
+  const authorityFor = (exec: any) => autoPermissionAuthority(exec, parentAgent, permissionPresets, gateNames)
   const isAutoExecution = (exec: any) => authorityFor(exec) !== undefined
   // LOCKED-category predicate honoring the two opt-outs: delete / disk are
   // always locked; privilege is locked unless privilegeAutoReview is on, and
@@ -3537,11 +3606,13 @@ export function apply(ctx: Context, rawConfig: Config): void {
     if (category === 'delete' && provenArtifactDeletion) return false
     return LOCKED_CATEGORIES.includes(category as (typeof LOCKED_CATEGORIES)[number])
   }
-  // Root authority session (walks the parent chain for subagents that inherit
-  // Auto): the preset gate, breaker counter, and history are all keyed on this
-  // so switching/creating a subagent can never reset the breaker.
+  // Root session of the parent chain. The preset gate, breaker counter, and
+  // history are all keyed on that root, so creating or switching a subagent
+  // can never split (or reset) a breaker bucket — including the case where the
+  // subagent's own raw identity is the gated preset. A non-gated exec has no
+  // authority and keys on 'unknown'.
   const authorityKeyFor = (exec: any): string =>
-    (authorityFor(exec) ?? exec.agent)?.session?.id ?? 'unknown'
+    authorityFor(exec) === undefined ? 'unknown' : (rootAuthoritySessionId(exec, parentAgent) ?? 'unknown')
 
   const classifyStaticRisk = (req: any, args: any): { risk: StaticRisk; reason?: string; assessment?: any; category?: string; directive?: string; mode?: string } => {
     // Approval args come from the session log as a JSON string; parse them so
@@ -4249,7 +4320,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
     }
   })
 
-  watchNotices(anyCtx, () => config)
+  watchNotices(anyCtx, () => config, () => gateNames)
   trustedHosts = resolveTrustedHosts(anyCtx)
   installFeedbackRoute(anyCtx)
   installSettingsRoute(anyCtx, settings)
@@ -4318,97 +4389,108 @@ export function apply(ctx: Context, rawConfig: Config): void {
     return Promise.resolve({ kind: 'block', feedback: [{ type: 'text', text }] })
   }, { global: true })
 
-  // ── auto-switch never -> ask (only for auto preset, opt-in) ──────────────
-  const switchTimers = new Set<ReturnType<typeof setTimeout>>()
-  const clearSwitchTimers = () => {
-    for (const timer of switchTimers) clearTimeout(timer)
-    switchTimers.clear()
-  }
-  ctx.effect(() => clearSwitchTimers)
-
-  const ensureAsk = (agent: any) => {
-    if (!config.autoSwitchPolicyToAsk || !agent?.session) return
-    if (!permissionPresets) return
-    // Judge on the authority chain exactly like the answerer gate: a subagent
-    // session is governed by the Auto parent it inherits from, and the never
-    // override may live on that authority session rather than on the child.
-    const authority = autoPermissionAuthority({ agent }, parentAgent, permissionPresets, AUTO_PRESET)
-    if (authority === undefined) return
-    // Whichever plane holds the never override gets flipped: the authority
-    // session's, or (for a subagent carrying its own) the agent's own.
-    let flip = authority
-    if (approval?.overrideOf?.(authority.session) !== 'never') {
-      if (approval?.overrideOf?.(agent.session) !== 'never') return
-      flip = agent
-    }
-    const timer = setTimeout(() => {
-      switchTimers.delete(timer)
-      // The host appends approval/policy synchronously inside setPolicy, which
-      // re-enters the session/event handler; mark the session so that observed
-      // copy is never attributed to the user (the line below is the record).
-      // The guard ran before this timer; re-check here so a double trigger (or
-      // a policy that moved meanwhile) cannot leave a second, fabricated
-      // counter-move record. setPolicy itself early-returns when the policy is
-      // unchanged, so this also keeps the debug trail honest.
-      if (approval?.overrideOf?.(flip.session) !== 'never') return
-      pluginFlipSessions.add(flip.session.id)
-      try {
-        approval.setPolicy(flip, 'ask')
-        // The flip silently rewrites the session's effective policy — leave
-        // one debug trail so an operator can see why an Auto session stopped
-        // auto-answering (auditability for the guard's second line).
-        debugLog({ ev: 'auto-switch-never-to-ask', callId: null, sessionId: flip.session.id })
-        // One durable line as well, so the counter-move is visible without
-        // debug on.
-        appendAuditLine(
-          JSON.stringify({
-            type: 'permission-change',
-            at: Date.now(),
-            sessionId: flip.session.id,
-            scope: 'policy',
-            to: 'ask',
-            actor: 'plugin',
-            recentRejectedIds: recentRejectionPointers(approvalHistory, RECENT_REJECTION_CAP),
-          }),
-        )
-      } catch (error) {
-        console.error('[dsh-auto-approval-llm] setPolicy failed:', error)
-      } finally {
-        pluginFlipSessions.delete(flip.session.id)
-      }
-    }, 0)
-    switchTimers.add(timer)
-  }
-
-  anyCtx.on('agent/created', (payload: any) => {
-    ensureAsk(payload?.agent)
+  // ── session lifecycle: legacy auto migration, own-spec enforcement, baselines ──
+  //
+  // Migration is a raw identity rewrite (`session.append('permission/preset')`)
+  // and never calls permissionPresets.set(): set() short-circuits on the
+  // derived current() and would also rewrite knobs, silently widening a
+  // sandbox. Idempotency is read from the durable raw identity only.
+  //
+  // Ordering: the `session/created` migration listener is prepended so it runs
+  // before the host's pinInitialPermission; it is synchronous and never throws
+  // (a throw would abort the announce loop and roll the session back). The
+  // startup scan covers sessions that were already live, and `agent/created`
+  // is the idempotent fallback.
+  const agents = anyCtx.get('agents')
+  const permissionBaselines = new Map<string, PermissionState>()
+  const pluginInitiatedSessions = new Set<string>()
+  const specRestoreTimers = new Set<ReturnType<typeof setTimeout>>()
+  ctx.effect(() => () => {
+    for (const timer of specRestoreTimers) clearTimeout(timer)
+    specRestoreTimers.clear()
   })
 
-  const agents = anyCtx.get('agents')
-
-  // Mid-flight checkpoints: the boot sweep and agent/created only observe a
-  // session at its birth, so a session switched into Auto (or handed a never
-  // override) while already running escaped the guard until now. The host
-  // appends `permission/preset` on every actual preset change and
-  // `approval/policy` on every override change; both ride session/event, which
-  // reaches this context. The payload only decides WHEN to re-check — the
-  // guard's own conditions still decide WHETHER to flip.
-  // Per-session, per-plane baselines. The host appends a plane event only when
-  // that plane actually moves, and it pins all three planes once at session
-  // creation, so the first value seen per plane is a baseline rather than a
-  // user switch (see observePermissionChange). `pluginFlipSessions` suppresses
-  // the observed copy of this plugin's own counter-move, which records itself.
-  const permissionBaselines = new Map<string, PermissionState>()
-  const pluginFlipSessions = new Set<string>()
-  const rememberPermissionBaseline = (session: any) => {
+  const markPluginInitiated = (session: any): (() => void) => {
     const id = session?.id
-    if (typeof id !== 'string') return
-    permissionBaselines.set(id, baselineFromPermissionState(permissionPresets?.permissionState?.(session)))
+    if (typeof id !== 'string') return () => {}
+    pluginInitiatedSessions.add(id)
+    return () => { pluginInitiatedSessions.delete(id) }
   }
-  anyCtx.on('session/created', (session: any) => rememberPermissionBaseline(session))
+
+  // The single mutation seam. `session.append` is public host API; going
+  // through one wrapper keeps the migration module free of a session import
+  // and makes "append-only, never set()" greppable.
+  const appendSessionEvent = (session: any, type: string, data: unknown): void => {
+    if (session === undefined || session === null || typeof session.append !== 'function') {
+      throw new Error('session.append is unavailable')
+    }
+    session.append(type, data)
+  }
+
+  const migrationDeps = {
+    permissionPresets,
+    capability: hostCapability.capability,
+    approval,
+    append: appendSessionEvent,
+    audit: appendAuditLine,
+    warn: (message: string) => console.warn(`[dsh-auto-approval-llm] ${message}`),
+    markPluginInitiated,
+    current: (session: any) => {
+      try {
+        return currentPreset(permissionPresets, session)
+      } catch {
+        return undefined
+      }
+    },
+    now: () => Date.now(),
+  }
+
+  const rememberPermissionBaseline = (session: any) => {
+    try {
+      const id = session?.id
+      if (typeof id !== 'string') return
+      permissionBaselines.set(id, baselineFromPermissionState(permissionPresets?.permissionState?.(session)))
+    } catch (error) {
+      console.warn('[dsh-auto-approval-llm] permission baseline listener failed:', error)
+    }
+  }
+
+  // One entry point for every lifecycle hook: migrate the legacy raw identity
+  // first, then restore this plugin's own spec, and never let an exception
+  // cross the announce boundary.
+  const runLifecycleMigration = (session: any) => {
+    if (!session) return
+    try {
+      runPresetMigration(session, migrationDeps)
+    } catch (error) {
+      try {
+        appendAuditLine(migrationAuditLine({ ok: false, sessionId: session?.id ?? null, stage: 'listener', reason: error instanceof Error ? error.message : String(error) }))
+      } catch { /* audit is best-effort inside the listener */ }
+      console.warn('[dsh-auto-approval-llm] preset migration listener failed:', error)
+    }
+    try {
+      enforceOwnSpec(session, migrationDeps)
+    } catch (error) {
+      console.warn('[dsh-auto-approval-llm] preset spec enforcement failed:', error)
+    }
+  }
+
+  // Prepend: run before the host pinInitialPermission writes the pinned state.
+  anyCtx.on('session/created', (session: any) => runLifecycleMigration(session), { prepend: true, global: true })
+  // Fallback for a session whose `session/created` fired before this plugin
+  // loaded; raw-identity idempotency makes a second run a no-op.
+  anyCtx.on('agent/created', (payload: any) => runLifecycleMigration(payload?.agent?.session))
+  // The baseline listener stays a push listener: it folds the host's pinned
+  // baseline, which is written by the pin callback that runs after our
+  // prepended migration.
+  anyCtx.on('session/created', (session: any) => {
+    try {
+      rememberPermissionBaseline(session)
+    } catch (error) {
+      console.warn('[dsh-auto-approval-llm] permission baseline listener failed:', error)
+    }
+  })
   anyCtx.on('session/event', (session: any, event: any) => {
-    const enteredAuto = event?.type === 'permission/preset' && event.data?.preset === AUTO_PRESET
-    const overrideSet = event?.type === 'approval/policy' && event.data?.policy === 'never'
     // Observation only: a permission-plane move leaves one durable line with
     // pointers to the latest rejections, so a switch made right after a block
     // can be read together with what was blocked. It never feeds a verdict, a
@@ -4419,7 +4501,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       const observed = observePermissionChange(
         id === undefined ? undefined : permissionBaselines.get(id),
         change,
-        { pluginInitiated: id !== undefined && pluginFlipSessions.has(id) },
+        { pluginInitiated: id !== undefined && pluginInitiatedSessions.has(id) },
       )
       if (id !== undefined) permissionBaselines.set(id, observed.baseline)
       if (observed.record) {
@@ -4436,18 +4518,48 @@ export function apply(ctx: Context, rawConfig: Config): void {
         )
       }
     }
-    if (!enteredAuto && !overrideSet) return
-    const agent = agents?.get?.(session?.id)
-    if (agent !== undefined) ensureAsk(agent)
+    // Own-spec enforcement, deferred one tick: the host is publishing this
+    // `approval/policy` event and a same-tick append would hit the session
+    // re-entrancy guard. The callback re-reads the raw state, so a session that
+    // moved preset meanwhile is skipped instead of rewritten.
+    if (event?.type === 'approval/policy' && event.data?.policy === 'never') {
+      const timer = setTimeout(() => {
+        specRestoreTimers.delete(timer)
+        try {
+          enforceOwnSpec(session, migrationDeps)
+        } catch (error) {
+          console.warn('[dsh-auto-approval-llm] deferred spec enforcement failed:', error)
+        }
+      }, 0)
+      specRestoreTimers.add(timer)
+    }
   })
 
-  // Sweep already-live agents on startup so existing auto-preset sessions that
-  // were left with a `never` override also get switched to `ask`, and fold
-  // their current plane values in as baselines first: a session restored from
-  // disk never re-emits its history.
+  // Baseline sweep for sessions that were already live when the plugin loaded.
   if (agents && typeof agents.list === 'function') {
     for (const agent of agents.list()) rememberPermissionBaseline(agent?.session)
-    for (const agent of agents.list()) ensureAsk(agent)
+  }
+
+  // Startup scan of live sessions: migrate the legacy signature, restore the
+  // own spec, and leave one auditable count line. `sessions.list()` only holds
+  // live sessions, so no non-live append can masquerade as a success.
+  const sessionsService = anyCtx.get('sessions')
+  if (sessionsService && typeof sessionsService.list === 'function') {
+    const counts: MigrationScanCounts = { candidates: 0, foreign: 0, never: 0, unknown: 0 }
+    for (const session of sessionsService.list()) {
+      const classification = classifyForMigration(rawStateOf(permissionPresets, session), approval)
+      if (classification === 'candidate') counts.candidates += 1
+      else if (classification === 'never') counts.never += 1
+      else if (classification === 'unknown') counts.unknown += 1
+      else counts.foreign += 1
+      runLifecycleMigration(session)
+      rememberPermissionBaseline(session)
+    }
+    try {
+      appendAuditLine(scanAuditLine(counts))
+    } catch (error) {
+      console.warn('[dsh-auto-approval-llm] preset migration scan audit failed:', error)
+    }
   }
 
   // ── approval/request answerer (prepend => terminal for handled asks) ─────
@@ -4493,7 +4605,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
     const key = session?.id
     if (key === undefined) return
     permissionBaselines.delete(key)
-    pluginFlipSessions.delete(key)
+    pluginInitiatedSessions.delete(key)
     // Drop the breaker counters under the same per-key lock as the in-flight
     // approval writes, so a write that is still queued behind us cannot
     // resurrect a stale counter after disposal (reset race). The shared Promise
@@ -4939,8 +5051,8 @@ export function apply(ctx: Context, rawConfig: Config): void {
     // Auto (mirrors tools/pre-execute) instead of falling through to the
     // official panel without review or breaker.
     const authority = authorityFor({ agent: req.agent, signal: req.signal })
-    const preset = currentPreset(permissionPresets, authority?.session ?? req.agent.session)
-    if (preset !== AUTO_PRESET) return next()
+    const rawPreset = rawPresetOf(permissionPresets, authority?.session ?? req.agent.session)
+    if (rawPreset === undefined || !gateNames.includes(rawPreset)) return next()
     const sessionKey = authorityKeyFor({ agent: req.agent })
     requestAtByKey.set(sessionKey, Date.now())
     debugLog({ ev: 'request', callId: req.callId ?? null, toolName: req.toolName, sessionKey })
@@ -5692,7 +5804,8 @@ export function apply(ctx: Context, rawConfig: Config): void {
         const key = authorityKeyFor({ agent })
         let mode: string | null = null
         try {
-          mode = currentPreset(permissionPresets, authority?.session ?? agent?.session) ?? null
+          const raw = rawPresetOf(permissionPresets, authority?.session ?? agent?.session)
+          mode = raw !== undefined && gateNames.includes(raw) ? GATED_PRESET : (raw ?? null)
         } catch {
           mode = null
         }

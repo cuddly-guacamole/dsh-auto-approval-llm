@@ -8,11 +8,18 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { SHELL_METACHARACTERS, assemblyVerdict, cleanup, docsBuildVerdict, installSignalCleanup, shellArgument } from '../scripts/gate.mjs'
+import { SHELL_METACHARACTERS, assemblyVerdict, cleanup, composedPresetBlocks, docsBuildVerdict, installSignalCleanup, shellArgument } from '../scripts/gate.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 
-const ENTRY = "- id: auto-approval-llm\n  name: '@quill507/dsh-auto-approval-llm'\n"
+const ENTRY = [
+  "- id: auto-approval-llm",
+  "  name: '@quill507/dsh-auto-approval-llm'",
+  '    presets:',
+  '      auto-approval:',
+  '        sandbox: danger-full-access',
+  '        approval: ask',
+].join('\n') + '\n'
 
 test('a shell metacharacter is refused instead of quoted', () => {
   // Every step runs through a shell, so a metacharacter in an argument would be
@@ -138,4 +145,35 @@ test('the gate keeps its verdict logic outside main so it stays reachable', () =
   const source = readFileSync(join(root, 'scripts/gate.mjs'), 'utf8')
   assert.match(source, /export function assemblyVerdict/)
   assert.match(source, /export function shellArgument/)
+})
+
+test('composedPresetBlocks reads the preset keys of each presets: block', () => {
+  const dump = [
+    '  config:',
+    '    presets:',
+    '      read-only:',
+    '        sandbox: read-only',
+    '      auto-approval:',
+    '        approval: ask',
+    '    other:',
+    '      auto:',
+  ].join('\n')
+  assert.deepEqual(composedPresetBlocks(dump), [['read-only', 'auto-approval']])
+  assert.deepEqual(composedPresetBlocks(''), [])
+})
+
+test('the composed permission table must carry auto-approval and must not define auto', () => {
+  assert.equal(assemblyVerdict({ cliPresent: true, status: 0, error: undefined, stdout: ENTRY }).kind, 'ok')
+  const withAuto = ENTRY.replace('      auto-approval:', '      auto-approval:\n      auto:')
+  const standalone = assemblyVerdict({ cliPresent: true, status: 0, error: undefined, stdout: withAuto })
+  assert.equal(standalone.kind, 'fail')
+  assert.match(standalone.reason, /standalone auto preset/)
+  const missing = assemblyVerdict({
+    cliPresent: true,
+    status: 0,
+    error: undefined,
+    stdout: "- id: auto-approval-llm\n  name: '@quill507/dsh-auto-approval-llm'\n",
+  })
+  assert.equal(missing.kind, 'fail')
+  assert.match(missing.reason, /does not define the auto-approval preset/)
 })

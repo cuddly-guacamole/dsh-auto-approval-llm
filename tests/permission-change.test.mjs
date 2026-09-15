@@ -13,7 +13,7 @@
  * contracts are mostly about: the creation pin (all three planes are appended
  * once on a fresh session, including `approval/policy: never` whenever the
  * default preset is full access) and this plugin's own `never -> ask`
- * counter-move. Both are absorbed by the per-plane baseline.
+ * spec-restore appends. Both are absorbed by the per-plane baseline.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -178,21 +178,20 @@ test('host wiring: the record is gated on the baseline, audited, and carries its
       `${label}: the baseline comes from the host service`,
     )
     assert.ok(source.includes("'session/created'"), `${label}: a new session refreshes its baseline`)
-    // The plugin's own counter-move is re-checked and marked before setPolicy,
-    // and cleared after, so a no-op can never be recorded (setPolicy itself
-    // early-returns when the policy is unchanged).
-    const flipAt = source.lastIndexOf("approval.setPolicy(flip, 'ask')")
-    assert.ok(flipAt > 0, `${label}: the ensureAsk flip is wired`)
-    const after = source.slice(flipAt, flipAt + 1800)
-    assert.ok(after.includes('pluginFlipSessions.delete('), `${label}: the marker is cleared after setPolicy`)
-    assert.ok(after.includes("actor: 'plugin'"), `${label}: the counter-move records itself`)
-    assert.ok(after.includes('recentRejectedIds'), `${label}: the counter-move carries the same shape`)
-    const addAt = source.lastIndexOf('pluginFlipSessions.add(', flipAt)
-    assert.ok(addAt > 0 && flipAt - addAt < 700, `${label}: the flip is marked before setPolicy`)
-    assert.ok(
-      source.slice(Math.max(0, addAt - 400), addAt).includes('overrideOf'),
-      `${label}: the policy re-check immediately precedes the marker`,
-    )
+    // The plugin's own appends are marked while in flight, so the observed
+    // copy is never attributed to the user; the marker is released after the
+    // append. The identity migration and the own-spec restore both use it.
+    const markerAt = source.lastIndexOf('pluginInitiatedSessions.add(')
+    assert.ok(markerAt > 0, `${label}: plugin-initiated appends are marked`)
+    assert.ok(source.slice(markerAt, markerAt + 400).includes('pluginInitiatedSessions.delete('), `${label}: the marker is released`)
+    assert.ok(source.includes('markPluginInitiated'), `${label}: the marker owns the migration/enforcement appends`)
+    assert.ok(source.includes('enforceOwnSpec('), `${label}: own-spec restore is wired`)
+    assert.ok(source.includes('runPresetMigration('), `${label}: legacy migration is wired`)
+    // The deferred enforcement trigger re-reads the raw state inside the timer,
+    // so a preset that moved meanwhile is skipped instead of rewritten.
+    const deferAt = source.lastIndexOf("event.data?.policy === 'never'")
+    assert.ok(deferAt > 0, `${label}: the never override trigger is wired`)
+    assert.ok(source.slice(deferAt, deferAt + 600).includes('setTimeout('), `${label}: the trigger is deferred past the append reentrancy guard`)
     assert.ok(!source.includes('liveSessions'), `${label}: the superseded activity gate is gone`)
   }
 })

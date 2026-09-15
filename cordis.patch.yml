@@ -1,8 +1,12 @@
 # @quill507/dsh-auto-approval-llm bundle layer.
 #
-# Preset contract: the "auto" preset MUST keep approval: ask. The plugin's
-# autoSwitchPolicyToAsk guard (below) flips a never-policy auto session back
-# to ask at runtime; never relax this preset to approval: never.
+# Preset contract: the "auto-approval" preset MUST keep approval: ask. The
+# plugin enforces this spec at runtime (a never override on the raw
+# auto-approval identity is restored to ask); the host's own risk confirm
+# covers only its built-in danger-full-access tier. Never relax this preset to
+# approval: never, and never add a separate "auto" preset here: hosts >= 0.1.6
+# reserve that name for the upstream auto-review integration and refuse to
+# compose a table that defines it.
 - id: permission
   config:
     presets:
@@ -12,12 +16,10 @@
       workspace-write:
         sandbox: workspace-write
         approval: ask
-      auto:
+      auto-approval:
         sandbox: danger-full-access
-        # Keep in sync with autoSwitchPolicyToAsk: this static "ask" is the
-        # first line of defense, the runtime guard is the second.
         approval: ask
-        name: Auto
+        name: Auto approval
         description: High-privilege execution with automatic safety classification and approval for risky actions.
       danger-full-access:
         sandbox: danger-full-access
@@ -26,10 +28,8 @@
 # Premise: the host base patch (dsh-base cordis.patch.yml) pins the approval
 # service policy to 'never' when DSH_PERMISSION_MODE=danger-full-access, and
 # the preset derive falls back to that base policy — cold sessions then derive
-# as danger-full-access, never as auto, so this plugin stays inactive (the
-# runtime autoSwitchPolicyToAsk guard cannot help: it only flips sessions that
-# already derived as auto). Keep the base policy at its default 'ask' wherever
-# auto approval is expected.
+# as danger-full-access, never as auto-approval, so this plugin stays inactive.
+# Keep the base policy at its default 'ask' wherever auto approval is expected.
 #
 # Config values are pinned against the z.object defaults in src/index.ts.
 # The plugin's loader ENTRY is created by this insert row — the profile
@@ -45,9 +45,6 @@
       name: '@quill507/dsh-auto-approval-llm'
       config:
         enabled: true
-        # OVERRIDE of code default (false): ship the never->ask policy guard
-        # ON so a bundle install cannot run the auto preset unapproved.
-        autoSwitchPolicyToAsk: true
         timeoutAction: reject
         allowlist: []
         denyList: []

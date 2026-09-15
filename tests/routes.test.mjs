@@ -252,7 +252,7 @@ function sessionModeHarness() {
     get: (name) => {
       if (name === 'webServer') return { register: (desc) => registrations.push(desc) }
       if (name === 'agents') return { get: (sid) => (sid === 'sess-1' ? agent : undefined) }
-      if (name === 'permissionPresets') return { current: () => 'auto' }
+      if (name === 'permissionPresets') return { permissionState: () => ({ preset: 'auto', sandbox: 'danger-full-access', approval: 'ask' }) }
       return undefined
     },
     effect: (fn) => fn(),
@@ -269,7 +269,7 @@ test('session-mode GET: session id arrives in a request header; the query form i
   })
   assert.equal(ok.status, 200)
   assert.equal(ok.body.ok, true)
-  assert.equal(ok.body.value.mode, 'auto')
+  assert.equal(ok.body.value.mode, 'auto-approval', 'legacy raw auto is normalized to the machine name')
   // Legacy query transport must not be honored: the header discipline is the
   // same as the review-status call-id (2026-09-03 audit).
   const legacy = await callJson(handler, {

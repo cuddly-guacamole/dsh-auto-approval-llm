@@ -300,6 +300,9 @@ export const HOST_ONLY_KEYS = [
   'breakerAntiHijackMs',
   'reviewMaxRetries',
   'loopDetectionThreshold',
+  // Retired guard key: kept in the schema as a host-owned no-op so a card save
+  // cannot delete it; resolveConfig warns and normalizes it to false.
+  'autoSwitchPolicyToAsk',
 ]
 
 /**

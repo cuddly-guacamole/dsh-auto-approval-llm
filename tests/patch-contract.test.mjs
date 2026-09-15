@@ -2,13 +2,15 @@
  * dsh-auto-approval-llm · cordis.patch.yml loader/preset contract.
  *
  * The loader ENTRY exists only because of the `- insert:` row (the profile
- * bundles array supplies patch layers but does not create entries — 2026-08-30
- * regression: losing the insert 404'd every plugin route), and the "auto"
- * preset MUST keep approval: ask (first line of the privilege defense; the
- * runtime guard is the second). The host applyEntryPatches only warns on a
- * missing row, so nothing else would catch a regression. Anchors read the
- * shipped yml (comment lines stripped — the header prose mentions the pinned
- * values); no YAML dependency, only indentation block scanning.
+ * bundles array supplies patch layers but does not create entries — a missing
+ * insert 404s every plugin route), and the "auto-approval" preset MUST keep
+ * approval: ask (the plugin restores that spec at runtime). The shipped table
+ * must never define a standalone "auto" preset: hosts >= 0.1.6 reserve the name
+ * for the upstream auto-review integration and refuse to compose it. The host
+ * applyEntryPatches only warns on a missing row, so nothing else would catch a
+ * regression. Anchors read the shipped yml (comment lines stripped — the header
+ * prose mentions the pinned values); no YAML dependency, only indentation block
+ * scanning.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -37,15 +39,22 @@ test('patch contract: the loader entry insert row exists with the plugin id', ()
   assert.match(block, /name: '@quill507\/dsh-auto-approval-llm'/, 'the entry must name the plugin package')
 })
 
-test('patch contract: the auto preset keeps approval ask on a danger-full-access sandbox', () => {
-  const auto = find(/^\s+auto:\s*$/)
-  assert.equal(auto.length, 1, 'exactly one auto preset block')
-  const block = blockOf(auto[0].index).join('\n')
-  assert.match(block, /sandbox: danger-full-access/, 'auto sandbox is danger-full-access')
-  assert.match(block, /approval: ask/, 'auto approval MUST stay ask (never relax to never/auto)')
+test('patch contract: the auto-approval preset keeps approval ask on a danger-full-access sandbox', () => {
+  const gated = find(/^\s+auto-approval:\s*$/)
+  assert.equal(gated.length, 1, 'exactly one auto-approval preset block')
+  const block = blockOf(gated[0].index).join('\n')
+  assert.match(block, /sandbox: danger-full-access/, 'auto-approval sandbox is danger-full-access')
+  assert.match(block, /approval: ask/, 'auto-approval approval MUST stay ask (never relax to never)')
+  assert.match(block, /name: Auto approval/, 'the display name is the rename contract')
+  assert.match(block, /description: High-privilege execution/, 'the description is preserved verbatim')
 })
 
-test('patch contract: danger-full-access preset keeps approval never (auto is the guarded tier)', () => {
+test('patch contract: no standalone auto preset is shipped (reserved name)', () => {
+  const auto = find(/^\s+auto:\s*$/)
+  assert.equal(auto.length, 0, 'a standalone auto preset would break >=0.1.6 hosts at composition')
+})
+
+test('patch contract: danger-full-access preset keeps approval never (auto-approval is the guarded tier)', () => {
   const dfa = find(/^\s+danger-full-access:\s*$/)
   assert.equal(dfa.length, 1, 'exactly one danger-full-access preset block')
   assert.match(blockOf(dfa[0].index).join('\n'), /approval: never/)
@@ -54,7 +63,7 @@ test('patch contract: danger-full-access preset keeps approval never (auto is th
 test('patch contract: shipped config pins match the intended defaults', () => {
   const insert = blockOf(find(/^- insert:/)[0].index).join('\n')
   assert.match(insert, /enabled: true/)
-  assert.match(insert, /autoSwitchPolicyToAsk: true/, 'the never->ask guard ships ON')
+  assert.doesNotMatch(insert, /autoSwitchPolicyToAsk/, 'the retired guard key is not pinned')
   assert.match(insert, /timeoutAction: reject/)
   assert.match(insert, /allowlist: \[\]/)
   assert.match(insert, /denyList: \[\]/)
@@ -64,9 +73,10 @@ test('patch contract: shipped config pins match the intended defaults', () => {
   assert.match(insert, /notifyUser: true/)
 })
 
-test('patch contract: the four presets are exactly the shipped set', () => {
+test('patch contract: the four permission presets are exactly the shipped set', () => {
   const permission = blockOf(find(/^- id: permission/)[0].index).join('\n')
-  for (const preset of ['read-only', 'workspace-write', 'auto', 'danger-full-access']) {
-    assert.match(permission, new RegExp(`^\\s+${preset}:\\s*$`, 'm'), `preset ${preset} present`)
+  for (const preset of ['read-only', 'workspace-write', 'auto-approval', 'danger-full-access']) {
+    assert.match(permission, new RegExp(`^[ ]+${preset}:[ ]*$`, 'm'), `preset ${preset} present`)
   }
+  assert.doesNotMatch(permission, /^\s+auto:\s*$/m, 'auto is not a shipped preset row')
 })

@@ -1,4 +1,20 @@
 /**
+ * Machine name of this plugin's own permission preset. The shipped patch
+ * declares it with sandbox danger-full-access and approval ask; the host
+ * reserves the plain "auto" name for its auto-review integration, so the
+ * plugin's own tier needs a distinct identity.
+ */
+export const GATED_PRESET = 'auto-approval'
+
+/**
+ * Machine name of the legacy "auto" preset. On hosts >= 0.1.6 the name is
+ * reserved by the upstream auto-review integration; this plugin accepts it as
+ * a gate alias only when the capability probe reports "legacy", and migrates
+ * it by a raw permission/preset append (never permissionPresets.set()).
+ */
+export const LEGACY_AUTO_PRESET = 'auto'
+
+/**
  * Hard cap on a free-text reason accepted from a model, in characters. Not a
  * user setting: it bounds what a reviewer endpoint can push into
  * history/audit/UI regardless of configuration. `parseClassifierDecision`

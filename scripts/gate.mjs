@@ -37,6 +37,58 @@ export function shellArgument(argument) {
 }
 
 /**
+ * Preset keys of every `presets:` block in a composed config dump, one array
+ * per block. The dump renders loader entries as YAML (the include plugin's own
+ * patch algorithm), so this stays a small indent scan instead of pulling a YAML
+ * parser into the release gate. A block ends at the next non-blank line whose
+ * indent is not deeper than the `presets:` key itself.
+ *
+ * @returns {string[][]}
+ */
+export function composedPresetBlocks(output) {
+  const blocks = []
+  const lines = String(output ?? '').split(/\r?\n/)
+  let presetsIndent = -1
+  let keyIndent = -1
+  let current = null
+  const close = () => {
+    if (current !== null) blocks.push(current)
+    current = null
+    presetsIndent = -1
+    keyIndent = -1
+  }
+  for (const line of lines) {
+    if (line.trim() === '' || line.trimStart().startsWith('#')) continue
+    const indent = line.length - line.trimStart().length
+    if (presetsIndent < 0) {
+      const open = /^(\s*)presets:\s*$/.exec(line)
+      if (open) {
+        presetsIndent = open[1].length
+        keyIndent = -1
+        current = []
+      }
+      continue
+    }
+    if (indent <= presetsIndent) {
+      close()
+      const reopen = /^(\s*)presets:\s*$/.exec(line)
+      if (reopen) {
+        presetsIndent = reopen[1].length
+        keyIndent = -1
+        current = []
+      }
+      continue
+    }
+    if (keyIndent < 0) keyIndent = indent
+    if (indent !== keyIndent) continue
+    const key = /^([A-Za-z0-9_-]+):\s*$/.exec(line.slice(indent))
+    if (key) current.push(key[1])
+  }
+  close()
+  return blocks
+}
+
+/**
  * Decide what the assembly step should do with the CLI probe.
  *
  * The difficult case is telling "this machine has no dsh" apart from "dsh is
@@ -58,6 +110,17 @@ export function assemblyVerdict({ cliPresent, status, error, stdout }) {
   const output = stdout ?? ''
   for (const expected of ['- id: auto-approval-llm', "name: '@quill507/dsh-auto-approval-llm'"]) {
     if (!output.includes(expected)) return { kind: 'fail', reason: `the loader tree does not contain ${expected}` }
+  }
+  // The composed permission table must carry the plugin's own preset and must
+  // not reintroduce a standalone `auto` row: hosts >= 0.1.6 reserve that name
+  // and refuse to compose a table that defines it. The preset row is a key
+  // inside a `presets:` block, never the loader id (`auto-approval-llm`).
+  const permissionBlock = composedPresetBlocks(output).find(block => block.includes('auto-approval'))
+  if (permissionBlock === undefined) {
+    return { kind: 'fail', reason: 'the composed permission table does not define the auto-approval preset' }
+  }
+  if (permissionBlock.includes('auto')) {
+    return { kind: 'fail', reason: 'the composed permission table still defines a standalone auto preset' }
   }
   return { kind: 'ok' }
 }
@@ -192,7 +255,7 @@ function smokeClientBundle(pkg) {
 
 function checkPatch(pkg) {
   const patch = readFileSync(join(pkg, 'cordis.patch.yml'), 'utf8')
-  const meaningful = patch.split('\n').map(line => line.replace(/#.*$/, '')).filter(line => line.trim() !== '')
+  const meaningful = patch.split(/\r?\n/).map(line => line.replace(/#.*$/, '')).filter(line => line.trim() !== '')
   if (!meaningful[0]?.trimStart().startsWith('- ')) throw new Error('cordis.patch.yml does not start with a top-level array')
   if (!/^- insert:/m.test(patch)) throw new Error('cordis.patch.yml declares no entry of its own')
   process.stdout.write('gate: cordis.patch.yml is a top-level array with an insert entry\n')
