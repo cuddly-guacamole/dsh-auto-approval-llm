@@ -1468,6 +1468,49 @@ export function perlInPlaceTargets(words) {
     return targets;
 }
 /**
+ * Write targets of a sort invocation: the output file (`-o`, `-oFILE`,
+ * `--output[=]`) and the temporary directory (`-T`, `-TDIR`,
+ * `--t[emporary-directory][=]`). The short `-t` is NOT one of them — it is the
+ * field separator, and booking it would book a delimiter as a path.
+ */
+export function sortWriteTargets(words, kinds = { output: true, temporary: true }) {
+    const targets = [];
+    const pushValue = (source, value) => {
+        if (value !== undefined && value !== '')
+            targets.push(source === undefined ? value : derivedOperand(source, value));
+    };
+    for (let index = 1; index < words.length; index += 1) {
+        const word = words[index];
+        const text = wordText(word);
+        if (text === '-o' || text === '--output') {
+            if (kinds.output) pushValue(undefined, words[index + 1]);
+            index += 1;
+            continue;
+        }
+        if (text.startsWith('--output=') || /^--o=/.test(text)) {
+            if (kinds.output) pushValue(word, text.slice(text.indexOf('=') + 1));
+            continue;
+        }
+        if (/^-o[^-].+/.test(text)) {
+            if (kinds.output) pushValue(word, text.slice(2));
+            continue;
+        }
+        if (text === '-T' || text === '--t' || text === '--temporary-directory') {
+            if (kinds.temporary) pushValue(undefined, words[index + 1]);
+            index += 1;
+            continue;
+        }
+        if (/^--t[a-z-]*=/.test(text)) {
+            if (kinds.temporary) pushValue(word, text.slice(text.indexOf('=') + 1));
+            continue;
+        }
+        if (/^-T[^-].+/.test(text)) {
+            if (kinds.temporary) pushValue(word, text.slice(2));
+        }
+    }
+    return targets;
+}
+/**
  * Whether one rsync operand names a REMOTE endpoint (`[user@]host:path` or
  * `rsync://…`). A Windows drive spelling (`C:/ws`) also contains a colon, so
  * the drive form is excluded first.
@@ -1639,6 +1682,16 @@ function segmentHardDenyReason(segment, shell, roots) {
     }
     else if (shell === 'bash' && ['mkdir', 'touch'].includes(name)) {
         writeOperands = unwrapped.words.slice(1).filter(word => !word.text.startsWith('-'));
+    }
+    else if (shell === 'bash' && name === 'sort' && sortWriteTargets(unwrapped.words, { output: false, temporary: true }).length > 0) {
+        // sort's TEMPORARY directory has no other owner on this plane, so it is
+        // judged here (state-tree, credential and destructive-target fuses). The
+        // output file keeps its own output-flag fence — routing it through this
+        // branch would replace that fence's precise reason with a generic one.
+        // sort is also NOT part of the copy/move write family on the ALLOW side:
+        // a routine temporary directory must keep leaving the static allow, which
+        // is the behavior the read-only predicate's sort branch preserves.
+        writeOperands = sortWriteTargets(unwrapped.words, { output: false, temporary: true });
     }
     else if (shell === 'bash' && writesThroughOperands(name, unwrapped.words)) {
         // Destination extraction mirrors how each head really writes: install

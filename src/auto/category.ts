@@ -22,7 +22,7 @@
 
 import { basename } from 'node:path'
 import { isProtectedProjectPath, isProtectedReadMetadata, isWithin, normalizePath } from './paths.js'
-import { decomposeCommandLine, envSplitStringWords, isNullSink, perlEditsInPlace, perlInPlaceTargets, rsyncWriteTargets, tarWriteTargets, tarWritesToDisk, unzipWriteTargets, wrapperValueFlag } from './shell.js'
+import { decomposeCommandLine, envSplitStringWords, isNullSink, perlEditsInPlace, perlInPlaceTargets, rsyncWriteTargets, sortWriteTargets, tarWriteTargets, tarWritesToDisk, unzipWriteTargets, wrapperValueFlag } from './shell.js'
 
 /** The 12 configurable category keys. */
 export type CategoryKey =
@@ -633,6 +633,15 @@ function classifySegmentBase(segment: Segment, shell: string, roots: CategoryRoo
     }
     if (GIT_LOCAL.has(sub)) return 'gitLocal'
     return 'unknown'
+  }
+  // A sort output file or temporary directory is a write target: the read-only
+  // list would label it readOnly, which left `sort -T <state tree>` on the
+  // statically allowed read side (the static engine already steps out of that
+  // allow, but the destination itself reached no fuse and the category stayed
+  // readOnly). The short `-t` (field separator) is not a path.
+  if (shell === 'bash' && name === 'sort') {
+    const sortTargets = sortWriteTargets(unwrapped.words)
+    if (sortTargets.length > 0) return copyMoveStyleCategory(sortTargets, roots)
   }
   const readOnly = (shell === 'bash' ? BASH_READ_ONLY : PWSH_READ_ONLY).has(name)
   if (readOnly) {
