@@ -119,7 +119,7 @@ test('structural: the base is recomputed per segment, not carried in a sticky va
   const fn = source.slice(source.indexOf('function hardDenyShellReason'), source.indexOf('function assessSegment'))
   assert.ok(fn.length > 0, 'hardDenyShellReason is present in the compiled module')
   assert.ok(
-    fn.includes('const segmentRoots = changerBase !== undefined ?'),
+    fn.includes('...(changerBase !== undefined ? { ...roots, workspace: changerBase } : roots)'),
     'the per-segment base is computed with a const ternary inside the loop',
   )
   assert.ok(

@@ -152,5 +152,6 @@ test('the view feeds the whole-line fuses only, never the decomposition', () => 
   // The target-level fuses run per segment and own the destructive checks, so a
   // blanked operand may never reach them.
   assert.ok(built.includes('decomposeCommandLine(compact, shell)'), 'decomposition still reads the raw text')
-  assert.ok(built.includes('opaqueHardDenyReason(compact, shell, roots)'), 'the opaque recovery still reads the raw text')
+  assert.ok(built.includes('opaqueHardDenyReason(compact, shell, '), 'the opaque recovery still reads the raw text')
+  assert.ok(!built.includes('opaqueHardDenyReason(fuseView'), 'the opaque recovery must not read the payload view')
 })

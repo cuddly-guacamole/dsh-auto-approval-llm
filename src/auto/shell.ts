@@ -3,7 +3,7 @@
 // MIT License, Copyright (c) 2026 程序员阿江-Relakkes (https://github.com/NanmiCoder/dsh-auto-mode).
 // Retained per the MIT License: this is a substantial portion of the original.
 import { basename } from 'node:path';
-import { globRootOf, hardDestructiveTargetReason, isArtifactArea, isCriticalPath, isProtectedProjectPath, isProtectedReadMetadata, isWithin, normalizePath, runtimeStateBasename, runtimeStateTargetInZone, runtimeStateTargetReason, } from './paths.js';
+import { globRootOf, hardDestructiveTargetReason, isArtifactArea, isCriticalPath, isPluginDevZoneTarget, isProtectedProjectPath, isProtectedReadMetadata, isWithin, normalizePath, runtimeStateBasename, runtimeStateTargetInZone, runtimeStateTargetReason, } from './paths.js';
 import { isEffectiveRoutine, sensitiveBasenameAt } from './category.js';
 function ambiguous(reason) {
     return { decision: 'ask', reason, classifierEligible: true };
@@ -721,7 +721,12 @@ function findNestedWriteDenyReason(words, roots) {
             // an LLM-answerable ask. Interpreter bodies keep the source scan
             // above; `{}` placeholders are not explicit paths and stay with
             // the caller's routine/semantic judgment.
-            const reason = segmentHardDenyReason({ words: nested, writeTargets: [], readTargets: [] }, 'bash', roots);
+            // A NESTED body never inherits the development-zone opening: it can
+            // shift its own base in a spelling the outer scan does not recognize
+            // (env --ch=…, git -C, …), so the opening stays with the single
+            // literally readable command.
+            const nestedRoots = { ...roots, zoneFuseTrusted: false };
+            const reason = segmentHardDenyReason({ words: nested, writeTargets: [], readTargets: [] }, 'bash', nestedRoots);
             if (reason !== undefined)
                 return `find -exec nested command: ${reason}`;
         }
@@ -1082,6 +1087,137 @@ const FIND_WRITE_ACTION = /^-(?:fprint|fprint0|fprintf|fls)$/;
  * (`lib/index.js`) fell out of both the fuse and the static-allow judgement.
  */
 const COPY_DEST_VALUE_FLAGS = new Set(['-t', '--target-directory', '-S', '--suffix', '-m', '--mode', '-o', '--owner', '-g', '--group', '--strip-program']);
+/**
+ * Long options that require a value. GNU getopt accepts unambiguous
+ * abbreviations, so `--suf VALUE`, `--sparse WHEN` and `--no-preserve LIST`
+ * consume the next word; reading only the full spelling left the value in the
+ * positional list and a real destination unjudged.
+ */
+const COPY_VALUE_LONG_OPTIONS = {
+    cp: ['--suffix', '--target-directory', '--sparse', '--no-preserve'],
+    mv: ['--suffix', '--target-directory'],
+    ln: ['--suffix', '--target-directory'],
+    install: ['--suffix', '--target-directory', '--strip-program', '--group', '--mode', '--owner'],
+};
+/** Long options that are exact no-value spellings even though another
+ * value-taking option starts with them (`install --strip` vs
+ * `install --strip-program`). Exact match wins, as GNU getopt does. */
+const COPY_NO_VALUE_LONG_OPTIONS = { install: new Set(['--strip']) };
+function longOptionTakesValue(text, name) {
+    const optionName = text.includes('=') ? text.slice(0, text.indexOf('=')) : text;
+    if ((COPY_NO_VALUE_LONG_OPTIONS[name] ?? new Set()).has(optionName))
+        return false;
+    const options = COPY_VALUE_LONG_OPTIONS[name] ?? [];
+    return options.some(option => optionName.length > 2 && option.startsWith(optionName));
+}
+/**
+ * Whether a short cluster takes its value from the NEXT word. GNU getopt
+ * scans left to right: the first value-taking option consumes the rest of the
+ * cluster as its fused value, so only a value option in the LAST position
+ * reaches for the next word (`-vS .bak` but `-S.txt`).
+ */
+function shortClusterSkipsNext(text, name) {
+    if (!text.startsWith('-') || text.startsWith('--'))
+        return false;
+    const valueOptions = shortValueOptions(name);
+    const body = text.slice(1);
+    for (let index = 0; index < body.length; index += 1) {
+        if (valueOptions.has(body[index]))
+            return index === body.length - 1;
+    }
+    return false;
+}
+function skipsNextValue(text, name) {
+    if (COPY_DEST_VALUE_FLAGS.has(text))
+        return true;
+    if (!text.includes('=') && longOptionTakesValue(text, name))
+        return true;
+    return shortClusterSkipsNext(text, name);
+}
+/**
+ * Target-directory spellings for the copy/move family. GNU getopt accepts any
+ * unambiguous abbreviation of a long option, so `--target-dir`, `--target-d`
+ * and `--t` all mean `--target-directory`. Reading only the full spelling left
+ * the destination inside the flag, so the SOURCE was judged as the target — and
+ * a source inside the plugin zone then rode the development-zone opening.
+ */
+function isTargetDirectoryFlag(text) {
+    if (text === '-t')
+        return true;
+    if (!text.startsWith('--'))
+        return false;
+    const name = text.includes('=') ? text.slice(0, text.indexOf('=')) : text;
+    return name.length > 2 && '--target-directory'.startsWith(name);
+}
+/** Short options of the copy/move family that consume a value. */
+const COPY_SHORT_VALUE_OPTIONS = new Set(['S', 't']);
+const INSTALL_SHORT_VALUE_OPTIONS = new Set(['g', 'm', 'o', 'S', 't']);
+function shortValueOptions(name) {
+    return name === 'install' ? INSTALL_SHORT_VALUE_OPTIONS : COPY_SHORT_VALUE_OPTIONS;
+}
+/**
+ * Whether a short-option cluster carries a boolean flag. A value-taking
+ * option before it ends the cluster (`-tlib` has no `l` flag), so the value
+ * text can never be read as a flag.
+ */
+function shortClusterHasFlag(text, flag, name) {
+    if (!text.startsWith('-') || text.startsWith('--'))
+        return false;
+    const valueOptions = shortValueOptions(name);
+    const body = text.slice(1);
+    for (let index = 0; index < body.length; index += 1) {
+        if (body[index] === flag)
+            return true;
+        if (valueOptions.has(body[index]))
+            return false;
+    }
+    return false;
+}
+/**
+ * How a token names the copy/move target directory. `{ next: true }` puts the
+ * value in the next word, `{ fused: value }` rides the token. Covers the
+ * long-option abbreviations and the short clusters GNU getopt fuses (`-rt
+ * lib`, `-rtlib`, `install -Dt`), where a value-taking option before `t` ends
+ * the cluster.
+ */
+function targetDirectorySpelling(text, name) {
+    if (isTargetDirectoryFlag(text)) {
+        if (!text.includes('='))
+            return { next: true };
+        const value = text.slice(text.indexOf('=') + 1);
+        return value === '' ? null : { fused: value };
+    }
+    if (!text.startsWith('-') || text.startsWith('--'))
+        return null;
+    const valueOptions = shortValueOptions(name);
+    const body = text.slice(1);
+    for (let index = 0; index < body.length; index += 1) {
+        if (body[index] === 't') {
+            const fused = body.slice(index + 1);
+            return fused === '' ? { next: true } : { fused };
+        }
+        if (valueOptions.has(body[index]))
+            return null;
+    }
+    return null;
+}
+/**
+ * `cp -s` / `cp -l` make the SOURCE a link target, so a subsequent write
+ * through the created link reaches it; those sources are judged like `ln`
+ * targets instead of being dropped.
+ */
+function createsLinks(words, name) {
+    if (name !== 'cp')
+        return false;
+    for (const word of words.slice(1)) {
+        const text = word.text;
+        if (text === '--symbolic-link' || text === '--link')
+            return true;
+        if (shortClusterHasFlag(text, 's', name) || shortClusterHasFlag(text, 'l', name))
+            return true;
+    }
+    return false;
+}
 function findSearchRoots(words) {
     const roots = [];
     for (let index = 1; index < words.length; index += 1) {
@@ -1580,12 +1716,17 @@ function writeOperandCandidates(words, name) {
         return [];
     const positionals = [];
     for (let index = 1; index < words.length; index += 1) {
-        if (words[index].text.startsWith('-') || COPY_DEST_VALUE_FLAGS.has(words[index - 1]?.text ?? ''))
+        const previous = words[index - 1]?.text ?? '';
+        const previousSpec = targetDirectorySpelling(previous, name);
+        if (words[index].text.startsWith('-') || skipsNextValue(previous, name)
+            || (previousSpec !== null && previousSpec.next === true))
             continue;
         positionals.push(words[index]);
     }
     const candidates = [];
-    if (name === 'mv') {
+    if (name === 'mv' || name === 'ln' || createsLinks(words, name)) {
+        // `mv` sources are removals, and `ln` / `cp -s` / `cp -l` sources are
+        // link targets a later write can reach, so every positional is judged.
         candidates.push(...positionals);
     }
     else {
@@ -1594,54 +1735,58 @@ function writeOperandCandidates(words, name) {
         // destination from every operand fuse below.
         let targetDirectory = false;
         for (let index = 1; index < words.length; index += 1) {
-            const text = words[index].text;
-            if (text === '-t' || text === '--target-directory' || text.startsWith('--target-directory=') || /^-t[^-]/.test(text))
+            if (targetDirectorySpelling(words[index].text, name) !== null)
                 targetDirectory = true;
         }
         if (!targetDirectory && positionals.length > 0)
             candidates.push(positionals[positionals.length - 1]);
     }
     for (let index = 1; index < words.length; index += 1) {
-        const text = words[index].text;
-        if (text === '-t' || text === '--target-directory') {
+        const spec = targetDirectorySpelling(words[index].text, name);
+        if (spec === null)
+            continue;
+        if (spec.next === true) {
             const value = words[index + 1];
             if (value !== undefined)
                 candidates.push(value);
         }
-        else if (text.startsWith('--target-directory=')) {
-            const value = text.slice('--target-directory='.length);
-            if (value !== '')
-                // The fused spelling derives a new operand from one word; the
-                // derived operand must inherit that word's dynamic/glob flags
-                // (the lexer marks a `$VAR`/`*` spelling dynamic/glob on the
-                // word itself). Dropping them let a `$HOME` target dodge the
-                // dynamic-home hard-deny and a `*`/`?` target dodge the glob
-                // gate; `-t DEST` (separate word above) already preserves the
-                // flags, so this branch must not diverge from it.
-                candidates.push({ text: value, dynamic: words[index].dynamic, glob: words[index].glob, quoted: true });
-        }
-        else if (/^-t[^-]/.test(text)) {
-            // GNU getopt fuses a flag with its value: `-t./lib` IS
-            // `-t ./lib`. Only the separated and `--long=` spellings used to
-            // be read, so the destination never entered the operand list and
-            // every write-target fuse judged the SOURCE instead — a fused
-            // `-t` was a silent, statically allowed write to the plugin's own
-            // execution code. Same inherited flags as the `--long=` branch.
-            const value = text.slice(2);
-            candidates.push({ text: value, dynamic: words[index].dynamic, glob: words[index].glob, quoted: true });
+        else if (spec.fused !== undefined && spec.fused !== '') {
+            // The fused spelling derives a new operand from one word; the
+            // derived operand must inherit that word's dynamic/glob flags
+            // (the lexer marks a `$VAR`/`*` spelling dynamic/glob on the
+            // word itself), or a `$HOME` target dodges the dynamic-home
+            // hard-deny and a glob target dodges the glob gate.
+            candidates.push({ text: spec.fused, dynamic: words[index].dynamic, glob: words[index].glob, quoted: true });
         }
     }
     return candidates;
 }
-// Unconditional DSH_HOME write fuse for shell vectors. Structured tools
-// (edit/write/apply_patch/…) honor trustedDshSubpaths openings; shell write
-// targets are extracted by a shallow lexer that cannot verify shell
-// semantics (nested execution, here-docs, process substitution), so shell
-// writes to DSH_HOME stay hard-denied even inside an opening.
+// DSH_HOME write fuse for shell vectors. Structured tools (edit/write/
+// apply_patch/…) honor trustedDshSubpaths openings; shell write targets are
+// extracted by a shallow lexer that cannot verify shell semantics (nested
+// execution, here-docs, process substitution), so operator-configured
+// openings are deliberately NOT extended to shell vectors. The plugin's own
+// development zone is the one exception: it is a constant derived from this
+// module's install location rather than an operator opening, the structured
+// write tools already treat it as routine, and a session whose workspace IS
+// the package would otherwise get two opposite verdicts for the same target.
+// The zone's own clamps keep running around this fuse: runtimeStateWriteReason
+// denies the runtime-state basenames and pluginZoneSelfModifyReason denies
+// lib/**, node_modules/** and the manifests/build config.
+//
+// The exception needs a PROVEN base: the session workspace has to be the real
+// cwd of the write. Callers prove that only for a single, literally readable
+// command with no wrapper, nested interpreter or directory-shifting flag
+// (zoneOpeningTrusted); every other line keeps the strict deny, because a
+// relative name that lands in the zone under a guessed base could really land
+// in lib/**, node_modules/** or another DSH_HOME tree. That is expressed as
+// zoneFuseTrusted: false on the roots those callers pass.
 function shellWriteToDshHomeDenied(normalizedPath, roots) {
-    if (isWithin(roots.dshHome, normalizedPath))
-        return 'shell write to DSH_HOME is not permitted by auto mode — use the write or edit tool instead';
-    return undefined;
+    if (!isWithin(roots.dshHome, normalizedPath))
+        return undefined;
+    if (roots.zoneFuseTrusted !== false && isPluginDevZoneTarget(normalizedPath))
+        return undefined;
+    return 'shell write to DSH_HOME is not permitted by auto mode — use the write or edit tool instead';
 }
 function segmentHardDenyReason(segment, shell, roots) {
     for (const target of segment.writeTargets) {
@@ -1677,7 +1822,7 @@ function segmentHardDenyReason(segment, shell, roots) {
     // an unconditional hard deny, and the same normalization the allow path
     // uses must not weaken when the workspace IS the zone.
     let writeOperands = null;
-    if (shell === 'bash' && ['cp', 'mv'].includes(name)) {
+    if (shell === 'bash' && ['cp', 'mv', 'ln'].includes(name)) {
         writeOperands = writeOperandCandidates(unwrapped.words, name);
     }
     else if (shell === 'bash' && ['mkdir', 'touch'].includes(name)) {
@@ -1932,6 +2077,108 @@ function effectiveCwdAfter(segment, shell, roots) {
         return undefined;
     return resolved;
 }
+/**
+ * A token that makes the command (or its nested action) run in another
+ * directory: env -C / git -C / make -C / --chdir / --directory shift the whole
+ * command, while GNU find's -execdir / -okdir run the action in each matched
+ * file's directory. The write-target extraction reads a target against the
+ * segment base, so such a segment is not a proven base and the development-zone
+ * opening must not apply to it.
+ */
+function hasBaseShiftingFlag(words) {
+    return words.some(word => {
+        const text = word.text;
+        return text.startsWith('-C') || text.startsWith('--chdir') || text.startsWith('--directory')
+            || text === '-execdir' || text === '-okdir';
+    });
+}
+/**
+ * Commands whose write can reproduce a file identity (move, link, extract,
+ * install). An opening for them could place a symlink or hard link inside the
+ * zone whose target is lib/**, node_modules/** or another DSH_HOME tree, and a
+ * later content write through it would land outside the zone. The opening
+ * covers CONTENT writes only, so these heads keep the strict deny.
+ */
+const IDENTITY_WRITE_COMMANDS = new Set(['mv', 'ln', 'rsync', 'tar', 'unzip', 'install', 'cpio', 'pax', 'new-item', 'ni', 'copy-item', 'move-item']);
+/**
+ * `cp` preserves the file identity under these options (plain cp dereferences
+ * the source). GNU getopt accepts unambiguous long-option abbreviations and
+ * abbreviated `--preserve=` attribute names, so the match is prefix-based:
+ * `--arch`, `--no-deref`, `--recurs` and `--preserve=li` all mean the same as
+ * their full spellings.
+ */
+const CP_IDENTITY_LONG_OPTIONS = ['--archive', '--no-dereference', '--recursive', '--link', '--symbolic-link'];
+function cpLongOptionMatches(text, option) {
+    const name = text.includes('=') ? text.slice(0, text.indexOf('=')) : text;
+    return name.length > 2 && option.startsWith(name);
+}
+function preserveCoversLinks(value) {
+    return value.toLowerCase().split(',').some(part => {
+        const name = part.trim();
+        return name !== '' && ('links'.startsWith(name) || 'all'.startsWith(name));
+    });
+}
+function cpCopiesIdentity(words) {
+    for (const word of words.slice(1)) {
+        const text = word.text;
+        if (text.includes('=')) {
+            const name = text.slice(0, text.indexOf('='));
+            // GNU abbreviates the option name itself (`--pr=li` is
+            // `--preserve=links`); the shortest unambiguous prefix is `--pr`.
+            if (name.length > 2 && '--preserve'.startsWith(name)) {
+                if (preserveCoversLinks(text.slice(text.indexOf('=') + 1)))
+                    return true;
+                continue;
+            }
+        }
+        for (const option of CP_IDENTITY_LONG_OPTIONS) {
+            if (cpLongOptionMatches(text, option))
+                return true;
+        }
+        for (const flag of ['a', 'd', 'P', 'r', 'R', 'l', 's']) {
+            if (shortClusterHasFlag(text, flag, 'cp'))
+                return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * Whether ONE segment may carry the plugin development-zone opening.
+ *
+ * The opening extends only the plugin zone, and only with a PROVEN base: a
+ * single-command line whose command the lexer reads literally (no wrapper or
+ * env-prefix rewrite), which carries no nested interpreter and no
+ * directory-shifting flag. There is then no earlier segment that could have
+ * moved the cwd and no flag that moves it inside this one, so the session
+ * workspace is the real base. Every other line — multi-segment, nested,
+ * wrapped, heredoc/opaque, flag-shifted — keeps the strict DSH_HOME deny: a
+ * relative target that lands in the zone under a guessed base could really
+ * land in lib/**, node_modules/** or another DSH_HOME tree.
+ */
+function zoneOpeningTrusted(segment) {
+    const raw = segment.words;
+    if (raw.length === 0)
+        return false;
+    const unwrapped = unwrapCommand(raw).words;
+    if (unwrapped.length !== raw.length || unwrapped[0] !== raw[0])
+        return false;
+    const head = unwrapped[0];
+    if (head.dynamic || head.glob)
+        return false;
+    // A dynamic/glob WORD may expand to a flag the static read cannot see
+    // (`cp ${V:---archive}`), so the opening needs every word to be literal.
+    if (raw.some(word => word.dynamic || word.glob))
+        return false;
+    const name = commandName(head.text);
+    if (nestedExecution(name, unwrapped) !== undefined)
+        return false;
+    if (IDENTITY_WRITE_COMMANDS.has(name))
+        return false;
+    if (name === 'cp' && cpCopiesIdentity(unwrapped))
+        return false;
+    return !hasBaseShiftingFlag(raw);
+}
 
 /**
  * Redirect targets found by scanning a raw command line for `>` / `>>`
@@ -1972,8 +2219,10 @@ const OPAQUE_REDIRECT_TARGET = /(?:^|[^;&|()<>])(?:\d*&?>{1,2}\|?|\d*>{1,2}&(?=\
  * plugin became the weakest one. The fuses below are the SAME predicates the
  * decomposed path uses (`hardDestructiveTargetReason`, `runtimeStateWriteReason`,
  * `shellWriteToDshHomeDenied`), deliberately not a private re-derivation: the
- * DSH_HOME `allowedDshSubpaths` openings and maintenance paths live in those
- * single owners, and a second copy would drift from them.
+ * DSH_HOME openings and maintenance paths live in those single owners, and a
+ * second copy would drift from them. Operator openings stay structured-tool
+ * only: `shellWriteToDshHomeDenied` extends just the plugin's own development
+ * zone, which is a constant rather than an opening.
  *
  * Scope discipline — the two halves of the trade:
  * - Only targets that another vector would already hard-deny are reported, so
@@ -2620,7 +2869,10 @@ export function hardDenyShellReason(source, shell, roots) {
         const opaqueClock = opaqueClockWriteReason(compact, shell);
         if (opaqueClock !== undefined)
             return opaqueClock;
-        return opaqueHardDenyReason(compact, shell, roots);
+        // The zone exception needs a proven base; an opaque line cannot prove
+        // one (a changer, a wrapper or an unreadable command name may hide in
+        // the part the lexer cannot read), so the recovery keeps the strict deny.
+        return opaqueHardDenyReason(compact, shell, { ...roots, zoneFuseTrusted: false });
     }
     // Fuses resolve relative targets against the directory the segment really
     // sees. A changer only moves that base inside an `&&` chain: there, reaching
@@ -2636,11 +2888,23 @@ export function hardDenyShellReason(source, shell, roots) {
     // reset, so `cd C:/tmp && printf a > f1; cd <workspace>; printf x >
     // package.json` judged the final write against C:/tmp and missed the
     // workspace contract file entirely (a fail-open on the strongest fuse).
+    // The development-zone opening is granted per LINE, not per segment: only
+    // a single-segment line whose command is literally readable can prove the
+    // session workspace is the real base. Multi-segment lines keep the strict
+    // DSH_HOME deny (the pre-opening behavior) because a relative target after
+    // a changer is only a guess; the general changer-base tracking below still
+    // judges the other fuses against the moved base.
+    const openingTrusted = roots.zoneFuseTrusted !== false
+        && decomposition.segments.length === 1
+        && zoneOpeningTrusted(decomposition.segments[0]);
     let changerBase;
     for (const segment of decomposition.segments) {
         if (segment.precededBy !== '' && segment.precededBy !== '&&')
             changerBase = undefined;
-        const segmentRoots = changerBase !== undefined ? { ...roots, workspace: changerBase } : roots;
+        const segmentRoots = {
+            ...(changerBase !== undefined ? { ...roots, workspace: changerBase } : roots),
+            zoneFuseTrusted: openingTrusted,
+        };
         // Per-segment privilege fuse: the whole-line regex above only sees the
         // raw source; a decomposed segment lets us judge the effective command
         // after wrappers, so `echo hi; sudo ls` cannot dodge the hard deny.
@@ -2824,7 +3088,7 @@ function classifyEffectiveCommand(name, words, segment, shell, roots, artifacts,
                             : name === 'rsync'
                                 ? rsyncWriteTargets(words)
                                 : name === 'install' || name === 'cp' || name === 'mv'
-                                ? writeOperandCandidates(words)
+                                ? writeOperandCandidates(words, name)
                                 : words.slice(1).filter(word => !word.text.startsWith('-'));
         if (writeTargets.some(word => word.dynamic || word.glob))
             return semanticReview('file write target is dynamic or globbed and cannot be statically proven inside the routine roots');
@@ -2928,7 +3192,14 @@ export function assessShell(source, shell, roots, artifacts, owner) {
             ? manualReview(`${shell} destructive command cannot be read statically: ${decomposition.reason}`)
             : semanticReview(`${shell} command requires independent classification because it cannot be read statically: ${decomposition.reason}`);
     }
-    const assessments = decomposition.segments.map(segment => assessSegment(segment, shell, roots, artifacts, owner));
+    // The assess plane never advances a changer base, so it applies the same
+    // per-line rule as the hard-deny plane: only a single, literally readable
+    // command may carry the opening; every other line takes the strict fuse.
+    const openingTrusted = roots.zoneFuseTrusted !== false
+        && decomposition.segments.length === 1
+        && zoneOpeningTrusted(decomposition.segments[0]);
+    const assessRoots = openingTrusted ? roots : { ...roots, zoneFuseTrusted: false };
+    const assessments = decomposition.segments.map(segment => assessSegment(segment, shell, assessRoots, artifacts, owner));
     // A segment-level hard deny (e.g. the nested-execution DSH_HOME write
     // fuse) must propagate to the whole line, not degrade into a classifier
     // ask via the generic merge below.

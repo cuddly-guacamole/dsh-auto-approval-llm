@@ -307,6 +307,18 @@ export function pluginZoneSelfModifyReason(normalized) {
         return `the plugin's own contract/build file (${base}) is not writable from agent sessions`;
     return undefined;
 }
+/**
+ * Whether a normalized target sits in the plugin's own development zone.
+ *
+ * The structured write tools always treat this zone as a sanctioned opening
+ * (`allowedDshSubpaths` carries it unconditionally), so the shell write
+ * vectors consult the same constant here: without it the same target gets two
+ * opposite verdicts. It is NOT an operator-configurable opening, and the
+ * zone's runtime-state / execution-code denies stay in their own owners.
+ */
+export function isPluginDevZoneTarget(normalizedPath) {
+    return isWithin(PLUGIN_ZONE_ROOT, normalizedPath);
+}
 /** Deterministic destructive-target fuse. */
 export function hardDestructiveTargetReason(target, roots) {
     // A glob names the directory it sweeps, not a literal path: `C:\*` and

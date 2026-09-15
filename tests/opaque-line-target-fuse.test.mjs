@@ -56,9 +56,9 @@ function makeRoots(workspace = PLUGIN_REPO) {
 }
 
 const roots = makeRoots()
-// A workspace outside DSH_HOME, so "ordinary target" really means ordinary: in
-// the plugin-repo workspace above, even a plain `printf x > out.txt` is fused by
-// the DSH_HOME rule (the workspace itself sits inside DSH_HOME).
+// A workspace outside DSH_HOME, so "ordinary target" really means ordinary. The
+// DSH_HOME rule no longer fuses a routine write inside the plugin's own
+// development zone, so the fused pair below uses a contract-file target.
 const plainRoots = makeRoots('C:/ws')
 const artifacts = { has: () => false }
 const CONTRACT_FILE_REASON = "the plugin's own contract/build file"
@@ -144,11 +144,12 @@ test('opaque fuse: ordinary targets still abstain so the classifier sees the lin
 
 test('opaque fuse: an opaque line matches the plain spelling on the same target', () => {
   // Consistency with the decomposed path is the whole contract of the recovery,
-  // so assert the pair rather than the opaque line alone. `out.txt` inside the
-  // plugin-repo workspace is a DSH_HOME write, which the plain spelling already
-  // fuses; the opaque spelling must not read differently.
-  const plain = hardDenyShellReason(String.raw`printf x > out.txt`, 'bash', roots)
-  const opaque = hardDenyShellReason(String.raw`printf x > out.txt; (:)`, 'bash', roots)
+  // so assert the pair rather than the opaque line alone. A contract-file target
+  // stays fused by its own owner whether or not the line is opaque (including
+  // inside the plugin's own development zone), so the opaque spelling must not
+  // read differently.
+  const plain = hardDenyShellReason(String.raw`printf x > package.json`, 'bash', roots)
+  const opaque = hardDenyShellReason(String.raw`printf x > package.json; (:)`, 'bash', roots)
   assert.ok(plain !== undefined, 'the plain spelling is fused in this workspace')
   assert.equal(opaque, plain, 'the opaque spelling must reach the same verdict as the plain one')
 })
@@ -189,7 +190,7 @@ test('opaque fuse: the recovery runs before the opaque early return', () => {
   const source = readFileSync(fileURLToPath(new URL('../lib/auto/shell.js', import.meta.url)), 'utf8')
   const opaqueBranch = source.indexOf("if (decomposition.kind === 'opaque')")
   assert.notEqual(opaqueBranch, -1, 'the opaque branch is present in the compiled module')
-  const call = source.indexOf('opaqueHardDenyReason(compact, shell, roots)')
+  const call = source.indexOf('opaqueHardDenyReason(compact, shell, ')
   assert.notEqual(call, -1, 'the opaque branch calls the recovery helper')
   assert.ok(call > opaqueBranch, 'the recovery is inside the opaque branch')
   assert.ok(
