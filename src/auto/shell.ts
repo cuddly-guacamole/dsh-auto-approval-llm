@@ -2892,8 +2892,16 @@ function hereDocumentRunsAsCode(source) {
     if (typeof source !== 'string' || !/<<-?[ \t]*["'\\]?[A-Za-z_]/.test(source))
         return false;
     for (const segment of opaqueSegmentWords(source)) {
-        const name = commandName(unwrapCommand(segment.words).words[0]?.text ?? '');
+        const first = unwrapCommand(segment.words).words[0];
+        const name = commandName(first?.text ?? '');
         if (STDIN_SCRIPT_INTERPRETERS.has(commandNameWithoutExe(name)))
+            return true;
+        // A dynamic interpreter spelling (`$SHELL <<EOF`, `$(which bash) <<EOF`)
+        // cannot be resolved statically, so the body is judged as code rather
+        // than assumed to be data: the same document prefixed by a literal
+        // interpreter name already runs as code, and an unreadable prefix must
+        // not be the cheaper spelling.
+        if (first !== undefined && (first.dynamic === true || /[$`]/.test(first.text)))
             return true;
     }
     return false;
