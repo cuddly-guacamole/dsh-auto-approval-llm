@@ -1,7 +1,7 @@
 # 18 · 确认制学习
 > *Confirmation learning*
 
-一句话定位：**同一操作在 Auto 档被你反复人工确认之后，第 N 次起自动放行——且放行前仍要过一次标准在线评审**。默认关（`learningEnabled: false`），开了也只对「低危、非锁定类别、无熔丝命中」的窄域生效。
+一句话定位：**同一操作在 Auto 档（machine value `auto-approval`）被你反复人工确认之后，第 N 次起自动放行——且放行前仍要过一次标准在线评审**。默认关（`learningEnabled: false`），开了也只对「低危、非锁定类别、无熔丝命中」的窄域生效。
 
 ## 18.1　接线结构：先查学习层，人工询问点各带 learnable 记账
 

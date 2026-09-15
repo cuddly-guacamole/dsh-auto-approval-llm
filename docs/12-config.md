@@ -6,7 +6,7 @@
 | 键 | 默认 | 说明 |
 |---|---|---|
 | `enabled` | true | answerer 总开关：关=本插件不再终结 approval/request（静态硬拒与 guard 仍生效） |
-| `autoSwitchPolicyToAsk` | false | 仅 auto+override=never 时自动翻 ask（bundle 覆盖为 true）；设置卡可配（「高级」子卡，即时保存） |
+| `autoSwitchPolicyToAsk` | false | 已退役：无运行时行为，host-owned 兼容残留（`resolveConfig` 见 true 时 warn 并归一回 `false`；设置卡不再渲染，`HOST_ONLY_KEYS` 保护其不被卡片保存删除） |
 | `debug` | false | 写 approval-debug.jsonl + [debug] 日志 |
 | `classifierSource` | session | 快速判断通道模型来源：session · preset(DSH 模型) · endpoint(共享端点) |
 | `classifierProvider / classifierModel` | '' | preset 档成对必填 |
@@ -57,7 +57,7 @@
 | `learningThreshold` | 3 | 触发学习放行所需的人工确认次数；保存时钳入 [2,10]（clampLearningThreshold），越界值由 resolveConfig 发 warn（<span class="lnum">index.ts:L"clamping learningThreshold"</span>） |
 | `directHumanEnabled` | false | 直接人工通道：agent 可调用 `dsa_request_user` 把后续操作路由给人工而非 LLM 分类器；默认关=零行为差异。工具仅在开启时于启动注册（工具集不可热换——开启需重启），审批通道读取实时，关掉立即停用已注册工具 |
 | `slashCommandsEnabled` | false | 命令面板注册 `/approval-mode` `/approval-reset` `/approval-reset-all`（评审模式查看/设置 + 熔断重置）。默认关=零命令表面积。命令集不可热换——仅在开启时于启动注册（开启需重启）；每个 handler 读取该开关实时，运行中关掉立即停用已注册命令 |
-| `<span class="badgeok">host-only ×15</span>` | — | workspaceRoot / dshHome / tempRoots / **trustedDirs** / **trustedDshSubpaths** / maintenanceDshPaths / classifierTimeoutMs(8s,100-60000) / classifierMaxOutputTokens(1024,64-4096) / maxArgsChars / notifyUser / **reviewerContextFacts** / **rulesDryRun** / **breakerAntiHijackMs** / **reviewMaxRetries** / **loopDetectionThreshold**（<span class="lnum">decision.ts:LHOST_ONLY_KEYS</span>；preserveHostKeys 回填，卡片保存不抹掉）。**归属不变量**：没有设置卡控件的键必须在此名单内——否则下一次任意卡片保存（整命名空间 replace）会把它从 settings.yaml 物理删除并静默回落默认（<span class="lnum">settings-key-ownership.test.mjs:L"no silent-delete gap"</span>） |
+| `<span class="badgeok">host-only ×16</span>` | — | workspaceRoot / dshHome / tempRoots / **trustedDirs** / **trustedDshSubpaths** / maintenanceDshPaths / classifierTimeoutMs(8s,100-60000) / classifierMaxOutputTokens(1024,64-4096) / maxArgsChars / notifyUser / **reviewerContextFacts** / **rulesDryRun** / **breakerAntiHijackMs** / **reviewMaxRetries** / **loopDetectionThreshold** / **autoSwitchPolicyToAsk**（<span class="lnum">decision.ts:LHOST_ONLY_KEYS</span>；preserveHostKeys 回填，卡片保存不抹掉）。**归属不变量**：没有设置卡控件的键必须在此名单内——否则下一次任意卡片保存（整命名空间 replace）会把它从 settings.yaml 物理删除并静默回落默认（<span class="lnum">settings-key-ownership.test.mjs:L"no silent-delete gap"</span>） |
 
 ## 三处设计亮点
 
@@ -74,13 +74,13 @@
 :::
 
 ::: warning bundle 层覆盖
-（cordis.patch.yml）：装包即生效的一处与代码默认不同 —— `autoSwitchPolicyToAsk: true`（默认关）。`humanOnlyList` 保持代码默认空列表：bash 回归正常管线（静态评估 → LLM 审查 → 人工兜底），不再被强制永远人工决定。
+（cordis.patch.yml）：bundle 不再覆盖任何安全行为开关。`humanOnlyList` 保持代码默认空列表：bash 回归正常管线（静态评估 → LLM 审查 → 人工兜底），不再被强制永远人工决定。
 :::
 
 ::: warning 容易误解的六件事
 1. **模型来源是每通道 3 档显式开关，半配 fail-closed**。`classifierSource` / `reviewerSource` 各自决定该通道走哪条：`session`（跟随会话模型）、`preset`（DSH 已配置模型，`*Provider`+`*Model` 成对）、`endpoint`（共享端点配置）。显式选了 `preset`/`endpoint` 却配置不全 → 快照层 fail-loud（`{failure}`），**绝不静默回落会话模型**（用户以为用了指定模型实际没有 = 被契约测试钉死的反模式）；仅 `session` 源携带残留垃圾值才静默清洗。端点缺密钥同样 fail-closed（debug 记 `reviewer-incomplete`）。评审路由可用性门是单一 `reviewerRouteAvailable` 谓词（覆盖三源），learning 门与主管线共用（<span class="lnum">index.ts:reviewerRouteAvailable</span>）。
 2. **`timeoutAction` 的 legacy 枚举迁移分支不可删**（`llm-low-risk-only` → `reject`，<span class="lnum">index.ts:L"timeoutAction === 'llm-low-risk-only'"</span>）：resolveConfig 是全有全无闸门——删掉映射后旧值走 throw，启动路径整库回落 patch 默认（<span class="lnum">index.ts:L"persisted config invalid, running defaults"</span>；热更新路径则保留旧 config），不是只重置这一个键。
-3. **移除顶层配置键后，旧 settings.yaml 的残留键被静默忽略**：残留键不会被剥离，而是随解析结果原样透传进运行时配置、只是再没有任何代码读取它——无警告无报错（`{...raw}` 透传 <span class="lnum">index.ts:L"...raw"</span> 起；Config schema <span class="lnum">index.ts:L"export const Config"</span> 起）；弃用公告只能靠文档，不会有迁移提示。
+3. **移除顶层配置键后，旧 settings.yaml 的残留键默认被静默忽略**：残留键不会被剥离，而是随解析结果原样透传进运行时配置、只是再没有任何代码读取它——无警告无报错（`{...raw}` 透传，见 <span class="lnum">index.ts:L"export function resolveConfig"</span>；Config schema <span class="lnum">index.ts:L"export const Config"</span> 起）；弃用公告只能靠文档，不会有迁移提示。**例外 = `autoSwitchPolicyToAsk`**：`resolveConfig` 显式读它、warn 并归一回 `false`，保证退役后没有代码路径还能读到 true。
 4. **`safetyPrompt` 与 `rulesText` 分工不同**：前者拼进评审 system 提示词，保存即热生效（<span class="lnum">index.ts:L"assembleReviewerSystem(config.safetyPrompt, config.rulesText)"</span>）；后者是声明式执法规则，先于内置 allowlist/denyList 终局裁决 allow/deny/human（<span class="lnum">index.ts:L"B1 declared rules"</span>）。
 5. **`reviewerProvider` 键名已复活（2026-09-05 用户拍板）**：作为深度评审通道 `preset` 档的 provider 键与 `reviewerModel` 成对。它不再是「在线路由的 provider」——在线/自定义端点由共享 `endpointUrl`/`endpointModel`/`endpointProtocol` 承载，两通道 `endpoint` 源共用一份；`endpointProtocol` 默认 openai 保留 anthropic。旧 `reviewerBaseUrl` / `reviewerProtocol` / 2 档 `classifierModelSource` / `reviewerModelSource` 等键已由新体系取代（未发版直接换代，无兼容层）。
 6. **`showSessionPanel` / `breakerAntiHijackMs` 是纯客户端呈现键**：host 裁决路径从不读取，改它们不影响任何审批结论。

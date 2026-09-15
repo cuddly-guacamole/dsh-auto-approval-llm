@@ -10,10 +10,12 @@
 
 | 项 | 要求 |
 |---|---|
-| 权限档 | **Auto 档** = `sandbox: danger-full-access` + `approval: ask`；其他档本插件不介入 |
-| DSH | `0.1.5-rc.2` 或更高 |
+| 权限档 | **Auto 档**（machine value `auto-approval`，host 名 `Auto approval`）= `sandbox: danger-full-access` + `approval: ask`；其他档本插件不介入 |
+| DSH | `0.1.5-rc.2` 或更高（`>= 0.1.6` 与上游 `@deepseek-ai/dsh-experimental-auto-review` 二选一；`< 0.1.6` 接受旧机器值 `auto` 别名） |
 | Node | `^22.19.0 || >=24.0.0` |
-| 共存 | 本插件是 `approval/request` 的唯一终结裁决者 —— 不要与其他审批类插件同时启用 |
+| 共存 | 本插件是 `approval/request` 的唯一终结裁决者 —— 不要与其它审批类插件同开，尤其不要与上游 `@deepseek-ai/dsh-experimental-auto-review`（`auto`，Auto review / EXP）同时启用 |
+
+> 从旧机器值 `auto` 升级：只迁移 `auto + danger-full-access + ask` 同签名存量会话；归档不处理，resume 时懒迁移。宿主 `>= 0.1.6` 无上游且无法迁移的存量会话打不开 = 文档化的 fail-closed（迁移口径见仓库 README「从旧 `auto` 档升级」）。
 
 ## 安装
 
@@ -25,7 +27,7 @@ dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 
 ## 30 秒验证
 
-1. 把会话或预设切到 **Auto 档**。
+1. 把会话或预设切到 **Auto 档**：`/permission auto-approval`。
 2. 打开 设置 → 插件 → 自动审批，确认卡片出现；默认配置即可工作（`enabled` 默认开）。
 3. 让 agent 执行一条只读命令（例如 `ls`）：常规操作走静态放行，审批面板不出现。
 4. 让 agent 执行一条静态规则看不明白的调用（例如含变量拼接的动态命令）：应出现官方审批面板与倒计时，或由 LLM 评审接管。

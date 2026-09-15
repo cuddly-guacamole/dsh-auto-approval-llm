@@ -34,7 +34,7 @@
 
 ```mermaid
 flowchart TD
-    T["一次 Auto 档工具调用"] --> G["tools.guard 同步硬拒闸门<br/>永不挂类别分类"]
+    T["一次 Auto 档（auto-approval）工具调用"] --> G["tools.guard 同步硬拒闸门<br/>永不挂类别分类"]
     G --> P["接线点① tools/pre-execute · 收紧层<br/>index.ts（只收紧、不产放行）"]
     P -->|"deny"| PD["完整拒绝对话：<br/>feedback + history(source='category-deny') → rejected [deny]"]
     P -->|"ask"| PA["立即返回 kind:'ask'<br/>跳过 classifier 快径 [ask]"]

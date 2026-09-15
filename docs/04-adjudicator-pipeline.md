@@ -2,11 +2,11 @@
 
 > *The Lone Adjudicator*
 
-这是整个插件的心脏。以下决策顺序与 <span class="lnum">index.ts:L"anyCtx.on('approval/request', async"</span>（answerer 注册体；互斥器/askHuman/learnAttempt 等前置件自节注释 <span class="lnum">index.ts:L"prepend => terminal for handled asks"</span> 起）逐行一致，红色 = 拒绝、蓝色 = 转人工/面板、绿色 = 放行。
+这是整个插件的心脏。以下决策顺序与 <span class="lnum">index.ts:L"anyCtx.on('approval/request', async"</span>（answerer 注册体；互斥器/askHuman/learnAttempt 等前置件自节注释 <span class="lnum">index.ts:L"prepend => terminal for handled asks"</span> 起）逐行一致，红色 = 拒绝、蓝色 = 转人工/面板、绿色 = 放行。G0 判据是 durable raw identity（`permissionState().preset`），不是会被 approval override 折叠掉的 `current()`。
 
 ```mermaid
 flowchart TD
-    A1["G0 门卫：enabled？有 permissionPresets？权威会话 preset === 'auto'？（沿 subagent 父链上溯，子代理继承 Auto；非 auto → 交回 next 官方处理） [gate]"] -->|通过| A2["准备：sessionKey=权威会话 id；收集 trustedUserMessages（直接用户消息 ≤4 条/4000 字符）；findToolCallArguments 取参数（截断到 4000）；classifyStaticRisk 在此算出 风险档+类别指令（L2509，一次计算全层复用） [ctx]"]
+    A1["G0 门卫：enabled？有 permissionPresets？权威会话 raw identity preset ∈ gateNames（modern=[auto-approval]；宿主 <0.1.6 的 legacy 兼容 auto 别名）？（沿 subagent 父链上溯，子代理继承本档；非本档 → 交回 next 官方处理） [gate]"] -->|通过| A2["准备：sessionKey=权威会话 id；收集 trustedUserMessages（直接用户消息 ≤4 条/4000 字符）；findToolCallArguments 取参数（截断到 4000）；classifyStaticRisk 在此算出 风险档+类别指令（L2509，一次计算全层复用） [ctx]"]
     A2 --> A3["G1 声明规则：rulesText 非空 → 解析，你写的规矩最大。deny→rejected(rule-deny)；allow→allowed-once(rule-allow)；human→转人；解析错误→本层跳过继续 [B1]"]
     A3 -->|未命中| A4["G2a 静态名单 · denyList：精确工具名命中 → rejected(denyList-deny) [lists·deny]"]
     A4 -->|未命中| A5["类别层 · deny：directive==='deny' → rejected(category-deny)，与 denyList 同构的终端拒绝，提权重试不可绕过 [category·deny]"]

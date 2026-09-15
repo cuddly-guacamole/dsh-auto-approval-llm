@@ -13,8 +13,8 @@
   <li><span class="who">③ 静态评估 + 类别收紧 · <code>tools/pre-execute</code> <span class="lnum">index.ts:L"anyCtx.on('tools/pre-execute', async"</span></span>
     <div class="cap">`assessTool` → `deny`（硬拒 `[dsh-auto-approval-llm] hard deny`，**落 `hard-deny` 历史记录 + debug 行**）/ `allow`（直接放行）/ `ask`。中间还有一层**类别收紧**（<span class="lnum">index.ts:L"Category tightening"</span>）：三态开关配成 `deny` 的类别在这里终端拒绝、配成 `ask` 的无条件跳过 classifier 快径直接转人工（详见 [§17](./17-category-switches)）。之后若 `classifierEligible`，交给 LLM 预分类器（`classifier.classify`）再定 `allow | deny | ask` —— 快路径的放行/拒绝各自落 `classifier-allow` / `classifier-deny` 历史记录（`ask` 除外，留待 answerer 记终局）；分类器不可用 → 一律向人工（`classifier unavailable`）。</div></li>
 
-  <li><span class="who">④ 终局裁决 · <code>approval/request</code> <span class="lnum">index.ts:L"anyCtx.on('approval/request', async"</span>（prepend+global，options <span class="lnum">index.ts:L"{ prepend: true, global: true }"</span>）</span>
-    <div class="cap">本插件的**核心决策管线**（详见 [§04](./04-adjudicator-pipeline)）：声明规则 → 名单 → 类别开关 → 评审模式 → 熔断 → 策略硬拒 → 学习放行 → 风险分档 → LLM 复审 + 人工倒计时。产出 `allowed-once` 或 `rejected`，或委托官方面板走人工竞速。</div></li>
+  <li><span class="who">④ 终局裁决 · <code>approval/request</code> <span class="lnum">index.ts:L"anyCtx.on('approval/request', async"</span>（prepend+global；门卫读 raw identity `auto-approval`，宿主 <0.1.6 兼容 `auto` 别名）</span>
+    <div class="cap">本插件档（machine value `auto-approval`）的**核心决策管线**（详见 [§04](./04-adjudicator-pipeline)）：声明规则 → 名单 → 类别开关 → 评审模式 → 熔断 → 策略硬拒 → 学习放行 → 风险分档 → LLM 复审 + 人工倒计时。产出 `allowed-once` 或 `rejected`，或委托官方面板走人工竞速。</div></li>
 
   <li><span class="who">⑤ 执行与产物登记 · <code>tools/result</code> <span class="lnum">index.ts:Lartifacts.settle</span></span>
     <div class="cap">`artifacts.settle`：把本会话**成功创建**的文件登记进 `ArtifactRegistry`（后续删除该文件时可豁免）——入参 `plannedCreates` 来自评估阶段的 `artifacts.plan`（L2931）。同一事件也是通知队列的「已执行」标记点：只决定**该不该发**通知，不决定位置（见 ⑦）。</div></li>

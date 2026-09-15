@@ -7,7 +7,7 @@ host 编排在 `src/index.ts`，真正「长脑子」的静态规则引擎在 `s
 
 | 文件 | 行 | 职责 |
 |---|---|---|
-| `constants.ts` <span class="lnum">constants.ts#</span> | 125 | 数值阈值默认值**唯一事实源**：5/8/10s、3/20、4000、8s/1024，及学习族（阈值 3/TTL 30d/100 条/会话放行帽 50）；同时承载设置卡「默认放行工具」显示目录（显示镜像，非放行面） |
+| `constants.ts` <span class="lnum">constants.ts#</span> | 141 | 数值阈值默认值**唯一事实源**：5/8/10s、3/20、4000、8s/1024，及学习族（阈值 3/TTL 30d/100 条/会话放行帽 50）；同时承载设置卡「默认放行工具」显示目录（显示镜像，非放行面） |
 | `risk-tokens.ts` <span class="lnum">risk-tokens.ts#</span> | 24 | HIGH 风险正则（NAME/REASON），供分类器与 policy 共用，防漂移 |
 | `paths.ts` <span class="lnum">paths.ts#</span> | 386 | 路径规范化（Windows 命名空间/NT 别名折叠、~ 展开、win32 小写）、受保护/关键路径判定、运行态文件名单 |
 | `shell.ts` <span class="lnum">shell.ts#</span> | 3056 | Bash/PowerShell 词法分解（sticky 正则状态机）＋ 整行熔断 ＋ 逐段静态分类 |
@@ -15,7 +15,7 @@ host 编排在 `src/index.ts`，真正「长脑子」的静态规则引擎在 `s
 | `rules.ts` <span class="lnum">rules.ts#</span> | 459 | Claude-Code 风格声明规则解析/求值（纯函数，host 与浏览器共用） |
 | `classifier.ts` <span class="lnum">classifier.ts#</span> | 100 | 预分类提示词、参数脱敏、严格响应解析 |
 | `dsh-classifier.ts` <span class="lnum">dsh-classifier.ts#</span> | 140 | 复用 `ctx.llm` 做低 token 分类请求（temperature 0） |
-| `decision.ts` <span class="lnum">decision.ts#</span> | 910 | 纯决策函数：评审解析、人机竞速、来源标注、熔断状态机、静态名单 |
+| `decision.ts` <span class="lnum">decision.ts#</span> | 913 | 纯决策函数：评审解析、人机竞速、来源标注、熔断状态机、静态名单 |
 | `trust.ts` <span class="lnum">trust.ts#</span> | 305 | web 路由信任平面（loopback/LAN 边界、Host 伪造防护、在线端点 URL 校验） |
 | `artifacts.ts` <span class="lnum">artifacts.ts#</span> | 140 | 本会话成功创建路径的内存出处登记（删除豁免依据） |
 | `audit.ts` <span class="lnum">audit.ts#</span> | 147 | append-only 审批审计（清空留墓碑、5MiB 裁剪；审计路径可被测试接缝重定向） |

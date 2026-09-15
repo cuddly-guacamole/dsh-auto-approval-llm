@@ -16,7 +16,7 @@
 
 </div>
 
-`Auto 档` = `sandbox: danger-full-access` + `approval: ask`。本插件在 Auto 会话里充当 `approval/request` 的**唯一终结裁决者**：常规操作经静态规则直接放行，危险/模糊操作走「静态规则 → LLM 分类 → LLM/人工裁决 → 倒计时兜底 → 熔断」，全程保留人工与审计兜底。
+`Auto 档`（machine value `auto-approval`；host 显示名 `Auto approval`；中文客户端显示 `自动审批`）= `sandbox: danger-full-access` + `approval: ask`。本插件在本档会话里充当 `approval/request` 的**唯一终结裁决者**：常规操作经静态规则直接放行，危险/模糊操作走「静态规则 → LLM 分类 → LLM/人工裁决 → 倒计时兜底 → 熔断」，全程保留人工与审计兜底。宿主 `>= 0.1.6` 的 `auto` 归上游 `@deepseek-ai/dsh-experimental-auto-review`（Auto review / EXP），与本插件**二选一，不可同开**。
 
 ---
 
@@ -67,23 +67,33 @@ flowchart TD
 
 ## 安装
 
-**前置**：会话/预设处于 **Auto 档**（`danger-full-access` + `approval: ask`）；DSH `0.1.5-rc.2`+；Node `^22.19.0 || >=24.0.0`。
+**前置**：会话/预设处于 **Auto 档**（machine value `auto-approval` = `danger-full-access` + `approval: ask`，用 `/permission auto-approval` 切换）；DSH `0.1.5-rc.2`+；Node `^22.19.0 || >=24.0.0`。
+
+兼容窗口：宿主 `>= 0.1.6` 上 `auto` 是上游 `@deepseek-ai/dsh-experimental-auto-review`（Auto review / EXP）的保留名，**本插件与它二选一，不可同开**；宿主 `< 0.1.6` 时本插件 gate 仍接受旧机器值 `auto` 别名，但 shipped patch 只定义 `auto-approval`。移除触发 = 最低支持宿主提升到 0.1.6 系列（rc 可用）。
 
 ```bash
 dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 ```
 
 - 安装后**重启 dsh**，host 侧才生效。
-- **只作用于 Auto 档**（其他权限档不介入）；本插件是 `approval/request` 的唯一终结者 —— **不要与其他审批类插件同时启用**。
+- **只作用于 Auto 档**（其他权限档不介入）；切换用 `/permission auto-approval`。本插件是 `approval/request` 的唯一终结者 —— **不要与其它审批类插件同开，尤其不要与上游 `@deepseek-ai/dsh-experimental-auto-review` 的 `auto`（Auto review / EXP）同时启用**。
 - **平台**：Windows + Git Bash 为主开发/测试基线；macOS / Linux / WSL 代码已适配但无真实用户验证；Android 原生环境不支持。→ [docs/19](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/blob/main/docs/19-platform-support.md)
 - **反馈**：到 [GitHub Issues](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/issues) 报告，注明平台、dsh 版本、插件版本、复现命令与预期行为。
 - 本地开发：`npx tsc -p tsconfig.json` + `npx tsdown`，以 `link:` 加载（host 改动需重启，client 改动自动热载）。→ [docs/14](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/blob/main/docs/14-code-map.md)
+
+### 从旧 `auto` 档升级
+
+- **同签名门槛**：所有宿主只迁移 `raw preset = auto` 且 `sandbox = danger-full-access` 且 `approval = ask` 的存量会话；其它 `auto` 签名（含 `danger-full-access + never`）一律不迁移并告警。
+- **迁移时机**：归档会话不处理，只在 resume 进入 live 时懒迁移（`session/created` prepend）；插件加载时对已 live 会话做一次启动扫描，`agent/created` 兜底。迁移只重写 durable raw identity（`permission/preset`），**不写旋钮、不调用 `permissionPresets.set()`**。
+- **自有档 spec enforcement**：`auto-approval` 会话的 effective-never（`approval: never`，或 `approval: null` + base policy `never`）由插件写回 `ask`（`preset-spec-restore` 审计）；不会再翻转上游 `auto`。
+- **fail-closed**：宿主 `>= 0.1.6` 且未装上游 auto-review、且该存量会话在 `permissionPresets` 服务构造期已 live（插件来不及先迁移）时，宿主 pin 会先于插件拒绝该会话——**会话打不开，不是静默放行**。处置：停 dsh → 用可选离线迁移工具或手工导出/导入 → 再启动；也可在 profile 保留上游 auto-review 层。该 boot 期缺口在插件侧无法自动修复。
+- 官方权限选择器的风险确认只覆盖宿主内置的 `danger-full-access`；自定义 `auto-approval` 档由插件客户端自行弹确认。
 
 ---
 
 ## 快速开始
 
-1. 把会话/预设切到 **Auto 档**。
+1. 把会话/预设切到 **Auto 档**：`/permission auto-approval`。
 2. 打开 设置 → 插件 → 自动审批。**默认配置即可工作**（常规操作静态放行；模糊操作走会话模型评审；超时按 `timeoutAction` 兜底，默认拒绝）。
 3. 想让审批走指定模型：在「在线评审模型」卡把通道来源设为「DSH 模型」并从列表选，或选「自定义端点」填协议 / 地址 / 模型 / 密钥 → 保存 → 测试连接。
 4. 嫌弹窗频繁：调大「中风险倒计时」，或把「超时动作」改为 `拒绝` / `低风险自动同意`。
@@ -152,7 +162,7 @@ dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 
 ## 安全模型摘要
 
-- **唯一终结者**：同一 approval 只有一个裁决者（prepend + global），不双弹窗、不双写。
+- **唯一终结者**：命中本插件档（`auto-approval`）的 approval 由本插件终结（prepend + global），不双弹窗、不双写；与上游 auto-review 二选一。
 - **fail-closed**：评审超时 / 垃圾 / 失败 → 拒绝或转人；ESCALATE 一律转人，不被 `timeoutAction=allow` 自动放行。
 - **reasoning-blind**：评审只看工具名 + 结构化脱敏参数 + 有界直接用户消息（唯一授权证据）+ 工作区事实。
 - **密钥不出 host**：在线评审密钥存 DSH 凭据，每操作解析，前端仅显「已配置」。

@@ -16,7 +16,7 @@
 
 </div>
 
-`Auto tier` = `sandbox: danger-full-access` + `approval: ask`. In Auto sessions this plugin is the **single terminal answerer** for `approval/request`: routine calls pass through static rules, while dangerous or ambiguous ones follow "static rules → LLM classifier → LLM/human verdict → countdown fallback → breaker", with human and audit fallbacks kept throughout.
+`Auto tier` (machine value `auto-approval`; host name `Auto approval`; zh client `自动审批`) = `sandbox: danger-full-access` + `approval: ask`. In this tier the plugin is the **single terminal answerer** for `approval/request`: routine calls pass through static rules, while dangerous or ambiguous ones follow "static rules → LLM classifier → LLM/human verdict → countdown fallback → breaker", with human and audit fallbacks kept throughout. On hosts `>= 0.1.6` the name `auto` belongs to the upstream `@deepseek-ai/dsh-experimental-auto-review` (Auto review / EXP): the two are **mutually exclusive and must not be enabled together**.
 
 ---
 
@@ -67,23 +67,33 @@ flowchart TD
 
 ## Installation
 
-**Prerequisites**: the session or preset is on the **Auto tier** (`danger-full-access` + `approval: ask`); DSH `0.1.5-rc.2`+; Node `^22.19.0 || >=24.0.0`.
+**Prerequisites**: the session or preset is on the **Auto tier** (machine value `auto-approval` = `danger-full-access` + `approval: ask`; switch with `/permission auto-approval`); DSH `0.1.5-rc.2`+; Node `^22.19.0 || >=24.0.0`.
+
+Compatibility window: on hosts `>= 0.1.6` the name `auto` is reserved for the upstream `@deepseek-ai/dsh-experimental-auto-review` (Auto review / EXP), so this plugin and that layer are **mutually exclusive**; on hosts `< 0.1.6` the plugin gate still accepts the legacy machine value `auto` alias, while the shipped patch defines only `auto-approval`. Removal trigger = raising the minimum supported host to the 0.1.6 series (rc counts).
 
 ```bash
 dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 ```
 
 - **Restart dsh** after installing, so the host side takes effect.
-- **Auto tier only** (other permission tiers are untouched); this plugin is the single terminal answerer for `approval/request` — **do not enable it alongside another approval plugin**.
+- **Auto tier only** (other permission tiers are untouched); switch with `/permission auto-approval`. This plugin is the single terminal answerer for `approval/request` — **do not enable it alongside another approval plugin, in particular not the upstream `@deepseek-ai/dsh-experimental-auto-review` (`auto`, Auto review / EXP)**.
 - **Platforms**: Windows + Git Bash is the primary development and test baseline; macOS / Linux / WSL are adapted in code but not verified by real users; Android native environments are unsupported. → [docs/19](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/blob/main/docs/19-platform-support.md)
 - **Feedback**: please file a [GitHub issue](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/issues) with your platform, dsh version, plugin version, reproduction command and expected behavior.
 - Local development: `npx tsc -p tsconfig.json` plus `npx tsdown`, loaded through a `link:` dependency (host changes need a restart; client changes hot-reload). → [docs/14](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/blob/main/docs/14-code-map.md)
+
+### Upgrading from the legacy `auto` tier
+
+- **Same-signature gate**: every host migrates only stored sessions with `raw preset = auto` + `sandbox = danger-full-access` + `approval = ask`; any other `auto` signature (including `danger-full-access + never`) is left untouched and warned about.
+- **When**: archived sessions are not processed; migration is lazy when a session becomes live on resume (`session/created` prepend), with a startup live scan and an `agent/created` fallback. It rewrites the durable raw identity (`permission/preset`) only — **no knob writes, no `permissionPresets.set()`**.
+- **Own-tier spec enforcement**: an `auto-approval` session whose approval is effectively `never` (`approval: never`, or `approval: null` with a base policy of `never`) is written back to `ask` (`preset-spec-restore` audit); the upstream `auto` is never touched.
+- **Fail-closed**: on hosts `>= 0.1.6` without the upstream auto-review layer, a stored session that is already live when the `permissionPresets` service is constructed (so the plugin cannot migrate it first) is rejected by the host pin — **the session does not open; it is not silently allowed**. Recovery: stop dsh → use the optional offline migration tool or export/import manually → start again; keeping the upstream auto-review layer is the alternative. This boot-time gap cannot be fixed plugin-side.
+- The official permission picker's risk confirmation covers only the host's built-in `danger-full-access`; the custom `auto-approval` tier gets its own confirmation from the plugin client.
 
 ---
 
 ## Quick start
 
-1. Switch the session or preset to the **Auto tier**.
+1. Switch the session or preset to the **Auto tier**: `/permission auto-approval`.
 2. Open Settings → Plugins → Auto approval. **The defaults already work** (routine calls pass statically; ambiguous ones go to session-model review; on timeout `timeoutAction` applies, reject by default).
 3. To route reviews through a specific model: set the channel's model source to "DSH model" in the Online review model card and pick one, or choose "Custom endpoint" and fill in protocol / base URL / model / key → save → test connection.
 4. If panels feel too frequent: raise the medium-risk countdown, or set the timeout action to `Reject` / `Auto-approve low-risk`.
@@ -152,7 +162,7 @@ When the directory cannot be written, the plugin **fails closed**: the audit gat
 
 ## Security model summary
 
-- **Single terminal answerer**: one decision-maker per approval (prepend + global), so there are never two popups or two writes.
+- **Single terminal answerer**: an approval in this plugin's tier (`auto-approval`) is settled by this plugin (prepend + global), so there are never two popups or two writes; it is mutually exclusive with the upstream auto-review.
 - **fail-closed**: reviewer timeout / garbage / failure → reject or hand to a human; ESCALATE always goes to a human and is never auto-allowed by `timeoutAction=allow`.
 - **reasoning-blind**: the reviewer sees only the tool name, structurally sanitized arguments, bounded direct user messages (the sole authorization evidence) and workspace facts.
 - **Keys never leave the host**: the online-review key lives in DSH credentials, is resolved per operation, and the frontend only ever shows "Configured".

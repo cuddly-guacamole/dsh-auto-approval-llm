@@ -2,7 +2,7 @@
 
 > *System Overview*
 
-这是一个挂在 **DeepSeek Harness** 上的 Cordis 插件：在 **Auto 权限预设**（`sandbox: danger-full-access` + `approval: ask`）下，充当 `approval/request` 的**唯一终结裁决者**。两面：**宿主端**（Node 进程，决策与安全）＋ **浏览器端**（Web GUI，设置与面板交互）。
+这是一个挂在 **DeepSeek Harness** 上的 Cordis 插件：在 **Auto 权限预设**（machine value `auto-approval`，host 显示名 `Auto approval`；`sandbox: danger-full-access` + `approval: ask`）下，充当 `approval/request` 的**唯一终结裁决者**；判据是 durable raw identity（`permissionPresets.permissionState().preset`），宿主 `>= 0.1.6` 只认 `auto-approval`，宿主 `< 0.1.6` 兼容旧机器值 `auto` 别名。两面：**宿主端**（Node 进程，决策与安全）＋ **浏览器端**（Web GUI，设置与面板交互）。
 
 **图例**
 
@@ -53,5 +53,5 @@
 以上六个文件同属运行态保护名单（<span class="lnum">paths.ts:LRUNTIME_STATE_BASENAMES</span>），任何工具调用都改不了它们；规范目录又在 `DSH_HOME` 之下，guard 对 `DSH_HOME` 的写入本就一律拒绝，故保护比「按文件名匹配」更宽。
 
 ::: tip 唯一终结者
-`approval/request` 以 `{prepend:true, global:true}` 注册（<span class="lnum">index.ts:L"anyCtx.on('approval/request', async"</span>，options 行 <span class="lnum">index.ts:L"{ prepend: true, global: true }"</span>）—— 对命中的 ask，本插件就是最终裁决，不会开第二个弹窗、不会双写、不会让审计断裂。
+`approval/request` 以 `{prepend:true, global:true}` 注册（<span class="lnum">index.ts:L"anyCtx.on('approval/request', async"</span>）—— 门卫读 durable raw identity（`permissionPresets.permissionState().preset ∈ gateNames`），对命中本插件档的 ask 就是最终裁决，不会开第二个弹窗、不会双写、不会让审计断裂。
 :::

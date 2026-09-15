@@ -26,7 +26,7 @@ hero:
 </div>
 
 > 为 DeepSeek Harness 的 **Auto 权限档**提供 LLM 辅助自动审批 + 超时自动兜底。
-> Auto 档 = `sandbox: danger-full-access` + `approval: ask`。本插件在 Auto 会话里充当 `approval/request` 的**唯一终结裁决者**：常规操作放行、危险/模糊操作交给「静态规则 → LLM 分类 → LLM/人工裁决 → 倒计时兜底 → 熔断」的自动管线，同时保证有人工与审计兜底。
+> Auto 档（machine value `auto-approval`，host 名 `Auto approval`）= `sandbox: danger-full-access` + `approval: ask`。本插件在本档会话里充当 `approval/request` 的**唯一终结裁决者**：常规操作放行、危险/模糊操作交给「静态规则 → LLM 分类 → LLM/人工裁决 → 倒计时兜底 → 熔断」的自动管线，同时保证有人工与审计兜底。宿主 `>= 0.1.6` 与上游 `@deepseek-ai/dsh-experimental-auto-review`（`auto`，Auto review / EXP）二选一。
 
 ## 核心数字
 
@@ -75,7 +75,7 @@ hero:
 
 <div class="navgrid">
   <a class="navcard" href="/dsh-auto-approval-llm/14-code-map"><span class="nn">14</span><span class="nt">代码地图与构建发布</span><span class="nd">tsc + tsdown + patch 层</span></a>
-  <a class="navcard" href="/dsh-auto-approval-llm/15-quality"><span class="nn">15</span><span class="nt">质量保障体系</span><span class="nd">1630 测试 + 运行时验证</span></a>
+  <a class="navcard" href="/dsh-auto-approval-llm/15-quality"><span class="nn">15</span><span class="nt">质量保障体系</span><span class="nd">1666 测试 + 运行时验证</span></a>
   <a class="navcard" href="/dsh-auto-approval-llm/16-axioms"><span class="nn">16</span><span class="nt">设计公理</span><span class="nd">为什么不追求完美</span></a>
   <a class="navcard" href="/dsh-auto-approval-llm/19-platform-support"><span class="nn">19</span><span class="nt">平台支持与反馈</span><span class="nd">Windows 基线 · 非 Windows 欢迎反馈</span></a>
 </div>

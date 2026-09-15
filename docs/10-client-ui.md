@@ -8,7 +8,7 @@
 | `settings.plugin.item` | `auto-approval-llm-card` | 30 | SettingsSection |
 | `conversation.session.header.utilities` | `…-session-panel` | -10 | SessionApprovalPanel |
 
-另有：会话标题栏的自动审批控件（分离按钮：左主区显示状态并在有倒计时时提前展开面板，右下箭头打开审批记录浮层）、`auto-icon.ts`（给权限菜单的 Auto 注入盾形图标 + 选择时的风险确认弹窗「我已了解风险」）、`locale.ts`（zh/en）。
+另有：会话标题栏的自动审批控件（分离按钮：左主区显示状态并在有倒计时时提前展开面板，右下箭头打开审批记录浮层）、`auto-icon.ts`（给权限菜单的 Auto 注入盾形图标 + 选择时的风险确认弹窗「我已了解风险」）、`locale.ts`（zh/en）。官方权限选择器自带的风险确认只覆盖宿主内置档；自定义 `auto-approval` 档的风险确认由本插件客户端自研弹窗补。
 
 ## 关键设计：客户端不自绘审批卡片
 
@@ -67,14 +67,14 @@ li.dsa-card（可折叠；任一卡脏 → 头部「未保存」徽标）
 │    ├─ 实用小功能    onboardingMessageEnabled（首次使用引导消息）· redactResults（成功结果二次脱敏）· editDiffPreview（默认关的增强开关）· rejectGuidance（拒绝引导提示）
 │    ├─ 在线评审模型   快速判断模型[来源: 跟随会话/DSH模型(catalog chips 填 Provider·Model)/自定义端点] · 深度评审模型[同构] · 自定义端点[共享：协议·API地址·模型·密钥(password型)「已配置|未配置」· 测试连接]（恢复默认=双通道回 session + 端点配置清空 + 清除密钥）；**端点块按需渲染**——仅当某通道来源=自定义端点，或端点地址/模型/密钥已有配置时出现（否则默认态少 4 行 + 密钥行 + 测试按钮）
 │    └─ 最近审批记录   搜索 · 分页(PAGE_SIZE=10) · 记录+[熔断]+原因(warn色) + LLM 响应耗时统计 · 清空历史(confirm)
-│    └─ 高级    defaultReviewMode · autoSwitchPolicyToAsk · autoModeNotice · showSessionPanel（逐行即时保存，无独立 footer；卡尾一行写明 rulesDryRun / breakerAntiHijackMs / reviewMaxRetries 三键由配置文件管理）
+│    └─ 高级    defaultReviewMode · autoModeNotice · showSessionPanel（逐行即时保存，无独立 footer；卡尾一行写明 rulesDryRun / breakerAntiHijackMs / reviewMaxRetries 三键由配置文件管理）
 └─ 底部 footer：恢复默认 · 重启提示(applies=restart) · 全局错误行
 ```
 
 > 分组标签（只加标签不移动控件）：前四张子卡（计时器与熔断 / 安全规则列表 / 分类开关与信任模式 / 确认制学习）标题带「安全底线」标签（计时器含倒计时秒数——决策窗口属安全项；`settings.group.safetyBase` 键），实用小功能卡、评审模型卡、历史卡与「高级」卡保持现状。归组合约：后续新增设置键默认进安全底线组。
 
 - **保存语义**：每卡只 POST 自己拥有的键（`sliceValueOf`），叠加到「最后保存基线」上 —— 保存 A 卡不会吞掉 B 卡未保存的编辑；顶层开关即时保存（预设行一次提交两个键、其余单键；`expectedRevision` 乐观并发控制）。学习子卡只提交 `LEARNING_KEYS = ['learningEnabled','learningThreshold']` 两键（<span class="lnum">client/index.ts:L"const LEARNING_KEYS"</span>），threshold 保存时钳入 2..10。
-- **host-only 键保护**：15 员名单 `workspaceRoot / dshHome / tempRoots / trustedDirs / trustedDshSubpaths / maintenanceDshPaths / classifierTimeoutMs / classifierMaxOutputTokens / maxArgsChars / notifyUser / reviewerContextFacts / rulesDryRun / breakerAntiHijackMs / reviewMaxRetries / loopDetectionThreshold`（<span class="lnum">decision.ts:LHOST_ONLY_KEYS</span>）走 patch/YAML 配置；保存时 `preserveHostKeys` 让存储值**恒胜出**，卡片改不掉它们。**归属不变量**：没有设置卡控件的键必须在此名单内——否则下一次任意卡片保存（整命名空间 replace）会把它从 settings.yaml 物理删除并静默回落默认（<span class="lnum">settings-key-ownership.test.mjs:L"no silent-delete gap"</span>）。
+- **host-only 键保护**：16 员名单 `workspaceRoot / dshHome / tempRoots / trustedDirs / trustedDshSubpaths / maintenanceDshPaths / classifierTimeoutMs / classifierMaxOutputTokens / maxArgsChars / notifyUser / reviewerContextFacts / rulesDryRun / breakerAntiHijackMs / reviewMaxRetries / loopDetectionThreshold / autoSwitchPolicyToAsk（已退役的 host-owned 兼容残留）`（<span class="lnum">decision.ts:LHOST_ONLY_KEYS</span>）走 patch/YAML 配置；保存时 `preserveHostKeys` 让存储值**恒胜出**，卡片改不掉它们。**归属不变量**：没有设置卡控件的键必须在此名单内——否则下一次任意卡片保存（整命名空间 replace）会把它从 settings.yaml 物理删除并静默回落默认（<span class="lnum">settings-key-ownership.test.mjs:L"no silent-delete gap"</span>）。
 - **密钥永不出现在 settings value**：独立 `/reviewer-credential` 路由；输入框 password + new-password 自动完成；保存后立即清空不回显。
 
 ## 10.3　会话标题栏「自动审批」统计

@@ -17,7 +17,7 @@
 | Windows（Git Bash） | ✅ 正式 | 主开发/测试环境 |
 | macOS / Linux / WSL | 🟡 欢迎反馈 | 代码已适配（见 19.1），尚未经真实用户验证 |
 | Android 浏览器访问 dsh web | ⚠️ 仅收集反馈 | 窄视口/触屏下的设置卡与审批面板体验可反馈，**不承诺支持**（不按手机宽度改造官方 UI） |
-| Android 原生环境（Auto 档） | ❌ 明确不支持 | Termux / root / adb / shizuku 等环境差异过大；国产安卓即使 root 也存在各种定制路径，Auto 档在此类环境视为玩家实验场景 |
+| Android 原生环境（Auto 档，machine value `auto-approval`） | ❌ 明确不支持 | Termux / root / adb / shizuku 等环境差异过大；国产安卓即使 root 也存在各种定制路径，Auto 档在此类环境视为玩家实验场景 |
 
 ## 19.3　为什么 Android 原生环境不支持 Auto 档
 
