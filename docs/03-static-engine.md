@@ -114,7 +114,7 @@ flowchart TD
 
 | 类别 | 内容 | 判定 |
 |---|---|---|
-| 家目录根 / DSH_HOME 树 | `~` 、`~/.dsh`（env DSH_HOME 或默认） | `hardDestructiveTargetReason` → 硬拒（allowedDshSubpaths 白名单可豁免）；shell 写向量另过 `shellWriteToDshHomeDenied` → 区内硬拒，唯一例外 = 插件自身开发区（常量，非 operator 开口） |
+| 家目录根 / DSH_HOME 树 | `~` 、`~/.dsh`（env DSH_HOME 或默认） | `hardDestructiveTargetReason` → 硬拒（allowedDshSubpaths 白名单可豁免）；shell 写向量另过 `shellWriteToDshHomeDenied` → 区内硬拒，唯一例外 = 插件自身开发区（常量，非 operator 开口）；被拒理由只在目标落在某个开口内时点名可用的替代写法（`write`/`edit`，或单段字面量内容写） |
 | 凭据根 | `.ssh` `.gnupg` `.aws` `.azure` `.kube` `.config/gcloud` | isCriticalPath |
 | shell 启动文件（12） | `.bashrc` `.bash_profile` `.bash_login` `.bash_logout` `.profile` `.zshrc` `.zprofile` `.zlogin` `.zlogout` `.kshrc` `.cshrc` `.tcshrc` | isCriticalPath（家目录变体硬拒；工作区变体 ask） |
 | 系统关键目录 | POSIX: `/etc` `/bin` `/sbin` `/usr` `/system` `/library` `/private/etc` `/boot` ；Win: `windows/program files/boot…` | isCriticalPath |
