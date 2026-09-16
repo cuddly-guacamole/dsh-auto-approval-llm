@@ -46,6 +46,26 @@ function sessionArtifact(path) {
   return registry
 }
 
+/**
+ * Slice `src` from a start marker to the end marker that FOLLOWS it.
+ *
+ * Both markers are mandatory: a renamed anchor must fail loudly instead of
+ * handing back an empty slice that satisfies every `includes` check.
+ */
+function region(src, startMarker, endMarker, from = 0) {
+  const a = src.indexOf(startMarker, from)
+  assert.notEqual(a, -1, `source marker missing: ${startMarker}`)
+  const b = src.indexOf(endMarker, a + startMarker.length)
+  assert.notEqual(b, -1, `region end missing after ${startMarker}: ${endMarker}`)
+  assert.ok(b > a, `region end must follow its start: ${startMarker}`)
+  return src.slice(a, b)
+}
+
+/** The compiled host's pre-execute listener, bounded by the next registration. */
+function preExecuteHandler(host) {
+  return region(host, "anyCtx.on('tools/pre-execute'", "anyCtx.on('tools/result'")
+}
+
 test('precondition: the policy plane really does exempt a session artifact deletion', () => {
   const registry = sessionArtifact('C:/ws/scratch.txt')
   const verdict = assessShell('rm scratch.txt', 'bash', roots, registry, owner)
@@ -177,7 +197,10 @@ test('the whole chain works in the DSH_HOME zone shape (the live failure)', () =
   const session = { id: 'zone-session' }
   const target = `${ws}/scratch.txt`
 
-  // The plugin's own wiring: pre-execute asks policy, then plan()s the creates.
+  // Fixture replay of the host's own step: pre-execute asks policy, then plan()s
+  // the creates. This shape proves the registry mechanics under plan/settle, but
+  // it cannot prove the HOST performs that step — the test is the one calling
+  // plan() here. The host pass-through itself is anchored in the test below.
   const create = assessTool({ name: 'write', arguments: { file_path: target, content: 'x' } }, zoneRoots, registry)
   assert.equal(create.decision, 'allow', `the zone write must be allowed, got ${create.decision}: ${create.reason}`)
   const exec = { name: 'write', token: 't-zone', agent: { session } }
@@ -191,6 +214,60 @@ test('the whole chain works in the DSH_HOME zone shape (the live failure)', () =
   assert.equal(removal.sessionArtifactDeletion, true)
   const threaded = categoryDirectiveFor({ name: 'bash', arguments: { command: 'rm scratch.txt' } }, zoneRoots, { categoryPolicy: {}, categoryMode: 'aggressive' }, removal)
   assert.equal(threaded.directive, 'inherit', 'and the clamp must be lifted for it')
+})
+
+test('the host pass-through is anchored: the assessment plannedCreates reach plan()', () => {
+  // The wiring seam the live failure went through. The chain test above replays
+  // plan -> settle by hand, so it stays green while the host drops the argument:
+  // replacing `assessment.plannedCreates` with `[]` there left every test in this
+  // file (and the two sibling provenance files) green, and `rm` of a file the
+  // session had just written fell back to the locked countdown. The assertion is
+  // therefore placed on the production host's own pre-execute listener — it is
+  // satisfied only by the shipped wiring passing the assessment's own field
+  // through, never by a step this test performs.
+  //
+  // Structural anchor, not a behavioural one: it pins the exact call the bundle
+  // performs (the whole argument list, so a dropped argument reddens) plus the
+  // trace that makes a broken chain observable in the first place. The value it
+  // passes is produced by the production policy plane and is asserted
+  // behaviourally in 'every file-creating allow branch ...' above.
+  const handler = preExecuteHandler(readFileSync(fileURLToPath(new URL('../lib/index.js', import.meta.url)), 'utf8'))
+  assert.ok(
+    handler.includes('artifacts.plan(exec, assessment.plannedCreates, roots)'),
+    'the host must hand the assessment its own plannedCreates; an empty array is the live-failure shape',
+  )
+  assert.ok(
+    !/artifacts\.plan\(exec, (?:\[\]|\[\s*\])/.test(handler),
+    'the plannedCreates argument must never be dropped for a constant',
+  )
+  assert.ok(handler.includes("type: 'artifact-provenance'"), 'the plan step leaves its observation record')
+  assert.ok(handler.includes("phase: 'plan'"), 'and the record names the plan phase')
+  assert.ok(/if \(recorded\.length > 0\)/.test(handler), 'the record is emitted only for a non-empty plan result')
+
+  // The guard is part of the wiring: text alone is not enough, because
+  // `if (assessment.plannedCreates !== undefined && false) {` — or wrapping the
+  // call in `if (false) {` — keeps every string above in place while plan() never
+  // runs, which is the live failure restored. Pin the guard LINE's exact shape
+  // (the assessment test and nothing else), then pin that the call sits inside it
+  // with no dead-constant branch in between.
+  const guardAt = handler.indexOf('if (assessment.plannedCreates !== undefined)')
+  assert.notEqual(guardAt, -1, 'the plan step is guarded on the assessment field')
+  const guardLine = handler.slice(guardAt, handler.indexOf('\n', guardAt))
+  assert.match(
+    guardLine,
+    /^\s*if \(assessment\.plannedCreates !== undefined\) \{$/,
+    `the guard must be exactly the assessment test, got: ${guardLine}`,
+  )
+  const callAt = handler.indexOf('artifacts.plan(exec, assessment.plannedCreates, roots)')
+  assert.ok(callAt > guardAt, 'the plan call sits inside that guard, not before it')
+  assert.ok(
+    !/if \(false\)/.test(handler.slice(guardAt, callAt)),
+    'the plan call may not be wrapped in a dead-constant branch',
+  )
+  assert.ok(
+    !/plannedCreates[^\n]*&&\s*(?:false|!true)\b/.test(handler),
+    'no constant may short-circuit the plan guard',
+  )
 })
 
 test('known interaction: a directory changer in the line costs the exemption', () => {
@@ -224,15 +301,61 @@ test('known interaction: a directory changer in the line costs the exemption', (
 })
 
 test('the exemption is structured, not parsed out of the reason text', () => {
-  // An authorization signal must never be re-derived from free text. Guard the
-  // shape: the flag is a field, set where the registry was consulted, and no
-  // consumer matches the message.
+  // An authorization signal must never be re-derived from free text. Two things
+  // are pinned: the producer's own message text has no consumer, and the two
+  // sites that carry the flag are structurally distinct.
   const shell = readFileSync(fileURLToPath(new URL('../src/auto/shell.ts', import.meta.url)), 'utf8')
-  assert.equal((shell.match(/sessionArtifactDeletion: true/g) ?? []).length, 2, 'set at the segment site and carried by the line rebuild')
-  for (const file of ['../src/auto/category.ts', '../src/index.ts']) {
-    const source = readFileSync(fileURLToPath(new URL(file, import.meta.url)), 'utf8')
-    assert.ok(!/session-created artifact/.test(source), `${file} must not match the exemption message text`)
+  // Take the needles from the message owner itself. A hardcoded phrase would keep
+  // passing after the producer reworded it — the scan would then match nothing
+  // anywhere and report clean.
+  const owner = /`(delete exact session-created artifact)(?:\$\{|`)/.exec(shell)
+  assert.ok(owner !== null, 'the exemption message owner is present in the shell plane')
+  const message = owner[1]
+  // Two needles, both owner-derived. The whole message is the exact string a
+  // consumer would have to copy; the trailing phrase is the part a partial match
+  // would key on, and it is the most likely violation (`reason.includes('... artifact')`).
+  // Banning only the long string is a WEAKER guard than the phrase it replaced:
+  // the substring violation passes while the scan still reports clean.
+  const phrase = message.split(/\s+/).slice(-2).join(' ')
+  assert.ok(
+    phrase.length < message.length && message.includes(phrase),
+    `expected a shorter distinctive phrase taken from the owner's wording, got: ${phrase}`,
+  )
+  const consumers = ['../src/auto/category.ts', '../src/index.ts'].map((file) => ({
+    file,
+    source: readFileSync(fileURLToPath(new URL(file, import.meta.url)), 'utf8'),
+  }))
+  for (const needle of [message, phrase]) {
+    for (const { file, source } of consumers) {
+      assert.ok(!source.includes(needle), `${file} must not match the exemption message text: ${needle}`)
+    }
   }
+
+  // Site 1, the segment proof: the flag is set only when EVERY deletion operand
+  // was observed in the registry and lies in the artifact area.
+  const segment = region(shell, 'if (deletion.targets.every(target => !target.glob)', 'deleting pre-session or unobserved data requires specific user authorization')
+  assert.ok(segment.includes(message), 'the segment site labels the allow with the owner message')
+  assert.ok(segment.includes('sessionArtifactDeletion: true'), 'the segment site sets the structured flag on that allow')
+  assert.match(
+    segment,
+    /paths\.every\(path => artifacts\.has\(owner, path, roots\) && isArtifactArea\(path, roots\)\)/,
+    'the segment site requires EVERY operand to be proven, not merely one',
+  )
+
+  // Site 2, the line rebuild: `some` over segments is correct there, because an
+  // unproven deletion already returned an ask above; what must not happen is the
+  // flag dropping with the rebuilt object.
+  const rebuilt = region(shell, 'const provenArtifactDeletion = assessments.some(', 'const reasons = assessments.filter(')
+  assert.match(
+    rebuilt,
+    /assessments\.some\(assessment => assessment\.sessionArtifactDeletion === true\)/,
+    'the line site aggregates the flag from the segment assessments',
+  )
+  assert.match(
+    rebuilt,
+    /return provenArtifactDeletion \? \{ \.\.\.merged, sessionArtifactDeletion: true \} : merged/,
+    'the line site carries the flag onto the rebuilt allow instead of dropping it',
+  )
 })
 
 test('the flag survives a compound line so a mixed line is not re-locked', () => {

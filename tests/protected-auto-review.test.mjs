@@ -133,6 +133,9 @@ test('blast radius: credential reads are protected asks, and the switch makes th
   // ordinary protected ask. So this switch genuinely widens what the reviewer
   // may answer — a private key read included. The test states that plainly
   // instead of claiming a narrower radius than the code has.
+  // A synthetic protected assessment without the credential flag, used as the
+  // switch's discriminator: same category, same explicit policy, no floor.
+  const answerable = { decision: 'ask', classifierEligible: true }
   for (const target of ['C:/Users/u/.ssh/id_rsa', 'C:/Users/u/.aws/credentials', 'C:/Users/u/.gnupg/secring.gpg']) {
     const exec = { name: 'read', arguments: { path: target } }
     const assessment = assessTool(exec, roots, artifacts)
@@ -143,11 +146,35 @@ test('blast radius: credential reads are protected asks, and the switch makes th
     // The clamp is what keeps that ask unanswerable today; the unlock turns it
     // into an ordinary ask the reviewer can actually answer. It must not become
     // an allow, and it must not stop being an ask.
-    assert.equal(categoryDirective(cfg(), category, assessment), 'ask', `${target}: locked ask`)
+    //
+    // Locked and unlocked agree HERE by design, so this pair cannot show that the
+    // switch is live: it is the credential floor that keeps both sides clamped,
+    // and even an explicit `auto` policy cannot lift it.
+    assert.equal(assessment.credentialRead, true, `${target}: the credential floor is what keeps this clamped`)
+    assert.equal(categoryDirective(cfg(), category, assessment), 'ask', `${target}: locked ask with the switch off`)
     assert.equal(
-      categoryDirective(cfg({ protectedAutoReview: true }), category, assessment),
+      categoryDirective(cfg({ categoryPolicy: { protected: 'auto' } }), category, assessment),
       'ask',
-      `${target}: unlocked, still an ask — now answerable`,
+      `${target}: locked — an explicit auto is clamped`,
+    )
+    assert.equal(
+      categoryDirective(cfg({ protectedAutoReview: true, categoryPolicy: { protected: 'auto' } }), category, assessment),
+      'ask',
+      `${target}: unlocked — the credential floor still keeps it an ask`,
+    )
+    // The non-vacuous version of the same pair, on the same category without the
+    // credential flag: with one explicit policy the directive follows the switch.
+    // Without this, a switch that did nothing at all would pass the two
+    // assertions above.
+    assert.equal(
+      categoryDirective(cfg({ categoryPolicy: { protected: 'auto' } }), category, answerable),
+      'ask',
+      `${target}: locked on an answerable protected call — explicit auto is clamped`,
+    )
+    assert.equal(
+      categoryDirective(cfg({ protectedAutoReview: true, categoryPolicy: { protected: 'auto' } }), category, answerable),
+      'auto',
+      `${target}: unlocked on an answerable protected call — the explicit auto flows through`,
     )
   }
 })

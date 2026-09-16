@@ -46,6 +46,48 @@ import { normalizePath, resolveRoots } from '../lib/auto/paths.js'
 const toSlash = (path) => path.replaceAll('\\', '/')
 const PLUGIN_REPO = toSlash(fileURLToPath(new URL('..', import.meta.url)).replace(/[\\/]$/, ''))
 
+/**
+ * The balanced `{ ... }` block starting at `openIndex`.
+ *
+ * String literals and comments are skipped so a brace inside them cannot
+ * unbalance the count, and the returned slice is the block itself — never a
+ * window that an indentation change could silently widen into neighbouring code.
+ */
+function braceBlockAt(src, openIndex, what) {
+  assert.notEqual(openIndex, -1, `${what}: the block's open brace is present`)
+  let depth = 0
+  for (let i = openIndex; i < src.length; i += 1) {
+    const ch = src[i]
+    if (ch === '/' && src[i + 1] === '/') {
+      i = src.indexOf('\n', i)
+      if (i === -1) break
+      continue
+    }
+    if (ch === '/' && src[i + 1] === '*') {
+      const end = src.indexOf('*/', i + 2)
+      assert.notEqual(end, -1, `${what}: unterminated block comment`)
+      i = end + 1
+      continue
+    }
+    if (ch === "'" || ch === '"' || ch === '`') {
+      const quote = ch
+      i += 1
+      while (i < src.length && src[i] !== quote) {
+        if (src[i] === '\\') i += 1
+        i += 1
+      }
+      assert.ok(i < src.length, `${what}: unterminated ${quote} literal`)
+      continue
+    }
+    if (ch === '{') depth += 1
+    else if (ch === '}') {
+      depth -= 1
+      if (depth === 0) return src.slice(openIndex, i + 1)
+    }
+  }
+  assert.fail(`${what}: unbalanced block`)
+}
+
 function makeRoots(workspace = PLUGIN_REPO) {
   const roots = resolveRoots(workspace, {})
   roots.allowedDshSubpaths = [normalizePath(PLUGIN_REPO, roots.workspace, roots.home)]
@@ -132,12 +174,21 @@ test('opaque fuse: ordinary targets still abstain so the classifier sees the lin
   // "The criterion should NOT hold here" half. An opaque line whose redirects
   // are routine workspace/temp paths must not be swept into the hard deny: the
   // semantic review it reaches is the intended handling.
+  //
+  // This half is a positive claim too, so it is asserted three ways. A loop that
+  // only rejects `deny` is satisfied by an `allow` (a static fail-open the fix
+  // must never introduce) and by a classifier-ineligible manual review, i.e. by
+  // exactly the outcomes this abstention is supposed to prevent.
   const failures = []
   for (const command of ABSTAINING) {
     const reason = hardDenyShellReason(command, 'bash', plainRoots)
     if (reason !== undefined) failures.push(`${command}: unexpectedly denied with "${reason}"`)
     const assessment = assessShell(command, 'bash', plainRoots, artifacts, undefined)
-    if (assessment.decision === 'deny') failures.push(`${command}: assessment denied`)
+    if (assessment.decision !== 'ask') failures.push(`${command}: decision=${assessment.decision}`)
+    if (assessment.classifierEligible !== true) failures.push(`${command}: classifierEligible=${assessment.classifierEligible}`)
+    if (!/independent classification/.test(String(assessment.reason))) {
+      failures.push(`${command}: reason does not route the line to classification: ${assessment.reason}`)
+    }
   }
   assert.deepEqual(failures, [], `opaque lines that lost their classifier path:\n${failures.join('\n')}`)
 })
@@ -184,19 +235,46 @@ test('opaque fuse: a null sink on an opaque line is not a write', () => {
 })
 
 test('opaque fuse: the recovery runs before the opaque early return', () => {
-  // Structural anchor for the call order. The behaviour tests above would still
-  // pass if a future edit re-introduced a second copy of the fuse elsewhere, so
-  // pin that the one implementation is reached on the opaque branch itself.
-  const source = readFileSync(fileURLToPath(new URL('../lib/auto/shell.js', import.meta.url)), 'utf8')
-  const opaqueBranch = source.indexOf("if (decomposition.kind === 'opaque')")
-  assert.notEqual(opaqueBranch, -1, 'the opaque branch is present in the compiled module')
-  const call = source.indexOf('opaqueHardDenyReason(compact, shell, ')
-  assert.notEqual(call, -1, 'the opaque branch calls the recovery helper')
-  assert.ok(call > opaqueBranch, 'the recovery is inside the opaque branch')
-  assert.ok(
-    source.indexOf('if (decomposition.kind === \'opaque\') return undefined') === -1,
-    'the bare early return that dropped every per-target fuse must be gone',
-  )
+  // Structural anchor for the call order, pinned by CONTAINMENT inside the opaque
+  // branch of THIS function. File order is not containment: the module's first
+  // `kind === 'opaque'` belongs to another function, so the old
+  // `call > opaqueBranch` comparison was satisfied by an unrelated location and
+  // stayed green even when the recovery was moved out of the branch entirely.
+  //
+  // Both trees are checked: the compiled module the tests import and the source
+  // it is built from, so the anchor survives a rebuild either way.
+  for (const file of ['../src/auto/shell.ts', '../lib/auto/shell.js']) {
+    const source = readFileSync(fileURLToPath(new URL(file, import.meta.url)), 'utf8')
+    const functionAt = source.indexOf('export function hardDenyShellReason(')
+    assert.notEqual(functionAt, -1, `${file}: hardDenyShellReason is present`)
+    const functionEnd = source.indexOf('\nfunction assessSegment(', functionAt)
+    assert.notEqual(functionEnd, -1, `${file}: the hardDenyShellReason body is bounded by the next declaration`)
+    const body = source.slice(functionAt, functionEnd)
+    // Head by regex (a reflow onto the next line must not hide the branch), and
+    // the block by PAIRED delimitation: an indentation-sensitive `\n    }` marker
+    // could stop at an unrelated 4-space brace, and a slice that is a superset of
+    // the branch is a false-pass direction for every containment assertion below.
+    const head = /if \(decomposition\.kind === 'opaque'\)\s*\{/.exec(body)
+    assert.notEqual(head, null, `${file}: the opaque branch head lives inside hardDenyShellReason`)
+    const openAt = body.indexOf('{', head.index)
+    const branch = braceBlockAt(body, openAt, `${file}: hardDenyShellReason opaque branch`)
+    assert.ok(openAt + branch.length < body.length, `${file}: the branch block closes inside hardDenyShellReason`)
+    const callAt = branch.indexOf('opaqueHardDenyReason(compact, shell, ')
+    assert.notEqual(callAt, -1, `${file}: the recovery is called from inside the opaque branch, got:\n${branch}`)
+    assert.ok(
+      branch.includes('return opaqueHardDenyReason(compact, shell, { ...roots, zoneFuseTrusted: false });'),
+      `${file}: the recovery must be the branch's verdict, not a discarded call`,
+    )
+    // The clock fuse keeps its own early return; the recovery must still be
+    // reached after it, inside the same branch.
+    const clockReturn = branch.indexOf('return opaqueClock')
+    assert.notEqual(clockReturn, -1, `${file}: the opaque clock-write fuse still runs first`)
+    assert.ok(clockReturn < callAt, `${file}: the recovery runs after the clock fuse and is still reached`)
+    assert.ok(
+      source.indexOf("if (decomposition.kind === 'opaque') return undefined") === -1,
+      `${file}: the bare early return that dropped every per-target fuse must be gone`,
+    )
+  }
 })
 
 test('opaque fuse: a redirect attached to the preceding word is judged too', () => {

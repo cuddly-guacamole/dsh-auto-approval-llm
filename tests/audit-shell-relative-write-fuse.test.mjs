@@ -61,12 +61,18 @@ test('relative write destinations reach the plugin-zone self-modify fuse', () =>
 test('a trailing flag does not hide the destination operand', () => {
   const verdict = shell('cp ./src/index.ts lib/index.js -v', zoneRoots)
   assert.equal(verdict.decision, 'deny', 'the destination is the last positional, not the last word')
+  // Pin the rule that owns the deny, not just "denied": a deny by a neighbouring
+  // fuse would leave the destination extraction this test covers unproven.
+  assert.match(verdict.reason ?? '', /plugin's own execution code \(lib\/\)/, 'the zone execution-code rule must own the deny')
+  assert.equal(verdict.classifierEligible, false, 'the deny must not degrade into an LLM-answerable ask')
 })
 
 test('a trailing value-taking flag does not hide the destination either', () => {
   for (const command of ['install ./src/index.ts lib/index.js -m 755', 'cp -b ./src/index.ts lib/index.js -S orig', 'mv ./src/index.ts lib/index.js -S orig']) {
     const verdict = shell(command, zoneRoots)
     assert.equal(verdict.decision, 'deny', `${command}: the flag value is not the destination`)
+    assert.match(verdict.reason ?? '', /plugin's own execution code \(lib\/\)/, `${command}: the zone execution-code rule must own the deny`)
+    assert.equal(verdict.classifierEligible, false, `${command}: the deny must not reach the classifier`)
   }
 })
 
@@ -85,4 +91,6 @@ test('routine relative operations keep their static allow (no over-block)', () =
 test('a dependency tree reached through a relative spelling is still fused', () => {
   const verdict = shell('cp ./src/index.ts node_modules/x.js', zoneRoots)
   assert.equal(verdict.decision, 'deny', 'a relative spelling must not dodge the dependency fuse')
+  assert.match(verdict.reason ?? '', /plugin's own execution code \(node_modules\/\)/, 'the dependency tree must be the named rule')
+  assert.equal(verdict.classifierEligible, false, 'the dependency deny must not reach the classifier')
 })

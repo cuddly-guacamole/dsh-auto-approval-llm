@@ -73,9 +73,18 @@ test('a routine zone write clears the DSH_HOME fuse and matches a normal workspa
     assert.equal(dev.decision, normal.decision, `${command}: dev zone=${dev.decision} vs normal workspace=${normal.decision}`)
     assert.notEqual(dev.decision, 'deny', `${command} must not be hard-denied inside the zone`)
   }
-  // The exact decisions, so a later loosening cannot pass as "same as normal".
-  assert.equal(verdictOf('printf x > .agents/out.md', devZone).decision, 'ask')
-  assert.equal(verdictOf('cp ./src/a.ts ./src/b.ts', devZone).decision, 'allow')
+  // The exact decisions, per command. A relation-only oracle ("same as a normal
+  // workspace") is satisfied by two identical wrong answers, in the zone and
+  // outside it alike, so it cannot pin the contract on its own.
+  for (const [command, expected] of [
+    ['printf x > .agents/out.md', 'ask'],
+    ['cat > src/a.ts', 'ask'],
+    ['tee tests/x.mjs', 'ask'],
+    ['cp ./src/a.ts ./src/b.ts', 'allow'],
+    ['sort -o ./out.txt ./in.txt', 'ask'],
+  ]) {
+    assert.equal(verdictOf(command, devZone).decision, expected, `${command} must decide ${expected} inside the zone`)
+  }
 })
 
 test('every other DSH_HOME target keeps the unconditional deny', () => {

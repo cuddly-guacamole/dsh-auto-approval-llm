@@ -122,8 +122,10 @@ test('structured reads: basename-only judgment mirrors the shell detector', () =
 
 test('host: pre-execute emits a durable appendAuditLine for runtime-state reads', () => {
   // Old code only debugLogged the read; a `type`-keyed appendAuditLine event
-  // with sessionId/toolName/files is the new persistent record.
-  assert.ok(SRC.includes("appendAuditLine(JSON.stringify({"), 'the durable append exists in the host')
+  // with sessionId/toolName/files is the new persistent record. The anchor is
+  // the event's own region below — a bare `SRC.includes('appendAuditLine(...')`
+  // precondition adds nothing here, because it is satisfied by any unrelated
+  // audit line in the host.
   const event = runtimeStateReadEvent(SRC)
   assert.ok(event.includes("type: 'runtime-state-read',"), 'the record carries the read event type')
   assert.match(event, /appendAuditLine/, 'the event is written through the appendAuditLine gate')

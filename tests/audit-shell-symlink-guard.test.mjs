@@ -166,15 +166,18 @@ test('guard: the narrowed verdict does not depend on the position mode', () => {
 test('guard: the resolver really ran on the shell target (the control is not vacuous)', () => {
   sandbox(({ ws, root }) => {
     writeFileSync(join(ws, 'plain.txt'), 'x')
-    let calls = 0
     const seen = []
-    const counting = (p) => { calls += 1; seen.push(p); return resolveDeepest(p) }
+    const counting = (p) => { seen.push(p); return resolveDeepest(p) }
     assert.equal(symlinkEscapeReason(bash('cat plain.txt'), rootsOf(ws, root), counting), undefined)
-    // The guard resolves the workspace root AND the target; a bare `calls > 0`
-    // would be satisfied by the workspace resolution alone, so require the
-    // target itself to have been resolved.
-    assert.ok(calls >= 2, `expected the workspace and the target to be resolved, got ${calls}`)
-    assert.ok(seen.some((p) => p.includes('plain.txt')), `resolved: ${seen.join(', ')}`)
+    // The guard resolves the workspace root AND the target, so pin both by
+    // value. A resolution COUNT cannot tell "workspace + target" from
+    // "workspace + something else", and it was fully absorbed by the target
+    // check beside it: the workspace resolution had no assertion of its own.
+    assert.ok(seen.includes(ws), `the workspace root itself must be resolved, got: ${seen.join(', ')}`)
+    assert.ok(
+      seen.some((p) => p.includes('plain.txt')),
+      `the extracted target must be resolved, got: ${seen.join(', ')}`,
+    )
   })
 })
 

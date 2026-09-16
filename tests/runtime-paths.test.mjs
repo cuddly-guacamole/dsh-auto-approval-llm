@@ -37,6 +37,7 @@ import {
   LEARNING_FILENAME,
   REVIEW_MODE_FILENAME,
   RUNTIME_FILENAMES,
+  appendRuntimeLine,
   ensureRuntimeDir,
   resolveRuntimeReadPath,
   resolveRuntimeWritePath,
@@ -64,18 +65,44 @@ function sandbox(body) {
 test('the canonical location is <DSH_HOME>/auto-approval-llm', () => {
   // Derived from the environment, not a hardcoded checkout path: a worktree, a CI
   // checkout or another user must each get their own state directory.
-  const dshHome = process.env.DSH_HOME?.trim() || join(homedir(), '.dsh')
-  assert.equal(stateDirPath(), join(dshHome, 'auto-approval-llm'))
-  assert.ok(stateDirPath().startsWith(dshHome), 'the state directory lives under DSH_HOME')
-  for (const name of RUNTIME_FILENAMES) {
-    assert.equal(runtimeFilePath(name), join(dshHome, 'auto-approval-llm', name))
+  //
+  // The environment value is DRIVEN here rather than recomputed. On a machine
+  // whose DSH_HOME already equals `~/.dsh` (this one), an implementation that
+  // ignored DSH_HOME and returned the fallback satisfied every assertion below,
+  // so a temporary DSH_HOME that differs from the fallback is what gives the
+  // derivation its teeth.
+  const previous = process.env.DSH_HOME
+  const dir = mkdtempSync(join(tmpdir(), 'dsa-m18-'))
+  const dshHome = join(dir, 'dsh-home')
+  assert.notEqual(dshHome, join(homedir(), '.dsh'), 'precondition: the driven env value differs from the fallback')
+  try {
+    process.env.DSH_HOME = dshHome
+    setRuntimeStateDir(undefined)
+    const stateDir = join(dshHome, 'auto-approval-llm')
+    assert.equal(stateDirPath(), stateDir, 'the state directory follows DSH_HOME')
+    assert.ok(stateDirPath().startsWith(dshHome), 'the state directory lives under DSH_HOME')
+    for (const name of RUNTIME_FILENAMES) {
+      assert.equal(runtimeFilePath(name), join(stateDir, name))
+      assert.equal(resolveRuntimeReadPath(name), join(stateDir, name), `${name}: the read path follows DSH_HOME`)
+      assert.equal(resolveRuntimeWritePath(name), join(stateDir, name), `${name}: the write path follows DSH_HOME`)
+    }
+    // The state directory must NOT be inside the package tree — that is the whole
+    // point: npm replaces the package directory on a version upgrade.
+    assert.ok(
+      !stateDirPath().startsWith(REPO_ROOT),
+      `state must live outside the installed package, got ${stateDirPath()}`,
+    )
+    // Control for the direction above: a blank DSH_HOME still falls back to
+    // `~/.dsh`, so the assertions are about the env branch, not about the
+    // directory simply being "wherever the test pointed it".
+    process.env.DSH_HOME = '   '
+    assert.equal(stateDirPath(), join(homedir(), '.dsh', 'auto-approval-llm'), 'a blank DSH_HOME falls back to ~/.dsh')
+  } finally {
+    if (previous === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = previous
+    setRuntimeStateDir(undefined)
+    rmSync(dir, { recursive: true, force: true })
   }
-  // The state directory must NOT be inside the package tree — that is the whole
-  // point: npm replaces the package directory on a version upgrade.
-  assert.ok(
-    !stateDirPath().startsWith(REPO_ROOT),
-    `state must live outside the installed package, got ${stateDirPath()}`,
-  )
 })
 
 test('every persisted file has exactly one name and the set has no duplicates', () => {
@@ -141,6 +168,13 @@ test('write creates the canonical directory and lands there', () => {
     const path = resolveRuntimeWritePath(HISTORY_FILENAME)
     assert.equal(path, join(stateDir, HISTORY_FILENAME))
     assert.ok(existsSync(stateDir), 'the write path creates the directory')
+    // "Lands there" is about the bytes, not about a directory appearing: a write
+    // helper that resolved somewhere else would satisfy every check above. Drive
+    // the append through the module's own write chain and read the record back at
+    // the canonical path.
+    const line = '{"id":"landing"}\n'
+    assert.equal(appendRuntimeLine(HISTORY_FILENAME, line), join(stateDir, HISTORY_FILENAME), 'the append reports the canonical file')
+    assert.equal(readFileSync(join(stateDir, HISTORY_FILENAME), 'utf8'), line, 'the record is readable at the canonical path')
   })
 })
 
@@ -168,19 +202,70 @@ test('setRuntimeStateDir is the host seam, and a relative path is refused', () =
   }
 })
 
+/**
+ * `src` with comment bodies blanked out, character indices preserved.
+ *
+ * A comment that mentions a call must not be counted as one, and blanking (rather
+ * than deleting) keeps every index usable for the region assertions below.
+ */
+function blankComments(src) {
+  const out = [...src]
+  for (let i = 0; i < src.length; i += 1) {
+    const ch = src[i]
+    if (ch === "'" || ch === '"' || ch === '`') {
+      const quote = ch
+      i += 1
+      while (i < src.length && src[i] !== quote) {
+        if (src[i] === '\\') i += 1
+        i += 1
+      }
+      continue
+    }
+    if (ch === '/' && src[i + 1] === '/') {
+      const end = src.indexOf('\n', i)
+      const stop = end === -1 ? src.length : end
+      for (let j = i; j < stop; j += 1) out[j] = ' '
+      i = stop - 1
+      continue
+    }
+    if (ch === '/' && src[i + 1] === '*') {
+      const end = src.indexOf('*/', i + 2)
+      if (end === -1) break
+      for (let j = i; j < end + 2; j += 1) out[j] = ' '
+      i = end + 1
+    }
+  }
+  return out.join('')
+}
+
 test('the host seam is applied before the stores are loaded', () => {
   // The ordering claim F1 violated. Reading from one directory while writing to
   // another is a split brain, so the load call must come after the seam is set.
-  // Match the CALLS by their indentation, not the nearest mention: the name also
-  // appears in the import list, in the function definition and in comments.
   const source = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
-  const seamAt = source.search(/^\s+setRuntimeStateDir\(join\(/m)
-  const loadAt = source.search(/^\s+loadRuntimeStores\(\)$/m)
+  const code = blankComments(source)
+  // Banning `loadHistory()` alone was a one-name guard: `loadRuntimeStores()` is
+  // the entry point that reaches every store, so a second call site — at module
+  // scope or from another seam — would restore the split brain while that ban
+  // stayed green. Count EVERY call site in code (comments blanked, the definition
+  // excluded), not just a bare whole-line call: `if (f) loadRuntimeStores()`,
+  // `void loadRuntimeStores()` and `loadRuntimeStores();` all escape a line-shape
+  // regex while loading the stores from somewhere else.
+  const callSites = [...code.matchAll(/(?<!function\s)loadRuntimeStores\s*\(/g)]
+  assert.equal(callSites.length, 1, `expected exactly one loadRuntimeStores() call site, got ${callSites.length}`)
+  const loadAt = callSites[0].index
+  const seamAt = code.search(/^\s+setRuntimeStateDir\(join\(/m)
   assert.ok(seamAt > 0, 'the host seam is called from apply()')
-  assert.ok(loadAt > 0, 'the stores are loaded from apply()')
   assert.ok(seamAt < loadAt, 'the state directory is set BEFORE the stores are loaded')
+  // And it is inside the apply() BODY, not merely after the apply() header: the
+  // closing brace of that body is the first top-level `}` after the header.
+  const applyAt = code.search(/export function apply\s*\(/)
+  assert.notEqual(applyAt, -1, 'apply() is present')
+  const applyEnd = code.indexOf('\n}', applyAt)
+  assert.notEqual(applyEnd, -1, 'the apply() body is delimited by a top-level close brace')
+  assert.ok(applyAt < loadAt && loadAt < applyEnd, 'the load call is inside the apply() body, where the state directory is known')
   // And nothing may load them at module scope, which is what broke the ordering.
-  assert.doesNotMatch(source, /^loadHistory\(\)$/m, 'history is not loaded at module load')
+  assert.doesNotMatch(source, /^loadRuntimeStores\(\)$/m, 'the stores are not loaded at module load')
+  assert.doesNotMatch(source, /^loadHistory\(\)$/m, 'history is not loaded at module load on its own either')
 })
 
 test('ensureRuntimeDir is idempotent and reports success', () => {

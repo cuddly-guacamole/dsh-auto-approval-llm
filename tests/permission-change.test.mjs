@@ -29,6 +29,66 @@ import {
 const SRC = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
 const HOST = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
 
+/**
+ * Slice `src` from a start marker to the end marker that FOLLOWS it.
+ *
+ * Both markers are mandatory: a renamed anchor fails loudly instead of handing
+ * back an empty slice that satisfies every `includes` check.
+ */
+function region(src, startMarker, endMarker, from = 0) {
+  const a = src.indexOf(startMarker, from)
+  assert.notEqual(a, -1, `source marker missing: ${startMarker}`)
+  const b = src.indexOf(endMarker, a + startMarker.length)
+  assert.notEqual(b, -1, `region end missing after ${startMarker}: ${endMarker}`)
+  assert.ok(b > a, `region end must follow its start: ${startMarker}`)
+  return src.slice(a, b)
+}
+
+/**
+ * The balanced `{ ... }` block that starts at the first `{` after `marker`.
+ *
+ * String literals and comments are skipped, so a brace inside them cannot
+ * unbalance the count, and the returned slice is the block itself rather than a
+ * window that silently grows into neighbouring code.
+ */
+function braceBlock(src, marker, from = 0) {
+  const at = src.indexOf(marker, from)
+  assert.notEqual(at, -1, `block marker missing: ${marker}`)
+  const open = src.indexOf('{', at + marker.length)
+  assert.notEqual(open, -1, `block open brace missing after ${marker}`)
+  let depth = 0
+  for (let i = open; i < src.length; i += 1) {
+    const ch = src[i]
+    if (ch === '/' && src[i + 1] === '/') {
+      i = src.indexOf('\n', i)
+      if (i === -1) break
+      continue
+    }
+    if (ch === '/' && src[i + 1] === '*') {
+      const end = src.indexOf('*/', i + 2)
+      assert.notEqual(end, -1, `unterminated block comment after ${marker}`)
+      i = end + 1
+      continue
+    }
+    if (ch === "'" || ch === '"' || ch === '`') {
+      const quote = ch
+      i += 1
+      while (i < src.length && src[i] !== quote) {
+        if (src[i] === '\\') i += 1
+        i += 1
+      }
+      assert.ok(i < src.length, `unterminated ${quote} literal after ${marker}`)
+      continue
+    }
+    if (ch === '{') depth += 1
+    else if (ch === '}') {
+      depth -= 1
+      if (depth === 0) return src.slice(open, i + 1)
+    }
+  }
+  assert.fail(`unbalanced block after ${marker}`)
+}
+
 test('permissionChangeFromEvent: the three permission planes are read', () => {
   assert.deepEqual(permissionChangeFromEvent({ type: 'permission/preset', data: { preset: 'auto' } }), {
     scope: 'preset',
@@ -150,22 +210,33 @@ test('host wiring: the record is gated on the baseline, audited, and carries its
     ['src/index.ts', SRC],
     ['lib/index.js', HOST],
   ]) {
-    // Region anchors instead of fixed character windows around a literal: the
-    // statements may move, their presence in the handler may not.
-    const handlerAt = source.lastIndexOf("'session/event'")
-    assert.ok(handlerAt > 0, `${label}: the session/event handler is wired`)
-    const handler = source.slice(handlerAt, handlerAt + 2000)
+    // Structural regions instead of fixed character windows: a 2000-character
+    // window silently stops covering the statements it names as the handler
+    // grows, and an oversized one can also pull in statements from outside the
+    // region, which is a false pass for every positive assertion below.
+    const handler = region(source, "anyCtx.on('session/event'", "anyCtx.on('session/disposed'")
     for (const needle of [
       'permissionChangeFromEvent(',
       'observePermissionChange(',
       'permissionBaselines.set(',
+      'if (observed.record)',
+    ]) {
+      assert.ok(handler.includes(needle), `${label}: the handler carries ${needle}`)
+    }
+    // The record itself is gated: the gate is the marker, so a mutation to
+    // `if (true) {` reddens here, and the audit append plus its whole payload must
+    // sit INSIDE that branch — otherwise a plugin-created pin would be audited as
+    // a user switch, which is the finding this test names.
+    const branch = braceBlock(handler, 'if (observed.record)')
+    for (const needle of [
+      'appendAuditLine(',
       "type: 'permission-change'",
-      'recentRejectedIds',
       'scope: change.scope',
       'to: change.to',
       "actor: 'user'",
+      'recentRejectedIds',
     ]) {
-      assert.ok(handler.includes(needle), `${label}: the handler carries ${needle}`)
+      assert.ok(branch.includes(needle), `${label}: the gated branch carries ${needle}`)
     }
     // The baseline is also folded from the host's own view, at creation and for
     // sessions that were already live when the plugin booted.
