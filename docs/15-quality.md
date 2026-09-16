@@ -56,8 +56,8 @@ node --test "tests/**/*.test.mjs"        # 1730/1730 全绿
 ::: tip 宿主下限线（0.1.5-rc.2）
 
 ```bash
-node scripts/test-host-lines.mjs            # 两条线各装一次
-node scripts/test-host-lines.mjs --line rc2 # 只跑最低支持线
+npm run test:host-lines               # 两条线各装一次
+npm run test:host-lines -- --line rc2 # 只跑最低支持线
 ```
 
 `scripts/test-host-lines.mjs` 在 `os.tmpdir()` 前缀里按精确版本装出 peer 并集承诺的每条宿主线，再把编译后的判定层驱动到该线真实的 `permission-presets` 服务上：断言每个 `@deepseek-ai/dsh-*` 恰为目标版本、能力探测落该线档位（rc.2 = legacy，0.1.6-alpha.1 = modern）、同签名迁移在真实包上通过、`dfa+never` 原样保留；装错线或读错档位即红（含同前缀内的反向对照）。安装前缀只落在 `os.tmpdir()`，不触碰仓库 `node_modules`。该入口需要 npm registry 访问，故列为发版前手工步骤，不并入离线的 `npm run gate`；新增宿主线时在 `HOST_LINES` 加一行。`session` 与 `sessionProjections` 状态机是测试桩；权限服务类与投影注册/`apply` 来自真实包。
