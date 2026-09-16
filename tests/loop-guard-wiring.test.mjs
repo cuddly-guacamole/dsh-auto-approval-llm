@@ -18,8 +18,33 @@ const host = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
 const built = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
 
 test('the loop gate fires at exactly the four auto-allow sites, in both planes', () => {
-  assert.equal([...host.matchAll(/loopGateFires\(/g)].length, 4, 'static-allow + classifier-allow in pre-execute, static-allow + auto-allow in the answerer')
-  assert.equal([...built.matchAll(/loopGateFires\(/g)].length, 4, 'the compiled bundle keeps the same wiring')
+  // The count alone cannot tell a gate from a corpse: an inverted, voided,
+  // bare-statement, or constant-swallowed call keeps the count at four. So the
+  // count is paired with forbidden-shape looks instead of a proximity pattern
+  // (which false-reds the moment a site assigns the result first).
+  for (const [plane, text] of [['source', host], ['bundle', built]]) {
+    assert.equal([...text.matchAll(/loopGateFires\(/g)].length, 4, `${plane}: exactly the four gated sites call the gate`)
+    assert.equal([...text.matchAll(/!\s*loopGateFires\(/g)].length, 0, `${plane}: no site may invert the gate polarity`)
+    assert.equal([...text.matchAll(/void\s+loopGateFires\(/g)].length, 0, `${plane}: no site may discard the gate result`)
+    assert.equal([...text.matchAll(/^[ \t]*loopGateFires\([^\n]*\);[ \t]*$/gm)].length, 0, `${plane}: no call may sit as a bare statement (a read result must be consumed)`)
+    assert.equal([...text.matchAll(/loopGateFires\([^\n]*\)\s*&&\s*false/g)].length, 0, `${plane}: the gate result must never be ANDed with a constant — the guard would never fire`)
+    assert.equal([...text.matchAll(/false\s*&&\s*loopGateFires\(/g)].length, 0, `${plane}: the gate must never sit behind a constant false`)
+    assert.equal([...text.matchAll(/loopGateFires\([^\n]*\)\s*\|\|\s*true/g)].length, 0, `${plane}: the gate result must never be ORed with a constant — auto-allow would never escalate`)
+  }
+})
+
+test('the gate closure only escalates on the core fired verdict', () => {
+  // The sites above are gated on the closure's return value, so the closure
+  // itself must stay a thin reader of the core: nothing may decide locally,
+  // and the fire must leave the pin the answerer later reads.
+  const gateAt = host.indexOf('const loopGateFires = (')
+  assert.ok(gateAt > 0, 'the gate closure is locatable')
+  const gate = host.slice(gateAt, host.indexOf('const loopGuardStatus', gateAt))
+  assert.ok(gate.length > 100, 'the gate body is locatable')
+  assert.ok(gate.includes('const { consecutive, fired } = recordLoopCall(state, loopKeyFor(toolName, args), threshold)'), 'the gate must feed the core its own key and threshold')
+  assert.match(gate, /if\s*\(\s*!\s*fired\s*\)\s*return false/, 'the gate must stay silent until the core fires')
+  assert.ok(gate.includes('loopGuardPinned.set(callId,'), 'a fire must record the one-shot cross-plane pin')
+  assert.ok(/\breturn true\b/.test(gate), 'a fire must report back to the call site')
 })
 
 test('the allowlist and declared-rule channels stay exempt (negative slices)', () => {

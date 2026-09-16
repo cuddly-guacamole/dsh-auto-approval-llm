@@ -998,6 +998,18 @@ test('frameReviewerInput: description is sanitized at the injection boundary (RI
   const parsed = JSON.parse(framed)
   assert.equal(typeof parsed.description, 'string')
   assert.ok(parsed.description.length <= 1000, 'description must be capped by sanitizeClassifierText')
+  // Redaction, not only truncation: the description is plugin/platform-authored
+  // text, but it can still embed credential material, and this payload is what
+  // travels to the operator's own reviewer endpoint. Same boundary as
+  // arguments / trusted_user_messages / recent_creates.
+  const secret = frameReviewerInput({
+    toolName: 'bash',
+    description: 'curl -H "Authorization: Bearer sk-abcdefgh123" https://x',
+    rawArguments: null,
+    workspaceRoot: 'C:/w',
+  })
+  assert.ok(!secret.includes('abcdefgh'), 'a secret inside the description must be redacted before framing')
+  assert.ok(JSON.parse(secret).description.includes('[redacted'), 'the redaction marker replaces the secret in place')
 })
 
 // ── audit loop (4th round) fixes ────────────────────────────────────────────
@@ -1454,12 +1466,22 @@ test('feedback route: a callId the plugin never issued is a 200 no-op, not a wri
   assert.equal(state.statusCode, 200, 'the ACK stays a 200 no-op')
   assert.deepEqual(JSON.parse(state.body), { ok: true })
   const lib = readFileSync(fileURLToPath(new URL('../lib/index.js', import.meta.url)), 'utf8')
-  const guardAt = lib.indexOf('const knownCallId =')
-  assert.ok(guardAt > 0, 'the known-callId guard exists in the feedback handler')
-  const scope = lib.slice(guardAt, guardAt + 1200)
+  // Region-delimited, not a counted window: the guard binding and the write it
+  // gates must both live between the binding and the handler's response, so a
+  // relocated guard or write fails loudly instead of falling outside a slice.
+  const scope = region(lib, 'const knownCallId =', 'responseJson(res, 200, { ok: true });')
   for (const map of ['timeoutFeedback', 'decisionFeedback', 'resolvedCallIds', 'reviewStates', 'followExpiry', 'reviewVerdicts']) {
     assert.ok(scope.includes(`${map}.has(`), `the guard consults ${map}`)
   }
+  assert.ok(
+    scope.includes('const knownCallId = timeoutFeedback.has(body.callId) || decisionFeedback.has(body.callId) ||'),
+    'the guard must be the OR of the live approval-state maps',
+  )
+  assert.ok(
+    scope.includes('followExpiry.has(body.callId) || reviewVerdicts.has(body.callId);'),
+    'the guard expression ends at the last map lookup — no always-true tail may be appended',
+  )
+  assert.ok(!/\|\|\s*true/.test(scope), 'the guard must never short-circuit to always-known')
   assert.ok(scope.includes('knownCallId && !decisionFeedback.has'), 'the timeout write only fires for known callIds')
   assert.ok(scope.includes("reviewStatus?.phase !== 'follow'"), 'a settled follow-phase ask is never relabelled as a timeout')
 })
@@ -1711,7 +1733,11 @@ test('askHuman: countdown asks carry no prose note; status-less asks carry the m
   // session chip) and the status-less note is a machine token the client
   // renders in the reader's language.
   const src = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
-  assert.ok(src.includes('AWAITING_MARKER'), 'the status-less note must come from the shared marker')
+  // The marker must be PUSHED on the status-less path: a bare
+  // `src.includes('AWAITING_MARKER')` is satisfied by the import line alone, so
+  // a note emptied to '' used to leave this green.
+  const statuslessNote = region(src, 'else if (!status) {', 'const extra = notes.map((n) =>')
+  assert.ok(statuslessNote.includes('notes.push(AWAITING_MARKER)'), 'the status-less note must come from the shared marker')
   assert.ok(!src.includes('countdownNote'), 'the retired countdown note builder must not be called')
   assert.ok(!src.includes('Awaiting human approval — no auto-countdown'), 'the English sentence must be gone from the host')
   const decisionSrc = readFileSync(new URL('../lib/auto/decision.js', import.meta.url), 'utf8')
@@ -2987,17 +3013,22 @@ test('category ask on LOCKED categories: hard-reject countdown, never auto-allow
   assert.ok(src.includes('isLockedCategory'), 'isLockedCategory helper must exist in the compiled host')
   assert.ok(src.includes("const isLockedCategory = (category"), 'helper must be the LOCKED predicate')
   // Non-locked category asks keep the status-less shape (no countdown status).
-  // Anchored structurally: right after the locked branch's countdown ask, the
-  // next category-ask return is the bare three-argument form — and it comes
-  // before the review-mode section that follows in the answerer.
-  const lockedAskAt = src.indexOf('return askHuman(req, undefined, next, false, lockedStatus)')
-  assert.ok(lockedAskAt !== -1, 'locked ask must pass the countdown status')
-  const afterLockedIf = src.indexOf('}', lockedAskAt)
-  assert.ok(afterLockedIf !== -1, 'the locked countdown branch must close')
-  const statuslessAt = src.indexOf('return askHuman(req, undefined, next)', afterLockedIf)
-  assert.ok(statuslessAt !== -1, 'non-locked category asks must stay status-less')
-  const reviewModeAt = src.indexOf('const reviewMode = reviewModes.get', statuslessAt)
-  assert.ok(reviewModeAt !== -1 && statuslessAt < reviewModeAt, 'the status-less ask is the category-ask exit, before review-mode handling')
+  // ONE region covers the LOCKED branch and the non-locked exit, bounded by a
+  // stable declaration rather than a call literal: a whole-file indexOf for the
+  // five-argument call finds the FIRST such ask, which belongs to an unrelated
+  // branch, and the branch boundary itself is the review-mode section.
+  const categoryBlock = region(src, 'if (isLockedCategory(classified.category', 'const reviewMode = reviewModes.get')
+  const lockedAsk = /return askHuman\([^\n]*lockedStatus\)/.exec(categoryBlock)
+  assert.notEqual(lockedAsk, null, 'the LOCKED ask must pass the countdown status to askHuman')
+  assert.ok(categoryBlock.includes("phase: 'countdown'"), 'the locked ask must publish a countdown')
+  assert.ok(categoryBlock.includes("action: 'reject'"), 'the locked countdown action must be pinned to reject')
+  assert.ok(categoryBlock.includes('lockedAsk: true'), 'the locked ask must be marked as a locked countdown')
+  assert.ok(!categoryBlock.includes('return askHuman(req, undefined, next);'), 'nothing in the category block may fall back to a status-less ask')
+  // The non-locked exit is the ask AFTER the locked one: it keeps the category
+  // audit label and never carries the locked countdown status.
+  const nonLockedExit = categoryBlock.slice(lockedAsk.index + lockedAsk[0].length)
+  assert.ok(nonLockedExit.includes('classified.category'), 'the non-locked category ask must keep its audit label')
+  assert.ok(!nonLockedExit.includes('lockedStatus'), 'the non-locked category ask must not carry the locked countdown status')
 })
 
 // ── notice queue: parallel tool results must not drop sibling notices ──────
@@ -3253,8 +3284,8 @@ test('signatureFor: deterministic output and structured tool shape keys', () => 
   assert.equal(signatureFor({ kind: 'tool', toolName: '', args: {} }), undefined)
   assert.equal(
     signatureFor({ kind: 'shell-bash', command: 'git status' })?.signature,
-    signatureFor({ kind: 'shell-bash', command: 'git status' })?.signature,
-    'same input, same output',
+    'git status',
+    'head + whitelisted subcommand, no operands: the same input yields the same template',
   )
   assert.deepEqual(LEARNING_KINDS, ['shell-bash', 'shell-pwsh', 'tool'])
 })
@@ -3638,10 +3669,14 @@ test('client bundle: learning keys survive every sync point (anti-clearing pin)'
 
 test('client bundle: settings-card grid bodies keep constrained tracks (control-clipping pin)', () => {
   const client = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
-  assert.ok(
-    client.includes('gridTemplateColumns') && client.includes('minmax(0, 1fr)'),
-    'grid bodies must carry a minmax(0,1fr) track so a long hint can never push the row control past the card edge',
-  )
+  const source = readFileSync(new URL('../src/client/index.ts', import.meta.url), 'utf8')
+  // EVERY card body carries the constrained track: one relaxed track is enough
+  // to let a long hint push the row control past the card edge, so the count is
+  // pinned instead of "at least one occurrence exists somewhere in the bundle".
+  const sourceTracks = [...source.matchAll(/gridTemplateColumns: 'minmax\(0, 1fr\)'/g)].length
+  assert.equal(sourceTracks, 12, 'every settings-card grid body carries the constrained track in the source')
+  const builtTracks = [...client.matchAll(/gridTemplateColumns: "minmax\(0, 1fr\)"/g)].length
+  assert.equal(builtTracks, sourceTracks, 'the compiled bundle keeps every constrained track (no body may relax to a fixed width)')
 })
 
 // ── reviewer route availability: explicit pair ∥ baseUrl ∥ session fallback ──
@@ -3750,14 +3785,18 @@ const runSnapshot = (credentialValue, over = {}) =>
 
 test('direct review snapshot: endpoint without a stored key fails loudly, never a doomed session fallback', async () => {
   // An explicit endpoint choice without a resolved key can only produce AUTH —
-  // fail loudly instead of silently reviewing with the session model.
+  // fail loudly instead of silently reviewing with the session model. The
+  // reason is pinned: a bare `'failure' in snap` also accepts an unrelated
+  // error and would let the endpoint degrade without anyone noticing.
   const snap = await runSnapshot(undefined, { reviewerSource: 'endpoint', endpointUrl: 'http://127.0.0.1:9999/v1', endpointModel: 'direct-model' })
-  assert.ok('failure' in snap, 'endpoint without a key must surface a failure')
+  assert.deepEqual(snap, { failure: 'endpoint source needs a resolved API key' }, 'endpoint without a key must surface that exact failure — and nothing else')
+  assert.ok(!('route' in snap) && !('transport' in snap) && !('payload' in snap), 'a failed snapshot carries no session fallback and no request body')
 })
 
 test('direct review snapshot: endpoint with blank model is half-wired and fails loudly', async () => {
   const snap = await runSnapshot('sk-test', { reviewerSource: 'endpoint', endpointUrl: 'http://127.0.0.1:9999/v1', endpointModel: '' })
-  assert.ok('failure' in snap, 'a blank endpoint model must surface a failure')
+  assert.deepEqual(snap, { failure: 'endpoint source needs a URL and model' }, 'a blank endpoint model must surface that exact failure — and nothing else')
+  assert.ok(!('route' in snap) && !('transport' in snap) && !('payload' in snap), 'a failed snapshot carries no session fallback and no request body')
 })
 
 test('direct review snapshot: endpoint + model + stored key yield the raw snapshot carrying baseUrl and apiKey', async () => {
@@ -3861,37 +3900,40 @@ test('onboarding injection: only after the AUTO gate, through queueNotice, plugi
   // inside the tools/pre-execute handler after the isAutoExecution gate, and
   // the notice must reach the agent only via queueNotice -> injectNotice.
   const src = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
-  const preAt = src.indexOf("anyCtx.on('tools/pre-execute'")
-  const gateAt = src.indexOf('if (!isAutoExecution(exec))', preAt)
-  const markAt = src.indexOf('markFirstAutoSessionNotice(authorityKeyFor(exec))')
-  const queueAt = src.indexOf("queueNotice(exec.agent, exec.callId, onboardingNoticeText(config.timeoutAction, 'en'))")
-  assert.ok(preAt !== -1 && gateAt !== -1, 'AUTO gate must exist in pre-execute')
-  assert.ok(markAt !== -1 && queueAt !== -1, 'injection must mark then queue')
+  // Containment, not bare file order: the mark and the queue call must live
+  // INSIDE the tools/pre-execute handler, after the AUTO gate. Comparing two
+  // global indexOf offsets also passes when the injection has moved into an
+  // unrelated handler that merely sits later in the file.
+  const pre = region(src, "anyCtx.on('tools/pre-execute'", "anyCtx.on('tools/result'")
+  const gateAt = pre.indexOf('if (!isAutoExecution(exec))')
+  const markAt = pre.indexOf('markFirstAutoSessionNotice(authorityKeyFor(exec))')
+  const queueAt = pre.indexOf("queueNotice(exec.agent, exec.callId, onboardingNoticeText(config.timeoutAction, 'en'))")
+  assert.notEqual(gateAt, -1, 'AUTO gate must exist in pre-execute')
+  assert.notEqual(markAt, -1, 'the one-shot mark must run inside the pre-execute handler')
+  assert.notEqual(queueAt, -1, 'the notice must be queued inside the pre-execute handler')
   assert.ok(markAt > gateAt, 'injection must run only after the AUTO gate')
   assert.ok(queueAt > markAt, 'injection must go through the notice queue')
   // Channel invariant: the notice never fakes a user message.
   assert.ok(src.includes("source: { kind: 'plugin', plugin: 'dsh-auto-approval-llm' }"))
-  // Flush path is injectNotice (never a bare session append): the notice
-  // queue's flush body must contain the injectNotice call, and both helpers
-  // exist module-level (injectNotice is defined before flushNotices uses it).
+  // Flush path is injectNotice (never a bare session append): the flush body
+  // must contain the injectNotice call, and both helpers exist module-level
+  // (injectNotice is defined before flushNotices uses it).
   const flushAt = src.indexOf('function flushNotices')
-  const injectCallAt = src.indexOf('injectNotice(session, agent, text);')
   const injectDefAt = src.indexOf('function injectNotice')
-  assert.ok(flushAt !== -1 && injectCallAt !== -1 && injectDefAt !== -1, 'flush helpers must exist')
-  assert.ok(injectCallAt > flushAt, 'flush must deliver through injectNotice')
+  const flush = region(src, 'function flushNotices', 'function watchNotices')
+  assert.notEqual(flushAt, -1, 'the full-queue flush helper must exist')
+  assert.notEqual(injectDefAt, -1, 'injectNotice must exist module-level')
   assert.ok(injectDefAt < flushAt, 'injectNotice must be defined before the flush body')
+  assert.ok(flush.includes('injectNotice(session, agent, text);'), 'the flush body must deliver through injectNotice')
   // Flush trigger: the reliable point is the tools/result event (scope carrier
   // keys on exec.agent, same chain as tools/pre-execute) — the session/event
   // subscription alone may be filtered for plugin contexts. Parallel tool
   // calls each settle their OWN notice there (per-call flush); the step/end
   // event still drains the whole queue.
-  const toolsResultAt = src.indexOf("ctx.on('tools/result'")
-  const sessionEventAt = src.indexOf("ctx.on('session/event'")
-  const flushAfterToolsResult = src.indexOf('flushNotice(session, callId)', toolsResultAt)
-  assert.ok(toolsResultAt !== -1, 'tools/result flush trigger must be registered')
-  assert.ok(flushAfterToolsResult > toolsResultAt && flushAfterToolsResult < sessionEventAt, 'tools/result handler must settle its own callId (per-call flush)')
+  const resultFlush = region(src, "ctx.on('tools/result'", "ctx.on('session/event'")
+  assert.ok(resultFlush.includes('flushNotice(session, callId)'), 'the tools/result handler must settle its own callId (per-call flush)')
   const stepEndAt = src.indexOf("event?.type === 'step/end'")
-  assert.ok(stepEndAt !== -1, 'step/end must remain the full-queue drain point')
+  assert.notEqual(stepEndAt, -1, 'step/end must remain the full-queue drain point')
   assert.ok(src.indexOf('flushNotices(session)', stepEndAt) > stepEndAt, 'step/end must call the full flushNotices')
 })
 
@@ -3990,15 +4032,41 @@ test('model sources: no half-configured combination crashes resolveConfig, and n
   // combination without throwing (the channel layer surfaces an error that
   // consumers fail loudly on, never a bootstrap crash).
   const combos = [
-    { reviewerSource: 'preset', reviewerProvider: 'deepseek' },                     // preset missing model
-    { reviewerSource: 'preset', reviewerModel: 'deepseek-v4-flash' },               // preset missing provider
-    { classifierSource: 'preset', classifierProvider: 'deepseek' },                 // classifier preset missing model
-    { reviewerSource: 'endpoint', endpointUrl: 'http://127.0.0.1:1/v1' },           // endpoint missing model
-    { reviewerSource: 'session', reviewerProvider: 'deepseek', reviewerModel: 'x' }, // session with leftovers
-    { reviewerSource: 'custom' },                                                    // stale retired enum
+    {
+      input: { reviewerSource: 'preset', reviewerProvider: 'deepseek' }, // preset missing model
+      expect: { reviewerSource: 'preset', reviewerProvider: 'deepseek', reviewerModel: '' },
+    },
+    {
+      input: { reviewerSource: 'preset', reviewerModel: 'deepseek-v4-flash' }, // preset missing provider
+      expect: { reviewerSource: 'preset', reviewerProvider: '', reviewerModel: 'deepseek-v4-flash' },
+    },
+    {
+      input: { classifierSource: 'preset', classifierProvider: 'deepseek' }, // classifier preset missing model
+      expect: { classifierSource: 'preset', classifierProvider: 'deepseek', classifierModel: '' },
+    },
+    {
+      input: { reviewerSource: 'endpoint', endpointUrl: 'http://127.0.0.1:1/v1' }, // endpoint missing model
+      expect: { reviewerSource: 'endpoint', endpointUrl: 'http://127.0.0.1:1/v1', endpointModel: '' },
+    },
+    {
+      input: { reviewerSource: 'session', reviewerProvider: 'deepseek', reviewerModel: 'x' }, // session with leftovers
+      expect: { reviewerSource: 'session', reviewerProvider: '', reviewerModel: '' },
+    },
+    {
+      input: { reviewerSource: 'custom' }, // stale retired enum
+      expect: { reviewerSource: 'session', reviewerProvider: '', reviewerModel: '' },
+    },
   ]
-  for (const combo of combos) {
-    assert.doesNotThrow(() => resolveConfig({ timeoutAction: 'reject', ...combo }), `resolveConfig must not throw for ${JSON.stringify(combo)}`)
+  // The normalized RESULT is the contract, not just "no throw": a half-wired
+  // lane must keep its explicit source (so consumers fail loudly) and a session
+  // lane must have its leftover pair cleaned, while a retired enum falls back to
+  // session. Asserting only doesNotThrow left the returned shape unverified.
+  for (const { input, expect } of combos) {
+    let cfg
+    assert.doesNotThrow(() => { cfg = resolveConfig({ timeoutAction: 'reject', ...input }) }, `resolveConfig must not throw for ${JSON.stringify(input)}`)
+    for (const [key, value] of Object.entries(expect)) {
+      assert.equal(cfg[key], value, `${key} must normalize to ${JSON.stringify(value)} for ${JSON.stringify(input)}`)
+    }
   }
   const hostSrc = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
   assert.ok(!hostSrc.includes('classifierPair'), 'no classifier override pair may survive')
@@ -4026,7 +4094,14 @@ test('review wait: configurable per-attempt timeout with clamped default', () =>
   // instead of a hardcoded constant, and the retry loop receives it.
   const src = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
   assert.ok(src.includes('reviewWaitSeconds'), 'setting must exist in the compiled host')
-  assert.ok(src.includes('attemptTimeoutMs:', 'retry loop must consume the wait setting'))
+  // Shape, not the exact clamp expression: extracting the budget into a local
+  // const or reordering the math must stay green, while a hardcoded literal is
+  // still caught independently below. The enclosing function is the slice
+  // because the derivation may legitimately move above the call.
+  const loop = region(src, 'async function reviewWithLLM(', 'function injectNotice(')
+  assert.match(loop, /attemptTimeoutMs:\s*[^,\n]/, 'the retry loop must pass a computed per-attempt budget')
+  assert.ok(!/attemptTimeoutMs:\s*\d/.test(loop), 'the per-attempt budget must never be a numeric literal')
+  assert.ok(/config\.reviewWaitSeconds/.test(loop), 'the per-attempt budget must be derived from the configured reviewWaitSeconds setting')
   assert.ok(src.includes('.reviewWaitSeconds ?? THRESHOLD_DEFAULTS.reviewWaitSeconds'), 'host fallback must not hardcode the wait')
   const cfg = resolveConfig({ timeoutAction: 'reject' })
   assert.equal(cfg.reviewWaitSeconds, 5, 'default wait is 5 seconds')
@@ -4038,7 +4113,15 @@ test('reviewer credential delete also clears file-fallback key line', () => {
   // the shared-file fallback line this plugin may have appended earlier.
   const src = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
   assert.ok(src.includes('function clearReviewerKeyFromCredentialFile'), 'file-clear helper must exist')
-  assert.ok(src.includes('clearReviewerKeyFromCredentialFile()'), 'DELETE handler must invoke the file clear')
+  // Containment: the INVOCATION must sit inside the credential route's DELETE
+  // branch. A file-level `includes` is also satisfied by the helper's own
+  // definition line, so the call could be removed while this stayed green.
+  const route = region(src, 'export function installReviewerCredentialRoute', 'export function installHistoryRoute')
+  const deleteAt = route.indexOf("if (req.method === 'DELETE') {")
+  assert.notEqual(deleteAt, -1, 'the credential route must handle DELETE')
+  const deleteBranch = route.slice(deleteAt, route.indexOf('const body = await readJsonBody(req);', deleteAt))
+  assert.ok(deleteBranch.includes('clearReviewerKeyFromCredentialFile()'), 'the DELETE branch must invoke the file clear')
+  assert.ok(deleteBranch.includes('fileClear ==='), 'the DELETE branch must report a failed file clear instead of a silent ok')
   const clientSrc = readFileSync(new URL('../src/client/index.ts', import.meta.url), 'utf8')
   assert.ok(clientSrc.includes("method: 'DELETE'"), 'client reset must issue a credential DELETE')
   assert.ok(clientSrc.includes('settings.reviewResetDone'), 'client reset must report completion')
@@ -4132,7 +4215,9 @@ test('pre-execute fast path: the hard fuse and both classifier verdicts write hi
   const classifierRecordAt = pre.indexOf("'classifier-allow'")
   assert.ok(classifierRecordAt !== -1 && pre.includes("'classifier-deny'"), 'both classifier verdicts must be recorded')
   assert.ok(classifierRecordAt < pre.indexOf('[dsh-auto-approval-llm] classifier deny'), 'the record precedes the deny return')
-  assert.ok(classifierRecordAt > pre.indexOf("ev: 'classifier-decision'"), 'the record consumes the settled decision')
+  const classifierDecisionAt = pre.indexOf("ev: 'classifier-decision'")
+  assert.notEqual(classifierDecisionAt, -1, 'the classifier decision must be logged on the fast path')
+  assert.ok(classifierRecordAt > classifierDecisionAt, 'the record consumes the settled decision')
   // Nothing is recomputed for the record: the risk tier and the reason are
   // the exact values the decision was made and logged with.
   assert.ok(pre.includes('llmRisk: riskTier'), 'the already-computed risk tier is reused')

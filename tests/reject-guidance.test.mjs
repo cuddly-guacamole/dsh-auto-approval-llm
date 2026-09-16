@@ -83,6 +83,26 @@ test('maybeInjectRejectGuidance: never throws, returns silently when disabled or
   assert.doesNotThrow(() => maybeInjectRejectGuidance({ session: { id: 's' } }, 'c1', { rejectGuidance: false }, OFFICIAL_REJECT_GUIDANCE_TEXT))
 })
 
+test('maybeInjectRejectGuidance: the disabled switch queues no notice at all', () => {
+  // The notice queue is module-private and has no test accessor, so "not
+  // injected" is pinned as "the guard returns before it ever touches the
+  // agent/session that queueing requires": an injected notice must read
+  // agent.session and the callId, and a recording agent sees zero interactions.
+  const touched = []
+  const recordingAgent = new Proxy({}, {
+    get(_target, property) {
+      touched.push(String(property))
+      return property === 'session' ? { id: 's-reject-guidance' } : undefined
+    },
+  })
+  maybeInjectRejectGuidance(recordingAgent, 'call-1', { rejectGuidance: false }, OFFICIAL_REJECT_GUIDANCE_TEXT)
+  assert.deepEqual(touched, [], 'a disabled switch must not touch the agent — nothing may be queued')
+  // Sanity: the same probe does fire when the switch is on, so the assertion
+  // above cannot pass merely because the trap never runs.
+  maybeInjectRejectGuidance(recordingAgent, 'call-1', { rejectGuidance: true }, OFFICIAL_REJECT_GUIDANCE_TEXT)
+  assert.ok(touched.length > 0 && touched.every((property) => property === 'session'), 'the enabled path reads the session that queueing needs')
+})
+
 // ── config wiring ─────────────────────────────────────────────────────────
 
 test('resolveConfig: rejectGuidance defaults to false and parses as boolean', () => {

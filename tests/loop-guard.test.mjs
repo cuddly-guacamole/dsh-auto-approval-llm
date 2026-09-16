@@ -16,8 +16,12 @@ import assert from 'node:assert/strict'
 import { fnv1a32, loopKeyFor, createLoopState, recordLoopCall, normalizeLoopThreshold, LOOP_GUARD_MAX_KEYS } from '../lib/auto/loop-guard.js'
 import { resolveConfig } from '../lib/index.js'
 
-test('fnv1a32: deterministic per input and discriminating across inputs', () => {
-  assert.equal(fnv1a32('bash\u0000{"command":"ls"}'), fnv1a32('bash\u0000{"command":"ls"}'))
+test('fnv1a32: matches the published FNV-1a 32-bit vectors and discriminates inputs', () => {
+  // The hash is a stored-key wire format, so it is pinned to known vectors
+  // (offset basis for '', one 0x61 step for 'a') instead of compared with itself.
+  assert.equal(fnv1a32(''), '811c9dc5')
+  assert.equal(fnv1a32('a'), 'e40c292c')
+  assert.equal(fnv1a32('bash\u0000{"command":"ls"}'), '483eb77d')
   assert.notEqual(fnv1a32('bash\u0000{"command":"ls"}'), fnv1a32('bash\u0000{"command":"ls -la"}'))
 })
 
@@ -30,7 +34,12 @@ test('loopKeyFor: the same call yields the same key regardless of argument key o
 })
 
 test('loopKeyFor: missing arguments fall back to a tool-level key', () => {
-  assert.equal(loopKeyFor('web_fetch', undefined), loopKeyFor('web_fetch', undefined))
+  // The fallback is exactly "tool name + separator + empty body": pinning the
+  // vector keeps `undefined` from folding into the '{}' body an explicit
+  // empty-arguments call produces.
+  assert.equal(loopKeyFor('web_fetch', undefined), fnv1a32('web_fetch\u0000'))
+  assert.equal(loopKeyFor('web_fetch', undefined), '8b8b560a')
+  assert.notEqual(loopKeyFor('web_fetch', undefined), loopKeyFor('web_fetch', {}), 'no arguments is not the same call as empty arguments')
   assert.notEqual(loopKeyFor('web_fetch', undefined), loopKeyFor('web_search', undefined))
 })
 
@@ -51,13 +60,19 @@ test('recordLoopCall: a different key breaks the streak (strict consecutiveness)
   assert.deepEqual(fourth, { consecutive: 1, fired: false }, 'a→a→b→a never fires')
 })
 
-test('recordLoopCall: the per-session table stays bounded (FIFO over least-recently-updated keys)', () => {
+test('recordLoopCall: the per-session table stays bounded (least-recently-updated eviction)', () => {
   const state = createLoopState()
   for (let i = 0; i < LOOP_GUARD_MAX_KEYS; i += 1) recordLoopCall(state, `k${i}`, 5)
   assert.equal(state.inner.size, LOOP_GUARD_MAX_KEYS)
+  // Re-touch k0: it is still the oldest INSERTED key but no longer the
+  // least-RECENTLY-updated one, so the next eviction must take k1. Plain
+  // insertion order would evict k0 and quietly turn the table into a FIFO that
+  // drops live streaks first.
+  recordLoopCall(state, 'k0', 5)
   recordLoopCall(state, 'k-new', 5)
-  assert.equal(state.inner.size, LOOP_GUARD_MAX_KEYS, 'the oldest entry was evicted, not grown')
-  assert.equal(state.inner.has('k0'), false, 'k0 (inserted first) is the one evicted')
+  assert.equal(state.inner.size, LOOP_GUARD_MAX_KEYS, 'one entry was evicted, never grown')
+  assert.equal(state.inner.has('k1'), false, 'k1 is now the least-recently-updated key and is the one evicted')
+  assert.equal(state.inner.has('k0'), true, 'the re-touched key survives')
   assert.equal(state.inner.has(`k${LOOP_GUARD_MAX_KEYS - 1}`), true, 'recent keys survive')
 })
 

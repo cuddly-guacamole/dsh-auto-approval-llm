@@ -860,7 +860,7 @@ test('LP3: exactly the registered learnable sites construct a learnable context'
   assert.ok(preSlot.includes("'direct-human-target'"), 'the pre-slot site is the registered direct-human target')
   assert.equal([...postSlot.matchAll(/, learnableContextFor\(/g)].length,
     LEARNABLE_HOOK_SITES.length - 2, 'the countdown ask sites carry every hook but the query gate and the direct-human target')
-  // 15 askHuman call sites: the five learnable countdown hooks (LOW llm /
+  // 17 askHuman call sites: the five learnable countdown hooks (LOW llm /
   // compressed-LOW close-in / MEDIUM / HIGH + the 2026-09-05 additions below),
   // the LOCKED hard-reject countdown plus the two locked hard-reject gates that
   // route into it (the allowlist mirror, 2026-09-05 user decision, and the
