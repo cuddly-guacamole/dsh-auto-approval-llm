@@ -582,6 +582,23 @@ function unwrapCommand(words) {
     return { words: current, dynamicInput };
 }
 /** Describe an interpreter boundary and whether its inline source is visible. */
+/** Whether a `-Flag`/`-Flag:value` word names the encoded-command boundary. */
+function encodedCommandPrefix(text) {
+    const match = /^-([A-Za-z]+)(?::.*)?$/.exec(text);
+    if (match === null)
+        return false;
+    const name = match[1].toLowerCase();
+    return name.length >= 2 && 'encodedcommand'.startsWith(name);
+}
+/** Whether a word opens an interpreter inline program on this plane. */
+function interpreterProgramFlag(base, text) {
+    const lower = text.toLowerCase();
+    if (base === 'cmd')
+        return lower === '/c' || lower === '/k' || lower === '-c';
+    if (base === 'powershell' || base === 'pwsh')
+        return lower === '/c' || lower === '-c' || (lower.startsWith('-') && lower.slice(1).length >= 2 && 'command'.startsWith(lower.slice(1)));
+    return text === '-c' || text === '--command';
+}
 function nestedExecution(name, words) {
     // The interpreter lists are matched against the name without its `.exe`
     // suffix: an interpreter spelled `python.exe` / `node.exe` (both real on a
@@ -597,21 +614,23 @@ function nestedExecution(name, words) {
         return undefined;
     }
     if (['sh', 'bash', 'zsh', 'fish', 'ksh', 'dash', 'cmd', 'powershell', 'pwsh'].includes(base)) {
-        // PowerShell -EncodedCommand carries its program as an opaque base64
-        // blob: there is no source to read, so the boundary must be marked
-        // instead of silently disappearing.
-        if (words.some((word, wordIndex) => wordIndex > 0 && /^-(?:encodedcommand|enc)$/i.test(word.text)))
+        const pwshPlane = ['powershell', 'pwsh'].includes(base);
+        const commandIndex = words.findIndex((word, wordIndex) => wordIndex > 0 && interpreterProgramFlag(base, word.text));
+        const scanLimit = commandIndex < 0 ? words.length : commandIndex;
+        // PowerShell -EncodedCommand carries an opaque base64 program. Any
+        // unambiguous prefix (-enc, -encoded) and the colon-fused spelling
+        // (-EncodedCommand:<b64>) name the same boundary; -e is accepted only
+        // on the PowerShell plane so a POSIX bash -e is not misread.
+        if (words.slice(1, scanLimit).some(word => pwshPlane
+            ? (/^-e$/i.test(word.text) || encodedCommandPrefix(word.text))
+            : encodedCommandPrefix(word.text)))
             return { encoded: true };
-        const index = words.findIndex((word, wordIndex) => wordIndex > 0 && /^(?:-c|\/c|--command|-Command|-command|[/]k)$/.test(word.text));
-        if (index < 0 || words[index + 1] === undefined)
+        if (commandIndex < 0 || words[commandIndex + 1] === undefined)
             return {};
-        // cmd and PowerShell `-Command` take the REST of the line as the
-        // program (`cmd /c mklink link target` used to be truncated to
-        // `mklink`, so its operands were never judged); a POSIX shell `-c`
-        // reads only the next word as the script and treats the rest as
-        // positional parameters.
+        // cmd and PowerShell take the REST of the line as the program; a POSIX
+        // shell -c reads only the next word as the script.
         const joinRest = ['cmd', 'powershell', 'pwsh'].includes(base);
-        return { source: joinRest ? words.slice(index + 1).map(word => word.text).join(' ') : words[index + 1].text };
+        return { source: joinRest ? words.slice(commandIndex + 1).map(word => word.text).join(' ') : words[commandIndex + 1].text };
     }
     if (['eval', 'iex', 'invoke-expression'].includes(base)) {
         return { ...(words.length < 2 ? {} : { source: words.slice(1).map(word => word.text).join(' ') }) };
@@ -1802,6 +1821,14 @@ function shellWriteToDshHomeDenied(normalizedPath, roots) {
         return undefined;
     return (roots.allowedDshSubpaths ?? []).some(root => isWithin(root, normalizedPath)) ? 'shell write to DSH_HOME is not permitted in this form — use the write or edit tool, or a single-segment literal content write' : 'shell write to DSH_HOME is not permitted by auto mode';
 }
+/** Whether a `-Flag` word is an unambiguous prefix of one candidate parameter. */
+function pwshFlagMatch(text, candidates) {
+    const match = /^-([A-Za-z]+)$/.exec(text);
+    if (match === null)
+        return undefined;
+    const name = match[1].toLowerCase();
+    return candidates.find(candidate => candidate.startsWith(name) && (name.length >= 2 || candidate === 'target' || candidate === 'value'));
+}
 function segmentHardDenyReason(segment, shell, roots) {
     for (const target of segment.writeTargets) {
         if (isNullSink(target, shell))
@@ -1879,27 +1906,21 @@ function segmentHardDenyReason(segment, shell, roots) {
         writeOperands = [];
         for (let index = 1; index < unwrapped.words.length; index += 1) {
             const word = unwrapped.words[index];
-            // Inline colon spellings (`-Path:VALUE`) fuse the flag and its
-            // value into one word. Without lifting the value the write-target
-            // fuses below never see a destination that the separated spelling
-            // (`-Path VALUE`) flags, so `set-content -Path:$HOME/.dsh/…` used
-            // to decay into an LLM-answerable ask. Mirror the separated path:
-            // carry the source word's dynamic/glob markers so `$HOME` keeps
-            // the unconditional hard deny. `-Destination` belongs here too
-            // (its separated value is caught as a positional below; the fused
-            // form would otherwise hide it behind a leading `-`).
+            // Inline colon spellings (`-Path:VALUE`) fuse the flag and its value
+            // into one word; PowerShell also binds unambiguous parameter
+            // prefixes (`-Pa:VALUE` is `-Path:VALUE`), so the value is lifted
+            // through the same prefix matcher rather than a full-spelling regex.
             const identityCmdlet = name === 'new-item' || name === 'ni';
-            const inlineValue = identityCmdlet
-                ? /^-(?:path|literalpath|filepath|destination|target|targe|targ|tar|ta|value|valu|val|va):(.+)$/i.exec(word.text)
-                : /^-(?:path|literalpath|filepath|destination):(.+)$/i.exec(word.text);
-            if (inlineValue !== null) {
-                if (inlineValue[1] !== '')
-                    writeOperands.push({ text: inlineValue[1], dynamic: word.dynamic, glob: word.glob, quoted: true });
+            const pathFlags = identityCmdlet
+                ? ['path', 'literalpath', 'filepath', 'destination', 'target', 'value']
+                : ['path', 'literalpath', 'filepath', 'destination'];
+            const inlineMatch = /^-([A-Za-z]+):(.*)$/.exec(word.text);
+            if (inlineMatch !== null && pwshFlagMatch('-' + inlineMatch[1], pathFlags)) {
+                if (inlineMatch[2] !== '')
+                    writeOperands.push({ text: inlineMatch[2], dynamic: word.dynamic, glob: word.glob, quoted: true });
                 continue;
             }
-            if (identityCmdlet
-                ? /^-(?:path|literalpath|filepath|target|targe|targ|tar|ta|value|valu|val|va)$/i.test(word.text)
-                : /^-(?:path|literalpath|filepath)$/i.test(word.text)) {
+            if (pwshFlagMatch(word.text, pathFlags) !== undefined) {
                 const value = unwrapped.words[index + 1];
                 if (value !== undefined) writeOperands.push(value);
                 index += 1;
@@ -2350,7 +2371,8 @@ function payloadUnreadable(payload) {
         const trimmed = line.trim();
         if (trimmed === '' || trimmed.startsWith('#'))
             continue;
-        return /^[$`"']/.test(trimmed);
+        if (/^[$`"']/.test(trimmed))
+            return true;
     }
     return false;
 }
@@ -2358,6 +2380,15 @@ function payloadUnreadable(payload) {
 function opaqueDestructiveLockedReason(source, stripped, shell, roots) {
     if (destructiveNestedSource(stripped))
         return 'destructive command in the readable part of an opaque line';
+    // A here-document body can also reach an interpreter through a command
+    // substitution (`eval "$(cat <<EOF ... rm -rf ... EOF)"`): the body is
+    // stripped from the syntax view, so the raw text is the only place the
+    // destructive program is visible. Gate on an interpreter already present
+    // in the syntax so a commit message that merely names the tokens stays
+    // reviewable.
+    const syntaxText = String(stripped).toLowerCase();
+    if (destructiveNestedSource(source) && (syntaxText.includes('eval') || syntaxText.includes('iex') || syntaxText.includes('invoke-expression')))
+        return 'here-document body reaches an interpreter through a command substitution';
     if (!hereDocumentRunsAsCode(source))
         return undefined;
     const interpreter = hereDocumentInterpreterName(source);
