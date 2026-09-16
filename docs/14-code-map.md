@@ -85,6 +85,6 @@ verify-*.mjs            3 个运行时验证脚本（verify-auth / verify-config
 
 **client（tsdown）**：`src/client/index.ts` → `lib/client.js`（CJS / browser platform），banner 包 `window.__ModuleLoader__.load({id, factory})`；声明依赖（react/slots/primitives/runtime）外部化，其余打包。文件头保留 dsh-auto-mode 的 MIT 致谢。
 
-**bundle 层（patch.yml）**：权限预设 `auto-approval` = `danger-full-access` + `approval: ask`（host 名 `Auto approval`；**禁飙到 never**，自有档 effective-never 由插件运行时归一回 ask）。宿主 `>= 0.1.6` 不得出现 `auto` preset（上游 auto-review 保留名，配置即 boot 失败），故本插件与上游 `@deepseek-ai/dsh-experimental-auto-review` 二选一。bundle 不再覆盖安全行为开关（`autoSwitchPolicyToAsk` 已退役并保留为 host-owned no-op）；`humanOnlyList` 保持代码默认空。
+**bundle 层（patch.yml）**：权限预设 `auto-approval` = `danger-full-access` + `approval: ask`（host 名 `Auto approval`；**禁飙到 never**，自有档 effective-never 由插件运行时归一回 ask）。宿主 `>= 0.1.6` 的 shipped patch 不得静态定义 `auto` preset（该名归上游 auto-review 运行期 `registerAuto` 注册，静态配置即 boot 失败）；本插件只定义/接管 `auto-approval`，与上游的 `auto` 档可同时启用。bundle 不再覆盖安全行为开关（`autoSwitchPolicyToAsk` 已退役并保留为 host-owned no-op）；`humanOnlyList` 保持代码默认空。
 
 **exports**：`.`（lib/index.js + types）、`./client`（lib/client.js + types contact）、`./package.json`；peerDeps 覆盖 cordis ≥4.0.1<5、dsh-llm / dsh-tools / dsh-session / dsh-permission-presets / dsh-user-approval ≥0.1.5-rc.2<2 || ≥0.1.6-alpha.1<2、schemastery ^3.18.0 —— 并集同时覆盖 `<0.1.6` 的旧 `auto` 别名窗口与 0.1.6 系列（含 rc）。新增 `src/auto/preset-migration.ts` 承载多信号宿主能力探测、raw identity gate、同签名懒迁移与自有档 spec enforcement；最低支持宿主提升到 0.1.6 系列时移除 legacy/unknown 分支与 `auto` 客户端 variant。

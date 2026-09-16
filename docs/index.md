@@ -26,7 +26,7 @@ hero:
 </div>
 
 > 为 DeepSeek Harness 的 **Auto 权限档**提供 LLM 辅助自动审批 + 超时自动兜底。
-> Auto 档（machine value `auto-approval`，host 名 `Auto approval`）= `sandbox: danger-full-access` + `approval: ask`。本插件在本档会话里充当 `approval/request` 的**唯一终结裁决者**：常规操作放行、危险/模糊操作交给「静态规则 → LLM 分类 → LLM/人工裁决 → 倒计时兜底 → 熔断」的自动管线，同时保证有人工与审计兜底。宿主 `>= 0.1.6` 与上游 `@deepseek-ai/dsh-experimental-auto-review`（`auto`，Auto review / EXP）二选一。
+> Auto 档（machine value `auto-approval`，host 名 `Auto approval`）= `sandbox: danger-full-access` + `approval: ask`。本插件在本档会话里充当 `approval/request` 的**唯一终结裁决者**：常规操作放行、危险/模糊操作交给「静态规则 → LLM 分类 → LLM/人工裁决 → 倒计时兜底 → 熔断」的自动管线，同时保证有人工与审计兜底。宿主 `>= 0.1.6` 的 `auto` 档归上游 `@deepseek-ai/dsh-experimental-auto-review`（Auto review / EXP）；本插件只接管 `auto-approval`，两者可同时启用。
 
 ## 核心数字
 

@@ -16,7 +16,7 @@
 
 </div>
 
-`Auto 档`（machine value `auto-approval`；host 显示名 `Auto approval`；中文客户端显示 `自动审批`）= `sandbox: danger-full-access` + `approval: ask`。本插件在本档会话里充当 `approval/request` 的**唯一终结裁决者**：常规操作经静态规则直接放行，危险/模糊操作走「静态规则 → LLM 分类 → LLM/人工裁决 → 倒计时兜底 → 熔断」，全程保留人工与审计兜底。宿主 `>= 0.1.6` 的 `auto` 归上游 `@deepseek-ai/dsh-experimental-auto-review`（Auto review / EXP），与本插件**二选一，不可同开**。
+`Auto 档`（machine value `auto-approval`；host 显示名 `Auto approval`；中文客户端显示 `自动审批`）= `sandbox: danger-full-access` + `approval: ask`。本插件在本档会话里充当 `approval/request` 的**唯一终结裁决者**：常规操作经静态规则直接放行，危险/模糊操作走「静态规则 → LLM 分类 → LLM/人工裁决 → 倒计时兜底 → 熔断」，全程保留人工与审计兜底。宿主 `>= 0.1.6` 的 `auto` 归上游 `@deepseek-ai/dsh-experimental-auto-review`（Auto review / EXP），；本插件只接管 `auto-approval` 档、上游只接管 `auto` 档（按 derived preset 判档），两者**作用于不同档位、可同时启用**。
 
 ---
 
@@ -69,14 +69,14 @@ flowchart TD
 
 **前置**：会话/预设处于 **Auto 档**（machine value `auto-approval` = `danger-full-access` + `approval: ask`，用 `/permission auto-approval` 切换）；DSH `0.1.5-rc.2`+；Node `^22.19.0 || >=24.0.0`。
 
-兼容窗口：宿主 `>= 0.1.6` 上 `auto` 是上游 `@deepseek-ai/dsh-experimental-auto-review`（Auto review / EXP）的保留名，**本插件与它二选一，不可同开**；宿主 `< 0.1.6` 时本插件 gate 仍接受旧机器值 `auto` 别名，但 shipped patch 只定义 `auto-approval`。移除触发 = 最低支持宿主提升到 0.1.6 系列（rc 可用）。
+兼容窗口：宿主 `>= 0.1.6` 上 `auto` 是上游 `@deepseek-ai/dsh-experimental-auto-review`（Auto review / EXP）的保留名，本插件只定义/接管 `auto-approval`，两者**分档并存、可同时启用**；宿主 `< 0.1.6` 时本插件 gate 仍接受旧机器值 `auto` 别名，但 shipped patch 只定义 `auto-approval`。移除触发 = 最低支持宿主提升到 0.1.6 系列（rc 可用）。
 
 ```bash
 dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 ```
 
 - 安装后**重启 dsh**，host 侧才生效。
-- **只作用于 Auto 档**（其他权限档不介入）；切换用 `/permission auto-approval`。本插件是 `approval/request` 的唯一终结者 —— **不要与其它审批类插件同开，尤其不要与上游 `@deepseek-ai/dsh-experimental-auto-review` 的 `auto`（Auto review / EXP）同时启用**。
+- **只作用于 Auto 档**（其他权限档不介入）；切换用 `/permission auto-approval`。本插件是 `auto-approval` 档 `approval/request` 的唯一终结者 —— **同一档位不要再叠加第二个审批裁决者**；上游 `@deepseek-ai/dsh-experimental-auto-review` 的 `auto`（Auto review / EXP）是另一个档位，两者可同时启用。
 - **平台**：Windows + Git Bash 为主开发/测试基线；macOS / Linux / WSL 代码已适配但无真实用户验证；Android 原生环境不支持。→ [docs/19](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/blob/main/docs/19-platform-support.md)
 - **反馈**：到 [GitHub Issues](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/issues) 报告，注明平台、dsh 版本、插件版本、复现命令与预期行为。
 - 本地开发：`npx tsc -p tsconfig.json` + `npx tsdown`，以 `link:` 加载（host 改动需重启，client 改动自动热载）。→ [docs/14](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/blob/main/docs/14-code-map.md)
@@ -162,7 +162,7 @@ dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 
 ## 安全模型摘要
 
-- **唯一终结者**：命中本插件档（`auto-approval`）的 approval 由本插件终结（prepend + global），不双弹窗、不双写；与上游 auto-review 二选一。
+- **唯一终结者**：命中本插件档（`auto-approval`）的 approval 由本插件终结（prepend + global），不双弹窗、不双写；上游 auto-review 的 `auto` 档与本档互不接管，可并存。
 - **fail-closed**：评审超时 / 垃圾 / 失败 → 拒绝或转人；ESCALATE 一律转人，不被 `timeoutAction=allow` 自动放行。
 - **reasoning-blind**：评审只看工具名 + 结构化脱敏参数 + 有界直接用户消息（唯一授权证据）+ 工作区事实。
 - **密钥不出 host**：在线评审密钥存 DSH 凭据，每操作解析，前端仅显「已配置」。

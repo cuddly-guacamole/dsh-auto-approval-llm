@@ -16,7 +16,7 @@
 
 </div>
 
-`Auto tier` (machine value `auto-approval`; host name `Auto approval`; zh client `自动审批`) = `sandbox: danger-full-access` + `approval: ask`. In this tier the plugin is the **single terminal answerer** for `approval/request`: routine calls pass through static rules, while dangerous or ambiguous ones follow "static rules → LLM classifier → LLM/human verdict → countdown fallback → breaker", with human and audit fallbacks kept throughout. On hosts `>= 0.1.6` the name `auto` belongs to the upstream `@deepseek-ai/dsh-experimental-auto-review` (Auto review / EXP): the two are **mutually exclusive and must not be enabled together**.
+`Auto tier` (machine value `auto-approval`; host name `Auto approval`; zh client `自动审批`) = `sandbox: danger-full-access` + `approval: ask`. In this tier the plugin is the **single terminal answerer** for `approval/request`: routine calls pass through static rules, while dangerous or ambiguous ones follow "static rules → LLM classifier → LLM/human verdict → countdown fallback → breaker", with human and audit fallbacks kept throughout. On hosts `>= 0.1.6` the name `auto` belongs to the upstream `@deepseek-ai/dsh-experimental-auto-review` (Auto review / EXP): the upstream only acts when the derived preset is auto, so the two **own different tiers and can be enabled together**.
 
 ---
 
@@ -69,14 +69,14 @@ flowchart TD
 
 **Prerequisites**: the session or preset is on the **Auto tier** (machine value `auto-approval` = `danger-full-access` + `approval: ask`; switch with `/permission auto-approval`); DSH `0.1.5-rc.2`+; Node `^22.19.0 || >=24.0.0`.
 
-Compatibility window: on hosts `>= 0.1.6` the name `auto` is reserved for the upstream `@deepseek-ai/dsh-experimental-auto-review` (Auto review / EXP), so this plugin and that layer are **mutually exclusive**; on hosts `< 0.1.6` the plugin gate still accepts the legacy machine value `auto` alias, while the shipped patch defines only `auto-approval`. Removal trigger = raising the minimum supported host to the 0.1.6 series (rc counts).
+Compatibility window: on hosts `>= 0.1.6` the name `auto` is reserved for the upstream `@deepseek-ai/dsh-experimental-auto-review` (Auto review / EXP), while this plugin only defines and gates `auto-approval`, so the two **own different tiers and can be enabled together**; on hosts `< 0.1.6` the plugin gate still accepts the legacy machine value `auto` alias, while the shipped patch defines only `auto-approval`. Removal trigger = raising the minimum supported host to the 0.1.6 series (rc counts).
 
 ```bash
 dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 ```
 
 - **Restart dsh** after installing, so the host side takes effect.
-- **Auto tier only** (other permission tiers are untouched); switch with `/permission auto-approval`. This plugin is the single terminal answerer for `approval/request` — **do not enable it alongside another approval plugin, in particular not the upstream `@deepseek-ai/dsh-experimental-auto-review` (`auto`, Auto review / EXP)**.
+- **Auto tier only** (other permission tiers are untouched); switch with `/permission auto-approval`. This plugin is the single terminal answerer for `approval/request` **in the `auto-approval` tier** — do not stack a second terminal answerer on the same tier; the upstream `@deepseek-ai/dsh-experimental-auto-review` (`auto`, Auto review / EXP) owns a different tier and can be enabled together.
 - **Platforms**: Windows + Git Bash is the primary development and test baseline; macOS / Linux / WSL are adapted in code but not verified by real users; Android native environments are unsupported. → [docs/19](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/blob/main/docs/19-platform-support.md)
 - **Feedback**: please file a [GitHub issue](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/issues) with your platform, dsh version, plugin version, reproduction command and expected behavior.
 - Local development: `npx tsc -p tsconfig.json` plus `npx tsdown`, loaded through a `link:` dependency (host changes need a restart; client changes hot-reload). → [docs/14](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/blob/main/docs/14-code-map.md)
@@ -162,7 +162,7 @@ When the directory cannot be written, the plugin **fails closed**: the audit gat
 
 ## Security model summary
 
-- **Single terminal answerer**: an approval in this plugin's tier (`auto-approval`) is settled by this plugin (prepend + global), so there are never two popups or two writes; it is mutually exclusive with the upstream auto-review.
+- **Single terminal answerer**: an approval in this plugin's tier (`auto-approval`) is settled by this plugin (prepend + global), so there are never two popups or two writes; the upstream auto-review owns the `auto` tier and is never touched, so the two can coexist.
 - **fail-closed**: reviewer timeout / garbage / failure → reject or hand to a human; ESCALATE always goes to a human and is never auto-allowed by `timeoutAction=allow`.
 - **reasoning-blind**: the reviewer sees only the tool name, structurally sanitized arguments, bounded direct user messages (the sole authorization evidence) and workspace facts.
 - **Keys never leave the host**: the online-review key lives in DSH credentials, is resolved per operation, and the frontend only ever shows "Configured".
