@@ -1,7 +1,7 @@
 # 11 · 数据与持久化
 > *What lands on disk*
 
-插件运行态共**六个文件**（<span class="lnum">paths.ts:LRUNTIME_STATE_BASENAMES</span> RUNTIME_STATE_BASENAMES 六员：`history.jsonl / audit.jsonl / approval-debug.jsonl / review-mode.json / llm-latency.jsonl / learning.json`）——这名单同时是保护对象：任何工具调用改写它们都会被静态引擎无条件硬拒；且规范目录位于 `DSH_HOME` 下，guard 对 `DSH_HOME` 的写入本身就一律拒绝（不限于这六个文件名；唯一常量例外是插件自身开发区），保护比按名单匹配更宽。
+插件运行态共**六个文件**（<span class="lnum">paths.ts:LRUNTIME_STATE_BASENAMES</span> RUNTIME_STATE_BASENAMES 六员：`history.jsonl / audit.jsonl / approval-debug.jsonl / review-mode.json / llm-latency.jsonl / learning.json`）——这名单同时是保护对象：任何工具调用改写它们都会被静态引擎无条件硬拒；且规范目录位于 `DSH_HOME` 下，guard 对 `DSH_HOME` 的写入本身就一律拒绝（不限于这六个文件名；常量例外 = 插件自身开发区 ∪ 会话工作区（当它是 DSH_HOME 的 plugins 直接子目录时）），保护比按名单匹配更宽。
 
 ## 位置与读写（`<DSH_HOME>/auto-approval-llm/`）
 
