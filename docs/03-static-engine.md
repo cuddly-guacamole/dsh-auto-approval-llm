@@ -155,3 +155,10 @@ flowchart TD
     C1 --> C2["settle（结果时）：成功（shell exitCode===0 或 write operation==='create'）才登记进 created [post]"]
     C2 --> C3["闭环：删除命令只豁免「本会话=self 亲手创建」的文件，其余删除一律交人工 [deny-exempt]"]
 ```
+
+## 3.7　已知边界 · 嵌套解释器与 opaque 锁定（2026-09-16 登记，不再加宽）
+
+- **已闭合**：`hardDenyShellReason` 按解释器边界**有界递归**（`MAX_NESTED_HARD_DENY_DEPTH=3`，超出即硬拒）；`pwsh`/`cmd` 归一同一平面；解释器 flag 认 `-c`/`-Command` 的无歧义前缀（如 `-Com`）、cmd 大小写（`/C`/`/K`）与 `-EncodedCommand` 家族（`-en`/`-enc`/`-encoded`/`-EncodedCommand:<b64>`，编码体一律 hard-deny）；pwsh 写 cmdlet 的路径/身份参数按无歧义前缀提取（`-Pa`/`-Tar`/`-T` 等），`mklink` 两个 positional 同判身份写。
+- **opaque/heredoc 锁定**：若其可执行正文含破坏性命令（含引号内 `os.system('rm -rf …')`、`eval "$(cat <<EOF …)"`）或读凭据，携带结构化 `opaqueLocked` 进入 LOCKED 同款**钉死拒绝倒计时**，不再落在线评审器直放；普通数据正文（`cat <<EOF`）、commit 消息与只读命令维持原档。
+- **已知残余（如实写明）**：`bash -c` 多层转义套娃在**深度 ≥4** 时，解析器可能取不到内层 source 而退出递归，落回可应答 ask（深度 ≤3 与单层包装已闭合）。当前决定**不再加宽**（继续加宽会扩大 over-block），登记于此备查。
+- **AD（面板 marker）**：breaker/locked/awaiting 文案改读 host reason（按 approval key 的有界 map），不再信任含工具命令回显的 `panel.textContent`；`onDetach` 仅清 canonical key，宿主 `pending.key` 若非 canonical 会残留（受 `MAX_PENDING_REASONS=500` 封顶）。
