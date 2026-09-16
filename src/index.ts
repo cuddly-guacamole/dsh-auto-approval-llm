@@ -23,7 +23,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
-import { appendFileSync, existsSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { isIP } from 'node:net'
 import { networkInterfaces, homedir } from 'node:os'
 import { join } from 'node:path'
@@ -3574,14 +3574,16 @@ export function apply(ctx: Context, rawConfig: Config): void {
       mode?: 'standard' | 'aggressive'
       trustedDirs?: string[]
     }
-    // Two sets, one owner: devZoneRoots holds the constant development
-    // zones (shell-fuse eligible); allowedDshSubpaths adds the operator-named
-    // DSH_HOME subtrees. Structured consumers read the union, the shell fuse
-    // reads the constant set only. The zones keep their narrower
-    // runtime-state deny, which sits inside the union semantics.
-    roots.devZoneRoots = devZoneRootsFor(roots.workspace, roots.dshHome, roots.home)
+    // Two sets, one owner. devZoneRoots holds the constant development zones
+    // (module install root plus the gated session workspace) and is the only
+    // set the shell fuse extends. allowedDshSubpaths adds the DSH_HOME-derived
+    // install spelling (legacy, structured-only) and the operator-named
+    // subtrees. The zones keep their narrower runtime-state deny.
+    roots.devZoneRoots = devZoneRootsFor(roots.workspace, roots.dshHome, roots.home, realpathSync)
+    const assumedInstall = normalizePath(join(roots.dshHome, 'plugins', 'dsh-auto-approval-llm'), roots.workspace, roots.home)
     roots.allowedDshSubpaths = [
-      ...roots.devZoneRoots,
+      assumedInstall,
+      ...roots.devZoneRoots.filter((root) => root !== assumedInstall),
       ...(config.trustedDshSubpaths ?? []).map((dir) => normalizePath(dir, roots.workspace, roots.home)),
     ]
     roots.maintenanceDshPaths = (config.maintenanceDshPaths ?? []).map((dir) => normalizePath(dir, roots.workspace, roots.home))

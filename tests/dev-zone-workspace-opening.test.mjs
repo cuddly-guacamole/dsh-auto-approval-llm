@@ -14,7 +14,7 @@
  */
 import test from "node:test"
 import assert from "node:assert/strict"
-import { devZoneRootsFor, isGrantedDevZoneTarget, normalizePath } from "../lib/auto/paths.js"
+import { devZoneRootsFor, isGrantedDevZoneTarget, normalizePath, pluginWorkspaceDevZone } from "../lib/auto/paths.js"
 import { assessTool, hardDenyReason } from "../lib/auto/policy.js"
 import { hardDenyShellReason } from "../lib/auto/shell.js"
 
@@ -104,4 +104,27 @@ test("operator openings stay structured-tool only under the new roots", () => {
   const roots = rootsFor(OTHER, [OPERATOR])
   assert.equal(hardDenyReason(write(`${OPERATOR}/x.md`), roots), undefined)
   assert.match(hardDenyShellReason(`printf x > ${OPERATOR}/x.md`, "bash", roots) ?? "", /DSH_HOME/)
+})
+
+test("a workspace whose realpath leaves the plugins root is not opened", () => {
+  const SESSIONS = `${DSH_HOME}/sessions`
+  const junction = (p) => (p === norm(OTHER) ? norm(SESSIONS) : p)
+  assert.equal(pluginWorkspaceDevZone(OTHER, DSH_HOME, USERROOT, junction), undefined)
+  assert.notEqual(pluginWorkspaceDevZone(OTHER, DSH_HOME, USERROOT, (p) => p), undefined)
+  const throwing = () => { throw new Error("unresolvable") }
+  assert.equal(pluginWorkspaceDevZone(OTHER, DSH_HOME, USERROOT, throwing), undefined)
+  assert.equal(devZoneRootsFor(OTHER, DSH_HOME, USERROOT, junction).some((root) => root === norm(OTHER)), false)
+})
+
+test("the DSH_HOME-derived install spelling is structured-only, never a shell zone", () => {
+  const LOOKALIKE = normalizePath(`${DSH_HOME}/plugins/dsh-auto-approval-llm`, DSH_HOME, USERROOT)
+  const devZoneRoots = devZoneRootsFor(OTHER, DSH_HOME, USERROOT)
+  const roots = {
+    ...rootsFor(OTHER),
+    devZoneRoots,
+    allowedDshSubpaths: [LOOKALIKE, ...devZoneRoots.filter((root) => root !== LOOKALIKE)],
+  }
+  const lookalikeSrc = `${LOOKALIKE}/src/a.ts`
+  assert.equal(hardDenyReason(write(lookalikeSrc), roots), undefined, "structured keeps the legacy spelling open")
+  assert.match(hardDenyShellReason(`printf x > ${DSH_HOME}/plugins/dsh-auto-approval-llm/src/a.ts`, "bash", roots) ?? "", /DSH_HOME/, "the shell fuse extends the constant set only")
 })

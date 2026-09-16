@@ -320,21 +320,37 @@ export function pluginZoneSelfModifyReason(normalized, roots) {
 export function isPluginDevZoneTarget(normalizedPath) {
     return isWithin(PLUGIN_ZONE_ROOT, normalizedPath);
 }
-/** Constant development zones for one session: the plugin install root plus the DSH_HOME-joined spelling when they differ. Operator openings are excluded on purpose. */
-export function devZoneRootsFor(workspace, dshHome, home) {
-    const assumedInstall = normalizePath(join(dshHome, 'plugins', 'dsh-auto-approval-llm'), workspace, home);
-    const roots = [assumedInstall];
-    if (PLUGIN_ZONE_ROOT !== assumedInstall)
-        roots.push(PLUGIN_ZONE_ROOT);
-    // The session workspace is a development zone when it is ONE plugin repo
-    // directly under the DSH_HOME plugins root. The plugins root itself,
-    // deeper paths, operator trees and every other DSH_HOME tree stay fenced.
-    // The base is provable: zoneOpeningTrusted only extends a single, literally
-    // readable command whose real cwd is this workspace.
+/** The workspace-side development zone, or undefined when the session workspace is not one plugin repo directly under the DSH_HOME plugins root. Lexical by default; the host passes a realpath resolver so a workspace that is itself a link into a fenced tree cannot open that tree. */
+export function pluginWorkspaceDevZone(workspace, dshHome, home, resolveReal) {
     const pluginsRoot = normalizePath(join(dshHome, 'plugins'), workspace, home);
     const sessionRoot = normalizePath(workspace, workspace, home);
-    if (sessionRoot !== pluginsRoot && dirname(sessionRoot) === pluginsRoot && !roots.includes(sessionRoot))
-        roots.push(sessionRoot);
+    if (sessionRoot === pluginsRoot || dirname(sessionRoot) !== pluginsRoot)
+        return undefined;
+    // A path-shaped direct child is not enough: the workspace root itself can
+    // be a link into a fenced tree (sessions / credentials), and the symlink
+    // guard anchors on the resolved workspace, so it would not report the
+    // escape. Require the realpath to still be one direct child of the
+    // resolved plugins root; an unresolvable path fails closed.
+    const resolve = resolveReal ?? (value => value);
+    let realSession;
+    let realPlugins;
+    try {
+        realSession = normalizePath(resolve(sessionRoot), workspace, home);
+        realPlugins = normalizePath(resolve(pluginsRoot), workspace, home);
+    }
+    catch {
+        return undefined;
+    }
+    if (realSession === realPlugins || dirname(realSession) !== realPlugins)
+        return undefined;
+    return sessionRoot;
+}
+/** The constant development zones of one session: the module install root plus the gated workspace. Operator openings are deliberately excluded. */
+export function devZoneRootsFor(workspace, dshHome, home, resolveReal) {
+    const roots = [PLUGIN_ZONE_ROOT];
+    const workspaceZone = pluginWorkspaceDevZone(workspace, dshHome, home, resolveReal);
+    if (workspaceZone !== undefined && !roots.includes(workspaceZone))
+        roots.push(workspaceZone);
     return roots;
 }
 /** The constant development zones of one call. */
