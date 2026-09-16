@@ -79,3 +79,20 @@ test('read-only pwsh keeps its previous tier', () => {
   const wrapped = verdict(`bash -c 'pwsh -NoProfile -Command "Get-ChildItem"'`)
   assert.notEqual(wrapped.decision, 'deny')
 })
+
+test('an encoded PowerShell program is refused, not reviewed', () => {
+  const v = verdict(`bash -c 'pwsh -EncodedCommand ZgBvAG8A'`)
+  assert.equal(v.decision, 'deny')
+  assert.equal(v.classifierEligible, false)
+})
+
+test('an abbreviated identity flag is judged like the full spelling', () => {
+  const v = verdict(`bash -c 'pwsh -NoProfile -Command "New-Item -ItemType SymbolicLink -Path:.agents/ak-live -Tar:lib"'`)
+  assert.equal(v.decision, 'deny')
+})
+
+test('a nested interpreter beyond the depth limit fails closed', () => {
+  const v = verdict("eval eval eval eval 'echo hi'")
+  assert.equal(v.decision, 'deny')
+  assert.equal(v.classifierEligible, false)
+})

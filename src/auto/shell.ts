@@ -597,6 +597,11 @@ function nestedExecution(name, words) {
         return undefined;
     }
     if (['sh', 'bash', 'zsh', 'fish', 'ksh', 'dash', 'cmd', 'powershell', 'pwsh'].includes(base)) {
+        // PowerShell -EncodedCommand carries its program as an opaque base64
+        // blob: there is no source to read, so the boundary must be marked
+        // instead of silently disappearing.
+        if (words.some((word, wordIndex) => wordIndex > 0 && /^-(?:encodedcommand|enc)$/i.test(word.text)))
+            return { encoded: true };
         const index = words.findIndex((word, wordIndex) => wordIndex > 0 && /^(?:-c|\/c|--command|-Command|-command|[/]k)$/.test(word.text));
         if (index < 0 || words[index + 1] === undefined)
             return {};
@@ -668,7 +673,7 @@ function destructiveNestedSource(source) {
     // A backtick substitution is a segment boundary like `$(`, so it belongs in
     // the anchor set: `` `rm -rf /` `` starts the nested source right after the
     // backtick and used to miss every anchor here.
-    return /(?:^|[\s;&|()`])(?:rm|rmdir|unlink|shred|remove-item|del|erase)(?:\s|$)|\b(?:shutil\.rmtree|os\.(?:remove|unlink|rmdir|removedirs)|file\.(?:delete|unlink)|directory\.delete)\s*\(|\.(?:rm|rmsync|unlink|unlinksync|rmdir|rmdirsync|delete)\s*\(|\b(?:delete\s+from|drop\s+(?:table|database)|truncate\s+table)\b/i.test(source);
+    return /(?:^|[\s;&|()`"'])(?:rm|rmdir|unlink|shred|remove-item|del|erase)(?:\s|$)|\b(?:shutil\.rmtree|os\.(?:remove|unlink|rmdir|removedirs)|file\.(?:delete|unlink)|directory\.delete)\s*\(|\.(?:rm|rmsync|unlink|unlinksync|rmdir|rmdirsync|delete)\s*\(|\b(?:delete\s+from|drop\s+(?:table|database)|truncate\s+table)\b/i.test(source);
 }
 /**
  * Whether a visible nested-execution source combines a file-write function
@@ -1885,7 +1890,7 @@ function segmentHardDenyReason(segment, shell, roots) {
             // form would otherwise hide it behind a leading `-`).
             const identityCmdlet = name === 'new-item' || name === 'ni';
             const inlineValue = identityCmdlet
-                ? /^-(?:path|literalpath|filepath|destination|target|value):(.+)$/i.exec(word.text)
+                ? /^-(?:path|literalpath|filepath|destination|target|targe|targ|tar|ta|value|valu|val|va):(.+)$/i.exec(word.text)
                 : /^-(?:path|literalpath|filepath|destination):(.+)$/i.exec(word.text);
             if (inlineValue !== null) {
                 if (inlineValue[1] !== '')
@@ -1893,7 +1898,7 @@ function segmentHardDenyReason(segment, shell, roots) {
                 continue;
             }
             if (identityCmdlet
-                ? /^-(?:path|literalpath|filepath|target|value)$/i.test(word.text)
+                ? /^-(?:path|literalpath|filepath|target|targe|targ|tar|ta|value|valu|val|va)$/i.test(word.text)
                 : /^-(?:path|literalpath|filepath)$/i.test(word.text)) {
                 const value = unwrapped.words[index + 1];
                 if (value !== undefined) writeOperands.push(value);
@@ -2654,6 +2659,8 @@ function opaqueNestedAssessment(source, shell, roots) {
         const nested = nestedExecution(name, unwrapped.words);
         if (nested === undefined)
             continue;
+        if (nested.encoded === true)
+            return denied('encoded interpreter program is not permitted');
         if (nested.source === undefined)
             return manualReview('opaque nested execution requires manual review');
         if (destructiveNestedSource(nested.source))
@@ -3016,16 +3023,18 @@ export function hardDenyShellReason(source, shell, roots, depth = 0) {
         // plane, or a wrapper stops one level short. Bounded depth keeps a nest
         // of wrappers from growing the work without limit; a nested body never
         // inherits the development-zone opening.
-        if (depth < MAX_NESTED_HARD_DENY_DEPTH) {
-            const unwrappedSegment = unwrapCommand(segment.words);
-            const nestedName = commandName(unwrappedSegment.words[0]?.text ?? '');
-            if (SHELL_CODE_INTERPRETERS.has(commandNameWithoutExe(nestedName))) {
-                const nested = nestedExecution(nestedName, unwrappedSegment.words);
-                if (nested !== undefined && nested.source !== undefined) {
-                    const nestedReason = hardDenyShellReason(nested.source, shellPlaneOf(nestedName), { ...segmentRoots, zoneFuseTrusted: false }, depth + 1);
-                    if (nestedReason !== undefined)
-                        return nestedReason;
-                }
+        const unwrappedSegment = unwrapCommand(segment.words);
+        const nestedName = commandName(unwrappedSegment.words[0]?.text ?? '');
+        if (SHELL_CODE_INTERPRETERS.has(commandNameWithoutExe(nestedName))) {
+            const nested = nestedExecution(nestedName, unwrappedSegment.words);
+            if (nested !== undefined && nested.encoded === true)
+                return 'encoded interpreter program is not permitted';
+            if (nested !== undefined && nested.source !== undefined) {
+                if (depth >= MAX_NESTED_HARD_DENY_DEPTH)
+                    return 'nested interpreter depth limit reached';
+                const nestedReason = hardDenyShellReason(nested.source, shellPlaneOf(nestedName), { ...segmentRoots, zoneFuseTrusted: false }, depth + 1);
+                if (nestedReason !== undefined)
+                    return nestedReason;
             }
         }
         const next = effectiveCwdAfter(segment, shell, segmentRoots);
@@ -3055,6 +3064,8 @@ function assessSegment(segment, shell, roots, artifacts, owner) {
     if (nested !== undefined) {
         if (routineInlineProbe(name, nested.source))
             return allowed('routine inline package or version probe');
+        if (nested.encoded === true)
+            return denied('encoded interpreter program is not permitted');
         if (nested.source === undefined)
             return manualReview('opaque nested execution requires manual review');
         if (destructiveNestedSource(nested.source))

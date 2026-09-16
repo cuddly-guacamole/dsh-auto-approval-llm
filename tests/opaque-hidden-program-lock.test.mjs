@@ -109,3 +109,14 @@ test('the answerer locked predicate reads the same structured flag', () => {
     'the flag must be passed at the locked-ask call site',
   )
 })
+
+test('a destructive command quoted inside a non-shell program is locked too', () => {
+  for (const command of [
+    `python3 <<'EOF'\nimport os\nos.system('rm -rf C:/ws/scratch')\nEOF`,
+    `python3 <<'EOF'\nimport os\nos.system("Remove-Item C:/ws/scratch")\nEOF`,
+  ]) {
+    const v = verdict(command)
+    assert.equal(v.assessment.opaqueLocked, true, command)
+    assert.equal(v.directive, 'ask', command)
+  }
+})
