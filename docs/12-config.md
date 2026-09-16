@@ -66,7 +66,7 @@
 :::
 
 ::: tip host-only 键保护
-浏览器设置卡不为这些键渲染**控件**：高级子卡按 `HOST_ONLY_KEYS` 单一 owner 给出只读清单（键名 + 当前生效值，无控件、无保存路径），计数由同一列表派生。`preserveHostKeys` 在保存时把它们从当前值回填进提交对象，正则配置永不被卡片保存抹掉。
+浏览器设置卡不为这些键渲染**控件**：高级子卡按 `HOST_ONLY_KEYS` 单一 owner 给出只读清单（键名 + 当前生效值，无控件、无保存路径），计数由同一列表派生，并给出拒绝出口说明（DSH_HOME 写入仅由 `trustedDshSubpaths` / `maintenanceDshPaths` 开口，且只服务结构化 write/edit）。`preserveHostKeys` 在保存时把它们从当前值回填进提交对象，正则配置永不被卡片保存抹掉。
 :::
 
 ::: tip 热更新

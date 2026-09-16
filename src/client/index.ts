@@ -1650,6 +1650,8 @@ function SettingsSection() {
     }, showHostKeys ? t('settings.advanced.yamlKeysHide') : t('settings.advanced.yamlKeysShow')),
       t('settings.advanced.yamlNote', { count: HOST_ONLY_KEYS.length })),
     showHostKeys ? renderHostOnlyRows() : null,
+    React.createElement('p', { className: 'dsa-hint', style: { margin: 0 } }, t('settings.advanced.openingNote')),
+    React.createElement('p', { className: 'dsa-hint', style: { margin: 0 } }, t('settings.advanced.manualNote')),
   )
 
   // Read-only list of the config-file-only keys: display-only rows (key + the

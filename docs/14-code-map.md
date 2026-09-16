@@ -37,12 +37,12 @@ src/
 │    ├─ tool-stats.ts    94   工具调用统计收集
 │    └─ trust.ts         305  web 路由信任平面（loopback/LAN 边界、Host 伪造防护、在线端点 URL 校验）
 └─ client/
-     ├─ index.ts         React 客户端主体 3001 行（设置卡 8 子卡/面板增强/应答 watcher 装配/浮动按钮/CSS）
+     ├─ index.ts         React 客户端主体 3003 行（设置卡 8 子卡/面板增强/应答 watcher 装配/浮动按钮/CSS）
      ├─ approvals/       应答模块（0.0.12 起；0.0.16 起单协议——remote 源适配 + shared 协议无关核心；rc.2 legacy/feature 已删）
      │    ├─ remote.ts       229
      │    └─ shared.ts       656
      ├─ auto-icon.ts     权限菜单图标 + Auto 风险确认弹窗 657 行
-     ├─ locale.ts        zh/en 双语 556 行
+     ├─ locale.ts        zh/en 双语 560 行
      ├─ human-gate.ts    浮层「人工出手率」派生（HUMAN_SOURCES 与 scripts/friction-report 同源）
      └─ tool-chips.ts    150  工具芯片
 
@@ -62,7 +62,7 @@ tests/
 ├─ trusted-intent-window.test.mjs（授权证据窗口溢出计数：slot cap/去重/预算交互、拒因 note 两分支、trusted-intents 事件量化 overflowed 标志）/ client-human-gate.test.mjs（浮层人工出手率：与 friction-report 同源名单、空窗口不作零声称、round 边界、中英三键、bundle 装配锚）
 ├─ loop-guard.test.mjs（循环键稳定性/回退、严格连续+fire-and-reset 状态机、FIFO 64、阈值钳制与 resolveConfig 映射）/ loop-guard-wiring.test.mjs（四站点成对锚、allowlist 与 rule-allow 豁免负向切片、跨面标记读位置与 one-shot、pinned 形状先于 learnAttempt、门不写 history 不碰熔断、disposal/sweep 有界、audit-query 渲染）
 ├─ host-lines.test.mjs（宿主下限线：承诺表与精确钉版、装错线/读错档位的反向对照、补丁组合表解析；本机安装线驱动真实 permission-presets 服务）
-└─ 合计 187 个 tests/*.test.mjs（node --test 全绿基线）
+└─ 合计 188 个 tests/*.test.mjs（node --test 全绿基线）
 scripts/
 ├─ build.sh             （DSH 源码仓库布局）tsc 编译 src→lib
 ├─ clean-lib.mjs        构建前清空 lib/（tsc 不删除已删源的旧产物）
