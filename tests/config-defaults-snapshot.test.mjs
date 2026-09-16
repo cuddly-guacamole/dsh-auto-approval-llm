@@ -91,8 +91,19 @@ test('patch pin consistency: every shipped insert pin equals its schema default'
   const lines = readFileSync(new URL('../cordis.patch.yml', import.meta.url), 'utf8')
     .split(/\r?\n/)
     .filter((line) => !/^\s*#/.test(line))
-  const insertAt = lines.findIndex((line) => /^- insert:/.test(line))
-  const block = lines.slice(insertAt).join('\n')
+  const insertAt = lines.findIndex((line) => /^\s*- insert:/.test(line))
+  assert.ok(insertAt !== -1, 'the shipped patch must carry the insert row')
+  // The search domain is the insert block itself, read by indentation — not
+  // "everything after the insert row": a later top-level row must not be able
+  // to satisfy a pin.
+  const base = lines[insertAt].length - lines[insertAt].trimStart().length
+  const blockLines = []
+  for (let i = insertAt + 1; i < lines.length; i += 1) {
+    const line = lines[i]
+    if (line.trim() !== '' && line.length - line.trimStart().length <= base) break
+    blockLines.push(line)
+  }
+  const block = blockLines.join('\n')
   const defaults = Config({})
   const pinned = {
     enabled: true,

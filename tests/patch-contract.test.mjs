@@ -43,10 +43,13 @@ test('patch contract: the auto-approval preset keeps approval ask on a danger-fu
   const gated = find(/^\s+auto-approval:\s*$/)
   assert.equal(gated.length, 1, 'exactly one auto-approval preset block')
   const block = blockOf(gated[0].index).join('\n')
-  assert.match(block, /sandbox: danger-full-access/, 'auto-approval sandbox is danger-full-access')
-  assert.match(block, /approval: ask/, 'auto-approval approval MUST stay ask (never relax to never)')
-  assert.match(block, /name: Auto approval/, 'the display name is the rename contract')
-  assert.match(block, /description: High-privilege execution/, 'the description is preserved verbatim')
+  // Anchored to the whole line (a quoted scalar is accepted): a bare substring
+  // would also be satisfied by `approval: ask-later` or any value that merely
+  // contains the pinned text.
+  assert.match(block, /^\s+sandbox:\s+['"]?danger-full-access['"]?\s*$/m, 'auto-approval sandbox is danger-full-access')
+  assert.match(block, /^\s+approval:\s+['"]?ask['"]?\s*$/m, 'auto-approval approval MUST stay ask (never relax to never)')
+  assert.match(block, /^\s+name:\s+['"]?Auto approval['"]?\s*$/m, 'the display name is the rename contract')
+  assert.match(block, /^\s+description:\s+High-privilege execution[^\n]*$/m, 'the description is preserved verbatim')
 })
 
 test('patch contract: no standalone auto preset is shipped (reserved name)', () => {
@@ -62,15 +65,17 @@ test('patch contract: danger-full-access preset keeps approval never (auto-appro
 
 test('patch contract: shipped config pins match the intended defaults', () => {
   const insert = blockOf(find(/^- insert:/)[0].index).join('\n')
-  assert.match(insert, /enabled: true/)
+  // Each pin is matched as a whole line so a value that merely starts with the
+  // pinned text cannot satisfy it.
+  assert.match(insert, /^\s+enabled:\s+['"]?true['"]?\s*$/m)
   assert.doesNotMatch(insert, /autoSwitchPolicyToAsk/, 'the retired guard key is not pinned')
-  assert.match(insert, /timeoutAction: reject/)
-  assert.match(insert, /allowlist: \[\]/)
-  assert.match(insert, /denyList: \[\]/)
-  assert.match(insert, /humanOnlyList: \[\]/)
-  assert.match(insert, /maxConsecutiveDenials: 3/)
-  assert.match(insert, /maxTotalDenials: 20/)
-  assert.match(insert, /notifyUser: true/)
+  assert.match(insert, /^\s+timeoutAction:\s+['"]?reject['"]?\s*$/m)
+  assert.match(insert, /^\s+allowlist:\s+\[\]\s*$/m)
+  assert.match(insert, /^\s+denyList:\s+\[\]\s*$/m)
+  assert.match(insert, /^\s+humanOnlyList:\s+\[\]\s*$/m)
+  assert.match(insert, /^\s+maxConsecutiveDenials:\s+3\s*$/m)
+  assert.match(insert, /^\s+maxTotalDenials:\s+20\s*$/m)
+  assert.match(insert, /^\s+notifyUser:\s+['"]?true['"]?\s*$/m)
 })
 
 test('patch contract: the four permission presets are exactly the shipped set', () => {

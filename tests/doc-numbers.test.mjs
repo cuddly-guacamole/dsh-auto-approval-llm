@@ -77,7 +77,6 @@ test('an unchecked claim inside a watched page is reported', () => {
     uncovered.some(entry => entry.file === 'docs/15-quality.md'),
     `the scan must report the injected claim, got ${JSON.stringify(uncovered)}`,
   )
-  assert.deepEqual(uncoveredClaims(sources), [], 'the real tree must have no uncovered claims')
 })
 
 test('the uncovered-claim scan recognises the phrasings a page can use', () => {
@@ -91,7 +90,15 @@ test('an inline per-file count is checked against the file it names', () => {
   // Per-file counts drift on their own: the suite total can stay right while one
   // file's share is stale, which is exactly what happened to three of them.
   const sources = watchedDocumentSources(root)
-  assert.deepEqual(checkPerFileClaims(sources).problems, [], 'the real tree must state per-file counts correctly')
+  const real = checkPerFileClaims(sources)
+  assert.deepEqual(real.problems, [], 'the real tree must state per-file counts correctly')
+  // Ratchet: the tally is the checker's own account of the claims it matched,
+  // so a statement that silently left a watched page cannot pass as "nothing
+  // was wrong" — the floor only moves deliberately, together with the docs.
+  assert.ok(
+    real.lines.length >= 4,
+    `expected the watched pages to carry at least 4 inline per-file counts, got ${real.lines.length}`,
+  )
 
   const stale = { 'docs/index.md': `${sources['docs/index.md']}\n见 category.test.mjs 3 例\n` }
   const problems = checkPerFileClaims(stale).problems

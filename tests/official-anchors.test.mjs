@@ -5,7 +5,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -319,7 +319,41 @@ test('items are independent: one failure does not stop the other three', t => {
   }
 })
 
-test('the local gate runs the check as an added step after the documentation anchors', () => {
+test('the real repository resolves its own official artifacts without a FAIL', () => {
+  // Every case above drives a tmp fixture, so nothing in the file proved the
+  // check works against THIS tree. Run it here with the script's own default
+  // repository root and its normal official-root resolution: a machine without
+  // the official packages must print the documented skip, and a machine with
+  // them must report every item without a FAIL.
+  const environment = { ...process.env }
+  delete environment.DSA_OFFICIAL_ROOT
+  delete environment.DSA_ANCHOR_REPO_ROOT
+  let status = 0
+  let output = ''
+  try {
+    output = execFileSync(process.execPath, [scriptPath], { cwd: repoRoot, encoding: 'utf8', env: environment })
+  } catch (error) {
+    status = typeof error.status === 'number' ? error.status : 1
+    output = `${error.stdout ?? ''}${error.stderr ?? ''}`
+  }
+  assert.equal(status, 0, `the real tree must not fail the official anchor check:\n${output}`)
+  assert.doesNotMatch(output, /check-official-anchors: FAIL/, 'no item may fail on the real tree')
+  const reading = /^check-official-anchors: reading official packages from (.+)$/m.exec(output)
+  if (reading === null) {
+    assert.equal(output.trim(), 'check-official-anchors: WARN official packages not resolvable; skipped')
+    return
+  }
+  assert.equal(existsSync(reading[1]), true, 'the reported official root must exist')
+  for (const item of ['platform-seed-modules', 'approval-button-labels', 'slot-directory', 'permission-presets']) {
+    assert.match(output, new RegExp(`^check-official-anchors: (ok|WARN|FAIL) {2}${item} {2}`, 'm'), `${item} must be reported for the real tree`)
+  }
+  assert.match(output, /^check-official-anchors: ok$/m, 'a run with no failing item reports ok')
+})
+
+test('refactor guard: the gate keeps the check wired unconditionally after the documentation anchors', () => {
+  // Not a behaviour check — this only notices if the step is renamed, moved out
+  // of gate.mjs, or made conditional. The behaviour proof is the real-tree case
+  // above.
   const gate = readFileSync(gatePath, 'utf8')
   const scriptsInOrder = [...gate.matchAll(/run\('[^']*',\s*'node',\s*\['scripts\/([^']+)'/g)].map(match => match[1])
   assert.deepEqual(
@@ -331,5 +365,50 @@ test('the local gate runs the check as an added step after the documentation anc
   assert.ok(
     scriptsInOrder.indexOf('check-official-anchors.mjs') > scriptsInOrder.indexOf('check-anchors.mjs'),
     'the anchor check must run after the documentation anchor step and before the release steps',
+  )
+
+  // A guarded step is not a wired step: wrapping the call in `if (…) { … }`, in
+  // a `cond && run(...)` prefix, or making it the continuation of an expression
+  // on the previous line leaves the call text intact, so the assertions above
+  // stay green while the gate stops running it. Pin the call's own position
+  // instead — the whole line must be one bare `run(...)` statement, it must sit
+  // at the same indentation as the sibling read-only steps, and the nearest
+  // preceding non-comment line must be a complete statement of its own (it
+  // cannot open a block, and it cannot end on an operator, which is what an
+  // expression continuation looks like). Trade-off: a table-driven refactor of
+  // these steps reddens here and above. The shapes pinned are exactly these
+  // source shapes; a step made conditional inside a callee is out of reach of
+  // any text-level guard.
+  const lines = gate.split(/\r?\n/)
+  const bareRun = /^\s*run\('[^']*',\s*'node',\s*\['scripts\/check-official-anchors\.mjs'\]\)\s*$/
+  const officialAt = lines.findIndex(line => bareRun.test(line))
+  assert.notEqual(officialAt, -1, 'the official anchor step must stay a standalone run(...) statement')
+  const siblingAt = lines.findIndex(line => /^\s*run\('[^']*',\s*'node',\s*\['scripts\/check-anchors\.mjs'\]\)\s*$/.test(line))
+  assert.notEqual(siblingAt, -1, 'the documentation anchor step must stay a standalone run(...) statement')
+  const indentOf = (line) => line.length - line.trimStart().length
+  assert.equal(
+    indentOf(lines[officialAt]),
+    indentOf(lines[siblingAt]),
+    'the official anchor step must stay a top-level statement beside the other read-only steps',
+  )
+  let guardAt = officialAt - 1
+  while (guardAt >= 0 && (lines[guardAt].trim() === '' || /^\s*(\/\/|\*|\/\*)/.test(lines[guardAt]))) guardAt -= 1
+  assert.ok(guardAt >= 0, 'the official anchor step must not be the first line of the gate')
+  const guard = lines[guardAt].trim()
+  assert.ok(
+    !/^(?:if|for|while|switch)\s*\(/.test(guard) && !/^else\b/.test(guard) && !guard.endsWith('{'),
+    `the official anchor step must not sit inside a conditional or loop block, found guard line: ${JSON.stringify(lines[guardAt])}`,
+  )
+  // The preceding step has to end a statement, not half of an expression. The
+  // closing tokens cover both the semicolon style and this repository's
+  // semicolon-free `foo()` steps; the continuation set is what an expression
+  // split across lines ends on.
+  const CONTINUATIONS = ['&&', '||', '??', '=>', '?', ':', ',', '=', '+', '-', '*', '/', '%', '.', '&', '|']
+  const endsStatement = /[;})]$/.test(guard)
+  const endsContinuation = CONTINUATIONS.some(token => guard.endsWith(token))
+    || /(?:return|const|let|var|await|new)$/.test(guard)
+  assert.ok(
+    endsStatement && !endsContinuation,
+    `the official anchor step must be a statement of its own, not the tail of an expression; preceding line: ${JSON.stringify(lines[guardAt])}`,
   )
 })

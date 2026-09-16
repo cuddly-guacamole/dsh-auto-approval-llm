@@ -150,14 +150,47 @@ test('endpoint classify: a blank endpoint is refused before any network call', a
 
 const HOST_SRC = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
 
+/**
+ * Argument block of every `name(` call in the compiled host, from the call to
+ * its own `});`. Slicing per call keeps a construction site from being covered
+ * by the text of an unrelated one elsewhere in the file.
+ */
+function callBlocks(source, name) {
+  const blocks = []
+  for (const match of source.matchAll(new RegExp(`${name}\\(`, 'g'))) {
+    const end = source.indexOf('});', match.index)
+    assert.notEqual(end, -1, `${name}( at offset ${match.index} is not closed with });`)
+    blocks.push(source.slice(match.index, end + 3))
+  }
+  return blocks
+}
+
 test('host wiring: the classifier construction derives its override from classifierSource', () => {
-  const helperAt = HOST_SRC.indexOf('const classifierOverrideFor')
-  const preStart = HOST_SRC.indexOf("'tools/pre-execute'")
-  assert.ok(helperAt !== -1 && preStart > helperAt)
-  const block = HOST_SRC.slice(helperAt, preStart)
-  assert.ok(block.includes('classifierSource'), 'the override derivation reads the source switch')
-  assert.ok(block.includes('classifierOverrideFor(config)'), 'the construction spreads the derived override')
-  assert.ok(!block.includes('classifierPair'), 'no retired classifierPair marker may resurface')
+  const helperAt = HOST_SRC.indexOf('const classifierOverrideFor =')
+  const helperEnd = HOST_SRC.indexOf('let classifier = createDshClassifier(', helperAt)
+  assert.ok(helperAt !== -1 && helperEnd > helperAt, 'the override derivation is declared before the construction')
+  const helper = HOST_SRC.slice(helperAt, helperEnd)
+  // Distinguishing facts rather than the whole ternary expression: hoisting the
+  // pair into a local, wrapping it in Boolean(...), reordering the operands or
+  // using shorthand properties are behaviour-equivalent and must not redden,
+  // while gutting the guard must. The negative direction is what makes the
+  // facts load-bearing: a version that always returned {} leaves the operator's
+  // chosen pair a no-op even though every identifier survives.
+  for (const fact of [
+    /cfg\.classifierSource === 'preset'/,
+    /cfg\.classifierProvider\.length > 0/,
+    /cfg\.classifierModel\.length > 0/,
+    /provider: cfg\.classifierProvider/,
+    /model: cfg\.classifierModel/,
+    /:\s*\{\}/,
+  ]) assert.match(helper, fact, `the override derivation is missing ${fact}`)
+  assert.doesNotMatch(helper, /&&\s*false/, 'the override derivation must not be short-circuited to an empty route')
+  // Both constructions — the initial one and the settings rebuild — must
+  // actually spread that derivation into the classifier options.
+  const constructions = callBlocks(HOST_SRC, 'createDshClassifier')
+  assert.equal(constructions.length, 2, 'the host constructs the classifier once and rebuilds it on settings changes')
+  for (const block of constructions) assert.ok(block.includes('...classifierOverrideFor(config)'), 'the derived override is spread into the construction')
+  assert.ok(!HOST_SRC.includes('classifierPair'), 'no retired classifierPair marker may resurface')
 })
 
 test('host wiring: the fast-decision lane records its own latency samples', () => {
@@ -182,6 +215,21 @@ test('host wiring: reasoning effort and output budget reach the LLM calls', () =
   // is frozen into the snapshot; a non-default reasoning effort is forwarded
   // to the host prepareCall, and the classifier lane forwards its own effort.
   assert.ok(HOST_SRC.includes('reviewerMaxTokens'), 'the output budget key is wired')
-  assert.ok(HOST_SRC.includes('reasoningEffort'), 'the reasoning-effort control is forwarded')
   assert.ok(HOST_SRC.includes("snapshot.reasoningEffort"), 'the reviewer snapshot carries the frozen effort')
+  // Every classifier construction path forwards the configured effort: the
+  // initial construction and the settings rebuild through createDshClassifier,
+  // and the endpoint lane through createEndpointClassifier. Only live lines
+  // count — a commented-out option keeps the text in the product, so a plain
+  // substring count would let the control die inside a comment.
+  const optionLines = (source) => [...source.matchAll(/reasoningEffort: config\.classifierReasoning \?\? ''/g)]
+    .filter(match => /^\s*$/.test(source.slice(source.lastIndexOf('\n', match.index) + 1, match.index)))
+  assert.equal(optionLines(HOST_SRC).length, 3, 'every classifier construction path forwards the configured reasoning effort on a live line')
+  const constructions = [
+    ...callBlocks(HOST_SRC, 'createDshClassifier'),
+    ...callBlocks(HOST_SRC, 'createEndpointClassifier'),
+  ]
+  assert.equal(constructions.length, 3, 'the host has three classifier construction sites')
+  for (const block of constructions) {
+    assert.equal(optionLines(block).length, 1, 'the construction forwards the configured reasoning effort on a live line')
+  }
 })

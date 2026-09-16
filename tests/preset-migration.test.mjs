@@ -67,7 +67,7 @@ function harness(options = {}) {
       if (targetSpec === null) throw new Error(`unknown preset: ${name}`)
       return targetSpec
     },
-    current: options.current ?? (() => (stateRef.value.preset === GATED_PRESET ? GATED_PRESET : 'auto-approval')),
+    current: options.current ?? (() => stateRef.value.preset),
   }
   if (options.capability === 'modern') {
     permissionPresets.registerAuto = () => {}
@@ -391,9 +391,10 @@ test('T12/T-S1..S4: the authority key walks to the parent-chain root', () => {
   // T-S4: a plain session is its own root.
   assert.equal(rootAuthoritySessionId({ agent: { session: root } }, parentAgent), 'root-1')
   assert.equal(rootAuthoritySessionId({ agent: undefined }, parentAgent), undefined)
-  // Cycles terminate.
+  // Cycles are cut by the visited set: the walk stops on the second sighting of
+  // 'b' and the last resolved node is 'a'.
   const cyclicParent = (id) => (id === 'a' ? { session: { id: 'a', header: { origin: 'subagent', parentSession: 'b' } } } : { session: { id: 'b', header: { origin: 'subagent', parentSession: 'a' } } })
-  assert.ok(typeof rootAuthoritySessionId({ agent: { session: { id: 'a', header: { origin: 'subagent', parentSession: 'b' } } } }, cyclicParent) === 'string')
+  assert.equal(rootAuthoritySessionId({ agent: { session: { id: 'a', header: { origin: 'subagent', parentSession: 'b' } } } }, cyclicParent), 'a')
 })
 
 test('safeResolveSpec and migrationDecision are shape checks, not guesses', () => {
@@ -416,7 +417,17 @@ test('T13: compiled wiring anchors (retired symbols gone, raw gate and migration
   assert.ok(lib.includes('permissionState'), 'the baseline reads the host projection')
   assert.ok(lib.includes('enforceOwnSpec('), 'own-spec restore is wired into the host')
   assert.ok(lib.includes('runPresetMigration('), 'the migration is wired into the host')
-  assert.ok(lib.includes('prepend: true') && lib.includes('global: true'), 'the migration listener is prepend+global')
+  // The migration registration's option object, anchored as a shape rather than
+  // as a whole call string (a parameter rename, an extra space or a missing
+  // semicolon is not the defect). The product carries a second
+  // `prepend: true, global: true` listener (the answerer), so two independent
+  // option lookups would stay green after this registration lost its options —
+  // the runLifecycleMigration prefix is what makes the match discriminating.
+  assert.equal(
+    [...lib.matchAll(/runLifecycleMigration\(\w+\),\s*\{\s*prepend: true,\s*global: true\s*\}/g)].length,
+    1,
+    'exactly one migration registration carries prepend+global',
+  )
   assert.ok(lib.includes('rootAuthoritySessionId('), 'the authority key walks to the root')
   assert.ok(lib.includes('pluginInitiatedSessions'), 'plugin-initiated suppression is wired')
   assert.ok(lib.includes('scanAuditLine('), 'the startup scan audit is wired into the host')

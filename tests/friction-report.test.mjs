@@ -12,9 +12,13 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
   AUDIT_BYTE_LIMIT,
   AUDIT_LINE_LIMIT,
+  ROTATION_WARN_RATIO,
   USAGE_EXIT_CODE,
   VERDICT_EXIT_CODES,
   attemptFailureCodes,
@@ -88,7 +92,26 @@ test('summarizeDecisions: separates panel-mediated from human answered; ignores 
   assert.equal(summary.timeouts, 2)
   assert.equal(summary.rejections, 3)
   assert.equal(summary.bytes, 4_096)
-  assert.ok(summary.rotationBytes > 0 && summary.rotationBytes < 1)
+  assert.equal(summary.rotationBytes, 4_096 / AUDIT_BYTE_LIMIT, 'rotationBytes is the share of the byte-rotation trigger in use')
+})
+
+test('renderReport warns once the audit crosses the byte-rotation ratio', () => {
+  const render = (bytes) => renderReport({
+    decisions: summarizeDecisions([decision({})], bytes),
+    latency: settlementByChannel([]),
+    criterion: evaluateCriterion([decision({})], { window: 1 }),
+    overturns: overturnTable([]),
+    attempts: attemptFailureCodes([]),
+    since: false,
+    badLines: 0,
+  })
+  const below = render(AUDIT_BYTE_LIMIT * ROTATION_WARN_RATIO - 1)
+  assert.doesNotMatch(below.text, /byte-rotation trigger/, 'a byte short of the ratio stays quiet')
+  const at = render(AUDIT_BYTE_LIMIT * ROTATION_WARN_RATIO)
+  assert.match(at.text, /audit is at 80% of the byte-rotation trigger/)
+  assert.match(at.text, new RegExp(`keeps at most the newest ${AUDIT_LINE_LIMIT} lines`))
+  const over = render(AUDIT_BYTE_LIMIT * 0.95)
+  assert.match(over.text, /audit is at 95% of the byte-rotation trigger/)
 })
 
 test('overturnTable: reports who is overturnable, not just who answered', () => {
@@ -216,6 +239,31 @@ test('readJsonl: a missing file is reported, unparseable lines are counted', () 
   const missing = readJsonl('C:/definitely/not/here/audit.jsonl')
   assert.equal(missing.ok, false)
   assert.deepEqual(missing.records, [])
+  assert.equal(missing.badLines, 0)
+
+  const dir = mkdtempSync(join(tmpdir(), 'friction-report-'))
+  try {
+    const file = join(dir, 'audit.jsonl')
+    const text = '{}\nnot json\n'
+    writeFileSync(file, text)
+    const damaged = readJsonl(file)
+    assert.equal(damaged.ok, true)
+    assert.deepEqual(damaged.records, [{}], 'the parseable line survives')
+    assert.equal(damaged.badLines, 1, 'the unparseable line is counted, not dropped silently')
+    assert.equal(damaged.bytes, Buffer.byteLength(text))
+    const rendered = renderReport({
+      decisions: summarizeDecisions(damaged.records, damaged.bytes),
+      latency: settlementByChannel([]),
+      criterion: evaluateCriterion(damaged.records, { window: 1 }),
+      overturns: overturnTable(damaged.records),
+      attempts: attemptFailureCodes(damaged.records),
+      since: false,
+      badLines: damaged.badLines,
+    })
+    assert.match(rendered.text, /\[!\] 1 unparseable line\(s\) skipped/, 'the report surfaces the damaged lines')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test('parseArgs: invalid values are rejected instead of silently ignored', () => {
@@ -261,6 +309,25 @@ test('the text and --json paths share one verdict and exit code', () => {
   assert.match(text.output, /verdict:/)
   const parsed = JSON.parse(json.output)
   assert.equal(parsed.criterion.exitCode, json.code)
+
+  // The empty ledger is the degenerate input: INSUFFICIENT happens to be the
+  // one verdict whose code is shared with the usage error. A failing ledger
+  // drives FAIL, so a path that emitted a constant would diverge from the
+  // criterion it was handed.
+  const dir = mkdtempSync(join(tmpdir(), 'friction-report-'))
+  try {
+    const file = join(dir, 'audit.jsonl')
+    writeFileSync(file, `${JSON.stringify(decision({ source: 'human-allow', llmDecision: 'DENY' }))}\n`)
+    const failedText = captureLogs(() => main(['--file', file, '--latency', missingLatency, '--window', '1']))
+    const failedJson = captureLogs(() => main(['--json', '--file', file, '--latency', missingLatency, '--window', '1']))
+    assert.equal(failedText.code, VERDICT_EXIT_CODES.FAIL)
+    assert.equal(failedJson.code, failedText.code, 'both renderings of a failing ledger agree')
+    assert.notEqual(failedText.code, USAGE_EXIT_CODE)
+    assert.match(failedText.output, /verdict: FAIL/)
+    assert.equal(JSON.parse(failedJson.output).criterion.verdict, 'FAIL')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test('attemptFailureCodes: counts codes across decisions and flags unknown ones', () => {
@@ -287,8 +354,48 @@ test('attemptFailureCodes: a non-array attempts field is ignored, never thrown o
 })
 
 test('renderReport carries the criterion verdict instead of deriving its own', () => {
-  const criterion = evaluateCriterion([], { window: 20 })
+  // An explicitly constructed FAIL criterion over a non-empty decision set:
+  // renderReport must echo the window, the tally and the code it was handed.
+  // Deriving the verdict from the ledger would land on VACUOUS here, and the
+  // empty-ledger case alone could not tell a carried code from a constant.
+  const criterion = {
+    window: 3,
+    sessionsAvailable: 9,
+    windowComplete: true,
+    sessionIds: ['a', 'b', 'c'],
+    decisionCount: 2,
+    humanAnswered: 2,
+    overturnEligible: 2,
+    humanOverturns: 1,
+    highAdvisoryDecisions: 4,
+    learningRevocations: 0,
+    windowStartedAt: 1_000,
+    verdict: 'FAIL',
+    exitCode: VERDICT_EXIT_CODES.FAIL,
+  }
+  const records = [
+    decision({ sessionId: 'a', source: 'human-allow', llmDecision: 'ALLOW' }),
+    decision({ sessionId: 'b', source: 'human-allow', llmDecision: 'DENY' }),
+  ]
   const rendered = renderReport({
+    decisions: summarizeDecisions(records, 4_096),
+    latency: settlementByChannel([]),
+    criterion,
+    overturns: overturnTable(records),
+    attempts: attemptFailureCodes(records),
+    since: false,
+    badLines: 0,
+  })
+  assert.equal(rendered.exitCode, VERDICT_EXIT_CODES.FAIL)
+  assert.match(rendered.text, /criterion window \(last 3 sessions by last activity\)/)
+  assert.match(rendered.text, /sessions available 9/)
+  assert.match(rendered.text, /overturnable 2 {2}overturns 1/)
+  assert.match(rendered.text, /verdict: FAIL/)
+  assert.match(rendered.text, /exit code 1/)
+
+  // An empty ledger prints its own empty-window note while still carrying the
+  // criterion's code: the text is derived, the verdict is not.
+  const empty = renderReport({
     decisions: summarizeDecisions([]),
     latency: settlementByChannel([]),
     criterion,
@@ -297,8 +404,8 @@ test('renderReport carries the criterion verdict instead of deriving its own', (
     since: false,
     badLines: 0,
   })
-  assert.equal(rendered.exitCode, criterion.exitCode)
-  assert.match(rendered.text, /no decision records found/)
+  assert.match(empty.text, /no decision records found/)
+  assert.equal(empty.exitCode, VERDICT_EXIT_CODES.FAIL)
 })
 
 test('a ledger holding only a revocation still fails, never a usage error', () => {

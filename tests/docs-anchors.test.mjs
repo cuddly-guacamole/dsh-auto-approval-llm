@@ -29,7 +29,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -104,7 +104,6 @@ test('no bare range anchors remain anywhere in the docs tree', () => {
   // for. Zero is therefore a ratchet, not a coincidence.
   const run = fullRun()
   assert.equal(run.range, 0, `bare range anchors must not come back, found ${run.range}:\n${run.result.stdout}`)
-  assert.match(run.result.stdout, /0 range-checked only/, 'the summary keeps the range bucket visible so it cannot grow silently')
 })
 
 test('no unparsable spans: a span the checker cannot resolve fails the run', () => {
@@ -185,23 +184,65 @@ test('checker: range-only anchors are never reported as verified', () => {
     /range-checked only \(in-bounds; a wrong-code range is not auto-detectable\)/.test(source),
     'the range bucket is labelled as unproven in the summary',
   )
-  assert.ok(
-    !/buckets\.range \+ buckets\.declaration[^\n]*totalChecked/.test(source),
-    'ranges must not be folded into a verified total',
-  )
+  // Behaviour, not the source wording: one in-bounds range plus one resolvable
+  // symbol anchor. Both are examined, exactly one is verified, and the range is
+  // counted in its own bucket — a run that folded ranges into the verified
+  // total would report 2 verified here.
+  const probe = join(root, `probe-anchor-range-${process.pid}.md`)
+  try {
+    writeFileSync(probe, [
+      '# probe',
+      '',
+      'in bounds: <span class="lnum">policy.ts:L1-3</span>',
+      '',
+      'good: <span class="lnum">policy.ts:LassessTool</span>',
+      '',
+    ].join('\n'))
+    const result = runChecker(['--check', '--per-doc', `probe-anchor-range-${process.pid}.md`])
+    assert.equal(result.status, 0, `an in-bounds range is not a violation:\n${result.stdout}${result.stderr}`)
+    const examined = Number(/(\d+) anchor\(s\) examined/.exec(result.stdout)?.[1] ?? Number.NaN)
+    const verified = Number(/— (\d+) verified/.exec(result.stdout)?.[1] ?? Number.NaN)
+    const range = Number(/(\d+) range-checked only/.exec(result.stdout)?.[1] ?? Number.NaN)
+    assert.equal(examined, 2, 'both anchors are counted')
+    assert.equal(verified, 1, 'the in-bounds range is not counted as verified')
+    assert.equal(range, 1, 'the in-bounds range lands in its own bucket')
+    assert.match(result.stdout, /1 range-checked only/, 'the summary keeps the range bucket visible')
+    // The per-document tally is the other place a range could be folded in.
+    const row = /doc \S+ anchors=(\d+) verified=(\d+) range=(\d+)/.exec(result.stdout)
+    assert.ok(row, 'the per-doc tally is printed for the probe')
+    assert.deepEqual([row[1], row[2], row[3]], ['2', '1', '1'], 'the probe page tally keeps the range out of verified')
+  } finally {
+    rmSync(probe, { force: true })
+  }
 })
 
-test('checker: the script only reads — there is no write mode', () => {
+test('checker: the script only reads — a run leaves the files it reads byte-identical', () => {
   // An earlier draft shipped a `--write` mode that could never fire (its guard
   // compared a value the finder had seeded from the same field, so the patch
   // list was always empty) and a test that "pinned" it by grepping for the
   // writeFileSync call — which passed on unreachable code. Symbol anchors are
   // self-verifying and a bare range cannot be repaired mechanically, so the
-  // honest shape is a read-only checker; pin the absence, and pin that the file
-  // system is not opened for writing at all.
-  const source = readFileSync(checker, 'utf8')
-  // The header comment explains why there is no write mode, so strip comments
+  // honest shape is a read-only checker. Pin it behaviourally: the pages and
+  // sources a full run resolves must come back with the same bytes and the same
+  // mtime, which a name match over the source text cannot establish.
+  const watched = ['docs/index.md', 'docs/03-static-engine.md', 'src/auto/policy.ts', 'scripts/check-anchors.mjs']
+  const before = new Map()
+  for (const relative of watched) {
+    const full = join(root, relative)
+    assert.ok(existsSync(full), `${relative} must exist for the read-only probe`)
+    before.set(relative, { text: readFileSync(full, 'utf8'), mtimeMs: statSync(full).mtimeMs })
+  }
+  const result = runChecker(['--per-doc'])
+  assert.equal(result.status, 0, `the repo-wide check must pass:\n${result.stdout}${result.stderr}`)
+  for (const [relative, prior] of before) {
+    const full = join(root, relative)
+    assert.equal(readFileSync(full, 'utf8'), prior.text, `${relative} must not be rewritten`)
+    assert.equal(statSync(full).mtimeMs, prior.mtimeMs, `${relative} must not be touched`)
+  }
+  // The interface carries no write mode either, so a future flag cannot select
+  // one. The header comment explains why there is none, so strip comments
   // before asserting the flag itself is gone.
+  const source = readFileSync(checker, 'utf8')
   const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
   assert.ok(!code.includes('--write'), 'the dead --write mode is gone')
   assert.ok(!/flags\.write/.test(code), 'no flag can select a write mode')

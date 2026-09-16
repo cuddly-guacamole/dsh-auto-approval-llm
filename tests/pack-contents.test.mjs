@@ -56,10 +56,15 @@ test('the runtime entries are present', () => {
 })
 
 test('every host module that exists in src ships its compiled counterpart', () => {
-  const sources = readdirSync(join(root, 'src/auto')).filter(name => name.endsWith('.ts')).length
-  const shipped = manifest.filter(path => /^lib\/auto\/[^/]+\.js$/.test(path)).length
-  assert.ok(sources > 0, 'src/auto must not be empty')
-  assert.equal(shipped, sources, 'lib/auto must mirror src/auto one to one')
+  // Compared as sets, not as counts: a renamed module and a stale build output
+  // leave the total unchanged while the tarball mirrors the wrong tree.
+  const expected = readdirSync(join(root, 'src/auto'))
+    .filter(name => name.endsWith('.ts'))
+    .map(name => `lib/auto/${name.replace(/\.ts$/, '.js')}`)
+    .sort()
+  const shipped = manifest.filter(path => /^lib\/auto\/[^/]+\.js$/.test(path)).sort()
+  assert.ok(expected.length > 0, 'src/auto must not be empty')
+  assert.deepEqual(shipped, expected, 'lib/auto must mirror src/auto one to one, with no orphan')
 })
 
 test('no declaration ships for a source file that no longer exists', () => {

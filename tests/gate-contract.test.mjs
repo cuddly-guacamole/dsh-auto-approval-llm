@@ -35,6 +35,11 @@ test('a harmless argument is quoted only when it contains whitespace', () => {
   assert.equal(shellArgument('tests/**/*.test.mjs'), 'tests/**/*.test.mjs')
   assert.equal(shellArgument('.gate-pack/pkg'), '.gate-pack/pkg')
   assert.equal(shellArgument('scripts/check-doc-numbers.mjs'), 'scripts/check-doc-numbers.mjs')
+  // The quoting branch itself: an argument carrying whitespace must reach the
+  // shell as one word, otherwise a real path like the one below silently splits
+  // into two arguments.
+  assert.equal(shellArgument('C:/Program Files/x'), '"C:/Program Files/x"')
+  assert.equal(shellArgument('.gate-pack/my pkg'), '".gate-pack/my pkg"')
 })
 
 test('a metacharacter reaches the caller as an error, not as a command line', () => {
