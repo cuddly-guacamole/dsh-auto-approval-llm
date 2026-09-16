@@ -260,23 +260,43 @@ test('the poller mirrors the host payload into the chip store, then settles it',
 
 test('a status-less ask lands on the chip as waiting for a human', async (t) => {
   const sessionId = 'chip-awaiting-session'
-  // The watcher registers the pending before the poller runs; the poller only
-  // has to confirm that the host published no countdown for it.
-  approvalStatusStore.observePending(sessionId, 'call-2')
-  globalThis.fetch = async (url) => {
+  const callId = 'call-2'
+  // The watcher registers the pending before the poller runs (the remote adapter
+  // observes every interaction it sees); the poller only has to confirm that the
+  // host published no countdown for it. Reading the `awaiting` flag back cannot
+  // separate the two halves: the watcher's own observePending already sets it,
+  // and the store keeps confirmAwaiting idempotent for a record that reports
+  // awaiting. The poller's confirmation call is therefore recorded directly —
+  // it is the only fact that disappears when the poller stops confirming.
+  approvalStatusStore.observePending(sessionId, callId)
+  const fetchLog = []
+  globalThis.fetch = async (url, init) => {
+    fetchLog.push({ url, init })
     if (url === REVIEW_STATUS_ROUTE) return { ok: true, json: async () => ({ ok: false }) }
     throw new Error(`unexpected fetch: ${url}`)
   }
+  const confirmed = []
+  const originalConfirmAwaiting = approvalStatusStore.confirmAwaiting
+  approvalStatusStore.confirmAwaiting = function (id, ask) {
+    confirmed.push([id, ask])
+    return originalConfirmAwaiting.call(this, id, ask)
+  }
   const poller = startReviewPolling(
-    { sessionId, key: `${sessionId}:call-2`, callId: 'call-2', respond: async () => {} },
+    { sessionId, key: `${sessionId}:${callId}`, callId, respond: async () => {} },
     () => true,
     { pollMs: 20 },
   )
   t.after(() => {
+    approvalStatusStore.confirmAwaiting = originalConfirmAwaiting
     poller.dispose()
     approvalStatusStore.clearSession(sessionId)
   })
-  await until(() => approvalStatusStore.activeFor(sessionId, Date.now())?.awaiting === true, 'awaiting record')
+  await until(() => confirmed.length >= 1, 'the poller to confirm the status-less ask')
+  assert.deepEqual(confirmed[0], [sessionId, callId], 'the confirmation carries the ask the poller watched')
+  const statusPolls = fetchLog.filter((entry) => entry.url === REVIEW_STATUS_ROUTE)
+  assert.ok(statusPolls.length >= 1, 'the confirmation follows a real review-status poll')
+  assert.equal(statusPolls[0].init?.headers?.['x-auto-approval-call-id'], callId)
+  assert.equal(approvalStatusStore.activeFor(sessionId, Date.now())?.awaiting, true)
 })
 
 // ── retirement anchors ────────────────────────────────────────────────────
@@ -297,10 +317,13 @@ test('the retired button-hijack path leaves no trace in source or bundle', () =>
 
 test('the session control carries the status label and owns no separate surface', () => {
   assert.ok(clientSource.includes("'conversation.session.header.utilities'"), 'the header slot must be used')
-  assert.ok(clientSource.includes('dsa-sessionSplit'), 'the control must render as a split control')
-  assert.ok(clientSource.includes('dsa-sessionChevron'), 'the chevron must own the history overlay')
+  // A bare class-name anchor is satisfied by the entry's own stylesheet, so each
+  // one pins the element that renders it instead.
+  assert.ok(clientSource.includes("React.createElement('span', { className: 'dsa-sessionSplit' }"), 'the control must render as a split control')
+  assert.ok(clientSource.includes("className: 'dsa-sessionChevron',"), 'the chevron must own the history overlay')
   assert.ok(clientSource.includes("const controlLabel = statusLabel ?? t('panel.button')"), 'idle must fall back to the control name')
-  assert.ok(clientBundle.includes('dsa-sessionSplit'), 'the split styles must ship in the bundle')
+  assert.ok(clientBundle.includes('className: "dsa-sessionSplit"'), 'the split control must ship in the bundle')
+  assert.ok(clientBundle.includes('.dsa-sessionSplit{'), 'the split styles must ship in the bundle')
   assert.ok(!clientSource.includes("id: 'auto-approval-llm-status-chip'"), 'the standalone chip must be gone')
   assert.ok(!clientSource.includes("'conversation.input.dock'"), 'the composer-dock capsule must be gone')
 })

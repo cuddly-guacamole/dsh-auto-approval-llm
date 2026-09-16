@@ -73,6 +73,15 @@ function settingsReq(over = {}) {
   return { ...LOOPBACK, ...over }
 }
 
+function jsonPost(payload, over = {}) {
+  return {
+    ...settingsReq({ method: 'POST' }),
+    headers: { host: 'localhost:3080', 'content-type': 'application/json' },
+    [Symbol.asyncIterator]: async function* () { yield JSON.stringify(payload) },
+    ...over,
+  }
+}
+
 test('settings GET: loopback returns the describe shape; foreign Host is 403', async () => {
   const settings = fakeSettings({ timeoutAction: 'reject', rejectGuidance: true })
   const { registrations: regs } = capture(installSettingsRoute, settings)
@@ -91,11 +100,25 @@ test('settings POST: requires expectedRevision, preserves host-only keys', async
   const settings = fakeSettings({ timeoutAction: 'reject', trustedDirs: ['C:/etc/x'] })
   const { registrations: regs } = capture(installSettingsRoute, settings)
   const handler = handlerOf(regs, 'settings')
+  // No JSON content type: the body reader refuses before the value guard runs,
+  // so this case alone can never tell whether a non-object value is rejected.
   const missing = await callJson(handler, {
     ...settingsReq({ method: 'POST' }),
     body: null,
   })
+  assert.equal(missing.status, 400)
   assert.equal(missing.body.ok, false, 'POST without a value object fails')
+  assert.equal(missing.body.error, 'Content-Type must be application/json')
+  // A readable JSON body with a matching revision reaches the value guard: an
+  // array spreads to `{}` and a null spreads to `{}`, so both used to 200 and
+  // silently reset every card key to its schema default.
+  for (const value of [[], null]) {
+    const badValue = await callJson(handler, jsonPost({ value, expectedRevision: 1 }))
+    assert.equal(badValue.status, 400, `a ${JSON.stringify(value)} value must be rejected`)
+    assert.equal(badValue.body.ok, false)
+    assert.equal(badValue.body.error, 'value is required')
+  }
+  assert.equal(settings.get().timeoutAction, 'reject', 'a rejected save must not touch the stored settings')
   const noRev = await callJson(handler, {
     ...settingsReq({ method: 'POST' }),
     headers: { host: 'localhost:3080', 'content-type': 'application/json' },
@@ -123,8 +146,26 @@ test('history GET: loopback 200 with records + llmLatency; foreign Host 403', as
   const ok = await callJson(handler, LOOPBACK)
   assert.equal(ok.status, 200)
   assert.equal(ok.body.ok, true)
-  assert.ok(Array.isArray(ok.body.value.records))
-  assert.ok('llmLatency' in ok.body.value)
+  // Existence alone says nothing about the payload: pin the exact key set and
+  // the full shape of every lane summary.
+  assert.deepEqual(
+    Object.keys(ok.body.value).sort(),
+    ['llmLatency', 'llmLatencyAll', 'llmLatencyClassifier', 'records'],
+    'the history payload carries the record list plus the three lane summaries',
+  )
+  assert.ok(Array.isArray(ok.body.value.records), 'records is the record array')
+  for (const lane of ['llmLatency', 'llmLatencyClassifier', 'llmLatencyAll']) {
+    assert.deepEqual(
+      Object.keys(ok.body.value[lane]).sort(),
+      ['abortedCount', 'avgMs', 'count', 'maxMs', 'minMs', 'windowStartAt'],
+      `${lane} is a full latency summary`,
+    )
+  }
+  assert.equal(
+    ok.body.value.llmLatencyAll.count,
+    ok.body.value.llmLatency.count + ok.body.value.llmLatencyClassifier.count,
+    'the merged summary counts both lanes',
+  )
   const denied = await callJson(handler, { ...LOOPBACK, headers: { host: 'evil.example:3080' }, socket: { remoteAddress: '10.0.0.7' } })
   assert.equal(denied.status, 403)
 })

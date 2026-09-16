@@ -157,6 +157,7 @@ function fakeRemoteEnv() {
         },
       },
     },
+    subscriberCount: () => subs.size,
     setMap: (m) => {
       map = m
       for (const fn of [...subs]) fn()
@@ -202,15 +203,29 @@ test('canonicalPendingKey: sessionId:callId, null without callId', () => {
 
 test('answerOnce: posts FEEDBACK (auto:true) then responds; the guard blocks a second answer', async () => {
   const feedbackLog = []
-  globalThis.fetch = routeFetch({ feedbackLog })
+  // The FEEDBACK POST is best-effort, so its order relative to the responder is
+  // part of the protocol: a respond that raced ahead of the feedback would let
+  // the host settle the ask before the outcome was reported.
+  const events = []
+  const fetchCalls = []
+  const inner = routeFetch({ feedbackLog })
+  globalThis.fetch = async (url, init) => {
+    fetchCalls.push({ url, init })
+    if (url === FEEDBACK_ROUTE) events.push('feedback')
+    return inner(url, init)
+  }
   const responds = []
-  const handle = { sessionId: 's1', key: 's1:c1', callId: 'c1', respond: async (o) => { responds.push(o) } }
+  const handle = { sessionId: 's1', key: 's1:c1', callId: 'c1', respond: async (o) => { responds.push(o); events.push('respond') } }
   await answerOnce(handle, 'allowed-once')
   await answerOnce(handle, 'allowed-once')
   await answerOnce(handle, 'rejected')
   assert.deepEqual(responds, ['allowed-once'], 'only the first responder wins')
+  assert.deepEqual(events, ['feedback', 'respond'], 'FEEDBACK is posted before the responder runs')
   assert.equal(feedbackLog.length, 1)
   assert.deepEqual(feedbackLog[0], { callId: 'c1', outcome: 'allowed-once', auto: true })
+  assert.equal(fetchCalls.length, 1, 'a blocked second answer must not post a second FEEDBACK')
+  assert.equal(fetchCalls[0].init?.method, 'POST')
+  assert.equal(fetchCalls[0].init?.headers?.['Content-Type'], 'application/json')
 })
 
 test('answerOnce: respond rejection is swallowed; no retry and no second FEEDBACK', async () => {
@@ -842,10 +857,37 @@ test('computeTextNodeRewrites: trailing newlines after the block are trimmed lik
 
 // ── static wiring anchors ──────────────────────────────────────────────────
 
-test('static anchors: remote-only wiring stays pinned; the legacy adapter is gone', () => {
+test('static anchors: remote-only wiring stays pinned; the legacy adapter is gone', async (t) => {
+  const { onCleanup } = perTest(t)
+  // The adapter is driven rather than grepped: its own header comment names
+  // `pendingInteractions` and `.answer(`, so a substring anchor is satisfied by
+  // prose. A live subscription plus an ask answered through `pending.answer` is
+  // what the wiring claim actually means.
+  const statuses = { c9: { phase: 'countdown', action: 'allow', seconds: 30 } }
+  globalThis.fetch = routeFetch({ statusByCallId: statuses })
+  const answers = []
+  const item = {
+    kind: 'approval',
+    key: 'approval:anchors',
+    sessionId: 's1',
+    callId: 'c9',
+    reason: 'edit files',
+    result: null,
+    answer: async (outcome) => { answers.push(outcome) },
+  }
+  const env = fakeRemoteEnv()
+  const { ctx, cleanup } = fakeCtx({ uiSession: env.uiSession })
+  watchRemoteApprovals(ctx, { pollMs: 10 })
+  onCleanup(cleanup)
+  assert.equal(env.subscriberCount(), 1, 'the adapter must subscribe to pendingInteractions')
+  env.setMap(new Map([['s1', item]]))
+  await sleep(40)
+  statuses.c9 = { phase: 'follow', source: 'llm', action: 'allow', seconds: 0 }
+  await until(() => answers.length === 1, 'the ask answered through pending.answer')
+  assert.deepEqual(answers, ['allowed-once'], 'the answer goes through the pending interaction')
+  cleanup()
+  assert.equal(env.subscriberCount(), 0, 'dispose must release the subscription')
   const remote = readFileSync(new URL('../src/client/approvals/remote.ts', import.meta.url), 'utf8')
-  assert.ok(remote.includes('pendingInteractions'), 'remote adapter must subscribe to pendingInteractions')
-  assert.ok(remote.includes('.answer('), 'remote adapter must answer through pending.answer')
   // The watcher binds at apply time: the services it resolves are declared as
   // inject dependencies, so no probe interval may come back (the full contract
   // lives in tests/client-declarative-services.test.mjs).

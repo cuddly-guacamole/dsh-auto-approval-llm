@@ -88,8 +88,12 @@ test('client bundle: the source-switch UI copy is wired (no retired key regressi
   for (const key of ['settings.reviewer.source.classifier', 'settings.reviewer.source.reviewer', 'settings.reviewer.source.provider', 'settings.reviewer.source.model', 'option.modelSource.session', 'option.modelSource.preset', 'option.modelSource.endpoint', 'settings.reviewer.endpointLegacy']) {
     assert.ok(client.includes(key), `locale key ${key} is referenced by the UI`)
   }
-  // The retired provider-dropdown family must stay gone.
-  for (const banned of ['settings.reviewer.followSession', 'settings.reviewer.loadingModels', 'settings.reviewer.provider\':']) {
+  // The retired provider-dropdown family must stay gone. The bundle writes its
+  // keys double-quoted, so the previous `settings.reviewer.provider':` needle
+  // (single quote + colon) could never match anything; ban the bare key. No
+  // live locale key is prefixed with it, so the substring cannot be satisfied
+  // by a neighbour.
+  for (const banned of ['settings.reviewer.followSession', 'settings.reviewer.loadingModels', 'settings.reviewer.provider']) {
     assert.ok(!client.includes(banned), `retired key ${banned} must not resurface`)
   }
 })
@@ -103,11 +107,21 @@ test('client bundle: the catalog routes are referenced by the preset pickers', (
 test('client bundle: the 3-source menu drives the lanes directly', () => {
   // The 3-source era drives the menu straight from the draft source; choosing
   // a preset catalog chip fills the pair. No reverse-derivation helpers remain.
-  assert.ok(client.includes('const presetLabel = '), 'the preset label helper is bundled')
-  assert.ok(client.includes('llmPresetModels'), 'the flattened preset list state exists')
-  assert.ok(client.includes('setLaneSource'), 'the direct source setter is bundled')
-  assert.ok(client.includes('choosePreset'), 'the preset chip chooser is bundled')
-  assert.ok(client.includes('sourceSection'), 'the shared source-section renderer is bundled')
+  // An identifier that only exists in its definition survives deleting every
+  // call site, so each one is pinned by its definition plus its consumer. Both
+  // anchors are shapes (arity, not local names) so a rename stays green while a
+  // dropped call site goes red.
+  assert.ok(/const presetLabel = \(\w+\) =>/.test(client), 'the preset label helper is defined')
+  assert.ok(/choosePreset\(\w+, presetLabel\(\w+\)\)/.test(client), 'the preset chip chooser consumes the label helper')
+  assert.ok(client.includes('const [llmPresetModels, setLlmPresetModels] = '), 'the flattened preset list state exists')
+  assert.ok(/setLlmPresetModels\(\w+\)/.test(client), 'the preset fetch fills the flattened list')
+  assert.ok(client.includes('llmPresetModels.length > 0'), 'the menu renders the list once it arrived')
+  assert.ok(/const setLaneSource = \(\w+, \w+\) =>/.test(client), 'the direct source setter is defined')
+  assert.ok(/setLaneSource\(\w+, \w+\)/.test(client), 'the source dropdown drives the direct setter')
+  assert.ok(/const choosePreset = \(\w+, \w+\) =>/.test(client), 'the preset chip chooser is defined')
+  const renderedLanes = [...client.matchAll(/sourceSection\("(\w+)"\)/g)].map((match) => match[1])
+  assert.deepEqual(renderedLanes, ['classifier', 'reviewer'], 'both lanes render through the shared source section')
+  assert.ok(/const sourceSection = \(\w+\) =>/.test(client), 'the shared source-section renderer is defined')
   assert.ok(!client.includes('currentMenuValue'), 'the retired reverse menu derivation is gone')
   assert.ok(!client.includes('applyMenuValue'), 'the retired menu application is gone')
   assert.ok(!client.includes('dsa-provider-suggest') && !client.includes('dsa-model-suggest'),
