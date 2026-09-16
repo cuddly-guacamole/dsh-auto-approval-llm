@@ -418,9 +418,10 @@ function commandNameWithoutExe(name) {
 const PRIVILEGE_COMMAND_PATTERN = new RegExp(`(?:^|[;&|({\`])\\s*(?:${[...PRIVILEGE_COMMANDS].join('|')})(?:\\.exe)?(?:\\s|$)`, 'i');
 /** Interpreters whose inline source runs as shell code on this plane. */
 const SHELL_CODE_INTERPRETERS = new Set(['sh', 'bash', 'zsh', 'fish', 'ksh', 'dash', 'cmd', 'cmd.exe', 'powershell', 'powershell.exe', 'pwsh', 'pwsh.exe', 'eval', 'iex', 'invoke-expression']);
+const MAX_NESTED_HARD_DENY_DEPTH = 3;
 /** The plane a nested interpreter's own source belongs to. */
 function shellPlaneOf(name) {
-    return /^(?:cmd|cmd\.exe|powershell|powershell\.exe|pwsh|pwsh\.exe|iex|invoke-expression)$/.test(name) ? 'powershell' : 'bash';
+    return /^(?:cmd|cmd\.exe|powershell|powershell\.exe|pwsh|pwsh\.exe|iex|invoke-expression)$/.test(name) ? 'pwsh' : 'bash';
 }
 /**
  * `env -S/--split-string VALUE` runs VALUE as a command line (the shebang
@@ -596,8 +597,16 @@ function nestedExecution(name, words) {
         return undefined;
     }
     if (['sh', 'bash', 'zsh', 'fish', 'ksh', 'dash', 'cmd', 'powershell', 'pwsh'].includes(base)) {
-        const index = words.findIndex((word, wordIndex) => wordIndex > 0 && /^(?:-c|\/c|--command)$/.test(word.text));
-        return { ...(index < 0 || words[index + 1] === undefined ? {} : { source: words[index + 1].text }) };
+        const index = words.findIndex((word, wordIndex) => wordIndex > 0 && /^(?:-c|\/c|--command|-Command|-command|[/]k)$/.test(word.text));
+        if (index < 0 || words[index + 1] === undefined)
+            return {};
+        // cmd and PowerShell `-Command` take the REST of the line as the
+        // program (`cmd /c mklink link target` used to be truncated to
+        // `mklink`, so its operands were never judged); a POSIX shell `-c`
+        // reads only the next word as the script and treats the rest as
+        // positional parameters.
+        const joinRest = ['cmd', 'powershell', 'pwsh'].includes(base);
+        return { source: joinRest ? words.slice(index + 1).map(word => word.text).join(' ') : words[index + 1].text };
     }
     if (['eval', 'iex', 'invoke-expression'].includes(base)) {
         return { ...(words.length < 2 ? {} : { source: words.slice(1).map(word => word.text).join(' ') }) };
@@ -1861,7 +1870,7 @@ function segmentHardDenyReason(segment, shell, roots) {
         else
             writeOperands = unwrapped.words.slice(1).filter(word => !word.text.startsWith('-'));
     }
-    else if (shell === 'pwsh' && ['set-content', 'add-content', 'out-file', 'copy-item', 'move-item', 'new-item'].includes(name)) {
+    else if (shell === 'pwsh' && ['set-content', 'add-content', 'out-file', 'copy-item', 'move-item', 'new-item', 'ni'].includes(name)) {
         writeOperands = [];
         for (let index = 1; index < unwrapped.words.length; index += 1) {
             const word = unwrapped.words[index];
@@ -1874,13 +1883,18 @@ function segmentHardDenyReason(segment, shell, roots) {
             // the unconditional hard deny. `-Destination` belongs here too
             // (its separated value is caught as a positional below; the fused
             // form would otherwise hide it behind a leading `-`).
-            const inlineValue = /^-(?:path|literalpath|filepath|destination):(.+)$/i.exec(word.text);
+            const identityCmdlet = name === 'new-item' || name === 'ni';
+            const inlineValue = identityCmdlet
+                ? /^-(?:path|literalpath|filepath|destination|target|value):(.+)$/i.exec(word.text)
+                : /^-(?:path|literalpath|filepath|destination):(.+)$/i.exec(word.text);
             if (inlineValue !== null) {
                 if (inlineValue[1] !== '')
                     writeOperands.push({ text: inlineValue[1], dynamic: word.dynamic, glob: word.glob, quoted: true });
                 continue;
             }
-            if (/^-(?:path|literalpath|filepath)$/i.test(word.text)) {
+            if (identityCmdlet
+                ? /^-(?:path|literalpath|filepath|target|value)$/i.test(word.text)
+                : /^-(?:path|literalpath|filepath)$/i.test(word.text)) {
                 const value = unwrapped.words[index + 1];
                 if (value !== undefined) writeOperands.push(value);
                 index += 1;
@@ -1889,6 +1903,12 @@ function segmentHardDenyReason(segment, shell, roots) {
                 writeOperands.push(word);
             }
         }
+    }
+    else if (shell === 'pwsh' && name === 'mklink') {
+        // mklink names its link and its target as bare positionals; both are
+        // identity writes, so both are judged (the /D, /H, /J switches start
+        // with a slash and are not operands).
+        writeOperands = unwrapped.words.slice(1).filter(word => !word.text.startsWith('-') && !word.text.startsWith('/'));
     }
     if (writeOperands !== null) {
         // Runtime-state files keep their precise reason in every spelling, so
@@ -2898,7 +2918,7 @@ function messagePayloadSpans(source, shell) {
     return spans;
 }
 
-export function hardDenyShellReason(source, shell, roots) {
+export function hardDenyShellReason(source, shell, roots, depth = 0) {
     const compact = source.trim();
     // The four whole-line fuses below read this view, in which data payloads
     // (a commit message body, a here-document body that is not a program) are
@@ -2991,6 +3011,23 @@ export function hardDenyShellReason(source, shell, roots) {
         const reason = segmentHardDenyReason(segment, shell, segmentRoots);
         if (reason !== undefined)
             return reason;
+        // A nested shell interpreter runs its own program: the guard must read
+        // that program with the SAME per-segment owner, on the interpreter own
+        // plane, or a wrapper stops one level short. Bounded depth keeps a nest
+        // of wrappers from growing the work without limit; a nested body never
+        // inherits the development-zone opening.
+        if (depth < MAX_NESTED_HARD_DENY_DEPTH) {
+            const unwrappedSegment = unwrapCommand(segment.words);
+            const nestedName = commandName(unwrappedSegment.words[0]?.text ?? '');
+            if (SHELL_CODE_INTERPRETERS.has(commandNameWithoutExe(nestedName))) {
+                const nested = nestedExecution(nestedName, unwrappedSegment.words);
+                if (nested !== undefined && nested.source !== undefined) {
+                    const nestedReason = hardDenyShellReason(nested.source, shellPlaneOf(nestedName), { ...segmentRoots, zoneFuseTrusted: false }, depth + 1);
+                    if (nestedReason !== undefined)
+                        return nestedReason;
+                }
+            }
+        }
         const next = effectiveCwdAfter(segment, shell, segmentRoots);
         if (next !== undefined)
             changerBase = next;
