@@ -9,6 +9,8 @@ import {
   canonicalPendingKey,
   createSeenSessionTracker,
   forgetAnsweredKeys,
+  forgetPendingReason,
+  rememberPendingReason,
   setLinkDown,
   startReviewPolling,
 } from './shared.js'
@@ -79,6 +81,10 @@ export function watchRemoteApprovals(ctx: any, options: WatcherOptions = {}): vo
       const callId = item.callId
       const key = canonicalPendingKey(item.sessionId, callId)
       if (!callId || !key) continue
+      // The panel text carries the model-controlled command echo; the host
+      // reason is the only channel that carries the machine markers without
+      // model-authored text, so record it before the active check.
+      rememberPendingReason([item.key, key], item.reason)
       seen.add(key)
       if (active.has(key) || resolvedKeys.has(key)) continue
       seenSessions.add(item.sessionId)
@@ -105,6 +111,7 @@ export function watchRemoteApprovals(ctx: any, options: WatcherOptions = {}): vo
         onDetach: (k) => {
           active.delete(k)
           resolvedKeys.add(k)
+          forgetPendingReason([k])
         },
       }))
     }
@@ -115,6 +122,7 @@ export function watchRemoteApprovals(ctx: any, options: WatcherOptions = {}): vo
         poller.dispose()
         active.delete(key)
         resolvedKeys.delete(key)
+        forgetPendingReason([key])
       }
     }
     for (const key of [...resolvedKeys]) {

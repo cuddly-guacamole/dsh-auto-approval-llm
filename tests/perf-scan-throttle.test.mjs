@@ -156,7 +156,7 @@ test('static anchor: the approval-panel scan is throttled too, and stays immedia
   assert.match(client, /throttledScan\.dispose\(\)/)
   // The install-time scan must stay immediate: a panel already on screen when
   // the plugin loads has to be armed at once, not after a throttle window.
-  assert.match(client, /observer\.observe\(doc\.body, \{ childList: true, subtree: true \}\)\r?\n\s*scan\(\)/)
+  assert.match(client, /observer\.observe\(doc\.body, \{ childList: true, subtree: true \}\)\r?\n\s*const unsubReasons = subscribePendingReasons\([^\n]*\)\r?\n\s*scan\(\)/)
 })
 
 test('a zero panel window really disables that throttle (guards the anchor above)', () => {

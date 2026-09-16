@@ -69,7 +69,7 @@ test('exactly the three locked ask sites are flagged', () => {
 })
 
 test('the client renders a localized sentence for the marker', () => {
-  assert.ok(client.includes('hasLockedAskNote(text)) renderLockedAskNote(panel)'), 'the scan branches on the shared detector')
+  assert.ok(client.includes('hasLockedAskNote(trustedReason)) renderLockedAskNote(panel)'), 'the scan branches on the shared detector')
   assert.ok(client.includes("t('panel.lockedAsk')"), 'the visible copy comes from the locale table')
   assert.ok(client.includes("data.split(LOCKED_ASK_MARKER).join(t('panel.lockedAsk'))"), 'the rewrite goes through the text node, not the panel element')
   assert.equal(client.split('if (nodeInsidePreview(node, panel)) continue').length - 1, 2,

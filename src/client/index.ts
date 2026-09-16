@@ -7,11 +7,10 @@ import { installAutoPermissionIcon, SHIELD_PATH, BOLT_PATH } from './auto-icon.j
 import { createTrailingThrottle, MIN_PANEL_SCAN_INTERVAL_MS } from './throttle.js'
 import { zh, en } from './locale.js'
 import { computePanelVisible } from './panel-visibility.js'
-import { computeTextNodeRewrites, createBreakerGuard, isLinkDown, revealApproval } from './approvals/shared.js'
+import { computeTextNodeRewrites, createBreakerGuard, isLinkDown, pendingReasonFor, revealApproval, subscribePendingReasons } from './approvals/shared.js'
 import { approvalStatusStore, chipState, coarseMinutes } from './approvals/status-store.js'
 import type { ChipState } from './approvals/status-store.js'
 import { watchSessionApprovals } from './approvals/session-watch.js'
-import { markerTextOutsidePreview } from './approvals/marker-text.js'
 import { humanGateStats } from './human-gate.js'
 import { watchRemoteApprovals } from './approvals/remote.js'
 import { buildToolChips, applyChipToList, type ToolChip, type ToolStatsPayload, type ToolStatsEntry } from './tool-chips.js'
@@ -268,14 +267,16 @@ function installApprovalPanelDecorations(): () => void {
         renderDiffBlock(panel, block)
         hideDiffBlock(panel)
       }
-      const markerSource = markerTextOutsidePreview(collectTextNodes(panel, []).map((node: any) => ({
-        text: node.data ?? '',
-        inPreview: nodeInsidePreview(node, panel),
-      })))
-      const text = computeTextNodeRewrites([markerSource], DIFF_START, DIFF_END)[0]
-      if (text.includes(AWAITING_MARKER)) renderAwaitingNote(panel)
-      if (hasLockedAskNote(text)) renderLockedAskNote(panel)
-      if (hasBreakerNote(text)) breaker.apply(panel, key)
+      // The machine markers are read from the host reason the watcher recorded
+      // for this key, never from the panel text: the panel also renders the
+      // tool command echo, which the model controls, so a command argument
+      // spelling the breaker marker could otherwise arm the anti-hijack guard
+      // and disable the human Reject / Allow buttons. The rewrite helpers still
+      // walk the panel text nodes, because that is where a genuine marker lands.
+      const trustedReason = pendingReasonFor(key)
+      if (trustedReason !== undefined && trustedReason.includes(AWAITING_MARKER)) renderAwaitingNote(panel)
+      if (trustedReason !== undefined && hasLockedAskNote(trustedReason)) renderLockedAskNote(panel)
+      if (trustedReason !== undefined && hasBreakerNote(trustedReason)) breaker.apply(panel, key)
     }
     breaker.prune(liveKeys)
   }
@@ -288,10 +289,12 @@ function installApprovalPanelDecorations(): () => void {
   const throttledScan = createTrailingThrottle(scan, { minIntervalMs: MIN_PANEL_SCAN_INTERVAL_MS })
   const observer = new g.MutationObserver(() => throttledScan.trigger())
   observer.observe(doc.body, { childList: true, subtree: true })
+  const unsubReasons = subscribePendingReasons(() => throttledScan.trigger())
   scan()
 
   return () => {
     observer.disconnect()
+    unsubReasons()
     throttledScan.dispose()
     breaker.dispose()
   }

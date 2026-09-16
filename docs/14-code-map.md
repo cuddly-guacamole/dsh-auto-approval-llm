@@ -37,10 +37,10 @@ src/
 │    ├─ tool-stats.ts    94   工具调用统计收集
 │    └─ trust.ts         305  web 路由信任平面（loopback/LAN 边界、Host 伪造防护、在线端点 URL 校验）
 └─ client/
-     ├─ index.ts         React 客户端主体 2969 行（设置卡 8 子卡/面板增强/应答 watcher 装配/浮动按钮/CSS）
+     ├─ index.ts         React 客户端主体 2972 行（设置卡 8 子卡/面板增强/应答 watcher 装配/浮动按钮/CSS）
      ├─ approvals/       应答模块（0.0.12 起；0.0.16 起单协议——remote 源适配 + shared 协议无关核心；rc.2 legacy/feature 已删）
-     │    ├─ remote.ts       221
-     │    └─ shared.ts       597
+     │    ├─ remote.ts       229
+     │    └─ shared.ts       656
      ├─ auto-icon.ts     权限菜单图标 + Auto 风险确认弹窗 657 行
      ├─ locale.ts        zh/en 双语 548 行
      ├─ human-gate.ts    浮层「人工出手率」派生（HUMAN_SOURCES 与 scripts/friction-report 同源）

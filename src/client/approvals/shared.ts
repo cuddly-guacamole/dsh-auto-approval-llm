@@ -158,6 +158,65 @@ export function createSeenSessionTracker(
 }
 
 /** Unified dedup/tombstone identity: `${sessionId}:${callId}`; null without callId. */
+/**
+ * The trusted machine-marker source for one approval panel, keyed by the
+ * host approval key (data-approval-key). The panel text also carries the
+ * tool command echo, which the model controls; the host reason is the only
+ * channel that carries the breaker / locked / awaiting markers without
+ * model-authored text, so the decoration layer reads it instead. Bounded
+ * FIFO: a long-lived tab must not grow it with every historical session.
+ */
+const MAX_PENDING_REASONS = 500
+const pendingReasons = new Map<string, string>()
+const pendingReasonListeners = new Set<() => void>()
+
+function notifyPendingReasons(): void {
+  for (const listener of [...pendingReasonListeners]) listener()
+}
+
+/** Record (or clear, with undefined) the host reason for one pending. */
+export function rememberPendingReason(keys: readonly (string | null | undefined)[], reason: string | undefined): void {
+  let changed = false
+  for (const key of keys) {
+    if (key === undefined || key === null || key === '') continue
+    const current = pendingReasons.get(key)
+    if (reason === undefined) {
+      if (current !== undefined) {
+        pendingReasons.delete(key)
+        changed = true
+      }
+      continue
+    }
+    if (current === reason) continue
+    if (current === undefined && pendingReasons.size >= MAX_PENDING_REASONS) {
+      const oldest = pendingReasons.keys().next().value
+      if (oldest !== undefined) {
+        pendingReasons.delete(oldest)
+        changed = true
+      }
+    }
+    pendingReasons.set(key, reason)
+    changed = true
+  }
+  if (changed) notifyPendingReasons()
+}
+
+/** The host reason recorded for a panel key, if the watcher has seen it. */
+export function pendingReasonFor(key: string | null | undefined): string | undefined {
+  if (key === undefined || key === null || key === '') return undefined
+  return pendingReasons.get(key)
+}
+
+/** Drop the recorded reasons for keys that left the pending snapshot. */
+export function forgetPendingReason(keys: readonly (string | null | undefined)[]): void {
+  rememberPendingReason(keys, undefined)
+}
+
+/** Rescan panels when the trusted reason set changes (a marker may land after the first scan). */
+export function subscribePendingReasons(listener: () => void): () => void {
+  pendingReasonListeners.add(listener)
+  return () => pendingReasonListeners.delete(listener)
+}
 export function canonicalPendingKey(sessionId: string, callId: string | undefined): string | null {
   if (!callId) return null
   return `${sessionId}:${callId}`

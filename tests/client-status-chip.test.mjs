@@ -330,7 +330,7 @@ test('the session control carries the status label and owns no separate surface'
 
 test('the surviving panel decorations are still mounted (no over-deletion)', () => {
   assert.ok(clientSource.includes('function installApprovalPanelDecorations'), 'the decoration pass must remain')
-  assert.ok(clientSource.includes('if (hasBreakerNote(text)) breaker.apply(panel, key)'), 'the breaker guard must still arm from the marker')
+  assert.ok(clientSource.includes('hasBreakerNote(trustedReason)) breaker.apply(panel, key)'), 'the breaker guard must still arm from the marker')
   assert.ok(clientSource.includes('breaker.prune(liveKeys)'), 'the breaker sweep must remain')
   assert.ok(clientSource.includes('createTrailingThrottle(scan'), 'the throttled scan must remain')
   assert.ok(clientSource.includes('data-dsa-edit-diff'), 'the edit-diff preview must remain')

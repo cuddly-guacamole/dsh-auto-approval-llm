@@ -1,23 +1,30 @@
 /**
- * dsh-auto-approval-llm · the client's marker fence must judge host text only.
+ * dsh-auto-approval-llm · the client's marker fence must read the host reason.
  *
- * The panel scan renders the edit-diff preview into the panel element, and its
- * rows are file content that stays in `textContent` after the raw block is
- * hidden — so a preview line spelling the breaker marker armed the guard
- * (disabling the human's Reject / Allow buttons) and a forged awaiting marker
- * made the client render the status-less copy. The marker text is now built
- * from every panel text node EXCEPT the rendered preview, on every scan. The
- * host strips the markers from the block as well, so this is the second fence
- * and has to actually hold.
+ * The panel scan used to build its marker text from every panel text node
+ * (minus the edit-diff preview). The panel also renders the tool command echo,
+ * which the model controls, so a command argument spelling the breaker marker
+ * armed the guard (disabling the human's Reject / Allow buttons) and a forged
+ * awaiting marker made the client render the status-less copy. The markers now
+ * come from the host reason recorded by the approval watcher, keyed by the same
+ * `data-approval-key` the panel carries; the panel text is only where a genuine
+ * marker is rewritten. The legacy preview helper is kept and unit-tested, but
+ * it is no longer the fence the client relies on.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { markerTextOutsidePreview } from '../lib/client/approvals/marker-text.js'
+import {
+  forgetPendingReason,
+  pendingReasonFor,
+  rememberPendingReason,
+  subscribePendingReasons,
+} from '../lib/client/approvals/shared.js'
 
 const client = readFileSync(new URL('../src/client/index.ts', import.meta.url), 'utf8')
 
-test('preview nodes never contribute to the marker text', () => {
+test('preview nodes never contribute to the legacy preview-free text', () => {
   const text = markerTextOutsidePreview([
     { text: 'host note ', inPreview: false },
     { text: '+ [dsh-auto-approval-llm] 🛑 breaker', inPreview: true },
@@ -29,38 +36,46 @@ test('preview nodes never contribute to the marker text', () => {
   assert.equal(text, 'host note  tail', 'the rest of the panel text is kept')
 })
 
-test('a host marker outside the preview still reaches the guard', () => {
-  assert.ok(markerTextOutsidePreview([{ text: 'x [dsh-auto-approval-llm] 🛑 breaker y', inPreview: false }]).includes('[dsh-auto-approval-llm] 🛑 breaker'))
+test('the trusted reason store records, updates, bounds and clears', () => {
+  rememberPendingReason(['s:1', null, undefined, ''], 'host reason')
+  assert.equal(pendingReasonFor('s:1'), 'host reason')
+  assert.equal(pendingReasonFor(null), undefined)
+  assert.equal(pendingReasonFor('missing'), undefined)
+  rememberPendingReason(['s:1'], 'updated')
+  assert.equal(pendingReasonFor('s:1'), 'updated')
+  forgetPendingReason(['s:1'])
+  assert.equal(pendingReasonFor('s:1'), undefined)
+  for (let i = 0; i < 501; i += 1) rememberPendingReason([`cap:${i}`], `r${i}`)
+  assert.equal(pendingReasonFor('cap:0'), undefined, 'the oldest entry is dropped')
+  assert.equal(pendingReasonFor('cap:500'), 'r500')
+  forgetPendingReason(['cap:500'])
 })
 
-test('the scan builds the marker text from the preview-free nodes', () => {
-  assert.ok(
-    client.includes('markerTextOutsidePreview(collectTextNodes(panel, [])'),
-    'the scan must exclude the rendered preview from the marker text',
-  )
-  assert.ok(
-    client.includes("hasAttribute('data-dsa-edit-diff')"),
-    'the exclusion must key off the preview element, not on a one-shot flag',
-  )
-  assert.ok(
-    !client.includes('const text = panel.textContent'),
-    'reading the rendered rows back into the marker text is the hole this fence closes',
-  )
+test('the store notifies listeners only on an actual change', () => {
+  let hits = 0
+  const unsub = subscribePendingReasons(() => { hits += 1 })
+  rememberPendingReason(['notify:1'], 'x')
+  rememberPendingReason(['notify:1'], 'x')
+  rememberPendingReason(['notify:1'], 'y')
+  forgetPendingReason(['notify:1'])
+  unsub()
+  rememberPendingReason(['notify:2'], 'z')
+  assert.equal(hits, 3, 'one notification per change, none after unsubscribe')
 })
 
-test('the de-blocked, preview-free text is what feeds both marker decisions', () => {
+test('the scan reads the trusted reason, not the panel text', () => {
   const scanStart = client.indexOf('const scan = () => {')
   const scanBody = client.slice(scanStart, client.indexOf('breaker.prune(liveKeys)'))
-  const renderAt = scanBody.indexOf('renderDiffBlock(panel, block)')
-  const textAt = scanBody.indexOf('markerTextOutsidePreview(collectTextNodes(panel, [])')
-  const awaitingAt = scanBody.indexOf('if (text.includes(AWAITING_MARKER))')
-  const breakerAt = scanBody.indexOf('if (hasBreakerNote(text)) breaker.apply(panel, key)')
-  assert.ok(renderAt !== -1 && textAt !== -1 && awaitingAt !== -1 && breakerAt !== -1, 'all four anchors are present')
-  assert.ok(textAt > renderAt, 'the marker text is captured after the preview render')
-  assert.ok(awaitingAt > textAt && breakerAt > textAt, 'both marker decisions read the preview-free text')
+  assert.ok(scanStart !== -1 && scanBody.length > 0, 'the scan body is located')
+  assert.ok(scanBody.includes('pendingReasonFor(key)'), 'the scan must read the trusted reason for this key')
+  assert.ok(scanBody.includes('hasBreakerNote(trustedReason)'), 'the breaker guard must arm from the trusted reason')
+  assert.ok(scanBody.includes('trustedReason.includes(AWAITING_MARKER)'), 'the awaiting copy must read the trusted reason')
+  assert.ok(scanBody.includes('hasLockedAskNote(trustedReason)'), 'the locked copy must read the trusted reason')
+  assert.ok(!scanBody.includes('markerTextOutsidePreview('), 'panel text must no longer feed the marker decisions')
 })
 
 test('the host ownership of the marker literals is unchanged', () => {
   assert.ok(client.includes("from '../auto/decision.js'"), 'the client still imports the shared detectors')
-  assert.ok(client.includes('hasBreakerNote(text)'), 'the breaker guard still arms through the shared detector')
+  assert.ok(client.includes("from './approvals/shared.js'"), 'the trusted-reason store is the shared client module')
+  assert.ok(client.includes('subscribePendingReasons('), 'a late-arriving host reason must trigger a rescan')
 })

@@ -923,7 +923,8 @@ test('static anchors: the guard is armed by the breaker marker, not by localized
   // trigger itself: it must come from the shared detector.
   const client = readFileSync(new URL('../src/client/index.ts', import.meta.url), 'utf8')
   const host = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
-  assert.ok(client.includes('if (hasBreakerNote(text)) breaker.apply(panel, key)'), 'scan must arm the guard through the shared detector')
+  assert.ok(client.includes('const trustedReason = pendingReasonFor(key)'), 'the marker must come from the host reason, not the panel text')
+  assert.ok(client.includes('hasBreakerNote(trustedReason)) breaker.apply(panel, key)'), 'scan must arm the guard through the shared detector')
   assert.ok(!/\/熔断\/\.test/.test(client), 'the localized-word trigger must be gone')
   assert.ok(host.includes('breakerNote(limitText, reasons)'), 'the host must write the note through the shared builder')
   assert.ok(!host.includes('⚠️ Breaker: model was'), 'the old inline note must be gone from the host')
