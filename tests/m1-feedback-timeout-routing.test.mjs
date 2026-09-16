@@ -51,8 +51,10 @@ test("M1: feedback for a live callId arms the post-execute timeout notice", asyn
   const post = await host.invokePostExecute({ callId: realCallId, name: "bash", agent: { session } }, { isError: true });
   assert.ok(post, "the errored result must be blocked");
   assert.equal(post.kind, "block");
-  assert.match(String(post.feedback?.[0]?.text), /auto-rejected by the configured timeout action/, "the injected text proves the route wrote the timeout feedback");
-  assert.notEqual(String(post.feedback?.[0]?.text).indexOf("not a user denial"), -1, "the notice keeps its honest provenance wording");
+  const injectedText = String(post.feedback?.[0]?.text);
+  assert.match(injectedText, /auto-rejected by the configured timeout action/, "the injected text proves the route wrote the timeout feedback");
+  assert.doesNotMatch(injectedText, /no human response in/, "the block text must come from the feedback route, never from the host countdown timer");
+  assert.notEqual(injectedText.indexOf("not a user denial"), -1, "the notice keeps its honest provenance wording");
 
   // Negative: a callId the plugin never issued writes nothing, so post-execute
   // must fall through to the host (the next stub resolves undefined).

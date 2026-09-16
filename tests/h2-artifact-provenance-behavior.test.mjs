@@ -6,6 +6,12 @@
  * listeners: pre-execute plans the write, tools/result promotes it, and the
  * later rm of the same path is allowed by the provenance exemption while an
  * unobserved rm still asks.
+ *
+ * The tools/result payload below is deliberately a shape the explicit
+ * write-result branch cannot promote ({ isError: false, value: {} }): only the
+ * pending plan can carry the path into the registry, so the rm allow assertion
+ * depends on the full plan -> settle chain. The explicit write-result branch
+ * (value.operation === create) is unit-covered by tests/probe.test.mjs.
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -34,7 +40,9 @@ test("H2: plan + promote make rm of the session artifact allow", async (t) => {
   assert.equal(plan.toolName, "write");
   assert.ok(Array.isArray(plan.paths) && plan.paths.some((path) => tail(path).endsWith("/scratch.txt")), "the plan record names the planned artifact");
 
-  await host.invokeToolsResult(writeExec, { isError: false, value: { operation: "create", path: target } });
+  // Only the pending plan can promote this payload: it carries no create
+  // contract, so the explicit write-result branch stays out of the chain.
+  await host.invokeToolsResult(writeExec, { isError: false, value: {} });
   const promote = provenance(host.readAuditLines(), "promote");
   assert.ok(promote, "tools/result must leave an artifact-provenance promote record");
   assert.equal(promote.callId, "h2-write");
