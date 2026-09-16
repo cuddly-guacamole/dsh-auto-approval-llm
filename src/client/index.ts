@@ -1,7 +1,8 @@
 import React from 'react'
 import { Button, Input } from '@deepseek-ai/dsh-client-ui-primitives'
-import { normalizeTimeoutAction, hasBreakerNote, hasLockedAskNote, AWAITING_MARKER, LOCKED_ASK_MARKER, REVIEWER_SYSTEM, assembleReviewerSystem, EDIT_DIFF_BLOCK_END, EDIT_DIFF_BLOCK_START } from '../auto/decision.js'
+import { normalizeTimeoutAction, hasBreakerNote, hasLockedAskNote, AWAITING_MARKER, LOCKED_ASK_MARKER, REVIEWER_SYSTEM, assembleReviewerSystem, EDIT_DIFF_BLOCK_END, EDIT_DIFF_BLOCK_START, HOST_ONLY_KEYS } from '../auto/decision.js'
 import { THRESHOLD_DEFAULTS, DEFAULT_ALLOW_TOOL_GROUPS } from '../auto/constants.js'
+import { hostOnlyRows } from './host-keys.js'
 import { parseRulesText } from '../auto/rules.js'
 import { installAutoPermissionIcon, SHIELD_PATH, BOLT_PATH } from './auto-icon.js'
 import { createTrailingThrottle, MIN_PANEL_SCAN_INTERVAL_MS } from './throttle.js'
@@ -771,6 +772,11 @@ function SettingsSection() {
   const [openLearning, setOpenLearning] = React.useState(false)
   const [openUtility, setOpenUtility] = React.useState(false)
   const [openAdvanced, setOpenAdvanced] = React.useState(false)
+  // Whether the read-only list of the config-file-only keys is expanded. The
+  // list is display-only (no control, no save path); it renders the resolved
+  // effective values, so it shows what the stored file and the base patch
+  // together actually produce.
+  const [showHostKeys, setShowHostKeys] = React.useState(false)
   const [learningEntries, setLearningEntries] = React.useState<any[]>([])
   const [learningEntriesError, setLearningEntriesError] = React.useState('')
   // Issue #5 model-source pickers: the registered providers and the full
@@ -1637,7 +1643,30 @@ function SettingsSection() {
       options: showPanelOptions(),
       onChange: (v: string) => { void instantSaveKey('showSessionPanel', v as any) },
     })),
-    React.createElement('p', { className: 'dsa-hint', style: { margin: 0 } }, t('settings.advanced.yamlNote')),
+    row(t('settings.advanced.yamlKeys'), React.createElement('button', {
+      type: 'button',
+      className: showHostKeys ? 'dsa-segBtn dsa-segBtnActive' : 'dsa-segBtn',
+      onClick: () => setShowHostKeys((v) => !v),
+    }, showHostKeys ? t('settings.advanced.yamlKeysHide') : t('settings.advanced.yamlKeysShow')),
+      t('settings.advanced.yamlNote', { count: HOST_ONLY_KEYS.length })),
+    showHostKeys ? renderHostOnlyRows() : null,
+  )
+
+  // Read-only list of the config-file-only keys: display-only rows (key + the
+  // resolved effective value), no control, no save path. The rows come from
+  // HOST_ONLY_KEYS through hostOnlyRows(), so the panel can never advertise a
+  // set the write path disagrees with; the note copy carries the derived count
+  // for the same reason.
+  const renderHostOnlyRows = () => React.createElement('div', { className: 'dsa-defaultAllow' },
+    ...hostOnlyRows(snapshot?.value).map((entry) => React.createElement('div', {
+      key: entry.key,
+      className: 'dsa-defaultAllowTools',
+      style: { alignItems: 'center' },
+    },
+      React.createElement('code', { className: 'dsa-defaultAllowTool' }, entry.key),
+      React.createElement('span', { className: 'dsa-chipDesc', style: { wordBreak: 'break-all' } },
+        entry.value ?? t('settings.advanced.yamlEmpty')),
+    )),
   )
 
   // Timers & breaker card body (the numeric/dangerous group).
