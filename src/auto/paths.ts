@@ -326,6 +326,15 @@ export function devZoneRootsFor(workspace, dshHome, home) {
     const roots = [assumedInstall];
     if (PLUGIN_ZONE_ROOT !== assumedInstall)
         roots.push(PLUGIN_ZONE_ROOT);
+    // The session workspace is a development zone when it is ONE plugin repo
+    // directly under the DSH_HOME plugins root. The plugins root itself,
+    // deeper paths, operator trees and every other DSH_HOME tree stay fenced.
+    // The base is provable: zoneOpeningTrusted only extends a single, literally
+    // readable command whose real cwd is this workspace.
+    const pluginsRoot = normalizePath(join(dshHome, 'plugins'), workspace, home);
+    const sessionRoot = normalizePath(workspace, workspace, home);
+    if (sessionRoot !== pluginsRoot && dirname(sessionRoot) === pluginsRoot && !roots.includes(sessionRoot))
+        roots.push(sessionRoot);
     return roots;
 }
 /** The constant development zones of one call. */
