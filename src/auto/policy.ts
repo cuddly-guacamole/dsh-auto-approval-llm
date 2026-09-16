@@ -67,6 +67,16 @@ export interface ToolAssessment {
      * signals.
      */
     credentialRead?: boolean
+    /**
+     * True when the shell plane judged an opaque / interpreter-hidden
+     * program destructive (or unreadable). The category layer labels every
+     * opaque line unknown/inherit, so the LOCKED clamp is unreachable from
+     * the category alone; this structured signal is read by the category
+     * directive and the answerer locked predicate, taking the same
+     * reject-only countdown as the plain spelling instead of an
+     * online-reviewer verdict.
+     */
+    opaqueLocked?: boolean
 }
 
 /**

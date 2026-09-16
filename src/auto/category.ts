@@ -791,8 +791,14 @@ export function categorizeCommand(source: string, shell: string, roots: Category
 export function categoryDirective(
   config: CategoryConfig,
   category: string,
-  assessment: { decision?: string; classifierEligible?: boolean; sessionArtifactDeletion?: boolean; credentialRead?: boolean },
+  assessment: { decision?: string; classifierEligible?: boolean; sessionArtifactDeletion?: boolean; credentialRead?: boolean; opaqueLocked?: boolean },
 ): CategoryDirective {
+  // An opaque / interpreter-hidden destructive program carries a structured
+  // signal from the shell plane: its category is honestly unknown, so the
+  // LOCKED clamp below could never see it. Return an ask (the answerer
+  // locked predicate reads the same flag and pins it to reject) rather than
+  // inherit, which the online reviewer settled with llm-allow.
+  if (assessment.opaqueLocked === true) return 'ask'
   if (category === 'unknown' || category === 'harnessInternal') return 'inherit'
   const mode = config.categoryMode === 'aggressive' ? 'aggressive' : 'standard'
   const policy = config.categoryPolicy ?? {}
@@ -872,7 +878,7 @@ export function categoryDirectiveFor(
   exec: CategoryExec,
   roots: CategoryRoots,
   config: CategoryConfig,
-  assessment: { decision?: string; classifierEligible?: boolean } = { decision: 'ask', classifierEligible: true },
+  assessment: { decision?: string; classifierEligible?: boolean; opaqueLocked?: boolean } = { decision: 'ask', classifierEligible: true },
 ): CategoryDirectiveForResult {
   const category = categorizeTool(exec, roots)
   return {

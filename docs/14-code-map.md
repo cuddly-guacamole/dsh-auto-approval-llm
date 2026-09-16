@@ -6,11 +6,11 @@
 
 ```text
 src/
-├─ index.ts              宿主编排：apply()、四挂点接线、16 路由、命令、评审器、审计、学习接线  5932 行
+├─ index.ts              宿主编排：apply()、四挂点接线、16 路由、命令、评审器、审计、学习接线  5940 行
 ├─ auto/                 静态评估纯函数层（28 文件，按字母序）
 │    ├─ artifacts.ts     140  本会话成功创建路径登记（删除豁免依据）
 │    ├─ audit.ts         147  append-only 审批审计（清空留墓碑、5MiB 保尾）
-│    ├─ category.ts      906  12 类三态开关层：归类/优先级合并/指令钳制/信任目录模式
+│    ├─ category.ts      912  12 类三态开关层：归类/优先级合并/指令钳制/信任目录模式
 │    ├─ classifier.ts    100  预分类提示词、参数脱敏、严格响应解析
 │    ├─ constants.ts     141  数值默认唯一事实源（倒计时/熔断/截断/学习族阈值）
 │    ├─ decision.ts      913  纯决策函数：评审解析、人机竞速、来源标注、熔断、静态名单、host-only 键
@@ -23,7 +23,7 @@ src/
 │    ├─ model-channel.ts 119  模型通道路由与 provider 选择
 │    ├─ paths.ts         440  路径规范化、受保护/关键路径判定、受保护读取例外（Git ref 元数据）、运行态文件名单
 │    ├─ permission-change.ts 131  权限平面变更观测：逐平面基线门控 + 被拒 decision 指针
-│    ├─ policy.ts        643  assessTool 确定性第一遍分类（17 步）
+│    ├─ policy.ts        653  assessTool 确定性第一遍分类（17 步）
 │    ├─ preset-migration.ts 423  auto-approval 重命名与存量迁移：多信号宿主能力探测、raw identity gate、同签名懒迁移、自有档 effective-never 归一回 ask
 │    ├─ probe.ts         72   工作区事实只读探针（reviewerContextFacts 的元数据来源）
 │    ├─ redact.ts        223  秘密脱敏器（token/AWS/PEM/Bearer…，供参数/评审理由/骨架/结果共用）
@@ -32,7 +32,7 @@ src/
 │    ├─ risk-tokens.ts   24   HIGH 风险正则（NAME/REASON 单一事实源）
 │    ├─ rules.ts         459  声明式规则解析/求值（host 与浏览器共用）
 │    ├─ runtime-paths.ts 293  运行态文件唯一路径 owner（`<DSH_HOME>/auto-approval-llm/` 规范位置；目录无法创建/拒绝写入时 fail-closed——append 失败返回 undefined，由调用方拒绝裁决，不回退包根、不搬家；open 阶段错误允许同路径重试一次，写后错误不重试）
-│    ├─ shell.ts         3327 bash/pwsh 词法分解 + 整行熔断 + 逐段静态分类（最大单文件）
+│    ├─ shell.ts         3417 bash/pwsh 词法分解 + 整行熔断 + 逐段静态分类（最大单文件）
 │    ├─ symlink.ts       182  符号链接创建与目标校验
 │    ├─ tool-stats.ts    94   工具调用统计收集
 │    └─ trust.ts         305  web 路由信任平面（loopback/LAN 边界、Host 伪造防护、在线端点 URL 校验）
@@ -61,7 +61,7 @@ tests/
 ├─ perf-settings-rules-parse.test.mjs / perf-poll-backoff.test.mjs / perf-scan-throttle.test.mjs （客户端开销：单次解析、轮询退避、扫描节流）
 ├─ trusted-intent-window.test.mjs（授权证据窗口溢出计数：slot cap/去重/预算交互、拒因 note 两分支、trusted-intents 事件量化 overflowed 标志）/ client-human-gate.test.mjs（浮层人工出手率：与 friction-report 同源名单、空窗口不作零声称、round 边界、中英三键、bundle 装配锚）
 ├─ loop-guard.test.mjs（循环键稳定性/回退、严格连续+fire-and-reset 状态机、FIFO 64、阈值钳制与 resolveConfig 映射）/ loop-guard-wiring.test.mjs（四站点成对锚、allowlist 与 rule-allow 豁免负向切片、跨面标记读位置与 one-shot、pinned 形状先于 learnAttempt、门不写 history 不碰熔断、disposal/sweep 有界、audit-query 渲染）
-└─ 合计 183 个 tests/*.test.mjs（node --test 全绿基线）
+└─ 合计 184 个 tests/*.test.mjs（node --test 全绿基线）
 scripts/
 ├─ build.sh             （DSH 源码仓库布局）tsc 编译 src→lib
 ├─ clean-lib.mjs        构建前清空 lib/（tsc 不删除已删源的旧产物）

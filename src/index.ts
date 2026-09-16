@@ -1724,7 +1724,9 @@ export function nameChannelLockRefusal(input: {
   category?: string
   sessionArtifactDeletion?: boolean
   credentialRead?: boolean
+  opaqueLocked?: boolean
 }): string | undefined {
+  if (input.opaqueLocked === true) return 'opaque destructive program is locked'
   if (input.category === 'delete' && input.sessionArtifactDeletion === true) return undefined
   if (input.credentialRead === true) return 'credential material read is not name-authorized'
   if (input.category !== undefined && HARD_LOCKED_CATEGORIES.includes(input.category as never)) {
@@ -3599,7 +3601,8 @@ export function apply(ctx: Context, rawConfig: Config): void {
   // pipeline). The protected opt-out is clamped by the same `credentialRead`
   // floor `categoryDirective` applies, so a credential-material read cannot be
   // unlocked in one plane and locked in the other.
-  const isLockedCategory = (category: string | undefined, provenArtifactDeletion = false, credentialRead = false): boolean => {
+  const isLockedCategory = (category: string | undefined, provenArtifactDeletion = false, credentialRead = false, opaqueLocked = false): boolean => {
+    if (opaqueLocked === true) return true
     if (category === undefined) return false
     if (category === 'privilege' && config.privilegeAutoReview === true) return false
     if (category === 'protected' && config.protectedAutoReview === true && !credentialRead) return false
@@ -4059,6 +4062,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
               category,
               sessionArtifactDeletion: assessment?.sessionArtifactDeletion === true,
               credentialRead: assessment?.credentialRead === true,
+              opaqueLocked: assessment?.opaqueLocked === true,
             })
             if (ruleLock !== undefined) {
               return { kind: 'ask', reason: `[dsh-auto-approval-llm] ${ruleLock} ${exec.name}` }
@@ -4148,6 +4152,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
         category,
         sessionArtifactDeletion: assessment?.sessionArtifactDeletion === true,
         credentialRead: assessment?.credentialRead === true,
+        opaqueLocked: assessment?.opaqueLocked === true,
       })
       if (mirrorRefusal !== undefined) {
         return { kind: 'ask', reason: `[dsh-auto-approval-llm] ${mirrorRefusal} ${exec.name}` }
@@ -5121,6 +5126,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
               category: classified.category,
               sessionArtifactDeletion: classified.assessment?.sessionArtifactDeletion === true,
               credentialRead: classified.assessment?.credentialRead === true,
+              opaqueLocked: classified.assessment?.opaqueLocked === true,
             })
             if (ruleLock !== undefined) {
               const lockedStatus: ReviewStatus = {
@@ -5237,6 +5243,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
         targetCategory,
         targetClassified.assessment?.sessionArtifactDeletion === true,
         targetClassified.assessment?.credentialRead === true,
+        targetClassified.assessment?.opaqueLocked === true,
       )
       const refusal = directHumanTargetRefusal({
         risk: targetRisk,
@@ -5335,6 +5342,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
         category: classified.category,
         sessionArtifactDeletion: classified.assessment?.sessionArtifactDeletion === true,
         credentialRead: classified.assessment?.credentialRead === true,
+        opaqueLocked: classified.assessment?.opaqueLocked === true,
       }) !== undefined) {
       // Hard-locked categories (delete / disk) cannot be pre-authorized by a
       // name — the allowlist does not beat them in either plane. The call
@@ -5384,7 +5392,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       // handle is wired, and no learnable context is passed — after
       // highRiskSeconds with no response the ask settles as timeout-deny so
       // unattended sessions cannot hang forever on a dangerous command.
-      if (isLockedCategory(classified.category, classified.assessment?.sessionArtifactDeletion === true, classified.assessment?.credentialRead === true)) {
+      if (isLockedCategory(classified.category, classified.assessment?.sessionArtifactDeletion === true, classified.assessment?.credentialRead === true, classified.assessment?.opaqueLocked === true)) {
         const lockedStatus: ReviewStatus = {
           risk: 'HIGH',
           phase: 'countdown',

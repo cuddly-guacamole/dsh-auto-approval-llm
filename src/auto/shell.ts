@@ -4,7 +4,7 @@
 // Retained per the MIT License: this is a substantial portion of the original.
 import { basename } from 'node:path';
 import { globRootOf, hardDestructiveTargetReason, isArtifactArea, isCriticalPath, isGrantedDevZoneTarget, isProtectedProjectPath, isProtectedReadMetadata, isWithin, normalizePath, runtimeStateBasename, runtimeStateTargetInZone, runtimeStateTargetReason, } from './paths.js';
-import { isEffectiveRoutine, sensitiveBasenameAt } from './category.js';
+import { categorizeCommand, HARD_LOCKED_CATEGORIES, isEffectiveRoutine, sensitiveBasenameAt } from './category.js';
 function ambiguous(reason) {
     return { decision: 'ask', reason, classifierEligible: true };
 }
@@ -839,7 +839,7 @@ export function shellReadsCredentialMaterial(source, shell, roots) {
         return false;
     const decomposition = decomposeCommandLine(source, shell);
     if (decomposition.kind !== 'segments')
-        return false;
+        return opaqueReadsCredentialMaterial(source, shell, roots);
     for (const segment of decomposition.segments) {
         const unwrapped = unwrapCommand(segment.words);
         const name = commandName(unwrapped.words[0]?.text ?? '');
@@ -2259,32 +2259,31 @@ const OPAQUE_REDIRECT_TARGET = /(?:^|[^;&|()<>])(?:\d*&?>{1,2}\|?|\d*>{1,2}&(?=\
  * Best effort by construction: an unterminated body consumes the rest of the
  * input, which is the conservative reading (those lines are body, not syntax).
  */
-function stripHeredocBodies(source) {
+/** Split a command line into its live syntax and the here-document bodies. */
+function walkHeredocs(source) {
     const lines = source.split(/\r?\n/);
-    const out = [];
+    const syntax = [];
+    const bodies = [];
     let pending = [];
+    let body = [];
     for (const line of lines) {
         if (pending.length > 0) {
             const stripped = line.replace(/^\t+/, '');
             if (pending[0].stripTabs ? stripped === pending[0].delimiter : line === pending[0].delimiter) {
                 pending.shift();
+                if (pending.length === 0) {
+                    bodies.push(body.join('\n'));
+                    body = [];
+                }
+            }
+            else {
+                body.push(line);
             }
             continue;
         }
-        out.push(line);
-        // Only a `<<` that is live syntax opens a here-document. Position-blind
-        // matching read `<<` inside quotes and comments too: one line such as
-        // `echo "a << b"` pushed a pending delimiter, and every following line —
-        // real syntax included — was then consumed as body, which silently
-        // disarmed every target fuse for the rest of the input (`rm -rf X; (:)`
-        // after such a line degraded from hard deny to ask).
+        syntax.push(line);
         const view = shellSyntaxView(line);
         for (const introducer of view.matchAll(/<<(-?)/g)) {
-            // The delimiter is read from the ORIGINAL text at the matched
-            // offset (the view blanks quoted spans but keeps offsets), so the
-            // quoted spelling `<<"EOF"` still names its delimiter. Only the
-            // operator is matched in the view: a trailing `\s*` there would
-            // swallow the original delimiter along with the blanked span.
             const rest = line.slice(introducer.index + introducer[0].length).replace(/^[ \t]*/, '');
             const delimiter = /^(?:"([^"]*)"|'([^']*)'|\\([A-Za-z_][A-Za-z0-9_]*)|([A-Za-z_][A-Za-z0-9_]*))/.exec(rest);
             const value = delimiter?.[1] ?? delimiter?.[2] ?? delimiter?.[3] ?? delimiter?.[4];
@@ -2293,7 +2292,82 @@ function stripHeredocBodies(source) {
             }
         }
     }
-    return out.join('\n');
+    if (pending.length > 0)
+        bodies.push(body.join('\n'));
+    return { syntax: syntax.join('\n'), bodies };
+}
+function stripHeredocBodies(source) {
+    return walkHeredocs(source).syntax;
+}
+/** The here-document bodies a command line feeds to its commands. */
+function heredocBodiesOf(source) {
+    return walkHeredocs(source).bodies;
+}
+/** The interpreter a here-document is fed to, or undefined for a dynamic head. */
+function hereDocumentInterpreterName(source) {
+    for (const segment of opaqueSegmentWords(stripHeredocBodies(source))) {
+        const first = unwrapCommand(segment.words).words[0];
+        const name = first === undefined ? '' : commandNameWithoutExe(commandName(first.text));
+        if (STDIN_SCRIPT_INTERPRETERS.has(name))
+            return name;
+        if (first !== undefined && (first.dynamic === true || /[$`]/.test(first.text)))
+            return undefined;
+    }
+    return undefined;
+}
+/** A hidden program whose head or substitutions cannot be read statically. */
+function payloadUnreadable(payload) {
+    if (typeof payload !== 'string')
+        return true;
+    if (/\$\(|`/.test(payload))
+        return true;
+    for (const line of payload.split(/\r?\n/)) {
+        const trimmed = line.trim();
+        if (trimmed === '' || trimmed.startsWith('#'))
+            continue;
+        return /^[$`"']/.test(trimmed);
+    }
+    return false;
+}
+/** Why an opaque line's hidden program must take the locked (reject-only) ask. */
+function opaqueDestructiveLockedReason(source, stripped, shell, roots) {
+    if (destructiveNestedSource(stripped))
+        return 'destructive command in the readable part of an opaque line';
+    if (!hereDocumentRunsAsCode(source))
+        return undefined;
+    const interpreter = hereDocumentInterpreterName(source);
+    for (const payload of heredocBodiesOf(source)) {
+        if (destructiveNestedSource(payload))
+            return 'here-document program is destructive';
+        if (payloadUnreadable(payload))
+            return 'here-document program cannot be read statically';
+        if (interpreter !== undefined && SHELL_CODE_INTERPRETERS.has(interpreter)) {
+            const decision = categorizeCommand(payload, shellPlaneOf(interpreter), roots);
+            if (HARD_LOCKED_CATEGORIES.includes(decision.category))
+                return `here-document program is a ${decision.category} command`;
+        }
+    }
+    return undefined;
+}
+/** Credential reads recovered from a line that cannot be decomposed. */
+function opaqueReadsCredentialMaterial(source, shell, roots) {
+    for (const segment of opaqueSegmentWords(source)) {
+        const unwrapped = unwrapCommand(segment.words);
+        const name = commandName(unwrapped.words[0]?.text ?? '');
+        const judgesSources = readOnlyCommand(name, unwrapped.words, shell)
+            || writesThroughOperands(name, unwrapped.words)
+            || name === 'cp' || name === 'mv';
+        if (!judgesSources)
+            continue;
+        const operands = [...unwrapped.words.slice(1), ...segment.readTargets];
+        if (name === 'dd')
+            operands.push(...ddInputTargets(unwrapped.words));
+        for (const path of explicitPaths(operands, roots)) {
+            if (sensitiveBasenameAt(path, roots) || isCriticalPath(path, roots))
+                return true;
+        }
+    }
+    return false;
 }
 
 /**
@@ -2563,7 +2637,7 @@ function opaqueNestedAssessment(source, shell, roots) {
         if (nested.source === undefined)
             return manualReview('opaque nested execution requires manual review');
         if (destructiveNestedSource(nested.source))
-            return manualReview('nested deletion requires manual review');
+            return { ...manualReview('nested deletion requires manual review'), opaqueLocked: true };
         if (nestedSourceWritesToDshHome(nested.source, roots))
             return denied('nested execution writes to DSH_HOME — use the write or edit tool instead');
         if (SHELL_CODE_INTERPRETERS.has(commandNameWithoutExe(name))) {
@@ -2947,7 +3021,7 @@ function assessSegment(segment, shell, roots, artifacts, owner) {
         if (nested.source === undefined)
             return manualReview('opaque nested execution requires manual review');
         if (destructiveNestedSource(nested.source))
-            return manualReview('nested deletion requires manual review');
+            return { ...manualReview('nested deletion requires manual review'), opaqueLocked: true };
         if (nestedSourceWritesToDshHome(nested.source, roots))
             return denied('nested execution writes to DSH_HOME — use the write or edit tool instead');
         // A nested inline source must not step below the tier the same text
@@ -3185,6 +3259,22 @@ export function assessShell(source, shell, roots, artifacts, owner) {
         // line feeds it to an interpreter that reads its program from stdin, so
         // that shape keeps the manual-review tier instead of losing it.
         const stripped = stripHeredocBodies(source);
+        // A hidden program that is destructive (a here-document fed to an
+        // interpreter, or a destructive token in the readable chunk) is the one
+        // opaque shape the LOCKED clamp could not reach: the category layer
+        // labels it `unknown`/`inherit`, so the online reviewer settled it with
+        // llm-allow. The structured `opaqueLocked` signal is read by the
+        // category directive and the answerer's locked predicate, which pins the
+        // call to the same reject-only countdown the plain spelling takes.
+        const lockedReason = opaqueDestructiveLockedReason(source, stripped, shell, roots);
+        if (lockedReason !== undefined)
+            return { ...manualReview(`opaque ${shell} destructive program requires a locked review: ${lockedReason}`), opaqueLocked: true };
+        // The credential floor has to cover the opaque reader too: an opaque
+        // line's read operands used to be invisible to it, so `cat <token>; (:)`
+        // rode the ordinary reviewer under `timeoutAction=allow`. The same
+        // structured flag keeps it on the reject-only countdown.
+        if (shellReadsCredentialMaterial(source, shell, roots))
+            return { ...manualReview(`opaque ${shell} read of credential material requires a locked review`), credentialRead: true, opaqueLocked: true };
         const nested = opaqueNestedAssessment(stripped, shell, roots);
         if (nested !== undefined)
             return nested;
