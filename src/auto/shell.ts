@@ -1786,7 +1786,7 @@ function shellWriteToDshHomeDenied(normalizedPath, roots) {
         return undefined;
     if (roots.zoneFuseTrusted !== false && isPluginDevZoneTarget(normalizedPath))
         return undefined;
-    return 'shell write to DSH_HOME is not permitted by auto mode — use the write or edit tool instead';
+    return (roots.allowedDshSubpaths ?? []).some(root => isWithin(root, normalizedPath)) ? 'shell write to DSH_HOME is not permitted in this form — use the write or edit tool, or a single-segment literal content write' : 'shell write to DSH_HOME is not permitted by auto mode';
 }
 function segmentHardDenyReason(segment, shell, roots) {
     for (const target of segment.writeTargets) {

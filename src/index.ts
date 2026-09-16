@@ -1132,7 +1132,7 @@ let rejectGuidanceWindow: number[] = []
 export function buildRejectGuidanceText(source: string, category?: string): string {
   const src = REJECT_GUIDANCE_KNOWN_SOURCES.includes(source) ? source : 'policy'
   const cat = category !== undefined && CATEGORY_KEYS.includes(category as (typeof CATEGORY_KEYS)[number]) ? ` (category: ${category})` : ''
-  return `[reject-guidance] Tool call denied by ${src} policy${cat}. Same target or effect stays denied under any wording or tool; ask the user if the denial seems wrong.`
+  return `[reject-guidance] Tool call denied by ${src} policy${cat}. Do not repeat, reword, or switch tools to evade the decision; ask the user if the denial seems wrong.`
 }
 
 export const OFFICIAL_REJECT_GUIDANCE_TEXT =

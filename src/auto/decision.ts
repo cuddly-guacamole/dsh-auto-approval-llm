@@ -739,7 +739,7 @@ export function assembleReviewerSystem(safetyPrompt: string | undefined, rulesTe
  * as an escape, and never carries the words try/retry itself.
  */
 export const DENY_CIRCUMVENTION_GUIDANCE =
-  'The denial applies to this operation: the same target or effect remains denied regardless of tool, wording, or alias. The same operation expressed differently remains denied; ask the user if you believe the denial is wrong.'
+  'The denial applies to this operation as issued. Do not repeat, reword, or switch tools to evade the decision; when a sanctioned alternative exists the reason above names it, otherwise ask the user if you believe the denial is wrong.'
 
 export type DenyFeedbackKind = 'rule' | 'denyList' | 'policy' | 'llm' | 'timeout' | 'category'
 

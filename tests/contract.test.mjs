@@ -2542,7 +2542,7 @@ test('formatDenyFeedback: timeout branch is the fail-closed notice, unprefixed, 
 test('formatDenyFeedback: guidance anchors the operation and never suggests rephrasing', () => {
   for (const kind of ['rule', 'denyList', 'policy', 'llm']) {
     const text = formatDenyFeedback(kind, { toolName: 'x', reason: 'r' })
-    assert.ok(text.includes('the same target or effect remains denied'), `${kind} anchors the operation`)
+    assert.ok(text.includes('The denial applies to this operation as issued'), `${kind} anchors the operation`)
     assert.ok(text.includes('ask the user'), `${kind} points at the human`)
     assert.ok(!/\b(?:try|retry)\b/i.test(DENY_CIRCUMVENTION_GUIDANCE), 'guidance has no try/retry literal')
     assert.ok(!/换种方式|换个说法/.test(text), `${kind} has no Chinese circumvention phrasing`)

@@ -61,7 +61,7 @@ test('policy-denial guidance never suggests retrying, rewording, or a different 
 
 test('buildRejectGuidanceText: policy denials anchor the operation, not the wording', () => {
   const text = buildRejectGuidanceText('category', 'delete')
-  assert.ok(text.includes('Same target or effect stays denied under any wording or tool'))
+  assert.ok(text.includes('Do not repeat, reword, or switch tools to evade the decision'))
   assert.ok(text.includes('ask the user'))
 })
 
