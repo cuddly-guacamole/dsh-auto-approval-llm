@@ -44,6 +44,7 @@ src/
      ├─ auto-icon.ts     权限菜单图标 + Auto 风险确认弹窗 657 行
      ├─ locale.ts        zh/en 双语 560 行
      ├─ human-gate.ts    浮层「人工出手率」派生（HUMAN_SOURCES 与 scripts/friction-report 同源）
+     ├─ host-keys.ts     47  仅配置文件可配键的只读渲染行（`HOST_ONLY_KEYS` 单一 owner → 键名 + 生效值；纯函数，无 React 依赖）
      └─ tool-chips.ts    150  工具芯片
 
 tests/

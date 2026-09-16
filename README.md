@@ -139,7 +139,7 @@ dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 | `slashCommandsEnabled` / `directHumanEnabled` | false | 注册 `/approval-*` 命令 / 直接人工通道（agent 可把操作路由给人；均需重启生效） |
 | `debug` / `redactResults` / `notifyUser` | false / false / true | 调试日志 / 结果脱敏 / 通过通知进会话 |
 
-> 设置卡为可折叠子卡 + 顶层开关即时保存，非法配置值有红色横幅 +「尝试修复」→ [docs/10](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/blob/main/docs/10-client-ui.md)。host-only 键（`workspaceRoot`、`trustedDirs`、`trustedDshSubpaths`、`maintenanceDshPaths`、`rulesDryRun`、`breakerAntiHijackMs`、`reviewMaxRetries` 等）用 patch / YAML 配置，设置卡保存不会抹掉。
+> 设置卡为可折叠子卡 + 顶层开关即时保存，非法配置值有红色横幅 +「尝试修复」→ [docs/10](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/blob/main/docs/10-client-ui.md)。host-only 键（`workspaceRoot`、`trustedDirs`、`trustedDshSubpaths`、`maintenanceDshPaths`、`rulesDryRun`、`breakerAntiHijackMs`、`reviewMaxRetries` 等）用 patch / YAML 配置，设置卡保存不会抹掉；「高级」子卡把它们连同**当前生效值**列为只读清单（无控件），并说明 DSH_HOME 写入的操作者开口与没有开口的族。
 
 ---
 

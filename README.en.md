@@ -139,7 +139,7 @@ The table below lists the common keys only; **every key, its full semantics and 
 | `slashCommandsEnabled` / `directHumanEnabled` | false | Register `/approval-*` commands / direct-human channel (the agent can route a call to a human; both need a restart) |
 | `debug` / `redactResults` / `notifyUser` | false / false / true | Debug log / redact successful results / approval notice in-session |
 
-> The settings card is a set of collapsible sub-cards with immediate save for top-level switches, and invalid configuration values raise a red banner plus a "Try to fix" button → [docs/10](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/blob/main/docs/10-client-ui.md). host-only keys (`workspaceRoot`, `trustedDirs`, `trustedDshSubpaths`, `maintenanceDshPaths`, `rulesDryRun`, `breakerAntiHijackMs`, `reviewMaxRetries` and friends) are configured through patch / YAML, and saving the settings card never clears them.
+> The settings card is a set of collapsible sub-cards with immediate save for top-level switches, and invalid configuration values raise a red banner plus a "Try to fix" button → [docs/10](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/blob/main/docs/10-client-ui.md). host-only keys (`workspaceRoot`, `trustedDirs`, `trustedDshSubpaths`, `maintenanceDshPaths`, `rulesDryRun`, `breakerAntiHijackMs`, `reviewMaxRetries` and friends) are configured through patch / YAML, and saving the settings card never clears them; the Advanced sub-card lists them with their current effective value as read-only rows (no control) and states which DSH_HOME write openings exist and which families have none.
 
 ---
 
