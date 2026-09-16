@@ -409,8 +409,8 @@ export function startReviewPolling(
       // parsing must not decide outcomes — status-less asks (breaker / manual
       // / human-only) are meant to wait for a human, and every real countdown
       // shows up here as a published review-status within one poll. The ask is
-      // still displayed: the chip reports it as waiting for a human.
-      approvalStatusStore.confirmAwaiting(handle.sessionId, handle.callId!)
+      // still displayed: observePending already reports a status-less ask as
+      // waiting for a human, and this poller writes nothing to the store.
       return
     }
     // Mirror the host's published countdown into the display store on every

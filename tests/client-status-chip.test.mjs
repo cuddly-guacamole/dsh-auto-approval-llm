@@ -120,16 +120,16 @@ test('a settled ask stays readable for a bounded window, then clears', () => {
   assert.equal(chipState(store.activeFor('s1', now), now, false).kind, 'empty')
 })
 
-test('a poll that briefly misses the countdown does not repaint the chip', () => {
+test('a re-observed ask does not repaint a published countdown', () => {
   // Observed live: the panel appeared ~8s into a locked-category countdown and
   // the chip flicked to "waiting for a human" for one poll before returning to
-  // the countdown, because the poller confirmed "no countdown" over a record
-  // that already carried one.
+  // the countdown. A re-observation of the same ask, like the one the watcher
+  // makes when the panel appears, must not downgrade a record that already
+  // carries a countdown.
   let now = 1_000
   const store = createApprovalStatusStore(() => now)
   store.observePending('s1', 'c1')
   store.publishStatus('s1', 'c1', { phase: 'countdown', action: 'reject', seconds: 10 })
-  store.confirmAwaiting('s1', 'c1')
   assert.equal(chipState(store.activeFor('s1', now), now, false).kind, 'countdown')
   // The watcher re-observing the same ask when its panel appears must not
   // downgrade the running countdown either (the other half of the same bug).
@@ -139,7 +139,6 @@ test('a poll that briefly misses the countdown does not repaint the chip', () =>
   store.dropPending('s1', 'c1')
   now = 2_000
   store.observePending('s1', 'c2')
-  store.confirmAwaiting('s1', 'c2')
   assert.equal(chipState(store.activeFor('s1', now), now, false).kind, 'awaiting')
 })
 
@@ -262,12 +261,10 @@ test('a status-less ask lands on the chip as waiting for a human', async (t) => 
   const sessionId = 'chip-awaiting-session'
   const callId = 'call-2'
   // The watcher registers the pending before the poller runs (the remote adapter
-  // observes every interaction it sees); the poller only has to confirm that the
-  // host published no countdown for it. Reading the `awaiting` flag back cannot
-  // separate the two halves: the watcher's own observePending already sets it,
-  // and the store keeps confirmAwaiting idempotent for a record that reports
-  // awaiting. The poller's confirmation call is therefore recorded directly —
-  // it is the only fact that disappears when the poller stops confirming.
+  // observes every interaction it sees). `awaiting` is written by observePending
+  // alone: the poller no longer confirms a status-less ask, it only has to leave
+  // one on screen. The chip state is therefore read back after a real
+  // review-status poll.
   approvalStatusStore.observePending(sessionId, callId)
   const fetchLog = []
   globalThis.fetch = async (url, init) => {
@@ -275,27 +272,20 @@ test('a status-less ask lands on the chip as waiting for a human', async (t) => 
     if (url === REVIEW_STATUS_ROUTE) return { ok: true, json: async () => ({ ok: false }) }
     throw new Error(`unexpected fetch: ${url}`)
   }
-  const confirmed = []
-  const originalConfirmAwaiting = approvalStatusStore.confirmAwaiting
-  approvalStatusStore.confirmAwaiting = function (id, ask) {
-    confirmed.push([id, ask])
-    return originalConfirmAwaiting.call(this, id, ask)
-  }
   const poller = startReviewPolling(
     { sessionId, key: `${sessionId}:${callId}`, callId, respond: async () => {} },
     () => true,
     { pollMs: 20 },
   )
   t.after(() => {
-    approvalStatusStore.confirmAwaiting = originalConfirmAwaiting
     poller.dispose()
     approvalStatusStore.clearSession(sessionId)
   })
-  await until(() => confirmed.length >= 1, 'the poller to confirm the status-less ask')
-  assert.deepEqual(confirmed[0], [sessionId, callId], 'the confirmation carries the ask the poller watched')
+  await until(() => fetchLog.some((entry) => entry.url === REVIEW_STATUS_ROUTE), 'a real review-status poll')
   const statusPolls = fetchLog.filter((entry) => entry.url === REVIEW_STATUS_ROUTE)
-  assert.ok(statusPolls.length >= 1, 'the confirmation follows a real review-status poll')
+  assert.ok(statusPolls.length >= 1, 'the chip state is read after a real review-status poll')
   assert.equal(statusPolls[0].init?.headers?.['x-auto-approval-call-id'], callId)
+  assert.equal(chipState(approvalStatusStore.activeFor(sessionId, Date.now()), Date.now(), false).kind, 'awaiting')
   assert.equal(approvalStatusStore.activeFor(sessionId, Date.now())?.awaiting, true)
 })
 

@@ -118,8 +118,6 @@ export function coarseMinutes(seconds: number): number {
 export interface ApprovalStatusStore {
   /** The watcher armed a pending; the host has published nothing yet. */
   observePending(sessionId: string, callId: string, breaker?: boolean): void
-  /** A poll confirmed the host has no countdown for this ask. */
-  confirmAwaiting(sessionId: string, callId: string): void
   /** Apply a host review-status payload. */
   publishStatus(sessionId: string, callId: string, status: HostStatus): void
   /** Record a settled ask (the panel is closing or closed). */
@@ -215,6 +213,9 @@ export function createApprovalStatusStore(now: () => number = Date.now): Approva
       // appears, and that must not downgrade a running countdown to "waiting for
       // a human" (observed live as a one-poll flicker).
       if (existing && existing.seconds > 0) {
+        // `awaiting` is written only by the record created below, so a
+        // re-observed ask keeps the state the watcher already published and the
+        // review-status poller no longer confirms it.
         if (breaker && !existing.breaker) {
           existing.breaker = breaker
           notify()
@@ -235,18 +236,6 @@ export function createApprovalStatusStore(now: () => number = Date.now): Approva
         revision: existing?.revision ?? -1,
         observedAt: at,
       })
-      notify()
-    },
-
-    confirmAwaiting(sessionId, callId) {
-      const record = records.get(recordKey(sessionId, callId))
-      if (!record || record.phase === 'follow' || record.awaiting) return
-      // A countdown was already published for this ask: one poll that briefly
-      // misses the status (the host window between publishes) must not repaint
-      // a running countdown as "waiting for a human" and back again.
-      if (record.seconds > 0) return
-      record.awaiting = true
-      record.observedAt = now()
       notify()
     },
 
