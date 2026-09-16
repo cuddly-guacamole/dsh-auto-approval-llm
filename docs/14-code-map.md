@@ -63,7 +63,7 @@ tests/
 ├─ trusted-intent-window.test.mjs（授权证据窗口溢出计数：slot cap/去重/预算交互、拒因 note 两分支、trusted-intents 事件量化 overflowed 标志）/ client-human-gate.test.mjs（浮层人工出手率：与 friction-report 同源名单、空窗口不作零声称、round 边界、中英三键、bundle 装配锚）
 ├─ loop-guard.test.mjs（循环键稳定性/回退、严格连续+fire-and-reset 状态机、FIFO 64、阈值钳制与 resolveConfig 映射）/ loop-guard-wiring.test.mjs（四站点成对锚、allowlist 与 rule-allow 豁免负向切片、跨面标记读位置与 one-shot、pinned 形状先于 learnAttempt、门不写 history 不碰熔断、disposal/sweep 有界、audit-query 渲染）
 ├─ host-lines.test.mjs（宿主下限线：承诺表与精确钉版、装错线/读错档位的反向对照、补丁组合表解析；本机安装线驱动真实 permission-presets 服务）
-└─ 合计 188 个 tests/*.test.mjs（node --test 全绿基线）
+└─ 合计 191 个 tests/*.test.mjs（node --test 全绿基线）
 scripts/
 ├─ build.sh             （DSH 源码仓库布局）tsc 编译 src→lib
 ├─ clean-lib.mjs        构建前清空 lib/（tsc 不删除已删源的旧产物）
@@ -89,3 +89,4 @@ verify-*.mjs            3 个运行时验证脚本（verify-auth / verify-config
 **bundle 层（patch.yml）**：权限预设 `auto-approval` = `danger-full-access` + `approval: ask`（host 名 `Auto approval`；**禁飙到 never**，自有档 effective-never 由插件运行时归一回 ask）。宿主 `>= 0.1.6` 的 shipped patch 不得静态定义 `auto` preset（该名归上游 auto-review 运行期 `registerAuto` 注册，静态配置即 boot 失败）；本插件只定义/接管 `auto-approval`，与上游的 `auto` 档可同时启用。bundle 不再覆盖安全行为开关（`autoSwitchPolicyToAsk` 已退役并保留为 host-owned no-op）；`humanOnlyList` 保持代码默认空。
 
 **exports**：`.`（lib/index.js + types）、`./client`（lib/client.js + types contact）、`./package.json`；peerDeps 覆盖 cordis ≥4.0.1<5、dsh-llm / dsh-tools / dsh-session / dsh-permission-presets / dsh-user-approval ≥0.1.5-rc.2<2 || ≥0.1.6-alpha.1<2、schemastery ^3.18.0 —— 并集同时覆盖 `<0.1.6` 的旧 `auto` 别名窗口与 0.1.6 系列（含 rc）。新增 `src/auto/preset-migration.ts` 承载多信号宿主能力探测、raw identity gate、同签名懒迁移与自有档 spec enforcement；最低支持宿主提升到 0.1.6 系列时移除 legacy/unknown 分支与 `auto` 客户端 variant。
+> 行为化支架新增登记（191 files / 1747 cases 时点）：`tests/helpers/host-ctx.mjs`（基础设施，非用例）+ `tests/h2-artifact-provenance-behavior.test.mjs` + `tests/h9-loop-guard-behavior.test.mjs` + `tests/m1-feedback-timeout-routing.test.mjs`。
