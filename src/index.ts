@@ -59,7 +59,7 @@ import {
   type LearningKind,
   type LearningStore,
 } from './auto/learning.js'
-import { isWithin, isCriticalPath, normalizePath, resolveRoots } from './auto/paths.js'
+import { isWithin, isCriticalPath, normalizePath, resolveRoots, devZoneRootsFor } from './auto/paths.js'
 import { assessTool, hardDenyReason, structuredRuntimeStateReadHits, type Roots } from './auto/policy.js'
 import { resolveDeepest, symlinkEscapeReason } from './auto/symlink.js'
 import { probeTargetFacts } from './auto/probe.js'
@@ -3569,17 +3569,19 @@ export function apply(ctx: Context, rawConfig: Config): void {
       dshHome: string
       tempRoots?: string[]
       allowedDshSubpaths?: string[]
+      devZoneRoots?: string[]
       maintenanceDshPaths?: string[]
       mode?: 'standard' | 'aggressive'
       trustedDirs?: string[]
     }
-    // The plugin's own development zone is always granted; operator-named
-    // DSH_HOME subtrees join it. Both share one list, so every existing
-    // consumer (guard, policy, shell, symlink escape) honours the opening
-    // without a second code path — and the plugin zone keeps its narrower
-    // runtime-state deny, which sits inside that same list's semantics.
+    // Two sets, one owner: devZoneRoots holds the constant development
+    // zones (shell-fuse eligible); allowedDshSubpaths adds the operator-named
+    // DSH_HOME subtrees. Structured consumers read the union, the shell fuse
+    // reads the constant set only. The zones keep their narrower
+    // runtime-state deny, which sits inside the union semantics.
+    roots.devZoneRoots = devZoneRootsFor(roots.workspace, roots.dshHome, roots.home)
     roots.allowedDshSubpaths = [
-      normalizePath(join(roots.dshHome, 'plugins', 'dsh-auto-approval-llm'), roots.workspace, roots.home),
+      ...roots.devZoneRoots,
       ...(config.trustedDshSubpaths ?? []).map((dir) => normalizePath(dir, roots.workspace, roots.home)),
     ]
     roots.maintenanceDshPaths = (config.maintenanceDshPaths ?? []).map((dir) => normalizePath(dir, roots.workspace, roots.home))

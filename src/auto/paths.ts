@@ -3,7 +3,7 @@
 // MIT License, Copyright (c) 2026 程序员阿江-Relakkes (https://github.com/NanmiCoder/dsh-auto-mode).
 // Retained per the MIT License: this is a substantial portion of the original.
 import { homedir, tmpdir } from 'node:os';
-import { dirname, posix, win32 } from 'node:path';
+import { dirname, join, posix, win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
 /**
  * Translate the MSYS/Git-Bash spelling of a Windows location into its win32
@@ -294,10 +294,11 @@ const PLUGIN_ZONE_ROOT = normalizePath(dirname(dirname(dirname(fileURLToPath(imp
  */
 const PLUGIN_ZONE_CODE_BASENAMES = new Set(['package.json', 'package-lock.json', 'tsdown.config.ts', 'tsconfig.json', 'cordis.patch.yml']);
 /** Fuse reason when the target is the plugin's own execution code or contract. */
-export function pluginZoneSelfModifyReason(normalized) {
-    if (!isWithin(PLUGIN_ZONE_ROOT, normalized))
+export function pluginZoneSelfModifyReason(normalized, roots) {
+    const zone = devZoneRootsOf(roots).find(root => isWithin(root, normalized));
+    if (zone === undefined)
         return undefined;
-    const rel = normalized.slice(PLUGIN_ZONE_ROOT.length).replace(/^[\\/]+/, '');
+    const rel = normalized.slice(zone.length).replace(/^[\\/]+/, '');
     const segments = rel.split(/[\\/]/);
     const head = (segments[0] ?? '').toLowerCase();
     if (head === 'lib' || head === 'node_modules' || head === 'dist')
@@ -318,6 +319,22 @@ export function pluginZoneSelfModifyReason(normalized) {
  */
 export function isPluginDevZoneTarget(normalizedPath) {
     return isWithin(PLUGIN_ZONE_ROOT, normalizedPath);
+}
+/** Constant development zones for one session: the plugin install root plus the DSH_HOME-joined spelling when they differ. Operator openings are excluded on purpose. */
+export function devZoneRootsFor(workspace, dshHome, home) {
+    const assumedInstall = normalizePath(join(dshHome, 'plugins', 'dsh-auto-approval-llm'), workspace, home);
+    const roots = [assumedInstall];
+    if (PLUGIN_ZONE_ROOT !== assumedInstall)
+        roots.push(PLUGIN_ZONE_ROOT);
+    return roots;
+}
+/** The constant development zones of one call. */
+export function devZoneRootsOf(roots) {
+    return roots?.devZoneRoots ?? [PLUGIN_ZONE_ROOT];
+}
+/** Whether the target sits in one of the constant development zones. */
+export function isGrantedDevZoneTarget(normalizedPath, roots) {
+    return devZoneRootsOf(roots).some(root => isWithin(root, normalizedPath));
 }
 /** Deterministic destructive-target fuse. */
 export function hardDestructiveTargetReason(target, roots) {
@@ -357,7 +374,7 @@ export function hardDestructiveTargetReason(target, roots) {
     // not: the zone exemption must never reach lib/** / manifests / build or
     // loader contract files (checked after the DSH_HOME fuse so ordinary
     // DSH_HOME targets keep their precise reason).
-    const selfModify = pluginZoneSelfModifyReason(normalized);
+    const selfModify = pluginZoneSelfModifyReason(normalized, roots);
     if (selfModify !== undefined)
         return selfModify;
     if (isCriticalPath(normalized, roots))

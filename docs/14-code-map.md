@@ -6,7 +6,7 @@
 
 ```text
 src/
-├─ index.ts              宿主编排：apply()、四挂点接线、16 路由、命令、评审器、审计、学习接线  5928 行
+├─ index.ts              宿主编排：apply()、四挂点接线、16 路由、命令、评审器、审计、学习接线  5930 行
 ├─ auto/                 静态评估纯函数层（28 文件，按字母序）
 │    ├─ artifacts.ts     140  本会话成功创建路径登记（删除豁免依据）
 │    ├─ audit.ts         147  append-only 审批审计（清空留墓碑、5MiB 保尾）
@@ -21,9 +21,9 @@ src/
 │    ├─ learning.ts      584  确认制学习：签名、计数、回收、查找、消费闸
 │    ├─ loop-guard.ts    95   循环防护纯核：循环键（工具+脱敏参数哈希）、严格连续计数、fire-and-reset、阈值钳制（接线在 index.ts 的四个自动放行站点）
 │    ├─ model-channel.ts 119  模型通道路由与 provider 选择
-│    ├─ paths.ts         398  路径规范化、受保护/关键路径判定、受保护读取例外（Git ref 元数据）、运行态文件名单
+│    ├─ paths.ts         415  路径规范化、受保护/关键路径判定、受保护读取例外（Git ref 元数据）、运行态文件名单
 │    ├─ permission-change.ts 131  权限平面变更观测：逐平面基线门控 + 被拒 decision 指针
-│    ├─ policy.ts        641  assessTool 确定性第一遍分类（17 步）
+│    ├─ policy.ts        643  assessTool 确定性第一遍分类（17 步）
 │    ├─ preset-migration.ts 423  auto-approval 重命名与存量迁移：多信号宿主能力探测、raw identity gate、同签名懒迁移、自有档 effective-never 归一回 ask
 │    ├─ probe.ts         72   工作区事实只读探针（reviewerContextFacts 的元数据来源）
 │    ├─ redact.ts        223  秘密脱敏器（token/AWS/PEM/Bearer…，供参数/评审理由/骨架/结果共用）

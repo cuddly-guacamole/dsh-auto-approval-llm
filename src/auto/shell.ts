@@ -3,7 +3,7 @@
 // MIT License, Copyright (c) 2026 程序员阿江-Relakkes (https://github.com/NanmiCoder/dsh-auto-mode).
 // Retained per the MIT License: this is a substantial portion of the original.
 import { basename } from 'node:path';
-import { globRootOf, hardDestructiveTargetReason, isArtifactArea, isCriticalPath, isPluginDevZoneTarget, isProtectedProjectPath, isProtectedReadMetadata, isWithin, normalizePath, runtimeStateBasename, runtimeStateTargetInZone, runtimeStateTargetReason, } from './paths.js';
+import { globRootOf, hardDestructiveTargetReason, isArtifactArea, isCriticalPath, isGrantedDevZoneTarget, isProtectedProjectPath, isProtectedReadMetadata, isWithin, normalizePath, runtimeStateBasename, runtimeStateTargetInZone, runtimeStateTargetReason, } from './paths.js';
 import { isEffectiveRoutine, sensitiveBasenameAt } from './category.js';
 function ambiguous(reason) {
     return { decision: 'ask', reason, classifierEligible: true };
@@ -1784,7 +1784,7 @@ function writeOperandCandidates(words, name) {
 function shellWriteToDshHomeDenied(normalizedPath, roots) {
     if (!isWithin(roots.dshHome, normalizedPath))
         return undefined;
-    if (roots.zoneFuseTrusted !== false && isPluginDevZoneTarget(normalizedPath))
+    if (roots.zoneFuseTrusted !== false && isGrantedDevZoneTarget(normalizedPath, roots))
         return undefined;
     return (roots.allowedDshSubpaths ?? []).some(root => isWithin(root, normalizedPath)) ? 'shell write to DSH_HOME is not permitted in this form — use the write or edit tool, or a single-segment literal content write' : 'shell write to DSH_HOME is not permitted by auto mode';
 }

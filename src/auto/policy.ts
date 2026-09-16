@@ -24,6 +24,8 @@ export interface Roots {
     dshHome?: string
     tempRoots?: string[]
     allowedDshSubpaths?: string[]
+    /** Constant development zones (shell-fuse eligible), a subset of allowedDshSubpaths. */
+    devZoneRoots?: string[]
     /** Position-gate mode injected live by rootsFor; absent = standard. */
     mode?: 'standard' | 'aggressive'
     /** Extra trusted directories injected live by rootsFor (standard mode only). */
