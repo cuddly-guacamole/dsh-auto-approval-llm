@@ -1,25 +1,30 @@
 // One-command runtime verification of the plugin's trust boundary, with a
 // guaranteed config restore (never leaves the mock-reviewer state behind).
 //
-//   node scripts/verify-runtime.mjs             # read-only: auth checks only
-//   node scripts/verify-runtime.mjs --mock      # auth checks + start mock
-//                                               # reviewer, apply mock config,
-//                                               # drive the approval flow, then
+//   node scripts/verify-runtime.mjs                        # no session: composed-fence auth checks only
+//   node scripts/verify-runtime.mjs --url '<startup-url>'  # auth + settings snapshot/restore
+//   node scripts/verify-runtime.mjs --url '<startup-url>' --mock
+//                                               # + start mock reviewer, apply mock
+//                                               # config, drive the approval flow, then
 //                                               # restore settings + stop mock
 //
-// The restore runs in `finally` and on SIGINT/SIGTERM, so Ctrl-C or an early
-// exit always returns /settings to the captured snapshot. Without --mock the
-// script performs no writes at all.
+// The web carrier authenticates /api before the plugin handler runs, so the
+// settings/approval rounds need a session: pass the launch URL (operator shell)
+// or --cookie-file. The restore runs in `finally` and on SIGINT/SIGTERM, so
+// Ctrl-C or an early exit always returns /settings to the captured snapshot.
+// Without --mock the script performs no writes at all.
 import http from 'node:http'
 import { spawn } from 'node:child_process'
 import { copyFileSync, existsSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { runAuthChecks } from './verify-auth.mjs'
+import { runAuthChecks, parseAuthArgs, exchangeToken, readCookieFile } from './verify-auth.mjs'
 
-const HOST = '127.0.0.1'
-const PORT = 3080
+let TARGET_HOST = '127.0.0.1'
+let TARGET_PORT = 3080
+let AUTHORITY = '127.0.0.1:3080'
+let SESSION_COOKIE = null
 const SETTINGS_ROUTE = '/api/auto-approval-llm/settings'
 const CREDENTIAL_ROUTE = '/api/auto-approval-llm/reviewer-credential'
 const here = dirname(fileURLToPath(import.meta.url))
@@ -95,7 +100,7 @@ function request(method, path, body) {
   return new Promise((resolve, reject) => {
     const data = body ? JSON.stringify(body) : null
     const r = http.request(
-      { host: HOST, port: PORT, path, method, headers: { host: `${HOST}:${PORT}`, 'content-type': 'application/json', ...(data ? { 'content-length': Buffer.byteLength(data) } : {}) } },
+      { host: TARGET_HOST, port: TARGET_PORT, path, method, headers: { host: AUTHORITY, 'content-type': 'application/json', ...(SESSION_COOKIE ? { cookie: SESSION_COOKIE } : {}), ...(data ? { 'content-length': Buffer.byteLength(data) } : {}) } },
       (res) => {
         let out = ''
         res.on('data', (c) => (out += c))
@@ -112,7 +117,13 @@ function request(method, path, body) {
   })
 }
 
-const getSettings = async () => (await request('GET', SETTINGS_ROUTE)).json?.value?.value ?? null
+const getSettings = async () => {
+  const res = await request('GET', SETTINGS_ROUTE)
+  if (res.status !== 200) {
+    throw new Error(`cannot snapshot current settings (HTTP ${res.status}): the web carrier requires a session — pass --url <startup-url> or --cookie-file <file>`)
+  }
+  return res.json?.value?.value ?? null
+}
 
 const putSettings = async (value) => {
   const snap = await request('GET', SETTINGS_ROUTE)
@@ -145,9 +156,34 @@ const clearMockCredential = async () => {
 }
 
 async function main() {
+  const args = parseAuthArgs(process.argv.slice(2))
   const wantMock = process.argv.includes('--mock')
+  if (args.url !== undefined) {
+    const session = await exchangeToken(args.url)
+    SESSION_COOKIE = session.cookie
+    AUTHORITY = session.authority
+    TARGET_HOST = session.host
+    TARGET_PORT = session.port
+  } else if (args.cookieFile !== undefined) {
+    SESSION_COOKIE = readCookieFile(args.cookieFile)
+    if (args.host !== undefined) {
+      TARGET_HOST = args.host
+      AUTHORITY = `${args.host}:${args.port ?? 3080}`
+    }
+    if (args.port !== undefined) TARGET_PORT = args.port
+  }
+  const authenticated = SESSION_COOKIE !== null
+
+  console.log('\n== auth boundary ==')
+  const auth = await runAuthChecks({ host: TARGET_HOST, port: TARGET_PORT, cookie: SESSION_COOKIE, authenticated, authority: AUTHORITY })
+  for (const r of auth.results) console.log(`${r.ok ? 'PASS' : 'FAIL'}  ${r.name}  -> ${r.status} (expect ${r.expect})`)
+  if (auth.fail) throw new Error(`auth checks: ${auth.fail} of ${auth.results.length} failed`)
+  if (!authenticated) {
+    console.log('[verify-runtime] no session: composed-fence auth checks only. Pass --url <startup-url> or --cookie-file <file> for the settings/approval rounds.')
+    return
+  }
+
   const before = await getSettings()
-  if (!before) throw new Error('cannot snapshot current settings (is the plugin listening on 127.0.0.1:3080?)')
   console.log(`[verify-runtime] snapshot captured; mock=${wantMock}${wantMock ? '' : ' (read-only)'}`)
 
   let dirty = false
@@ -183,11 +219,6 @@ async function main() {
   process.on('SIGTERM', () => { void restore().then(() => process.exit(143)) })
 
   try {
-    console.log('\n== auth boundary ==')
-    const { pass, fail, results } = await runAuthChecks()
-    for (const r of results) console.log(`${r.ok ? 'PASS' : 'FAIL'}  ${r.name}  -> ${r.status} (expect ${r.expect})`)
-    if (fail) throw new Error(`auth checks: ${fail} of ${results.length} failed`)
-
     if (wantMock) {
       mock = spawn(process.execPath, [MOCK_REVIEWER], { stdio: 'inherit' })
       await new Promise((r) => setTimeout(r, 600))
