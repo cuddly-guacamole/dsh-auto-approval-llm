@@ -122,20 +122,43 @@ async function nodeHandlerToFetch(handler: NodeRouteHandler, request: Request): 
 }
 
 /**
- * Register one exact route on the best carrier the context offers, falling back
- * to the web server and then to a no-op.
+ * Bind one exact route to the connection plugin's carrier-neutral Fetch
+ * registry. Both carriers read that registry: the web carrier mounts it under
+ * `/api` on its web server, and a shell-owned carrier dispatches the shared
+ * handler directly.
+ *
+ * The binding waits for the service instead of probing once: composition rows
+ * mount in dependency order, so a sibling carrier may not be up when this
+ * plugin's apply() runs. Registering the exact path on the web server instead
+ * would shadow the carrier's `/api` prefix route and bypass its request fence,
+ * so that shape is reserved for registry-less contexts (route unit tests that
+ * drive the Node-shaped handlers directly).
  */
 export function registerCarrierRoute(ctx: any, spec: CarrierRouteSpec, handler: NodeRouteHandler): void {
   const connection = ctx?.get?.('connection')
   if (connection?.fetch?.register !== undefined) {
-    ctx.effect(() => connection.fetch.register({
-      path: spec.path,
-      methods: [...spec.methods],
-      requestBody: spec.requestBody ?? 'buffered',
-      fetch: (request: Request) => nodeHandlerToFetch(handler, request),
-    }), spec.label)
+    bindFetchRegistry(ctx, connection, spec, handler)
     return
   }
+  if (typeof ctx?.inject !== 'function') {
+    bindWebServer(ctx, spec, handler)
+    return
+  }
+  ctx.inject(['connection'], (connCtx: any) => {
+    bindFetchRegistry(connCtx, connCtx.get('connection'), spec, handler)
+  })
+}
+
+function bindFetchRegistry(ctx: any, connection: any, spec: CarrierRouteSpec, handler: NodeRouteHandler): void {
+  ctx.effect(() => connection.fetch.register({
+    path: spec.path,
+    methods: [...spec.methods],
+    requestBody: spec.requestBody ?? 'buffered',
+    fetch: (request: Request) => nodeHandlerToFetch(handler, request),
+  }), spec.label)
+}
+
+function bindWebServer(ctx: any, spec: CarrierRouteSpec, handler: NodeRouteHandler): void {
   const webServer = ctx?.get?.('webServer')
   if (!webServer) return
   ctx.effect(() => webServer.register({ kind: 'exact', path: spec.path, handler }), spec.label)

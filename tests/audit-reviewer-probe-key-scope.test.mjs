@@ -45,5 +45,5 @@ test('the probe route gates the stored-key fallback on the target match', () => 
   // run behind that gate.
   assert.match(lib, /const probeApiKey = apiKey \|\| \(storedKeyAllowed \? await \(async \(\) => \{/)
   // And the configured endpoint URL must be the thing it is compared against.
-  assert.match(lib, /installTestRoute\(webCtx, llm, \(\) => config\.endpointUrl\)/)
+  assert.match(lib, /installTestRoute\(anyCtx, llm, \(\) => config\.endpointUrl\)/)
 })

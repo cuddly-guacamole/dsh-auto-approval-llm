@@ -10,7 +10,7 @@ src/
 ├─ auto/                 静态评估纯函数层（29 文件，按字母序）
 │    ├─ artifacts.ts     140  本会话成功创建路径登记（删除豁免依据）
 │    ├─ audit.ts         147  append-only 审批审计（清空留墓碑、5MiB 保尾）
-│    ├─ carrier-route.ts 142  载波中立路由注册：Fetch/Node 桥与 delete-op 归一
+│    ├─ carrier-route.ts 165  载波中立路由注册：Fetch/Node 桥与 delete-op 归一
 │    ├─ category.ts      912  12 类三态开关层：归类/优先级合并/指令钳制/信任目录模式
 │    ├─ classifier.ts    100  预分类提示词、参数脱敏、严格响应解析
 │    ├─ constants.ts     141  数值默认唯一事实源（倒计时/熔断/截断/学习族阈值）

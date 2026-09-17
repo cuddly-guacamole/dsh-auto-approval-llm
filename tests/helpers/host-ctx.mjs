@@ -95,10 +95,14 @@ export function createHostContext(options = {}) {
     // capability so the gate name set matches a legacy host.
     specOf: () => undefined,
   };
-  // `deferWebServer` models a carrier that provides the service only later
-  // (or never): the registrar stays unresolved until arriveWebServer() runs, so
-  // ctx.inject(['webServer'], ...) callbacks queue instead of firing.
-  let webServerReady = options.deferWebServer !== true;
+  // `deferConnection` models a carrier whose Fetch registry mounts only later
+  // (or never): until arriveConnection() runs, ctx.inject(['connection'], ...)
+  // callbacks queue instead of firing. The web server stays available so a
+  // context that only offers it still exercises the fallback shape.
+  let connectionReady = options.deferConnection !== true;
+  const connectionService = {
+    fetch: { register: (spec) => { routes.set(spec.path, spec); return () => {}; } },
+  };
   const webServerService = {
     host: undefined,
     register: (desc) => { routes.set(desc.path, desc); return () => {}; },
@@ -108,7 +112,8 @@ export function createHostContext(options = {}) {
     if (name === "permissionPresets") return permissionPresets;
     if (name === "tools") return {};
     if (name === "llm") return {};
-    if (name === "webServer") return webServerReady ? webServerService : undefined;
+    if (name === "connection") return connectionReady ? connectionService : undefined;
+    if (name === "webServer") return webServerService;
     return undefined;
   };
   const pendingInjects = [];
@@ -135,12 +140,13 @@ export function createHostContext(options = {}) {
       return { dispose: () => {} };
     },
   };
-  const arriveWebServer = () => {
-    webServerReady = true;
+  const arriveConnection = () => {
+    connectionReady = true;
     for (const pending of pendingInjects.splice(0)) {
       if (pending.names.every((name) => get(name) !== undefined)) pending.callback(pending.childCtx);
     }
   };
+  const arriveWebServer = arriveConnection;
   setRuntimePathsForTests({ stateDir });
   const config = baseConfig({ workspaceRoot, dshHome, ...(options.config ?? {}) });
   apply(ctx, config);
@@ -189,6 +195,27 @@ export function createHostContext(options = {}) {
   const callRoute = async (path, req) => {
     const desc = routes.get(path);
     if (desc === undefined) throw new Error("route not registered: " + path);
+    // A carrier registration carries a Fetch handler; a web-server registration
+    // carries the Node-shaped one. Both drive the same handler body.
+    if (typeof desc.fetch === "function") {
+      const headers = new Headers();
+      for (const [name, value] of Object.entries(req.headers ?? {})) headers.set(name, String(value));
+      let payload;
+      if (req[Symbol.asyncIterator] !== undefined) {
+        const chunks = [];
+        for await (const chunk of req) chunks.push(Buffer.from(chunk));
+        payload = Buffer.concat(chunks);
+      }
+      const response = await desc.fetch(new Request(`http://127.0.0.1:3080${path}`, {
+        method: req.method,
+        headers,
+        ...(payload === undefined ? {} : { body: payload }),
+      }));
+      const text = await response.text();
+      let body = text;
+      try { body = JSON.parse(text); } catch { /* keep raw text */ }
+      return { statusCode: response.status, body };
+    }
     const { res, state } = fakeResponse();
     await desc.handler(req, res);
     let body = state.body;
@@ -247,6 +274,7 @@ export function createHostContext(options = {}) {
     dispose,
     routes,
     handlers,
+    arriveConnection,
     arriveWebServer,
   };
 }

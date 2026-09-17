@@ -4330,29 +4330,29 @@ export function apply(ctx: Context, rawConfig: Config): void {
   // without that service leaves the routes unregistered while the rest of the
   // plugin keeps running, and a carrier that provides it later still gets them
   // on arrival. Every installer keeps its own `ctx.get('webServer')` guard.
-  anyCtx.inject(['webServer'], (webCtx: any) => {
-    installFeedbackRoute(webCtx)
-    installSettingsRoute(webCtx, settings)
-    installReviewerCredentialRoute(webCtx)
-    installHistoryRoute(webCtx)
-    installLatencyRoute(webCtx)
-    installToolStatsRoute(webCtx)
-    installReviewStatusRoute(webCtx)
-    installSessionReviewStatusRoute(webCtx)
-    installRevealRoute(webCtx)
-    installLearningStoreRoute(webCtx, (key: string) =>
-      // Serialize revoke + persist under the same per-key mutex the learning
-      // writers use, so a concurrent recordConfirm cannot interleave.
-      learningMutex.run(key, () => revokeLearning(learningStore, key)).then((done) => {
-        if (done) persistLearningGuarded()
-        return done
-      }))
-    installTestRoute(webCtx, llm, () => config.endpointUrl)
-    installLlmCatalogRoutes(webCtx, llm)
-    installSessionModeRoute(webCtx)
-    installStatsRoute(webCtx)
-  })
-
+  // Routes bind themselves to the carrier inside registerCarrierRoute(): the
+  // block no longer waits on `webServer`, so a carrier without it still gets the
+  // routes once its Fetch registry mounts.
+  installFeedbackRoute(anyCtx)
+  installSettingsRoute(anyCtx, settings)
+  installReviewerCredentialRoute(anyCtx)
+  installHistoryRoute(anyCtx)
+  installLatencyRoute(anyCtx)
+  installToolStatsRoute(anyCtx)
+  installReviewStatusRoute(anyCtx)
+  installSessionReviewStatusRoute(anyCtx)
+  installRevealRoute(anyCtx)
+  installLearningStoreRoute(anyCtx, (key: string) =>
+    // Serialize revoke + persist under the same per-key mutex the learning
+    // writers use, so a concurrent recordConfirm cannot interleave.
+    learningMutex.run(key, () => revokeLearning(learningStore, key)).then((done) => {
+      if (done) persistLearningGuarded()
+      return done
+    }))
+  installTestRoute(anyCtx, llm, () => config.endpointUrl)
+  installLlmCatalogRoutes(anyCtx, llm)
+  installSessionModeRoute(anyCtx)
+  installStatsRoute(anyCtx)
   // Sweep expired follow-phase statuses so a client that never ACKs (closed
   // tab / headless page) cannot leak callId keys in reviewStates.
   const followSweep = setInterval(() => {
