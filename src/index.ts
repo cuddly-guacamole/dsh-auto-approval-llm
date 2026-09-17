@@ -27,7 +27,7 @@ import { appendFileSync, existsSync, readFileSync, realpathSync, renameSync, sta
 import { isIP } from 'node:net'
 import { networkInterfaces, homedir } from 'node:os'
 import { join } from 'node:path'
-import { registerCarrierRoute } from './auto/carrier-route.js'
+import { methodOf, registerCarrierFetchRoute, registerCarrierRoute } from './auto/carrier-route.js'
 import { ArtifactRegistry } from './auto/artifacts.js'
 import { appendAuditLine, recordAuditClear } from './auto/audit.js'
 import { AGGRESSIVE_BUILTIN, applyCategoryDirective, CATEGORY_KEYS, categoryDirectiveFor, type CategoryKey, HARD_LOCKED_CATEGORIES, LOCKED_CATEGORIES, realpathCriticalReason, sensitiveBasenameAt } from './auto/category.js'
@@ -80,7 +80,7 @@ import {
   writeRuntimeAtomic,
 } from './auto/runtime-paths.js'
 import { runtimeStateReadHits } from './auto/shell.js'
-import { isLoopbackHostname, isTrustedRequest, resolvePublicReviewerTarget, reviewerProbeTargetAllowed, validateReviewerBaseUrl } from './auto/trust.js'
+import { isLoopbackHostname, isTrustedFetchRequest, isTrustedRequest, resolvePublicReviewerTarget, reviewerProbeTargetAllowed, validateReviewerBaseUrl } from './auto/trust.js'
 import { aggregateToolStats } from './auto/tool-stats.js'
 import { normalizeLane, normalizeSharedEndpoint, resolveTransport } from './auto/model-channel.js'
 import { callEndpointText, createPinnedLookup, requestEndpointText } from './auto/endpoint-call.js'
@@ -2129,6 +2129,47 @@ function sweepFeedbackMaps(): void {
 // at apply() from webRuntime / --trusted-host / LAN enumeration.
 let trustedHosts: string[] = []
 
+/** JSON response with the plugin's uniform headers; extra headers ride along. */
+function json(status: number, body: unknown, extra: Record<string, string> = {}): Response {
+  const bytes = Buffer.from(JSON.stringify(body))
+  return new Response(bytes, {
+    status,
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Content-Length': String(bytes.length),
+      'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff',
+      ...extra,
+    },
+  })
+}
+
+/** Read a buffered JSON body: content-type must be JSON, ≤ maxBytes, non-empty. */
+async function readJson(request: Request, maxBytes = 64 * 1024): Promise<any> {
+  const contentType = request.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase()
+  if (contentType !== 'application/json') throw new TypeError('Content-Type must be application/json')
+  const chunks: Buffer[] = []
+  let bytes = 0
+  if (request.body !== null) {
+    const reader = request.body.getReader()
+    try {
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        if (value === undefined) continue
+        const part = Buffer.from(value)
+        bytes += part.length
+        if (bytes > maxBytes) throw new RangeError(`request body exceeds ${maxBytes} bytes`)
+        chunks.push(part)
+      }
+    } finally {
+      reader.releaseLock()
+    }
+  }
+  if (chunks.length === 0) throw new TypeError('request body is empty')
+  return JSON.parse(Buffer.concat(chunks).toString('utf8'))
+}
+
 function responseJson(res: any, status: number, body: any): void {
   const bytes = Buffer.from(JSON.stringify(body))
   res.setHeader('Content-Type', 'application/json; charset=utf-8')
@@ -2196,27 +2237,25 @@ function resolveTrustedHosts(ctx: any): string[] {
 }
 
 export function installFeedbackRoute(ctx: any): void {
-  registerCarrierRoute(ctx, {
+  registerCarrierFetchRoute(ctx, {
     path: FEEDBACK_ROUTE,
     methods: ['POST'],
     requestBody: 'buffered',
     label: 'dsh-auto-approval-llm: feedback route',
-  }, async (req: any, res: any) => {
-      if (req.method !== 'POST') {
-        res.setHeader('Allow', 'POST')
-        responseJson(res, 405, { ok: false, error: 'method-not-allowed' })
-        return
+  }, async (request: Request): Promise<Response> => {
+      const method = methodOf(request)
+      if (method !== 'POST') {
+        return json(405, { ok: false, error: 'method-not-allowed' }, { Allow: 'POST' })
       }
       // Feedback plane: loopback-same-origin only (privileged domain — the
       // route writes approval state keyed by a callId the review-status
       // protocol carries in the open, so LAN peers must not be able to forge
       // those writes).
-      if (!isTrustedRequest(req, [])) {
-        responseJson(res, 403, { ok: false, error: 'forbidden' })
-        return
+      if (!isTrustedFetchRequest(request, [])) {
+        return json(403, { ok: false, error: 'forbidden' })
       }
       try {
-        const body = await readJsonBody(req)
+        const body = await readJson(request)
         if (typeof body?.callId !== 'string') throw new TypeError('callId is required')
         // The client may only confirm the outcome it is about to answer with;
         // the notice text is always generated host-side so a compromised page
@@ -2255,9 +2294,9 @@ export function installFeedbackRoute(ctx: any): void {
           reviewStates.delete(body.callId)
           followExpiry.delete(body.callId)
         }
-        responseJson(res, 200, { ok: true })
+        return json(200, { ok: true })
       } catch (error) {
-        responseJson(res, error instanceof RangeError ? 413 : 400, {
+        return json(error instanceof RangeError ? 413 : 400, {
           ok: false,
           error: error instanceof Error ? error.message : String(error),
         })
@@ -2431,21 +2470,21 @@ export function installReviewerCredentialRoute(ctx: any): void {
 }
 
 export function installHistoryRoute(ctx: any): void {
-  registerCarrierRoute(ctx, {
+  registerCarrierFetchRoute(ctx, {
     path: HISTORY_ROUTE,
     methods: ['GET', 'POST'],
     requestBody: 'buffered',
     label: 'dsh-auto-approval-llm: history route',
-  }, async (req: any, res: any) => {
-      if (!isTrustedRequest(req, trustedHosts)) {
-        responseJson(res, 403, { ok: false, error: 'forbidden' })
-        return
+  }, async (request: Request): Promise<Response> => {
+      const method = methodOf(request)
+      if (!isTrustedFetchRequest(request, trustedHosts)) {
+        return json(403, { ok: false, error: 'forbidden' })
       }
-      if (req.method === 'GET') {
+      if (method === 'GET') {
         // Latency split by lane: `llmLatency` stays the reviewer summary
         // (backward compatible); `llmLatencyClassifier` is the fast-decision
         // lane; `llmLatencyAll` merges both for an at-a-glance view.
-        responseJson(res, 200, {
+        return json(200, {
           ok: true,
           value: {
             records: [...approvalHistory].reverse(),
@@ -2454,9 +2493,8 @@ export function installHistoryRoute(ctx: any): void {
             llmLatencyAll: summarizeLatency(llmLatency, LATENCY_SUMMARY_WINDOW),
           },
         })
-        return
       }
-      if (req.method === 'DELETE') {
+      if (method === 'DELETE') {
         // Truncate FIRST and report honestly: clearing the in-memory window
         // while the file it was loaded from still holds the records means the
         // next boot resurrects them, and a 200 for that is a false success. The
@@ -2470,35 +2508,30 @@ export function installHistoryRoute(ctx: any): void {
           truncated = false
         }
         if (!truncated) {
-          responseJson(res, 500, { ok: false, error: 'history clear failed: the history file could not be truncated' })
-          return
+          return json(500, { ok: false, error: 'history clear failed: the history file could not be truncated' })
         }
         const clearedCount = approvalHistory.length
         approvalHistory.length = 0
         recordAuditClear(clearedCount)
-        responseJson(res, 200, { ok: true, value: { records: [] } })
-        return
+        return json(200, { ok: true, value: { records: [] } })
       }
-      res.setHeader('Allow', 'GET, POST')
-      responseJson(res, 405, { ok: false, error: 'method-not-allowed' })
+      return json(405, { ok: false, error: 'method-not-allowed' }, { Allow: 'GET, POST' })
   })
 }
 
 export function installLatencyRoute(ctx: any): void {
-  registerCarrierRoute(ctx, {
+  registerCarrierFetchRoute(ctx, {
     path: LLM_LATENCY_ROUTE,
     methods: ['POST'],
     requestBody: 'buffered',
     label: 'dsh-auto-approval-llm: llm-latency route',
-  }, async (req: any, res: any) => {
-      if (!isTrustedRequest(req, trustedHosts)) {
-        responseJson(res, 403, { ok: false, error: 'forbidden' })
-        return
+  }, async (request: Request): Promise<Response> => {
+      const method = methodOf(request)
+      if (!isTrustedFetchRequest(request, trustedHosts)) {
+        return json(403, { ok: false, error: 'forbidden' })
       }
-      if (req.method !== 'DELETE') {
-        res.setHeader('Allow', 'POST')
-        responseJson(res, 405, { ok: false, error: 'method-not-allowed' })
-        return
+      if (method !== 'DELETE') {
+        return json(405, { ok: false, error: 'method-not-allowed' }, { Allow: 'POST' })
       }
       // Clear only the LLM latency telemetry window + file. Approval history
       // is deliberately untouched — the history DELETE leaves latency alone
@@ -2506,34 +2539,31 @@ export function installLatencyRoute(ctx: any): void {
       // alone in turn. A file that cannot be truncated is a 500, never a
       // success the next boot undoes.
       if (!clearLatencySamples(llmLatency)) {
-        responseJson(res, 500, { ok: false, error: 'latency clear failed: the latency file could not be truncated' })
-        return
+        return json(500, { ok: false, error: 'latency clear failed: the latency file could not be truncated' })
       }
-      responseJson(res, 200, { ok: true, value: { records: [] } })
+      return json(200, { ok: true, value: { records: [] } })
   })
 }
 
 export function installToolStatsRoute(ctx: any): void {
-  registerCarrierRoute(ctx, {
+  registerCarrierFetchRoute(ctx, {
     path: TOOL_STATS_ROUTE,
     methods: ['GET'],
     requestBody: 'buffered',
     label: 'dsh-auto-approval-llm: tool-stats route',
-  }, async (req: any, res: any) => {
-      if (!isTrustedRequest(req, trustedHosts)) {
-        responseJson(res, 403, { ok: false, error: 'forbidden' })
-        return
+  }, async (request: Request): Promise<Response> => {
+      const method = methodOf(request)
+      if (!isTrustedFetchRequest(request, trustedHosts)) {
+        return json(403, { ok: false, error: 'forbidden' })
       }
-      if (req.method !== 'GET') {
-        res.setHeader('Allow', 'GET')
-        responseJson(res, 405, { ok: false, error: 'method-not-allowed' })
-        return
+      if (method !== 'GET') {
+        return json(405, { ok: false, error: 'method-not-allowed' }, { Allow: 'GET' })
       }
       // Aggregates the same in-memory history window the history route serves
       // (loaded from history.jsonl at boot, capped at 200 records). Read-only:
       // chips are advisory candidates — the actual list lives in the settings
       // value and is edited/saved entirely client-side.
-      responseJson(res, 200, { ok: true, value: { stats: aggregateToolStats(approvalHistory) } })
+      return json(200, { ok: true, value: { stats: aggregateToolStats(approvalHistory) } })
   })
 }
 
@@ -2609,33 +2639,30 @@ export function installLearningStoreRoute(ctx: any, revoke: (key: string) => Pro
 }
 
 export function installReviewStatusRoute(ctx: any): void {
-  registerCarrierRoute(ctx, {
+  registerCarrierFetchRoute(ctx, {
     path: REVIEW_STATUS_ROUTE,
     methods: ['GET'],
     requestBody: 'buffered',
     label: 'dsh-auto-approval-llm: review status route',
-  }, async (req: any, res: any) => {
-      if (!isTrustedRequest(req, trustedHosts)) {
-        responseJson(res, 403, { ok: false, error: 'forbidden' })
-        return
+  }, async (request: Request): Promise<Response> => {
+      const method = methodOf(request)
+      if (!isTrustedFetchRequest(request, trustedHosts)) {
+        return json(403, { ok: false, error: 'forbidden' })
       }
-      if (req.method !== 'GET') {
-        res.setHeader('Allow', 'GET')
-        responseJson(res, 405, { ok: false, error: 'method-not-allowed' })
-        return
+      if (method !== 'GET') {
+        return json(405, { ok: false, error: 'method-not-allowed' }, { Allow: 'GET' })
       }
       // Call id travels in a request header (not the URL query) so it does not
       // leak into devtools/logs/Referer. Same-origin + loopback-trusted plan.
-      const callId = String(req.headers?.['x-auto-approval-call-id'] ?? '').trim()
+      const callId = String(request.headers.get('x-auto-approval-call-id') ?? '').trim()
       // Long poll: the client asks to be woken when this ask changes instead of
       // waking up every 500ms. `0`/absent keeps the short-poll behaviour.
-      const holdMs = boundedHoldMs(req.headers?.['x-auto-approval-wait-ms'])
+      const holdMs = boundedHoldMs(request.headers.get('x-auto-approval-wait-ms'))
       if (callId && holdMs > 0) {
-        await holdWhileUnchanged(callId, holdMs, res)
-        if (res.writableEnded === true) return
+        await holdWhileUnchanged(callId, holdMs, request)
       }
       const status = callId ? reviewStates.get(callId) : undefined
-      responseJson(res, 200, status ? { ok: true, value: withRemaining(status) } : { ok: false, error: 'not-found' })
+      return json(200, status ? { ok: true, value: withRemaining(status) } : { ok: false, error: 'not-found' })
   })
 }
 
@@ -2652,17 +2679,17 @@ export function boundedHoldMs(raw: unknown): number {
  * released on client disconnect, and the route answers with the current state
  * either way — a hold timeout is a heartbeat, never a resolution.
  */
-export function holdWhileUnchanged(callId: string, holdMs: number, res: any): Promise<void> {
-  return holdWhileValue(() => reviewStates.get(callId)?.revision, holdMs, res)
+export function holdWhileUnchanged(callId: string, holdMs: number, request: Request): Promise<void> {
+  return holdWhile(request, () => reviewStates.get(callId)?.revision, holdMs)
 }
 
 /**
  * Hold a response until `current()` changes or the hold budget elapses. The
  * check runs in-process (no HTTP traffic), the timer is released on client
- * disconnect, and the caller answers with the current state either way — a hold
- * timeout is a heartbeat, never a resolution.
+ * disconnect (the request signal aborts), and the caller answers with the
+ * current state either way — a hold timeout is a heartbeat, never a resolution.
  */
-export function holdWhileValue(current: () => unknown, holdMs: number, res: any): Promise<void> {
+export function holdWhile(request: Request, current: () => unknown, holdMs: number): Promise<void> {
   const startedAt = Date.now()
   const initial = current()
   return new Promise((resolve) => {
@@ -2672,10 +2699,10 @@ export function holdWhileValue(current: () => unknown, holdMs: number, res: any)
       if (done) return
       done = true
       if (timer !== undefined) clearInterval(timer)
-      res.off?.('close', finish)
+      request.signal.removeEventListener('abort', finish)
       resolve()
     }
-    res.on?.('close', finish)
+    request.signal.addEventListener('abort', finish, { once: true })
     timer = setInterval(() => {
       if (done) return
       if (current() !== initial || Date.now() - startedAt >= holdMs) finish()
@@ -2697,40 +2724,36 @@ export function withRemaining(status: ReviewStatus): ReviewStatus & { remainingM
  * client's only way to show the countdown is this route.
  */
 export function installSessionReviewStatusRoute(ctx: any): void {
-  registerCarrierRoute(ctx, {
+  registerCarrierFetchRoute(ctx, {
     path: SESSION_REVIEW_STATUS_ROUTE,
     methods: ['GET'],
     requestBody: 'buffered',
     label: 'dsh-auto-approval-llm: session review status route',
-  }, async (req: any, res: any) => {
-      if (!isTrustedRequest(req, trustedHosts)) {
-        responseJson(res, 403, { ok: false, error: 'forbidden' })
-        return
+  }, async (request: Request): Promise<Response> => {
+      const method = methodOf(request)
+      if (!isTrustedFetchRequest(request, trustedHosts)) {
+        return json(403, { ok: false, error: 'forbidden' })
       }
-      if (req.method !== 'GET') {
-        res.setHeader('Allow', 'GET')
-        responseJson(res, 405, { ok: false, error: 'method-not-allowed' })
-        return
+      if (method !== 'GET') {
+        return json(405, { ok: false, error: 'method-not-allowed' }, { Allow: 'GET' })
       }
       // Session id travels in a request header, same discipline as the call id.
-      const sessionId = String(req.headers?.['x-auto-approval-session-id'] ?? '').trim()
+      const sessionId = String(request.headers.get('x-auto-approval-session-id') ?? '').trim()
       if (!sessionId) {
-        responseJson(res, 400, { ok: false, error: 'session-id-required' })
-        return
+        return json(400, { ok: false, error: 'session-id-required' })
       }
       // Same long poll as the per-ask route: the client is woken by a change in
       // this session's ask list instead of re-asking on a fixed cadence.
-      const holdMs = boundedHoldMs(req.headers?.['x-auto-approval-wait-ms'])
+      const holdMs = boundedHoldMs(request.headers.get('x-auto-approval-wait-ms'))
       if (holdMs > 0) {
-        await holdWhileValue(() => sessionReviewFingerprint(sessionId), holdMs, res)
-        if (res.writableEnded === true) return
+        await holdWhile(request, () => sessionReviewFingerprint(sessionId), holdMs)
       }
       const reviews: unknown[] = []
       for (const [callId, status] of reviewStates) {
         if (reviewSessions.get(callId) !== sessionId) continue
         reviews.push({ ...withRemaining(status), callId })
       }
-      responseJson(res, 200, { ok: true, value: { reviews } })
+      return json(200, { ok: true, value: { reviews } })
   })
 }
 

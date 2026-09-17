@@ -22,20 +22,21 @@ import {
   boundedHoldMs,
   createPanelGate,
   holdWhileUnchanged,
-  holdWhileValue,
+  holdWhile,
   installRevealRoute,
   installSessionReviewStatusRoute,
   installReviewStatusRoute,
   sessionReviewFingerprint,
   withRemaining,
 } from '../lib/index.js'
+import { carrierContext, findSpec, callSpec } from './helpers/carrier-route.mjs'
 import { followResolution } from '../lib/auto/decision.js'
 import { SESSION_REVIEW_STATUS_ROUTE } from '../lib/client/approvals/shared.js'
 import { approvalStatusStore } from '../lib/client/approvals/status-store.js'
 import { watchSessionApprovals } from '../lib/client/approvals/session-watch.js'
 
-const LOOPBACK = { method: 'GET', headers: { host: 'localhost:3080' }, socket: { remoteAddress: '127.0.0.1' } }
-const REMOTE = { method: 'GET', headers: { host: 'evil.example' }, socket: { remoteAddress: '203.0.113.9' } }
+const LOOPBACK = { method: 'GET', headers: { host: 'localhost:3080' } }
+const REMOTE = { method: 'GET', headers: { host: 'evil.example' } }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -49,43 +50,19 @@ async function until(cond, what, timeout = 2000) {
 }
 
 function capture(installer, ...args) {
-  const registrations = []
-  const ctx = {
-    get: (name) => (name === 'webServer' ? { register: (desc) => registrations.push(desc) } : undefined),
-    effect: (fn) => fn(),
-  }
+  const { ctx, specs } = carrierContext()
   installer(ctx, ...args)
-  assert.ok(registrations.length >= 1, 'at least one registration')
-  return registrations
+  assert.ok(specs.size >= 1, 'at least one registration')
+  return [...specs.values()]
 }
 
-function fakeRes() {
-  const state = { statusCode: 0, body: '', on: undefined, off: undefined }
-  const listeners = new Map()
-  const res = {
-    setHeader: () => {},
-    writeHead: (code) => { state.statusCode = code },
-    end: (chunk) => { state.body = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk) },
-    on: (event, fn) => {
-      const list = listeners.get(event) ?? []
-      list.push(fn)
-      listeners.set(event, list)
-    },
-    off: (event, fn) => {
-      const list = listeners.get(event) ?? []
-      listeners.set(event, list.filter((entry) => entry !== fn))
-    },
-    emit: (event) => {
-      for (const fn of [...(listeners.get(event) ?? [])]) fn()
-    },
-  }
-  return { res, state }
+/** A Fetch request whose signal plays the role of a client disconnect. */
+function holdRequest(signal) {
+  return new Request('http://127.0.0.1:3080/api/auto-approval-llm/review-status', { signal })
 }
 
-async function callJson(handler, req) {
-  const { res, state } = fakeRes()
-  await handler(req, res)
-  return { status: state.statusCode, body: state.body ? JSON.parse(state.body) : null }
+function callJson(route, req) {
+  return callSpec(route, req)
 }
 
 // ── panel gate ────────────────────────────────────────────────────────────
@@ -120,9 +97,8 @@ test('the reveal path releases a held gate early', async () => {
   const gate = createPanelGate('gate-reveal', 5_000)
   const started = Date.now()
   // The reveal route calls the stored release callback.
-  const registrations = capture(installRevealRoute)
-  const handler = registrations[0].handler
-  const { status, body } = await callJson(handler, {
+  const spec = capture(installRevealRoute)[0]
+  const { status, body } = await callJson(spec, {
     ...LOOPBACK,
     method: 'POST',
     headers: { host: 'localhost:3080', 'x-auto-approval-call-id': 'gate-reveal' },
@@ -144,25 +120,23 @@ test('boundedHoldMs clamps the requested hold', () => {
 })
 
 test('the hold answers on budget and on client disconnect', async () => {
-  const budget = fakeRes()
   const started = Date.now()
-  await holdWhileUnchanged('no-such-call', 30, budget.res)
+  await holdWhileUnchanged('no-such-call', 30, holdRequest(new AbortController().signal))
   const budgetElapsed = Date.now() - started
   assert.ok(budgetElapsed >= 25, 'the hold honours its budget')
   assert.ok(budgetElapsed < 1_000, `the budget path must answer promptly (waited ${budgetElapsed}ms)`)
-  assert.equal(budget.state.body, '', 'a hold writes nothing itself')
 
-  // The disconnect path is only covered by its wall clock: with the close
+  // The disconnect path is only covered by its wall clock: with the abort
   // listener gone the hold still resolves, just after the whole 5s budget, so
-  // every other assertion here stays green.
-  const disconnected = fakeRes()
+  // every other assertion here stays green. The helper owns no response, so a
+  // released hold can only be observed by how fast it resolves.
+  const disconnected = new AbortController()
   const disconnectStarted = Date.now()
-  const pending = holdWhileUnchanged('no-such-call', 5_000, disconnected.res)
-  disconnected.res.emit('close')
+  const pending = holdWhileUnchanged('no-such-call', 5_000, holdRequest(disconnected.signal))
+  disconnected.abort()
   await pending
   const disconnectElapsed = Date.now() - disconnectStarted
   assert.ok(disconnectElapsed < 1_000, `a client disconnect must release the hold, not wait out the budget (waited ${disconnectElapsed}ms)`)
-  assert.equal(disconnected.state.body, '', 'a released hold writes nothing itself')
 })
 
 // ── published status shape ────────────────────────────────────────────────
@@ -180,26 +154,23 @@ test('the client-facing status derives remaining time from the host deadline', (
 // ── routes: auth, method and shape fences ─────────────────────────────────
 
 test('the session discovery route holds the request until the ask list changes', async () => {
-  const handler = capture(installSessionReviewStatusRoute)[0].handler
+  const spec = capture(installSessionReviewStatusRoute)[0]
   const headers = { host: 'localhost:3080', 'x-auto-approval-session-id': 'no-such-session', 'x-auto-approval-wait-ms': '300' }
-  const { res, state } = fakeRes()
   const started = Date.now()
-  await handler({ ...LOOPBACK, headers }, res)
+  const { status, body } = await callJson(spec, { ...LOOPBACK, headers })
   const elapsed = Date.now() - started
   assert.ok(elapsed >= 250, `the route must honour the hold header (waited ${elapsed}ms)`)
-  assert.equal(state.statusCode, 200)
-  assert.deepEqual(JSON.parse(state.body), { ok: true, value: { reviews: [] } })
+  assert.equal(status, 200)
+  assert.deepEqual(body, { ok: true, value: { reviews: [] } })
 })
 
-test('holdWhileValue answers on change and on budget', async () => {
+test('holdWhile answers on change and on budget', async () => {
   let value = 'a'
-  const changed = fakeRes()
-  const pending = holdWhileValue(() => value, 5_000, changed.res)
+  const pending = holdWhile(holdRequest(new AbortController().signal), () => value, 5_000)
   value = 'b'
   await pending
-  const budget = fakeRes()
   const started = Date.now()
-  await holdWhileValue(() => 'steady', 30, budget.res)
+  await holdWhile(holdRequest(new AbortController().signal), () => 'steady', 30)
   assert.ok(Date.now() - started >= 25, 'the budget path still answers')
 })
 
@@ -241,9 +212,8 @@ test('the session hold wakes when the ask list changes', async () => {
   reviewStates.set(callId, { risk: 'LOW', phase: 'countdown', action: 'allow', seconds: 10, revision: 3 })
   reviewSessions.set(callId, sessionId)
   try {
-    const { res } = fakeRes()
     const started = Date.now()
-    const pending = holdWhileValue(() => sessionReviewFingerprint(sessionId), 5_000, res)
+    const pending = holdWhile(holdRequest(new AbortController().signal), () => sessionReviewFingerprint(sessionId), 5_000)
     // A settlement replaces the entry: the fingerprint must move with it.
     reviewStates.set(callId, { risk: 'LOW', phase: 'follow', action: 'allow', seconds: 0, source: 'llm' })
     await pending
@@ -264,9 +234,8 @@ test('a follow publish wakes the per-ask hold instead of stranding the panel', a
   const callId = 'hold-follow-call'
   reviewStates.set(callId, { risk: 'LOW', phase: 'countdown', action: 'allow', seconds: 10, revision: 9 })
   try {
-    const { res } = fakeRes()
     const started = Date.now()
-    const pending = holdWhileUnchanged(callId, 5_000, res)
+    const pending = holdWhileUnchanged(callId, 5_000, holdRequest(new AbortController().signal))
     const settled = followResolution('countdown', { risk: 'LOW', outcome: 'allowed-once' }, { timedOut: false, aborted: false })
     assert.equal(settled.kind, 'publish')
     assert.equal(settled.follow.revision, undefined, 'a follow must not carry the countdown revision')
@@ -279,7 +248,7 @@ test('a follow publish wakes the per-ask hold instead of stranding the panel', a
 })
 
 test('the session discovery route keeps the trust and method fences', async () => {
-  const handler = capture(installSessionReviewStatusRoute)[0].handler
+  const handler = capture(installSessionReviewStatusRoute)[0]
   const forbidden = await callJson(handler, { ...REMOTE })
   assert.equal(forbidden.status, 403, 'a non-trusted peer must not enumerate asks')
   const wrongMethod = await callJson(handler, { ...LOOPBACK, method: 'POST' })
@@ -293,7 +262,7 @@ test('the session discovery route keeps the trust and method fences', async () =
 })
 
 test('the reveal route keeps the trust and method fences and never invents a panel', async () => {
-  const handler = capture(installRevealRoute)[0].handler
+  const handler = capture(installRevealRoute)[0]
   assert.equal((await callJson(handler, { ...REMOTE, method: 'POST' })).status, 403)
   assert.equal((await callJson(handler, { ...LOOPBACK })).status, 405)
   const unknown = await callJson(handler, { ...LOOPBACK, method: 'POST' })
@@ -301,7 +270,7 @@ test('the reveal route keeps the trust and method fences and never invents a pan
 })
 
 test('the review-status route still never 404s and stays method-fenced', async () => {
-  const handler = capture(installReviewStatusRoute)[0].handler
+  const handler = capture(installReviewStatusRoute)[0]
   const anonymous = await callJson(handler, LOOPBACK)
   assert.equal(anonymous.status, 200)
   assert.deepEqual(anonymous.body, { ok: false, error: 'not-found' })

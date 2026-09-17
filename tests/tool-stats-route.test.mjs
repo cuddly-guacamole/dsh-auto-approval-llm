@@ -11,42 +11,28 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { aggregateToolStats } from '../lib/auto/tool-stats.js'
 import { installHistoryRoute, installToolStatsRoute } from '../lib/index.js'
+import { carrierContext, findSpec, callSpec } from './helpers/carrier-route.mjs'
 
 const LOOPBACK = { method: 'GET', headers: { host: 'localhost:3080' }, socket: { remoteAddress: '127.0.0.1' } }
 const BUCKETS = ['allow', 'deny', 'human']
 
 function capture(installer, ...args) {
-  const registrations = []
-  const ctx = {
-    get: (name) => (name === 'webServer' ? { register: (desc) => registrations.push(desc) } : undefined),
-    effect: (fn) => fn(),
-  }
+  const { ctx, specs } = carrierContext()
   installer(ctx, ...args)
+  const registrations = [...specs.values()]
   assert.ok(registrations.length >= 1, 'at least one registration')
   return { registrations }
 }
 
-function fakeRes() {
-  const state = { statusCode: 0, body: '' }
-  const res = {
-    setHeader: () => {},
-    writeHead: (code) => { state.statusCode = code },
-    end: (chunk) => { state.body = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk) },
-  }
-  return { res, state }
-}
-
-async function callJson(handler, req) {
-  const { res, state } = fakeRes()
-  await handler(req, res)
-  return { status: state.statusCode, body: state.body ? JSON.parse(state.body) : null }
+async function callJson(spec, req) {
+  const res = await callSpec(spec, req)
+  return { status: res.status, body: res.text ? res.body : null }
 }
 
 test('tool-stats route: GET from loopback returns aggregated stats', async () => {
   const { registrations } = capture(installToolStatsRoute)
-  const spec = registrations.find((r) => r.path.includes('tool-stats'))
-  assert.ok(spec, 'tool-stats route registered')
-  const { status, body } = await callJson(spec.handler, LOOPBACK)
+  const spec = findSpec(registrations, 'tool-stats')
+  const { status, body } = await callJson(spec, LOOPBACK)
   assert.equal(status, 200)
   assert.equal(body.ok, true)
   assert.ok(body.value?.stats, 'stats object present')
@@ -71,9 +57,8 @@ test('tool-stats route: GET from loopback returns aggregated stats', async () =>
 /** The very records the tool-stats route aggregates (same module instance). */
 async function historyWindow() {
   const { registrations } = capture(installHistoryRoute)
-  const spec = registrations.find((r) => r.path.includes('history'))
-  assert.ok(spec, 'history route registered')
-  const { status, body } = await callJson(spec.handler, LOOPBACK)
+  const spec = findSpec(registrations, 'history')
+  const { status, body } = await callJson(spec, LOOPBACK)
   assert.equal(status, 200)
   assert.ok(Array.isArray(body.value.records), 'the history window is readable as records')
   return body.value.records
@@ -81,8 +66,8 @@ async function historyWindow() {
 
 test('tool-stats route: forged non-loopback Host is denied', async () => {
   const { registrations } = capture(installToolStatsRoute)
-  const spec = registrations.find((r) => r.path.includes('tool-stats'))
-  const { status, body } = await callJson(spec.handler, {
+  const spec = findSpec(registrations, 'tool-stats')
+  const { status, body } = await callJson(spec, {
     method: 'GET',
     headers: { host: 'evil.example:3080' },
     socket: { remoteAddress: '192.168.1.9' },
@@ -93,7 +78,7 @@ test('tool-stats route: forged non-loopback Host is denied', async () => {
 
 test('tool-stats route: non-GET answers 405', async () => {
   const { registrations } = capture(installToolStatsRoute)
-  const spec = registrations.find((r) => r.path.includes('tool-stats'))
-  const { status } = await callJson(spec.handler, { ...LOOPBACK, method: 'POST' })
+  const spec = findSpec(registrations, 'tool-stats')
+  const { status } = await callJson(spec, { ...LOOPBACK, method: 'POST' })
   assert.equal(status, 405)
 })

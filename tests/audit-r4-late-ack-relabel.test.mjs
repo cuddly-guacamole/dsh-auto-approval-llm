@@ -22,26 +22,14 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { approvalStateForTests, installFeedbackRoute } from '../lib/index.js'
+import { carrierContext, findSpec, callSpec } from './helpers/carrier-route.mjs'
 
-function feedbackHandler() {
-  const registrations = []
-  const ctx = {
-    get: (name) => (name === 'webServer' ? { register: (desc) => registrations.push(desc) } : undefined),
-    effect: (fn) => fn(),
-  }
+function feedbackSpec() {
+  const { ctx, specs } = carrierContext()
   installFeedbackRoute(ctx)
+  const registrations = [...specs.values()]
   assert.equal(registrations.length, 1, 'the feedback installer registers exactly one route')
-  return registrations[0].handler
-}
-
-function fakeRes() {
-  const state = { statusCode: 0, body: '' }
-  const res = {
-    setHeader: () => {},
-    writeHead: (code) => { state.statusCode = code },
-    end: (chunk) => { state.body = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk) },
-  }
-  return { res, state }
+  return findSpec(registrations, 'feedback')
 }
 
 function post(payload) {
@@ -54,10 +42,9 @@ function post(payload) {
   }
 }
 
-async function ack(handler, payload) {
-  const { res, state } = fakeRes()
-  await handler(post(payload), res)
-  return { status: state.statusCode, body: JSON.parse(state.body) }
+async function ack(spec, payload) {
+  const result = await callSpec(spec, post(payload))
+  return { status: result.status, body: result.body }
 }
 
 function freshCallId(prefix) {
@@ -65,7 +52,7 @@ function freshCallId(prefix) {
 }
 
 test('an ACK for a settled ask in its follow window never writes a timeout notice', async () => {
-  const handler = feedbackHandler()
+  const spec = feedbackSpec()
   const state = approvalStateForTests()
   const callId = freshCallId('r4-follow')
   // The host resolved the ask and published follow; the resolved marker has
@@ -74,7 +61,7 @@ test('an ACK for a settled ask in its follow window never writes a timeout notic
   state.followExpiry.set(callId, Date.now() + 60_000)
   state.resolvedCallIds.delete(callId)
 
-  const res = await ack(handler, { callId, outcome: 'rejected', auto: true })
+  const res = await ack(spec, { callId, outcome: 'rejected', auto: true })
   assert.equal(res.status, 200)
   assert.equal(
     state.timeoutFeedback.has(callId),
@@ -87,12 +74,12 @@ test('an ACK for a settled ask in its follow window never writes a timeout notic
 })
 
 test('control: an ACK for a still-countdown ask keeps the timeout notice', async () => {
-  const handler = feedbackHandler()
+  const spec = feedbackSpec()
   const state = approvalStateForTests()
   const callId = freshCallId('r4-countdown')
   state.reviewStates.set(callId, { risk: 'MEDIUM', phase: 'countdown', action: 'reject', seconds: 10 })
 
-  const res = await ack(handler, { callId, outcome: 'rejected', auto: true })
+  const res = await ack(spec, { callId, outcome: 'rejected', auto: true })
   assert.equal(res.status, 200)
   const entry = state.timeoutFeedback.get(callId)
   assert.ok(entry, 'the in-flight fallback must keep writing the notice')
@@ -102,13 +89,13 @@ test('control: an ACK for a still-countdown ask keeps the timeout notice', async
 })
 
 test('control: a decision the model already settled still wins over the fallback', async () => {
-  const handler = feedbackHandler()
+  const spec = feedbackSpec()
   const state = approvalStateForTests()
   const callId = freshCallId('r4-decision')
   state.reviewStates.set(callId, { risk: 'MEDIUM', phase: 'countdown', action: 'reject', seconds: 10 })
   state.decisionFeedback.set(callId, { text: 'the model denied this call', at: Date.now() })
 
-  const res = await ack(handler, { callId, outcome: 'rejected', auto: true })
+  const res = await ack(spec, { callId, outcome: 'rejected', auto: true })
   assert.equal(res.status, 200)
   assert.equal(state.timeoutFeedback.has(callId), false, 'the real decision text must not be overwritten')
   state.decisionFeedback.delete(callId)

@@ -33,6 +33,7 @@ import { parseClassifierDecision } from '../lib/auto/classifier.js'
 import { MODEL_REASON_MAX_CHARS } from '../lib/auto/constants.js'
 import { RISK_NAME_PATTERN, RISK_REASON_PATTERN } from '../lib/auto/risk-tokens.js'
 import { buildAskReason, buildEditDiffText } from '../lib/auto/editdiff.js'
+import { carrierContext, findSpec, callSpec } from './helpers/carrier-route.mjs'
 import { Config, resolveConfig, sessionModelRoute, buildReviewSnapshot, markFirstAutoSessionNotice, onboardingTimeoutLabel, onboardingNoticeText, extractProbeErrorSummary, extractReviewerKeyLine, installFeedbackRoute, installReviewerCredentialRoute, sessionEventList, currentPreset, trustedUserMessages, questionAnswerMessages, trustedUserIntents, officialRejectionIn } from '../lib/index.js'
 import { categorizeCommand } from '../lib/auto/category.js'
 
@@ -1404,50 +1405,45 @@ test('isTrustedRequest: explicit host:port whitelist entries match exactly (M4, 
 // release) keyed by a callId the review-status protocol carries in the open;
 // it is therefore part of the loopback-only privileged plane, exactly like
 // the settings / reviewer-credential routes. These tests drive the registered
-// handler directly with minimal fake req/res.
+// Fetch spec the way a carrier does (a Request in, a Response out).
 
-function captureFeedbackHandler() {
-  const registrations = []
-  const ctx = {
-    get: (name) => (name === 'webServer' ? { register: (desc) => registrations.push(desc) } : undefined),
-    effect: (fn) => fn(),
-  }
+function captureFeedbackSpec() {
+  const { ctx, specs } = carrierContext()
   installFeedbackRoute(ctx)
+  const registrations = [...specs.values()]
   assert.equal(registrations.length, 1, 'feedback route must be registered exactly once')
-  return registrations[0].handler
+  return registrations[0]
 }
 
-function feedbackFakeRes() {
-  const state = { statusCode: 0, body: '' }
-  const res = {
-    setHeader: () => {},
-    writeHead: (code) => { state.statusCode = code },
-    end: (chunk) => { state.body = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk) },
-  }
-  return { res, state }
-}
-
-function feedbackReq(host, ip, payload, consumed) {
-  const bytes = Buffer.from(JSON.stringify(payload))
-  return {
+/**
+ * A POST Request whose `body` getter flags handler-level access. The Fetch
+ * layer buffers a request body before dispatch, so the observable "read" is
+ * the handler touching `request.body`: a 403 must never reach that point.
+ */
+function feedbackReq(host, payload, consumed) {
+  const request = new Request('http://127.0.0.1:3080/api/auto-approval-llm/feedback', {
     method: 'POST',
     headers: { host, 'content-type': 'application/json' },
-    socket: { remoteAddress: ip },
-    [Symbol.asyncIterator]: async function* () {
+    body: JSON.stringify(payload),
+  })
+  const bodyGetter = Object.getOwnPropertyDescriptor(Request.prototype, 'body').get
+  Object.defineProperty(request, 'body', {
+    configurable: true,
+    get() {
       consumed.value = true
-      yield bytes
+      return bodyGetter.call(request)
     },
-  }
+  })
+  return request
 }
 
 test('feedback route: loopback-same-origin request is accepted (200 ok:true)', async () => {
-  const handler = captureFeedbackHandler()
-  const { res, state } = feedbackFakeRes()
+  const spec = captureFeedbackSpec()
   const consumed = { value: false }
-  const req = feedbackReq('localhost:8080', '127.0.0.1', { callId: 'contract-loopback-1', outcome: 'rejected', auto: true }, consumed)
-  await handler(req, res)
-  assert.equal(state.statusCode, 200)
-  assert.deepEqual(JSON.parse(state.body), { ok: true })
+  const req = feedbackReq('localhost:8080', { callId: 'contract-loopback-1', outcome: 'rejected', auto: true }, consumed)
+  const { status, body } = await callSpec(spec, req)
+  assert.equal(status, 200)
+  assert.deepEqual(body, { ok: true })
   assert.equal(consumed.value, true, 'body must be read on the accepted path')
 })
 
@@ -1458,18 +1454,17 @@ test('feedback route: a callId the plugin never issued is a 200 no-op, not a wri
   // route must not leak which callIds exist), but the write only happens for
   // a callId present in one of the approval-state maps. Structural anchor:
   // the maps are module-private, so the guard itself is pinned on the lib.
-  const handler = captureFeedbackHandler()
-  const { res, state } = feedbackFakeRes()
+  const spec = captureFeedbackSpec()
   const consumed = { value: false }
-  const req = feedbackReq('localhost:8080', '127.0.0.1', { callId: 'contract-forged-callid', outcome: 'rejected', auto: true }, consumed)
-  await handler(req, res)
-  assert.equal(state.statusCode, 200, 'the ACK stays a 200 no-op')
-  assert.deepEqual(JSON.parse(state.body), { ok: true })
+  const req = feedbackReq('localhost:8080', { callId: 'contract-forged-callid', outcome: 'rejected', auto: true }, consumed)
+  const { status, body } = await callSpec(spec, req)
+  assert.equal(status, 200, 'the ACK stays a 200 no-op')
+  assert.deepEqual(body, { ok: true })
   const lib = readFileSync(fileURLToPath(new URL('../lib/index.js', import.meta.url)), 'utf8')
   // Region-delimited, not a counted window: the guard binding and the write it
   // gates must both live between the binding and the handler's response, so a
   // relocated guard or write fails loudly instead of falling outside a slice.
-  const scope = region(lib, 'const knownCallId =', 'responseJson(res, 200, { ok: true });')
+  const scope = region(lib, 'const knownCallId =', 'return json(200, { ok: true });')
   for (const map of ['timeoutFeedback', 'decisionFeedback', 'resolvedCallIds', 'reviewStates', 'followExpiry', 'reviewVerdicts']) {
     assert.ok(scope.includes(`${map}.has(`), `the guard consults ${map}`)
   }
@@ -1487,28 +1482,26 @@ test('feedback route: a callId the plugin never issued is a 200 no-op, not a wri
 })
 
 test('feedback route: LAN peer forging Host+callId is rejected 403 with no state writes', async () => {
-  const handler = captureFeedbackHandler()
-  const { res, state } = feedbackFakeRes()
-  // A LAN peer addressing the server by its LAN IP with an arbitrary callId:
-  // the body iterable flags consumption, so a 403 means the auth gate
-  // short-circuited before readJsonBody — and every approval-state write
-  // happens only after body parsing, so rejection implies zero side effects.
+  const spec = captureFeedbackSpec()
+  // A non-loopback authority with an arbitrary callId: the stream body flags
+  // its first read, so a 403 means the auth gate short-circuited before
+  // readJson — and every approval-state write happens only after body parsing,
+  // so rejection implies zero side effects.
   const consumed = { value: false }
-  const req = feedbackReq('192.168.1.50', '192.168.1.50', { callId: 'contract-lan-spoof', outcome: 'rejected', auto: true }, consumed)
-  await handler(req, res)
-  assert.equal(state.statusCode, 403)
-  assert.deepEqual(JSON.parse(state.body), { ok: false, error: 'forbidden' })
+  const req = feedbackReq('192.168.1.50', { callId: 'contract-lan-spoof', outcome: 'rejected', auto: true }, consumed)
+  const { status, body } = await callSpec(spec, req)
+  assert.equal(status, 403)
+  assert.deepEqual(body, { ok: false, error: 'forbidden' })
   assert.equal(consumed.value, false, 'rejection must precede any body/state processing')
 })
 
 test('feedback route: loopback peer cannot address a LAN Host header (403)', async () => {
-  const handler = captureFeedbackHandler()
-  const { res, state } = feedbackFakeRes()
+  const spec = captureFeedbackSpec()
   const consumed = { value: false }
-  const req = feedbackReq('192.168.1.50', '127.0.0.1', { callId: 'contract-lan-host', outcome: 'allowed-once' }, consumed)
-  await handler(req, res)
-  assert.equal(state.statusCode, 403)
-  assert.deepEqual(JSON.parse(state.body), { ok: false, error: 'forbidden' })
+  const req = feedbackReq('192.168.1.50', { callId: 'contract-lan-host', outcome: 'allowed-once' }, consumed)
+  const { status, body } = await callSpec(spec, req)
+  assert.equal(status, 403)
+  assert.deepEqual(body, { ok: false, error: 'forbidden' })
   assert.equal(consumed.value, false, 'rejection must precede any body/state processing')
 })
 
@@ -1519,32 +1512,22 @@ test('feedback route: loopback peer cannot address a LAN Host header (403)', asy
 // service unavailable" even when the store was live in the composition. The
 // handler must re-read ctx.get('credentials') on every request.
 
-function captureCredentialHandler() {
-  const registrations = []
-  const ctx = {
-    get: (name) => (name === 'webServer' ? { register: (desc) => registrations.push(desc) } : undefined),
-    effect: (fn) => fn(),
-  }
+function captureCredentialSpec() {
+  const { ctx, specs } = carrierContext()
   installReviewerCredentialRoute(ctx)
+  const registrations = [...specs.values()]
   assert.equal(registrations.length, 1, 'reviewer-credential route must be registered exactly once')
-  return { handler: registrations[0].handler, ctx }
+  return { spec: registrations[0], ctx }
 }
 
-function credentialReq(host = 'localhost:8080', ip = '127.0.0.1') {
-  return {
-    method: 'GET',
-    headers: { host },
-    socket: { remoteAddress: ip },
-    [Symbol.asyncIterator]: async function* () {},
-  }
+function credentialReq(host = 'localhost:8080') {
+  return { method: 'GET', headers: { host } }
 }
 
 test('reviewer-credential route: service missing still answers 200 with configured:false (unavailable, not crash)', async () => {
-  const { handler } = captureCredentialHandler()
-  const { res, state } = feedbackFakeRes()
-  await handler(credentialReq(), res)
-  assert.equal(state.statusCode, 200)
-  const body = JSON.parse(state.body)
+  const { spec } = captureCredentialSpec()
+  const { status, body } = await callSpec(spec, credentialReq())
+  assert.equal(status, 200)
   assert.equal(body.ok, true)
   assert.equal(body.value.configured, false)
   assert.equal(body.value.writable, false)
@@ -1552,28 +1535,21 @@ test('reviewer-credential route: service missing still answers 200 with configur
 })
 
 test('reviewer-credential route: per-request ctx.get resolves a late-mounted service (late-service fix)', async () => {
-  const { handler, ctx } = captureCredentialHandler()
+  const { spec, ctx } = captureCredentialSpec()
   // First request: service not yet mounted → unavailable shape.
-  let firstState
-  {
-    const { res, state } = feedbackFakeRes()
-    await handler(credentialReq(), res)
-    firstState = JSON.parse(state.body)
-    assert.equal(firstState.value.configured, false)
-  }
+  const first = await callSpec(spec, credentialReq())
+  assert.equal(first.body.value.configured, false)
   // Mount the service after install (the async Service.init race) and make
   // ctx.get('credentials') return it: the next request must see it.
   ctx.get = (name) => {
-    if (name === 'webServer') return { register: () => {} }
     if (name === 'credentials') return {
       describe: async () => ({ configured: true, source: 'file', writable: true }),
     }
     return undefined
   }
-  const { res, state } = feedbackFakeRes()
-  await handler(credentialReq(), res)
-  assert.equal(state.statusCode, 200)
-  assert.deepEqual(JSON.parse(state.body), { ok: true, value: { configured: true, source: 'file', writable: true } })
+  const { status, body } = await callSpec(spec, credentialReq())
+  assert.equal(status, 200)
+  assert.deepEqual(body, { ok: true, value: { configured: true, source: 'file', writable: true } })
 })
 
 // ── 7th audit round — A2: bare-dot protected-path read carve-out bypass ────

@@ -32,31 +32,27 @@ import {
   historyFilePath, installHistoryRoute, setHistoryFilePathForTests,
 } from '../lib/index.js'
 import { auditFilePath, setAuditFilePathForTests } from '../lib/auto/audit.js'
+import { carrierContext, findSpec, callSpec } from './helpers/carrier-route.mjs'
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url))
 
-function historyHandler() {
-  const registrations = []
-  const ctx = {
-    get: (name) => (name === 'webServer' ? { register: (desc) => registrations.push(desc) } : undefined),
-    effect: (fn) => fn(),
-  }
+function historySpec() {
+  const { ctx, specs } = carrierContext()
   installHistoryRoute(ctx)
+  const registrations = [...specs.values()]
   assert.equal(registrations.length, 1, 'the history installer registers exactly one route')
-  return registrations[0].handler
+  return findSpec(registrations, 'history')
 }
 
 const LOOPBACK = { headers: { host: 'localhost:3080' }, socket: { remoteAddress: '127.0.0.1' } }
 
 async function call(method, { host = 'localhost:3080', remoteAddress = '127.0.0.1' } = {}) {
-  const state = { statusCode: 0, body: '' }
-  const res = {
-    setHeader: () => {},
-    writeHead: (code) => { state.statusCode = code },
-    end: (chunk) => { state.body = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk) },
-  }
-  await historyHandler()({ method, headers: { host }, socket: { remoteAddress } }, res)
-  return { status: state.statusCode, body: state.body ? JSON.parse(state.body) : null }
+  const res = await callSpec(historySpec(), {
+    method,
+    headers: { host },
+    socket: { remoteAddress },
+  })
+  return { status: res.status, body: res.text ? res.body : null }
 }
 
 /**

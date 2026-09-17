@@ -14,27 +14,19 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { installHistoryRoute, setHistoryFilePathForTests } from '../lib/index.js'
 import { setAuditFilePathForTests } from '../lib/auto/audit.js'
+import { carrierContext, findSpec, callSpec } from './helpers/carrier-route.mjs'
 
-function historyHandler() {
-  const registrations = []
-  const ctx = {
-    get: (name) => (name === 'webServer' ? { register: (desc) => registrations.push(desc) } : undefined),
-    effect: (fn) => fn(),
-  }
+function historySpec() {
+  const { ctx, specs } = carrierContext()
   installHistoryRoute(ctx)
+  const registrations = [...specs.values()]
   assert.equal(registrations.length, 1)
-  return registrations[0].handler
+  return findSpec(registrations, 'history')
 }
 
-async function call(handler, method) {
-  const state = { statusCode: 0, body: '' }
-  const res = {
-    setHeader: () => {},
-    writeHead: (code) => { state.statusCode = code },
-    end: (body) => { state.body = body ?? '' },
-  }
-  await handler({ method, headers: { host: 'localhost:3080' }, socket: { remoteAddress: '127.0.0.1' } }, res)
-  return { statusCode: state.statusCode, json: JSON.parse(state.body || '{}') }
+async function call(spec, method) {
+  const result = await callSpec(spec, { method, headers: { host: 'localhost:3080' } })
+  return { statusCode: result.status, json: result.json }
 }
 
 test('a failed truncate is a 500 and leaves the records in place', async () => {
@@ -45,7 +37,7 @@ test('a failed truncate is a 500 and leaves the records in place', async () => {
   setHistoryFilePathForTests(dir)
   setAuditFilePathForTests(auditFile)
   try {
-    const result = await call(historyHandler(), 'DELETE')
+    const result = await call(historySpec(), 'DELETE')
     assert.equal(result.statusCode, 500, 'a failed clear must not report success')
     assert.equal(result.json.ok, false)
     assert.match(result.json.error, /could not be truncated/)
@@ -66,7 +58,7 @@ test('a successful truncate still answers 200 and empties the file', async () =>
   setHistoryFilePathForTests(historyFile)
   setAuditFilePathForTests(auditFile)
   try {
-    const result = await call(historyHandler(), 'DELETE')
+    const result = await call(historySpec(), 'DELETE')
     assert.equal(result.statusCode, 200)
     assert.deepEqual(result.json.value, { records: [] })
     assert.equal(readFileSync(historyFile, 'utf8'), '', 'the file really is empty')

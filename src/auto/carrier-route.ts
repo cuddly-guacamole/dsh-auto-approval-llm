@@ -30,6 +30,53 @@ type NodeRouteHandler = (req: any, res: any) => Promise<void> | void
 const DELETE_OP_HEADER = 'x-auto-approval-op'
 const DELETE_OP_VALUE = 'delete'
 
+/**
+ * The method a Handler sees: the delete op rides a POST because the Fetch
+ * registry carries GET/HEAD/POST only, so a client sends
+ * `POST` + `x-auto-approval-op: delete` for a delete.
+ */
+export function methodOf(request: Request): string {
+  if (request.method === 'POST' && request.headers.get(DELETE_OP_HEADER) === DELETE_OP_VALUE) return 'DELETE'
+  return request.method
+}
+
+/**
+ * Register one exact route as a native Fetch handler. The binding waits for
+ * `connection.fetch` instead of probing once: composition rows mount in
+ * dependency order, so the carrier registry may not be up when apply() runs.
+ * There is no Node-shaped fallback — a Fetch handler is the only shape a
+ * carrier dispatches.
+ */
+export function registerCarrierFetchRoute(
+  ctx: any,
+  spec: CarrierRouteSpec,
+  handler: (request: Request) => Promise<Response> | Response,
+): void {
+  const connection = ctx?.get?.('connection')
+  if (connection?.fetch?.register !== undefined) {
+    bindFetch(ctx, connection, spec, handler)
+    return
+  }
+  if (typeof ctx?.inject !== 'function') return
+  ctx.inject(['connection'], (connCtx: any) => {
+    bindFetch(connCtx, connCtx.get('connection'), spec, handler)
+  })
+}
+
+function bindFetch(
+  ctx: any,
+  connection: any,
+  spec: CarrierRouteSpec,
+  handler: (request: Request) => Promise<Response> | Response,
+): void {
+  ctx.effect(() => connection.fetch.register({
+    path: spec.path,
+    methods: [...spec.methods],
+    requestBody: spec.requestBody ?? 'buffered',
+    fetch: (request: Request) => handler(request),
+  }), spec.label)
+}
+
 /** The authority a Handler sees: a non-HTTP scheme is carrier-owned, not networked. */
 function authorityOf(headers: Record<string, string>, url: URL): string {
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return '127.0.0.1'

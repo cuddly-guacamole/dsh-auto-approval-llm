@@ -81,6 +81,45 @@ export function isTrustedRequest(req: { headers?: any; socket?: any }, trustedHo
 }
 
 /**
+ * Fetch-shaped trust predicate for the carrier-neutral route plane.
+ *
+ * A Fetch handler has no socket: the carrier owns the transport and already
+ * applied its own host/Origin/auth fence before dispatching. The authority is
+ * read from the Host header (or, when the header is absent, the request URL),
+ * and a non-HTTP scheme (`dsh-app://…`) cannot come from a network peer, so it
+ * is judged as a carrier-owned loopback caller — the same normalization the
+ * retired Node bridge applied. A non-loopback authority must still match the
+ * LAN whitelist, and the cross-site / same-origin checks are unchanged.
+ */
+export function isTrustedFetchRequest(request: Request, trustedHosts: string[]): boolean {
+  let url: URL
+  try {
+    url = new URL(request.url)
+  } catch {
+    return false
+  }
+  const carrierOwned = url.protocol !== 'http:' && url.protocol !== 'https:'
+  const authority = carrierOwned ? '127.0.0.1' : (request.headers.get('host') ?? url.host)
+  if (authority === '') return false
+  let hostUrl: URL
+  try {
+    hostUrl = new URL(`http://${authority}`)
+  } catch {
+    return false
+  }
+  const loopbackHost = isLoopbackHostname(hostUrl.hostname)
+  if (!loopbackHost && !trustedHosts.some(entry => trustedAuthorityMatches(entry, hostUrl))) return false
+  if (request.headers.get('sec-fetch-site') === 'cross-site') return false
+  const origin = request.headers.get('origin')
+  if (origin === null) return true
+  try {
+    return new URL(origin).host === hostUrl.host
+  } catch {
+    return false
+  }
+}
+
+/**
  * Whether a parsed probe URL may be the target of the online-reviewer
  * connection test. Aligned with the saved-reviewer scheme fence (https
  * anywhere, cleartext http only to loopback): the body-driven test target is

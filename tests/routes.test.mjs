@@ -16,40 +16,24 @@ import { fileURLToPath } from 'node:url'
 import {
   installHistoryRoute, installLatencyRoute, installLlmCatalogRoutes, installReviewStatusRoute, installSessionModeRoute, installSettingsRoute,
 } from '../lib/index.js'
+import { carrierContext, findSpec, callSpec } from './helpers/carrier-route.mjs'
 
-const LOOPBACK = { method: 'GET', headers: { host: 'localhost:3080' }, socket: { remoteAddress: '127.0.0.1' } }
+const LOOPBACK = { method: 'GET', headers: { host: 'localhost:3080' } }
 
 function capture(installer, ...args) {
-  const registrations = []
-  const ctx = {
-    get: (name) => (name === 'webServer' ? { register: (desc) => registrations.push(desc) } : undefined),
-    effect: (fn) => fn(),
-  }
+  const { ctx, specs } = carrierContext()
   installer(ctx, ...args)
+  const registrations = [...specs.values()]
   assert.ok(registrations.length >= 1, 'at least one registration')
   return { registrations }
 }
 
 function handlerOf(registrations, pathPart) {
-  const spec = registrations.find((r) => r.path.includes(pathPart))
-  assert.ok(spec, `no route matching ${pathPart}`)
-  return spec.handler
+  return findSpec(registrations, pathPart)
 }
 
-function fakeRes() {
-  const state = { statusCode: 0, body: '' }
-  const res = {
-    setHeader: () => {},
-    writeHead: (code) => { state.statusCode = code },
-    end: (chunk) => { state.body = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk) },
-  }
-  return { res, state }
-}
-
-async function callJson(handler, req) {
-  const { res, state } = fakeRes()
-  await handler(req, res)
-  return { status: state.statusCode, body: state.body ? JSON.parse(state.body) : null }
+function callJson(route, req) {
+  return callSpec(route, req)
 }
 
 // ── settings route ────────────────────────────────────────────────────────
@@ -91,7 +75,7 @@ test('settings GET: loopback returns the describe shape; foreign Host is 403', a
   assert.equal(ok.body.ok, true)
   assert.equal(ok.body.value.value.rejectGuidance, true)
   assert.equal(ok.body.value.revision, 1)
-  const denied = await callJson(handler, settingsReq({ headers: { host: 'evil.example:3080' }, socket: { remoteAddress: '192.168.1.9' } }))
+  const denied = await callJson(handler, settingsReq({ headers: { host: 'evil.example:3080' } }))
   assert.equal(denied.status, 403)
   assert.equal(denied.body.ok, false)
 })
@@ -166,7 +150,7 @@ test('history GET: loopback 200 with records + llmLatency; foreign Host 403', as
     ok.body.value.llmLatency.count + ok.body.value.llmLatencyClassifier.count,
     'the merged summary counts both lanes',
   )
-  const denied = await callJson(handler, { ...LOOPBACK, headers: { host: 'evil.example:3080' }, socket: { remoteAddress: '10.0.0.7' } })
+  const denied = await callJson(handler, { ...LOOPBACK, headers: { host: 'evil.example:3080' } })
   assert.equal(denied.status, 403)
 })
 
@@ -195,7 +179,7 @@ test('llm-latency registers one route; DELETE-only with the loopback fence', asy
   const handler = handlerOf(regs, 'llm-latency')
   const methodDenied = await callJson(handler, LOOPBACK)
   assert.equal(methodDenied.status, 405, 'GET is not allowed on the latency route')
-  const foreign = await callJson(handler, { method: 'DELETE', headers: { host: 'evil.example:3080' }, socket: { remoteAddress: '10.0.0.7' } })
+  const foreign = await callJson(handler, { method: 'DELETE', headers: { host: 'evil.example:3080' } })
   assert.equal(foreign.status, 403, 'foreign Host is refused even for DELETE')
 })
 
@@ -230,7 +214,7 @@ test('llm catalog: llm-models GET lists the provider models; foreign Host 403', 
   const ok = await callJson(handler, { ...LOOPBACK, url: '/api/auto-approval-llm/llm-models?provider=deepseek' })
   assert.equal(ok.status, 200)
   assert.deepEqual(ok.body.value.models, [{ provider: 'deepseek', id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash' }])
-  const denied = await callJson(handler, { ...LOOPBACK, url: '/api/auto-approval-llm/llm-models?provider=deepseek', headers: { host: 'evil.example' }, socket: { remoteAddress: '10.0.0.7' } })
+  const denied = await callJson(handler, { ...LOOPBACK, url: '/api/auto-approval-llm/llm-models?provider=deepseek', headers: { host: 'evil.example' } })
   assert.equal(denied.status, 403)
 })
 
@@ -256,7 +240,7 @@ test('llm catalog: reasoning-efforts GET returns the adapter-declared efforts fo
   assert.equal(ok.status, 200)
   assert.deepEqual(ok.body.value.efforts, [{ id: 'low', name: 'low' }, { id: 'high', name: 'high' }])
   assert.equal(ok.body.value.defaultEffort, 'high')
-  const denied = await callJson(handler, { ...LOOPBACK, url: '/api/auto-approval-llm/reasoning-efforts?provider=goat&model=deepseek-v4-flash', headers: { host: 'evil.example' }, socket: { remoteAddress: '10.0.0.7' } })
+  const denied = await callJson(handler, { ...LOOPBACK, url: '/api/auto-approval-llm/reasoning-efforts?provider=goat&model=deepseek-v4-flash', headers: { host: 'evil.example' } })
   assert.equal(denied.status, 403)
 })
 
@@ -280,26 +264,20 @@ test('review-status GET: never 404 — unknown callId returns ok:false at 200', 
   assert.equal(res.status, 200, 'the route always answers 200')
   assert.equal(res.body.ok, false, 'an unknown call reads as {ok:false}')
   assert.equal(res.body.error, 'not-found')
-  const denied = await callJson(handler, { ...LOOPBACK, headers: { host: 'evil.example' }, socket: { remoteAddress: '192.168.1.9' } })
+  const denied = await callJson(handler, { ...LOOPBACK, headers: { host: 'evil.example' } })
   assert.equal(denied.status, 403)
 })
 
 // ── session-mode route ────────────────────────────────────────────────────
 
 function sessionModeHarness() {
-  const registrations = []
   const agent = { session: { id: 'sess-1' } }
-  const ctx = {
-    get: (name) => {
-      if (name === 'webServer') return { register: (desc) => registrations.push(desc) }
-      if (name === 'agents') return { get: (sid) => (sid === 'sess-1' ? agent : undefined) }
-      if (name === 'permissionPresets') return { permissionState: () => ({ preset: 'auto', sandbox: 'danger-full-access', approval: 'ask' }) }
-      return undefined
-    },
-    effect: (fn) => fn(),
-  }
+  const { ctx, specs } = carrierContext({
+    agents: { get: (sid) => (sid === 'sess-1' ? agent : undefined) },
+    permissionPresets: { permissionState: () => ({ preset: 'auto', sandbox: 'danger-full-access', approval: 'ask' }) },
+  })
   installSessionModeRoute(ctx)
-  return handlerOf(registrations, 'session-mode')
+  return findSpec([...specs.values()], 'session-mode')
 }
 
 test('session-mode GET: session id arrives in a request header; the query form is dead', async () => {
@@ -321,6 +299,6 @@ test('session-mode GET: session id arrives in a request header; the query form i
   assert.equal(legacy.status, 400, 'a query-only call must fail: sessionId is required')
   const missing = await callJson(handler, LOOPBACK)
   assert.equal(missing.status, 400)
-  const foreign = await callJson(handler, { ...LOOPBACK, headers: { host: 'evil.example:3080' }, socket: { remoteAddress: '10.0.0.7' } })
+  const foreign = await callJson(handler, { ...LOOPBACK, headers: { host: 'evil.example:3080' } })
   assert.equal(foreign.status, 403)
 })

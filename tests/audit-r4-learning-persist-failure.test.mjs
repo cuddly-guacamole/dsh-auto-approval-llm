@@ -20,6 +20,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { installLearningStoreRoute } from '../lib/index.js'
 import { LEARNING_FILENAME, setRuntimePathsForTests } from '../lib/auto/runtime-paths.js'
+import { carrierContext, findSpec, callSpec } from './helpers/carrier-route.mjs'
 
 async function sandbox(blocked, body) {
   const dir = mkdtempSync(join(tmpdir(), 'r4-learning-'))
@@ -35,27 +36,12 @@ async function sandbox(blocked, body) {
   }
 }
 
-function routeHandler(revokeResult = true) {
-  const registrations = []
-  const ctx = {
-    get: (name) => (name === 'webServer' ? { register: (desc) => registrations.push(desc) } : undefined),
-    effect: (fn) => fn(),
-  }
+function routeSpec(revokeResult = true) {
+  const { ctx, specs } = carrierContext()
   installLearningStoreRoute(ctx, async () => revokeResult)
+  const registrations = [...specs.values()]
   assert.equal(registrations.length, 1, 'the learning-store installer registers exactly one route')
-  return registrations[0].handler
-}
-
-function fakeRes() {
-  const state = { statusCode: 0, body: '' }
-  return {
-    state,
-    res: {
-      setHeader: () => {},
-      writeHead: (code) => { state.statusCode = code },
-      end: (chunk) => { state.body = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk) },
-    },
-  }
+  return findSpec(registrations, 'learning-store')
 }
 
 function deleteReq(payload) {
@@ -69,32 +55,28 @@ function deleteReq(payload) {
 }
 
 test('a revoke that cannot be persisted is reported as a failure, not a 200', async () => {
-  const handler = routeHandler(true)
+  const spec = routeSpec(true)
   await sandbox(true, async () => {
-    const { res, state } = fakeRes()
-    await handler(deleteReq({ key: 'a'.repeat(64) }), res)
-    assert.equal(state.statusCode, 500, 'an unwritable learning.json must not answer success')
-    const body = JSON.parse(state.body)
-    assert.equal(body.ok, false)
-    assert.match(body.error, /could not be persisted/)
+    const res = await callSpec(spec, deleteReq({ key: 'a'.repeat(64) }))
+    assert.equal(res.status, 500, 'an unwritable learning.json must not answer success')
+    assert.equal(res.json.ok, false)
+    assert.match(res.json.error, /could not be persisted/)
   })
 })
 
 test('control: a writable store still answers 200 after persisting', async () => {
-  const handler = routeHandler(true)
+  const spec = routeSpec(true)
   await sandbox(false, async () => {
-    const { res, state } = fakeRes()
-    await handler(deleteReq({ key: 'b'.repeat(64) }), res)
-    assert.equal(state.statusCode, 200)
-    assert.deepEqual(JSON.parse(state.body), { ok: true, value: { removed: true } })
+    const res = await callSpec(spec, deleteReq({ key: 'b'.repeat(64) }))
+    assert.equal(res.status, 200)
+    assert.deepEqual(res.json, { ok: true, value: { removed: true } })
   })
 })
 
 test('control: an unknown key stays a 404 and never reports success', async () => {
-  const handler = routeHandler(false)
+  const spec = routeSpec(false)
   await sandbox(false, async () => {
-    const { res, state } = fakeRes()
-    await handler(deleteReq({ key: 'c'.repeat(64) }), res)
-    assert.equal(state.statusCode, 404)
+    const res = await callSpec(spec, deleteReq({ key: 'c'.repeat(64) }))
+    assert.equal(res.status, 404)
   })
 })

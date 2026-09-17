@@ -17,6 +17,7 @@ import { join } from 'node:path'
 import { installLatencyRoute } from '../lib/index.js'
 import { clearLatencySamples } from '../lib/auto/latency.js'
 import { setRuntimePathsForTests } from '../lib/auto/runtime-paths.js'
+import { carrierContext, findSpec, callSpec } from './helpers/carrier-route.mjs'
 
 const sample = (ms) => ({ at: Date.now(), source: 'reviewer', ms, settled: true })
 
@@ -44,26 +45,17 @@ test('the route answers 500 when the latency file cannot be truncated', async ()
   mkdirSync(join(stateDir, 'llm-latency.jsonl'), { recursive: true })
   try {
     setRuntimePathsForTests({ stateDir })
-    const registrations = []
-    const ctx = {
-      get: (name) => (name === 'webServer' ? { register: (desc) => registrations.push(desc) } : undefined),
-      effect: (fn) => fn(),
-    }
+    const { ctx, specs } = carrierContext()
     installLatencyRoute(ctx)
+    const registrations = [...specs.values()]
     assert.equal(registrations.length, 1, 'the latency installer registers exactly one route')
-    const state = { statusCode: 0, body: '' }
-    const res = {
-      setHeader: () => {},
-      writeHead: (code) => { state.statusCode = code },
-      end: (chunk) => { state.body = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk) },
-    }
-    await registrations[0].handler({
+    const spec = findSpec(registrations, 'llm-latency')
+    const res = await callSpec(spec, {
       method: 'DELETE',
       headers: { host: 'localhost:8080' },
-      socket: { remoteAddress: '127.0.0.1' },
-    }, res)
-    assert.equal(state.statusCode, 500, 'an untruncatable latency file must not answer success')
-    assert.match(JSON.parse(state.body).error, /could not be truncated/)
+    })
+    assert.equal(res.status, 500, 'an untruncatable latency file must not answer success')
+    assert.match(res.json.error, /could not be truncated/)
   } finally {
     setRuntimePathsForTests(undefined)
     rmSync(dir, { recursive: true, force: true })

@@ -13,60 +13,40 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { installSessionModeRoute } from '../lib/index.js'
+import { carrierContext, findSpec, callSpec } from './helpers/carrier-route.mjs'
 
 const LOOPBACK = { method: 'GET', headers: { host: 'localhost:3080' }, socket: { remoteAddress: '127.0.0.1' } }
 
 function sessionModeHarness() {
-  const registrations = []
   const agent = { session: { id: 'sess-1' } }
-  const ctx = {
-    get: (name) => {
-      if (name === 'webServer') return { register: (desc) => registrations.push(desc) }
-      if (name === 'agents') return { get: (sid) => (sid === 'sess-1' ? agent : undefined) }
-      if (name === 'permissionPresets') return { permissionState: () => ({ preset: 'auto', sandbox: 'danger-full-access', approval: 'ask' }) }
-      return undefined
-    },
-    effect: (fn) => fn(),
-  }
+  const { ctx, specs } = carrierContext({
+    agents: { get: (sid) => (sid === 'sess-1' ? agent : undefined) },
+    permissionPresets: { permissionState: () => ({ preset: 'auto', sandbox: 'danger-full-access', approval: 'ask' }) },
+  })
   installSessionModeRoute(ctx)
-  const spec = registrations.find((r) => r.path.includes('session-mode'))
+  const registrations = [...specs.values()]
+  const spec = findSpec(registrations, 'session-mode')
   assert.ok(spec, 'session-mode route must be registered')
-  return spec.handler
+  return spec
 }
 
 /** Harness whose preset lookup resolves nothing, for the live-agent-no-preset case. */
 function noPresetHarness() {
-  const registrations = []
   const agent = { session: { id: 'sess-1' } }
-  const ctx = {
-    get: (name) => {
-      if (name === 'webServer') return { register: (desc) => registrations.push(desc) }
-      if (name === 'agents') return { get: (sid) => (sid === 'sess-1' ? agent : undefined) }
-      if (name === 'permissionPresets') return { permissionState: () => ({ preset: null }) }
-      return undefined
-    },
-    effect: (fn) => fn(),
-  }
+  const { ctx, specs } = carrierContext({
+    agents: { get: (sid) => (sid === 'sess-1' ? agent : undefined) },
+    permissionPresets: { permissionState: () => ({ preset: null }) },
+  })
   installSessionModeRoute(ctx)
-  const spec = registrations.find((r) => r.path.includes('session-mode'))
+  const registrations = [...specs.values()]
+  const spec = findSpec(registrations, 'session-mode')
   assert.ok(spec, 'session-mode route must be registered')
-  return spec.handler
+  return spec
 }
 
-function fakeRes() {
-  const state = { statusCode: 0, body: '' }
-  const res = {
-    setHeader: () => {},
-    writeHead: (code) => { state.statusCode = code },
-    end: (chunk) => { state.body = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk) },
-  }
-  return { res, state }
-}
-
-async function callJson(handler, req) {
-  const { res, state } = fakeRes()
-  await handler(req, res)
-  return { status: state.statusCode, body: state.body ? JSON.parse(state.body) : null }
+async function callJson(spec, req) {
+  const result = await callSpec(spec, req)
+  return { status: result.status, body: result.body }
 }
 
 function get(sessionId) {
@@ -76,8 +56,8 @@ function get(sessionId) {
 }
 
 test('an unknown session id is a 200 with a null mode, never a 404', async () => {
-  const handler = sessionModeHarness()
-  const res = await callJson(handler, get('no-such-session'))
+  const spec = sessionModeHarness()
+  const res = await callJson(spec, get('no-such-session'))
   // The teeth: restoring the 404 branch turns this red.
   assert.equal(res.status, 200, 'an id with no live agent must not read as a client error')
   assert.equal(res.body.ok, true)
@@ -85,33 +65,26 @@ test('an unknown session id is a 200 with a null mode, never a 404', async () =>
 })
 
 test('a known legacy auto session reports the normalized machine name', async () => {
-  const handler = sessionModeHarness()
-  const res = await callJson(handler, get('sess-1'))
+  const spec = sessionModeHarness()
+  const res = await callJson(spec, get('sess-1'))
   assert.equal(res.status, 200)
   assert.equal(res.body.value.mode, 'auto-approval', 'a legacy raw auto is normalized for the panel')
 })
 
 test('a modern upstream auto session stays auto (not the plugin preset)', async () => {
-  const registrations = []
   const agent = { session: { id: 'sess-1' } }
-  const ctx = {
-    get: (name) => {
-      if (name === 'webServer') return { register: (desc) => registrations.push(desc) }
-      if (name === 'agents') return { get: (sid) => (sid === 'sess-1' ? agent : undefined) }
-      if (name === 'permissionPresets') {
-        return {
-          registerAuto: () => {},
-          catalog: () => ({ options: [] }),
-          permissionState: () => ({ preset: 'auto', sandbox: 'danger-full-access', approval: 'never' }),
-        }
-      }
-      return undefined
+  const { ctx, specs } = carrierContext({
+    agents: { get: (sid) => (sid === 'sess-1' ? agent : undefined) },
+    permissionPresets: {
+      registerAuto: () => {},
+      catalog: () => ({ options: [] }),
+      permissionState: () => ({ preset: 'auto', sandbox: 'danger-full-access', approval: 'never' }),
     },
-    effect: (fn) => fn(),
-  }
+  })
   installSessionModeRoute(ctx)
-  const spec = registrations.find((r) => r.path.includes('session-mode'))
-  const res = await callJson(spec.handler, get('sess-1'))
+  const registrations = [...specs.values()]
+  const spec = findSpec(registrations, 'session-mode')
+  const res = await callJson(spec, get('sess-1'))
   assert.equal(res.status, 200)
   assert.equal(res.body.value.mode, 'auto', 'the upstream auto name is not the plugin preset')
 })
@@ -122,19 +95,19 @@ test('a live agent with no resolvable preset already answered 200 + null', async
   // a new concept — and the client already treated it as "clear the remembered
   // mode". Answering 200 for an unknown agent therefore makes both no-mode
   // cases behave the same way instead of inventing a third.
-  const handler = noPresetHarness()
-  const res = await callJson(handler, get('sess-1'))
+  const spec = noPresetHarness()
+  const res = await callJson(spec, get('sess-1'))
   assert.equal(res.status, 200)
   assert.equal(res.body.value.mode, null)
 })
 
 test('genuine misuse still fails: missing header, wrong method, untrusted host', async () => {
-  const handler = sessionModeHarness()
-  const missing = await callJson(handler, get(undefined))
+  const spec = sessionModeHarness()
+  const missing = await callJson(spec, get(undefined))
   assert.equal(missing.status, 400, 'a missing session header stays an error')
-  const notGet = await callJson(handler, { ...get('sess-1'), method: 'POST' })
+  const notGet = await callJson(spec, { ...get('sess-1'), method: 'POST' })
   assert.equal(notGet.status, 405, 'a non-GET method stays an error')
-  const foreign = await callJson(handler, {
+  const foreign = await callJson(spec, {
     ...get('sess-1'),
     headers: { host: 'evil.example:3080', 'x-auto-approval-session-id': 'sess-1' },
     socket: { remoteAddress: '10.0.0.7' },
@@ -143,7 +116,7 @@ test('genuine misuse still fails: missing header, wrong method, untrusted host',
   // The authorization fence must also hold for an id that would take the new
   // 200 branch: moving that branch above the trust check would otherwise leave
   // this green.
-  const foreignUnknown = await callJson(handler, {
+  const foreignUnknown = await callJson(spec, {
     ...get('no-such-session'),
     headers: { host: 'evil.example:3080', 'x-auto-approval-session-id': 'no-such-session' },
     socket: { remoteAddress: '10.0.0.7' },
@@ -152,15 +125,15 @@ test('genuine misuse still fails: missing header, wrong method, untrusted host',
 })
 
 test('a blank session header is rejected before the agent lookup', async () => {
-  const handler = sessionModeHarness()
-  const blank = await callJson(handler, get('   '))
+  const spec = sessionModeHarness()
+  const blank = await callJson(spec, get('   '))
   assert.equal(blank.status, 400, 'whitespace-only ids must not read as a lookup miss')
 })
 
 test('repeated lookups for many distinct unknown ids stay answers, not failures', async () => {
-  const handler = sessionModeHarness()
+  const spec = sessionModeHarness()
   for (let i = 0; i < 200; i += 1) {
-    const res = await callJson(handler, get(`unknown-${i}`))
+    const res = await callJson(spec, get(`unknown-${i}`))
     assert.equal(res.status, 200, `request ${i} must stay a 200 answer`)
     assert.equal(res.body.value.mode, null)
   }
