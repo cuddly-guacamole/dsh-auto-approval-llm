@@ -2312,6 +2312,7 @@ function walkHeredocs(source) {
     const bodies = [];
     let pending = [];
     let body = [];
+    const syntaxStack = [];
     for (const line of lines) {
         if (pending.length > 0) {
             const stripped = line.replace(/^\t+/, '');
@@ -2328,7 +2329,7 @@ function walkHeredocs(source) {
             continue;
         }
         syntax.push(line);
-        const view = shellSyntaxView(line);
+        const view = shellSyntaxView(line, syntaxStack);
         for (const introducer of view.matchAll(/<<(-?)/g)) {
             const rest = line.slice(introducer.index + introducer[0].length).replace(/^[ \t]*/, '');
             const delimiter = /^(?:"([^"]*)"|'([^']*)'|\\([A-Za-z_][A-Za-z0-9_]*)|([A-Za-z_][A-Za-z0-9_]*))/.exec(rest);
@@ -2438,9 +2439,15 @@ function opaqueReadsCredentialMaterial(source, shell, roots) {
  * (over-blocking), which is why the introducer is READ from the view but the
  * delimiter is taken from the original line.
  */
-function shellSyntaxView(line) {
+/**
+ * Blank out everything that is not live syntax on one line, carrying the
+ * quote/substitution stack across lines. The stack MUST be threaded by the
+ * caller: a quote opened on an earlier line has to blank a later line's
+ * `<<X`, or that line is mistaken for a here-document introducer and every
+ * line after it is swallowed as body (the phantom-heredoc bypass).
+ */
+function shellSyntaxView(line, stack = []) {
     const out = [];
-    const stack = [];
     const top = () => stack[stack.length - 1];
     for (let index = 0; index < line.length; index += 1) {
         const char = line[index];

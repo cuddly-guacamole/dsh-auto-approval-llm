@@ -1201,6 +1201,44 @@ test('plain build/test/version probes without redirection are unchanged', () => 
   }
 })
 
+// ── phantom heredoc: the quote stack must cross lines ────────────────
+
+const PHANTOM_ZONE = fileURLToPath(new URL('../', import.meta.url)).split(String.fromCharCode(92)).join('/').replace(/\/$/, '')
+const phantomZoneRoots = { ...winRoots, workspace: PHANTOM_ZONE, allowedDshSubpaths: [PHANTOM_ZONE], devZoneRoots: [PHANTOM_ZONE] }
+
+test('phantom heredoc must not swallow a later real syntax line', () => {
+  // A quote opened on an earlier line is invisible to a per-line syntax view,
+  // so a later `<<EOF"` registered a here-document introducer and the line
+  // after it was stripped as body: a hard-denied write degraded into a
+  // classifier-eligible ask (the phantom-heredoc bypass). The quote stack is
+  // threaded across lines now, so neither ingredient can hide the write.
+  const targets = [
+    ['in-workspace plugin code', phantomZoneRoots, `${PHANTOM_ZONE}/lib/ae-probe.txt`],
+    ['DSH_HOME runtime state', winRoots, 'C:/Users/u/.dsh/auto-approval-llm/history.jsonl'],
+  ]
+  for (const [label, r, target] of targets) {
+    const write = `printf x > ${target}`
+    const phantom = ['echo "a', '<<EOF"', `${write}; (:)`].join(String.fromCharCode(10))
+    // Controls: the plain spelling is hard-denied, and neither ingredient
+    // alone changes that.
+    assert.equal(assessShell(write, 'bash', r, artifacts, undefined).decision, 'deny', `${label}: plain`)
+    assert.equal(assessShell(`${write}; (:)`, 'bash', r, artifacts, undefined).decision, 'deny', `${label}: tail only`)
+    assert.equal(assessShell(['echo "a', '<<EOF"', write].join(String.fromCharCode(10)), 'bash', r, artifacts, undefined).decision, 'deny', `${label}: phantom without tail`)
+    // The combined shape must keep the hard deny and never become an
+    // online-reviewable ask.
+    const v = assessShell(phantom, 'bash', r, artifacts, undefined)
+    assert.equal(v.decision, 'deny', `${label}: phantom must stay hard-denied`)
+    assert.equal(v.classifierEligible, false, `${label}: phantom must not be classifier-eligible`)
+    assert.ok(hardDenyShellReason(phantom, 'bash', r), `${label}: phantom must carry a hard-deny reason`)
+  }
+})
+
+test('a real here-document body is still data, not syntax', () => {
+  const real = ["cat <<'EOF'", 'see > package.json', 'EOF'].join(String.fromCharCode(10))
+  assert.equal(hardDenyShellReason(real, 'bash', phantomZoneRoots), undefined, 'a body line naming a redirect target is data')
+  assert.notEqual(assessShell(real, 'bash', phantomZoneRoots, artifacts, undefined).decision, 'deny', 'a data body must not be hard-denied')
+})
+
 // ── runtime-state read audit (pure detector, no verdict impact) ──────
 
 const auditRoots = winRoots
