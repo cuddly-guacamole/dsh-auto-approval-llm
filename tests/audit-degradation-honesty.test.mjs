@@ -33,7 +33,9 @@ test('the panel says the history failed instead of rendering zeroes', () => {
 
 test('the learning-store DELETE answers a JSON 413/400 like its siblings', () => {
   const route = host.indexOf("'dsh-auto-approval-llm: learning-store route'")
-  const body = host.slice(Math.max(0, route - 2_600), route)
+  assert.notEqual(route, -1, 'the learning-store route must be registered with its label')
+  const nextRoute = host.indexOf('export function installReviewStatusRoute', route)
+  const body = host.slice(route, nextRoute === -1 ? route + 4_000 : nextRoute)
   assert.match(body, /if \(req\.method === 'DELETE'\) \{\s*\n\s*\/\/ Same error contract/, 'the branch explains the contract')
   assert.match(body, /error instanceof RangeError \? 413 : 400/, 'the error contract matches every sibling route')
   assert.match(body, /error: error instanceof Error \? error\.message : String\(error\)/, 'the failure text crosses the wire')

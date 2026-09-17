@@ -23,17 +23,17 @@ export const name = 'dsh-auto-approval-llm'
 // match the official approval client's own declaration.
 export const inject = ['sessions', 'remote', 'uiSession', 'slots']
 
-const SETTINGS_ROUTE = '/_dsh/auto-approval-llm/settings'
-const HISTORY_ROUTE = '/_dsh/auto-approval-llm/history'
-const LLM_LATENCY_ROUTE = '/_dsh/auto-approval-llm/llm-latency'
-const TOOL_STATS_ROUTE = '/_dsh/auto-approval-llm/tool-stats'
-const TEST_ROUTE = '/_dsh/auto-approval-llm/test'
-const REVIEWER_CREDENTIAL_ROUTE = '/_dsh/auto-approval-llm/reviewer-credential'
-const LEARNING_STORE_ROUTE = '/_dsh/auto-approval-llm/learning-store'
-const SESSION_MODE_ROUTE = '/_dsh/auto-approval-llm/session-mode'
-const PROVIDERS_ROUTE = '/_dsh/auto-approval-llm/providers'
-const LLM_MODELS_ROUTE = '/_dsh/auto-approval-llm/llm-models'
-const REASONING_EFFORTS_ROUTE = '/_dsh/auto-approval-llm/reasoning-efforts'
+const SETTINGS_ROUTE = '/api/auto-approval-llm/settings'
+const HISTORY_ROUTE = '/api/auto-approval-llm/history'
+const LLM_LATENCY_ROUTE = '/api/auto-approval-llm/llm-latency'
+const TOOL_STATS_ROUTE = '/api/auto-approval-llm/tool-stats'
+const TEST_ROUTE = '/api/auto-approval-llm/test'
+const REVIEWER_CREDENTIAL_ROUTE = '/api/auto-approval-llm/reviewer-credential'
+const LEARNING_STORE_ROUTE = '/api/auto-approval-llm/learning-store'
+const SESSION_MODE_ROUTE = '/api/auto-approval-llm/session-mode'
+const PROVIDERS_ROUTE = '/api/auto-approval-llm/providers'
+const LLM_MODELS_ROUTE = '/api/auto-approval-llm/llm-models'
+const REASONING_EFFORTS_ROUTE = '/api/auto-approval-llm/reasoning-efforts'
 let sessionsRef: any
 let breakerAntiHijackMs = THRESHOLD_DEFAULTS.breakerAntiHijackMs
 const MAX_PANEL_RECORDS = 10
@@ -1241,8 +1241,8 @@ function SettingsSection() {
       // that is no longer stored. Every other save path adopts it here.
       setSnapshot(data.value)
       const del = await (globalThis as any).fetch(REVIEWER_CREDENTIAL_ROUTE, {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-auto-approval-op': 'delete' },
         credentials: 'same-origin',
       })
       const delData = await del.json().catch(() => ({}))
@@ -1358,7 +1358,7 @@ function SettingsSection() {
       // fetch resolves on HTTP errors too; only a verified ok:true response
       // may claim the key was cleared, otherwise the badge would lie while the
       // credential stays live.
-      const res = await (globalThis as any).fetch(REVIEWER_CREDENTIAL_ROUTE, { method: 'DELETE', credentials: 'same-origin' })
+      const res = await (globalThis as any).fetch(REVIEWER_CREDENTIAL_ROUTE, { method: 'POST', headers: { 'x-auto-approval-op': 'delete' }, credentials: 'same-origin' })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json().catch(() => null)
       if (data?.ok !== true) throw new Error(String(data?.error ?? 'credential clear failed'))
@@ -1391,7 +1391,7 @@ function SettingsSection() {
       // may claim the history was cleared (same discipline as
       // clearReviewerCredential), otherwise the card would lie while the
       // server-side records stay.
-      const res = await (globalThis as any).fetch(HISTORY_ROUTE, { method: 'DELETE', credentials: 'same-origin' })
+      const res = await (globalThis as any).fetch(HISTORY_ROUTE, { method: 'POST', headers: { 'x-auto-approval-op': 'delete' }, credentials: 'same-origin' })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json().catch(() => null)
       if (data?.ok !== true) throw new Error(String(data?.error ?? 'history clear failed'))
@@ -1408,7 +1408,7 @@ function SettingsSection() {
   const clearLatency = async () => {
     if (!(globalThis as any).confirm?.(t('confirm.clearLatency'))) return
     try {
-      const res = await (globalThis as any).fetch(LLM_LATENCY_ROUTE, { method: 'DELETE', credentials: 'same-origin' })
+      const res = await (globalThis as any).fetch(LLM_LATENCY_ROUTE, { method: 'POST', headers: { 'x-auto-approval-op': 'delete' }, credentials: 'same-origin' })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json().catch(() => null)
       if (data?.ok !== true) throw new Error(String(data?.error ?? 'latency clear failed'))
@@ -2201,8 +2201,8 @@ function SettingsSection() {
                 void (async () => {
                   setCardStatus({ id: 'learning', kind: 'ok', text: '' })
                   const res = await (globalThis as any).fetch(LEARNING_STORE_ROUTE, {
-                    method: 'DELETE',
-                    headers: { 'Content-Type': 'application/json' },
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'x-auto-approval-op': 'delete' },
                     body: JSON.stringify({ key: e.key }),
                     credentials: 'same-origin',
                   })

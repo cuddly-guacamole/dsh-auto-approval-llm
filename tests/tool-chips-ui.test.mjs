@@ -14,7 +14,7 @@ const client = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8'
 
 test('client bundle: fetches the tool-stats route when the security card opens', () => {
   assert.ok(client.includes('TOOL_STATS_ROUTE'), 'TOOL_STATS_ROUTE referenced')
-  assert.ok(client.includes('/_dsh/auto-approval-llm/tool-stats'), 'tool-stats path literal present')
+  assert.ok(client.includes('/api/auto-approval-llm/tool-stats'), 'tool-stats path literal present')
   assert.ok(client.includes('openSecurity'), 'fetch is gated on the security card being open')
 })
 

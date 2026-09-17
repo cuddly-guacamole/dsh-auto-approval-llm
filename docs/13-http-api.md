@@ -2,21 +2,23 @@
 
 > *Client ↔ Host 的唯一通道*
 
-**没有 RPC**：客户端是静态 bundle（非动态 Cordis Package），无法用 `host.call`，全部走同源 fetch。统一 `responseJson`（no-store + nosniff），body 强制 application/json ≤64KB，写操作全部带 `expectedRevision` 乐观并发。全站共 **16 条 `/_dsh/auto-approval-llm/*` 路由**（host 常量 <span class="lnum">index.ts:LFEEDBACK_ROUTE</span>；client 引用 <span class="lnum">client/index.ts:LSETTINGS_ROUTE</span>、<span class="lnum">client/approvals/shared.ts:LFEEDBACK_ROUTE</span>），每条入口第一行都过 `isTrustedRequest` 闸门，不存在无设防的「普通」路由。
+**没有 RPC**：客户端是静态 bundle（非动态 Cordis Package），无法用 `host.call`，全部走同源 fetch（注册在 connection 的载波中立 Fetch 注册表，见下表脚注）。统一 `responseJson`（no-store + nosniff），body 强制 application/json ≤64KB，写操作全部带 `expectedRevision` 乐观并发。全站共 **16 条 `/api/auto-approval-llm/*` 路由**（host 常量 <span class="lnum">index.ts:LFEEDBACK_ROUTE</span>；client 引用 <span class="lnum">client/index.ts:LSETTINGS_ROUTE</span>、<span class="lnum">client/approvals/shared.ts:LFEEDBACK_ROUTE</span>），每条入口第一行都过 `isTrustedRequest` 闸门，不存在无设防的「普通」路由。
+
+**删除动作走 `POST` + `x-auto-approval-op: delete`**：路由注册在 connection 的载波中立 Fetch 注册表（`connection.fetch.register`），该注册表只承载 `GET`/`HEAD`/`POST`；Web 载体把它挂到 web server 的 `/api` 前缀，shell 载体直接分派同一个 handler，因此同一套路径在两种载体下都可达。表中方法列为 `GET/POST` 且用途含「清空/吊销」的行，其删除语义由该请求头触发。
 
 | 路由 | 方法 | 用途 | 信任平面 |
 |---|---|---|---|
 | `/feedback` | POST | 客户端上报 outcome（auto:true）+ approval 完成 ACK | <span class="badgeerr">特权 [ ] 仅回环</span> |
 | `/settings` | GET/POST | 配置快照 {value,revision,writable,applies,configError} / 更新（preserveHostKeys） | <span class="badgeerr">特权 [ ] 仅回环</span> |
-| `/reviewer-credential` | GET/POST/DELETE | 端点密钥 {configured,writable}，永不回显 value | <span class="badgeerr">特权 [ ] 仅回环</span> |
+| `/reviewer-credential` | GET/POST | 端点密钥 {configured,writable}，永不回显 value | <span class="badgeerr">特权 [ ] 仅回环</span> |
 | `/test` | POST | 在线端点连通性探针（https 外网放行 + 公网地址强制 + fake-ip 豁免，8s 超时 max_tokens:1，非 2xx 带回错误摘要；仅当探针目标与已配置端点同址时才回退已存密钥）；模型库校验 modelFound | <span class="badgeerr">特权 [ ] 仅回环</span> |
 | `/providers` | GET | provider 目录 {id,name}（模型来源 picker 下拉） | <span class="badgeerr">特权 [ ] 仅回环</span> |
 | `/llm-models` | GET | `?provider=` 列某 provider 的模型 {provider,id,name} | <span class="badgeerr">特权 [ ] 仅回环</span> |
 | `/reasoning-efforts` | GET | `?provider=&model=` 列该模型的 reasoning efforts + defaultEffort（无 resolveModel 支持返回空列表） | <span class="badgeerr">特权 [ ] 仅回环</span> |
-| `/history` | GET/DELETE | 记录查询（逆序）/ 清空（仅清内存+history，审计留墓碑） | trustedHosts |
-| `/llm-latency` | DELETE | 清空 LLM 延迟遥测窗口 + 文件（不动审批历史；与 history DELETE 互不清） | trustedHosts |
+| `/history` | GET/POST | 记录查询（逆序）/ 清空（仅清内存+history，审计留墓碑） | trustedHosts |
+| `/llm-latency` | POST | 清空 LLM 延迟遥测窗口 + 文件（不动审批历史；与 history DELETE 互不清） | trustedHosts |
 | `/tool-stats` | GET | 精确名单页签的候选工具统计（最近工具 chips） | trustedHosts |
-| `/learning-store` | GET/DELETE | 已学习条目列表（键哈希+脱敏骨架+计数）/ 吊销单条（即时生效，落 `learning-revoked` 审计） | trustedHosts |
+| `/learning-store` | GET/POST | 已学习条目列表（键哈希+脱敏骨架+计数）/ 吊销单条（即时生效，落 `learning-revoked` 审计） | trustedHosts |
 | `/review-status` | GET | 单审批 countdown/follow 状态；callId 走 `x-auto-approval-call-id` 头（防 URL/devtools 泄漏）。可选 `x-auto-approval-wait-ms` 进入**长轮询**：held 至该 ask 的 `revision` 变化或预算（上限 20s）用尽，客户端断开即释放。状态对象带单调 `revision`、`expiresAt`（宿主时钟）与 `remainingMs`（按宿主时钟算出的剩余），可选带 `category?`（类别层闭集标签，供该 ask 的终局审计记录署名） | trustedHosts |
 | `/session-review-status` | GET | 会话级发现：列出该会话当前全部待审（`{callId, phase, action, seconds, remainingMs, revision, source?}[]`）；sessionId 走 `x-auto-approval-session-id` 头，缺失返 400。官方面板被 `panelDelayMs` 推迟期间，客户端靠它渲染芯片/胶囊 | trustedHosts |
 | `/reveal-approval` | POST | 提前放行被推迟的官方面板（「现在查看」）；callId 走 `x-auto-approval-call-id` 头。未知或已结算的 ask 返 `{ok:true,value:{revealed:false}}`，不伪造面板 | trustedHosts |

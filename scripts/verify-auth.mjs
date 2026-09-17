@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url'
 
 export const AUTH_HOST = '127.0.0.1'
 export const AUTH_PORT = 3080
-export const AUTH_ROUTE = '/_dsh/auto-approval-llm'
+export const AUTH_ROUTE = '/api/auto-approval-llm'
 
 export const AUTH_CASES = [
   { name: 'loopback allowed (review-status, Host=127.0.0.1:3080)', path: '/review-status', headers: { host: '127.0.0.1:3080' }, expect: 200 },

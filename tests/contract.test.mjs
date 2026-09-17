@@ -3540,7 +3540,7 @@ test('learning-store route: host exposes a trusted read/revoke surface with an a
   // The audit trail mirrors recordAuditClear's discipline (never a silent
   // erase the decision path depends on).
   const src = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
-  assert.ok(src.includes("LEARNING_STORE_ROUTE = '/_dsh/auto-approval-llm/learning-store'"), 'route constant must exist')
+  assert.ok(src.includes("LEARNING_STORE_ROUTE = '/api/auto-approval-llm/learning-store'"), 'route constant must exist')
   assert.ok(src.includes('installLearningStoreRoute'), 'route installer must exist')
   assert.ok(src.includes('learning-store route'), 'route must be registered with the web server')
   assert.ok(src.includes('revokeLearning'), 'host must consume revokeLearning')
@@ -3554,7 +3554,7 @@ test('learning-store route: host exposes a trusted read/revoke surface with an a
   const revokeScope = src.slice(revokeAt, revokeAt + 400)
   assert.ok(revokeScope.includes('persistLearningGuarded()'), 'revoke must persist the store through the guarded writer')
   const client = readFileSync(new URL('../src/client/index.ts', import.meta.url), 'utf8')
-  assert.ok(client.includes("LEARNING_STORE_ROUTE = '/_dsh/auto-approval-llm/learning-store'"), 'client must know the route')
+  assert.ok(client.includes("LEARNING_STORE_ROUTE = '/api/auto-approval-llm/learning-store'"), 'client must know the route')
   assert.ok(client.includes('settings.learning.revoke'), 'client must render a revoke control')
 })
 
@@ -4123,7 +4123,7 @@ test('reviewer credential delete also clears file-fallback key line', () => {
   assert.ok(deleteBranch.includes('clearReviewerKeyFromCredentialFile()'), 'the DELETE branch must invoke the file clear')
   assert.ok(deleteBranch.includes('fileClear ==='), 'the DELETE branch must report a failed file clear instead of a silent ok')
   const clientSrc = readFileSync(new URL('../src/client/index.ts', import.meta.url), 'utf8')
-  assert.ok(clientSrc.includes("method: 'DELETE'"), 'client reset must issue a credential DELETE')
+  assert.match(clientSrc, /fetch\(REVIEWER_CREDENTIAL_ROUTE, \{\n\s*method: 'POST',\n\s*headers: \{ 'Content-Type': 'application\/json', 'x-auto-approval-op': 'delete' \}/, 'client reset must issue a credential delete')
   assert.ok(clientSrc.includes('settings.reviewResetDone'), 'client reset must report completion')
 })
 

@@ -227,24 +227,24 @@ test('llm catalog: llm-models GET lists the provider models; foreign Host 403', 
   const llm = fakeLlm({ modelsByProvider: { deepseek: [{ id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash' }] } })
   const { registrations: regs } = capture(installLlmCatalogRoutes, llm)
   const handler = handlerOf(regs, 'llm-models')
-  const ok = await callJson(handler, { ...LOOPBACK, url: '/_dsh/auto-approval-llm/llm-models?provider=deepseek' })
+  const ok = await callJson(handler, { ...LOOPBACK, url: '/api/auto-approval-llm/llm-models?provider=deepseek' })
   assert.equal(ok.status, 200)
   assert.deepEqual(ok.body.value.models, [{ provider: 'deepseek', id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash' }])
-  const denied = await callJson(handler, { ...LOOPBACK, url: '/_dsh/auto-approval-llm/llm-models?provider=deepseek', headers: { host: 'evil.example' }, socket: { remoteAddress: '10.0.0.7' } })
+  const denied = await callJson(handler, { ...LOOPBACK, url: '/api/auto-approval-llm/llm-models?provider=deepseek', headers: { host: 'evil.example' }, socket: { remoteAddress: '10.0.0.7' } })
   assert.equal(denied.status, 403)
 })
 
 test('llm catalog: llm-models without a provider or for an unknown provider returns 400', async () => {
   const { registrations: regs } = capture(installLlmCatalogRoutes, fakeLlm())
   const handler = handlerOf(regs, 'llm-models')
-  const missing = await callJson(handler, { ...LOOPBACK, url: '/_dsh/auto-approval-llm/llm-models' })
+  const missing = await callJson(handler, { ...LOOPBACK, url: '/api/auto-approval-llm/llm-models' })
   assert.equal(missing.status, 400)
   assert.equal(missing.body.error, 'provider is required')
   const throwing = fakeLlm({})
   throwing.listModels = async () => { throw new Error('NO_ADAPTER') }
   const { registrations: regs2 } = capture(installLlmCatalogRoutes, throwing)
   const handler2 = handlerOf(regs2, 'llm-models')
-  const bad = await callJson(handler2, { ...LOOPBACK, url: '/_dsh/auto-approval-llm/llm-models?provider=nope' })
+  const bad = await callJson(handler2, { ...LOOPBACK, url: '/api/auto-approval-llm/llm-models?provider=nope' })
   assert.equal(bad.status, 400)
 })
 
@@ -252,20 +252,20 @@ test('llm catalog: reasoning-efforts GET returns the adapter-declared efforts fo
   const llm = fakeLlm({ modelInfoByRoute: { 'goat/deepseek-v4-flash': { provider: 'goat', id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', reasoning: { efforts: [{ id: 'low', name: 'low' }, { id: 'high', name: 'high' }], defaultEffort: 'high' } } } })
   const { registrations: regs } = capture(installLlmCatalogRoutes, llm)
   const handler = handlerOf(regs, 'reasoning-efforts')
-  const ok = await callJson(handler, { ...LOOPBACK, url: '/_dsh/auto-approval-llm/reasoning-efforts?provider=goat&model=deepseek-v4-flash' })
+  const ok = await callJson(handler, { ...LOOPBACK, url: '/api/auto-approval-llm/reasoning-efforts?provider=goat&model=deepseek-v4-flash' })
   assert.equal(ok.status, 200)
   assert.deepEqual(ok.body.value.efforts, [{ id: 'low', name: 'low' }, { id: 'high', name: 'high' }])
   assert.equal(ok.body.value.defaultEffort, 'high')
-  const denied = await callJson(handler, { ...LOOPBACK, url: '/_dsh/auto-approval-llm/reasoning-efforts?provider=goat&model=deepseek-v4-flash', headers: { host: 'evil.example' }, socket: { remoteAddress: '10.0.0.7' } })
+  const denied = await callJson(handler, { ...LOOPBACK, url: '/api/auto-approval-llm/reasoning-efforts?provider=goat&model=deepseek-v4-flash', headers: { host: 'evil.example' }, socket: { remoteAddress: '10.0.0.7' } })
   assert.equal(denied.status, 403)
 })
 
 test('llm catalog: reasoning-efforts for an unresolvable model degrades to an empty list', async () => {
   const { registrations: regs } = capture(installLlmCatalogRoutes, fakeLlm())
   const handler = handlerOf(regs, 'reasoning-efforts')
-  const missing = await callJson(handler, { ...LOOPBACK, url: '/_dsh/auto-approval-llm/reasoning-efforts' })
+  const missing = await callJson(handler, { ...LOOPBACK, url: '/api/auto-approval-llm/reasoning-efforts' })
   assert.equal(missing.status, 400, 'missing params stay a 400')
-  const unresolvable = await callJson(handler, { ...LOOPBACK, url: '/_dsh/auto-approval-llm/reasoning-efforts?provider=nope&model=none' })
+  const unresolvable = await callJson(handler, { ...LOOPBACK, url: '/api/auto-approval-llm/reasoning-efforts?provider=nope&model=none' })
   assert.equal(unresolvable.status, 200)
   assert.deepEqual(unresolvable.body.value.efforts, [], 'an adapter without the route degrades to default-only')
 })
@@ -316,7 +316,7 @@ test('session-mode GET: session id arrives in a request header; the query form i
   const legacy = await callJson(handler, {
     ...LOOPBACK,
     headers: { host: 'localhost:3080' },
-    url: '/_dsh/auto-approval-llm/session-mode?sessionId=sess-1',
+    url: '/api/auto-approval-llm/session-mode?sessionId=sess-1',
   })
   assert.equal(legacy.status, 400, 'a query-only call must fail: sessionId is required')
   const missing = await callJson(handler, LOOPBACK)

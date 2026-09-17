@@ -27,6 +27,7 @@ import { appendFileSync, existsSync, readFileSync, realpathSync, renameSync, sta
 import { isIP } from 'node:net'
 import { networkInterfaces, homedir } from 'node:os'
 import { join } from 'node:path'
+import { registerCarrierRoute } from './auto/carrier-route.js'
 import { ArtifactRegistry } from './auto/artifacts.js'
 import { appendAuditLine, recordAuditClear } from './auto/audit.js'
 import { AGGRESSIVE_BUILTIN, applyCategoryDirective, CATEGORY_KEYS, categoryDirectiveFor, type CategoryKey, HARD_LOCKED_CATEGORIES, LOCKED_CATEGORIES, realpathCriticalReason, sensitiveBasenameAt } from './auto/category.js'
@@ -1825,26 +1826,26 @@ const persistLearningGuarded = (): boolean => {
 // a dynamic Cordis Package). Instead it POSTs the timeout marker to this route
 // immediately before answering the approval, so `tools/post-execute` can tell
 // an automatic timeout apart from a deliberate user rejection.
-const FEEDBACK_ROUTE = '/_dsh/auto-approval-llm/feedback'
-const SETTINGS_ROUTE = '/_dsh/auto-approval-llm/settings'
-const REVIEWER_CREDENTIAL_ROUTE = '/_dsh/auto-approval-llm/reviewer-credential'
-const HISTORY_ROUTE = '/_dsh/auto-approval-llm/history'
-const LLM_LATENCY_ROUTE = '/_dsh/auto-approval-llm/llm-latency'
-const TOOL_STATS_ROUTE = '/_dsh/auto-approval-llm/tool-stats'
-const TEST_ROUTE = '/_dsh/auto-approval-llm/test'
-const SESSION_MODE_ROUTE = '/_dsh/auto-approval-llm/session-mode'
-const REVIEW_STATUS_ROUTE = '/_dsh/auto-approval-llm/review-status'
-const SESSION_REVIEW_STATUS_ROUTE = '/_dsh/auto-approval-llm/session-review-status'
-const REVEAL_ROUTE = '/_dsh/auto-approval-llm/reveal-approval'
-const STATS_ROUTE = '/_dsh/auto-approval-llm/stats'
+const FEEDBACK_ROUTE = '/api/auto-approval-llm/feedback'
+const SETTINGS_ROUTE = '/api/auto-approval-llm/settings'
+const REVIEWER_CREDENTIAL_ROUTE = '/api/auto-approval-llm/reviewer-credential'
+const HISTORY_ROUTE = '/api/auto-approval-llm/history'
+const LLM_LATENCY_ROUTE = '/api/auto-approval-llm/llm-latency'
+const TOOL_STATS_ROUTE = '/api/auto-approval-llm/tool-stats'
+const TEST_ROUTE = '/api/auto-approval-llm/test'
+const SESSION_MODE_ROUTE = '/api/auto-approval-llm/session-mode'
+const REVIEW_STATUS_ROUTE = '/api/auto-approval-llm/review-status'
+const SESSION_REVIEW_STATUS_ROUTE = '/api/auto-approval-llm/session-review-status'
+const REVEAL_ROUTE = '/api/auto-approval-llm/reveal-approval'
+const STATS_ROUTE = '/api/auto-approval-llm/stats'
 // Provider/model catalog feeds the Issue #5 model-source pickers in the
 // settings card. Named llm-models (not /models) so the retired /models route
 // — whose anti-resurrection anchor pins the exact string in the compiled host —
 // stays gone; these are new live consumers for a new UI, not a resurrection.
-const PROVIDERS_ROUTE = '/_dsh/auto-approval-llm/providers'
-const LLM_MODELS_ROUTE = '/_dsh/auto-approval-llm/llm-models'
-const REASONING_EFFORTS_ROUTE = '/_dsh/auto-approval-llm/reasoning-efforts'
-const LEARNING_STORE_ROUTE = '/_dsh/auto-approval-llm/learning-store'
+const PROVIDERS_ROUTE = '/api/auto-approval-llm/providers'
+const LLM_MODELS_ROUTE = '/api/auto-approval-llm/llm-models'
+const REASONING_EFFORTS_ROUTE = '/api/auto-approval-llm/reasoning-efforts'
+const LEARNING_STORE_ROUTE = '/api/auto-approval-llm/learning-store'
 const SETTINGS_NS = 'auto-approval-llm' as any
 
 // The online-reviewer API key lives in the DSH credential store (env-var
@@ -2195,12 +2196,12 @@ function resolveTrustedHosts(ctx: any): string[] {
 }
 
 export function installFeedbackRoute(ctx: any): void {
-  const webServer = ctx.get('webServer')
-  if (!webServer) return
-  ctx.effect(() => webServer.register({
-    kind: 'exact',
+  registerCarrierRoute(ctx, {
     path: FEEDBACK_ROUTE,
-    handler: async (req: any, res: any) => {
+    methods: ['POST'],
+    requestBody: 'buffered',
+    label: 'dsh-auto-approval-llm: feedback route',
+  }, async (req: any, res: any) => {
       if (req.method !== 'POST') {
         res.setHeader('Allow', 'POST')
         responseJson(res, 405, { ok: false, error: 'method-not-allowed' })
@@ -2261,13 +2262,11 @@ export function installFeedbackRoute(ctx: any): void {
           error: error instanceof Error ? error.message : String(error),
         })
       }
-    },
-  }), 'dsh-auto-approval-llm: feedback route')
+  })
 }
 
 export function installSettingsRoute(ctx: any, settings: any): void {
-  const webServer = ctx.get('webServer')
-  if (!webServer || !settings) return
+  if (!settings) return
 
   // Tolerant snapshot: if a stored value fails schema validation, settings.describe
   // may throw — never let that make GET 400 forever. Fall back to the raw stored
@@ -2300,10 +2299,12 @@ export function installSettingsRoute(ctx: any, settings: any): void {
     }
   }
 
-  ctx.effect(() => webServer.register({
-    kind: 'exact',
+  registerCarrierRoute(ctx, {
     path: SETTINGS_ROUTE,
-    handler: async (req: any, res: any) => {
+    methods: ['GET', 'POST'],
+    requestBody: 'buffered',
+    label: 'dsh-auto-approval-llm: settings route',
+  }, async (req: any, res: any) => {
       // Configuration plane: loopback-same-origin only (privileged domain,
       // mirroring the official settings/credentials fence).
       if (!isTrustedRequest(req, [])) {
@@ -2342,17 +2343,16 @@ export function installSettingsRoute(ctx: any, settings: any): void {
           error: error instanceof Error ? error.message : String(error),
         })
       }
-    },
-  }), 'dsh-auto-approval-llm: settings route')
+  })
 }
 
 export function installReviewerCredentialRoute(ctx: any): void {
-  const webServer = ctx.get('webServer')
-  if (!webServer) return
-  ctx.effect(() => webServer.register({
-    kind: 'exact',
+  registerCarrierRoute(ctx, {
     path: REVIEWER_CREDENTIAL_ROUTE,
-    handler: async (req: any, res: any) => {
+    methods: ['GET', 'POST'],
+    requestBody: 'buffered',
+    label: 'dsh-auto-approval-llm: reviewer credential route',
+  }, async (req: any, res: any) => {
       // Credential plane: loopback-same-origin only (privileged domain).
       if (!isTrustedRequest(req, [])) {
         responseJson(res, 403, { ok: false, error: 'forbidden' })
@@ -2409,7 +2409,7 @@ export function installReviewerCredentialRoute(ctx: any): void {
         }
         const body = await readJsonBody(req)
         if (req.method !== 'POST') {
-          res.setHeader('Allow', 'GET, POST, DELETE')
+          res.setHeader('Allow', 'GET, POST')
           responseJson(res, 405, { ok: false, error: 'method-not-allowed' })
           return
         }
@@ -2427,17 +2427,16 @@ export function installReviewerCredentialRoute(ctx: any): void {
           error: error instanceof Error ? error.message : String(error),
         })
       }
-    },
-  }), 'dsh-auto-approval-llm: reviewer credential route')
+  })
 }
 
 export function installHistoryRoute(ctx: any): void {
-  const webServer = ctx.get('webServer')
-  if (!webServer) return
-  ctx.effect(() => webServer.register({
-    kind: 'exact',
+  registerCarrierRoute(ctx, {
     path: HISTORY_ROUTE,
-    handler: async (req: any, res: any) => {
+    methods: ['GET', 'POST'],
+    requestBody: 'buffered',
+    label: 'dsh-auto-approval-llm: history route',
+  }, async (req: any, res: any) => {
       if (!isTrustedRequest(req, trustedHosts)) {
         responseJson(res, 403, { ok: false, error: 'forbidden' })
         return
@@ -2480,25 +2479,24 @@ export function installHistoryRoute(ctx: any): void {
         responseJson(res, 200, { ok: true, value: { records: [] } })
         return
       }
-      res.setHeader('Allow', 'GET, DELETE')
+      res.setHeader('Allow', 'GET, POST')
       responseJson(res, 405, { ok: false, error: 'method-not-allowed' })
-    },
-  }), 'dsh-auto-approval-llm: history route')
+  })
 }
 
 export function installLatencyRoute(ctx: any): void {
-  const webServer = ctx.get('webServer')
-  if (!webServer) return
-  ctx.effect(() => webServer.register({
-    kind: 'exact',
+  registerCarrierRoute(ctx, {
     path: LLM_LATENCY_ROUTE,
-    handler: async (req: any, res: any) => {
+    methods: ['POST'],
+    requestBody: 'buffered',
+    label: 'dsh-auto-approval-llm: llm-latency route',
+  }, async (req: any, res: any) => {
       if (!isTrustedRequest(req, trustedHosts)) {
         responseJson(res, 403, { ok: false, error: 'forbidden' })
         return
       }
       if (req.method !== 'DELETE') {
-        res.setHeader('Allow', 'DELETE')
+        res.setHeader('Allow', 'POST')
         responseJson(res, 405, { ok: false, error: 'method-not-allowed' })
         return
       }
@@ -2512,17 +2510,16 @@ export function installLatencyRoute(ctx: any): void {
         return
       }
       responseJson(res, 200, { ok: true, value: { records: [] } })
-    },
-  }), 'dsh-auto-approval-llm: llm-latency route')
+  })
 }
 
 export function installToolStatsRoute(ctx: any): void {
-  const webServer = ctx.get('webServer')
-  if (!webServer) return
-  ctx.effect(() => webServer.register({
-    kind: 'exact',
+  registerCarrierRoute(ctx, {
     path: TOOL_STATS_ROUTE,
-    handler: async (req: any, res: any) => {
+    methods: ['GET'],
+    requestBody: 'buffered',
+    label: 'dsh-auto-approval-llm: tool-stats route',
+  }, async (req: any, res: any) => {
       if (!isTrustedRequest(req, trustedHosts)) {
         responseJson(res, 403, { ok: false, error: 'forbidden' })
         return
@@ -2537,17 +2534,16 @@ export function installToolStatsRoute(ctx: any): void {
       // chips are advisory candidates — the actual list lives in the settings
       // value and is edited/saved entirely client-side.
       responseJson(res, 200, { ok: true, value: { stats: aggregateToolStats(approvalHistory) } })
-    },
-  }), 'dsh-auto-approval-llm: tool-stats route')
+  })
 }
 
 export function installLearningStoreRoute(ctx: any, revoke: (key: string) => Promise<boolean>): void {
-  const webServer = ctx.get('webServer')
-  if (!webServer) return
-  ctx.effect(() => webServer.register({
-    kind: 'exact',
+  registerCarrierRoute(ctx, {
     path: LEARNING_STORE_ROUTE,
-    handler: async (req: any, res: any) => {
+    methods: ['GET', 'POST'],
+    requestBody: 'buffered',
+    label: 'dsh-auto-approval-llm: learning-store route',
+  }, async (req: any, res: any) => {
       // The learning store is a privileged surface: read-only list + single
       // revoke. Same-origin loopback/LAN-whitelist gate as every other route.
       if (!isTrustedRequest(req, trustedHosts)) {
@@ -2607,19 +2603,18 @@ export function installLearningStoreRoute(ctx: any, revoke: (key: string) => Pro
         }
         return
       }
-      res.setHeader('Allow', 'GET, DELETE')
+      res.setHeader('Allow', 'GET, POST')
       responseJson(res, 405, { ok: false, error: 'method-not-allowed' })
-    },
-  }), 'dsh-auto-approval-llm: learning-store route')
+  })
 }
 
 export function installReviewStatusRoute(ctx: any): void {
-  const webServer = ctx.get('webServer')
-  if (!webServer) return
-  ctx.effect(() => webServer.register({
-    kind: 'exact',
+  registerCarrierRoute(ctx, {
     path: REVIEW_STATUS_ROUTE,
-    handler: async (req: any, res: any) => {
+    methods: ['GET'],
+    requestBody: 'buffered',
+    label: 'dsh-auto-approval-llm: review status route',
+  }, async (req: any, res: any) => {
       if (!isTrustedRequest(req, trustedHosts)) {
         responseJson(res, 403, { ok: false, error: 'forbidden' })
         return
@@ -2641,8 +2636,7 @@ export function installReviewStatusRoute(ctx: any): void {
       }
       const status = callId ? reviewStates.get(callId) : undefined
       responseJson(res, 200, status ? { ok: true, value: withRemaining(status) } : { ok: false, error: 'not-found' })
-    },
-  }), 'dsh-auto-approval-llm: review status route')
+  })
 }
 
 /** Clamp a requested hold to the server's own ceiling; 0 disables the hold. */
@@ -2703,12 +2697,12 @@ export function withRemaining(status: ReviewStatus): ReviewStatus & { remainingM
  * client's only way to show the countdown is this route.
  */
 export function installSessionReviewStatusRoute(ctx: any): void {
-  const webServer = ctx.get('webServer')
-  if (!webServer) return
-  ctx.effect(() => webServer.register({
-    kind: 'exact',
+  registerCarrierRoute(ctx, {
     path: SESSION_REVIEW_STATUS_ROUTE,
-    handler: async (req: any, res: any) => {
+    methods: ['GET'],
+    requestBody: 'buffered',
+    label: 'dsh-auto-approval-llm: session review status route',
+  }, async (req: any, res: any) => {
       if (!isTrustedRequest(req, trustedHosts)) {
         responseJson(res, 403, { ok: false, error: 'forbidden' })
         return
@@ -2737,8 +2731,7 @@ export function installSessionReviewStatusRoute(ctx: any): void {
         reviews.push({ ...withRemaining(status), callId })
       }
       responseJson(res, 200, { ok: true, value: { reviews } })
-    },
-  }), 'dsh-auto-approval-llm: session review status route')
+  })
 }
 
 /**
@@ -2760,12 +2753,12 @@ export function sessionReviewFingerprint(sessionId: string): string {
  * than inventing a panel.
  */
 export function installRevealRoute(ctx: any): void {
-  const webServer = ctx.get('webServer')
-  if (!webServer) return
-  ctx.effect(() => webServer.register({
-    kind: 'exact',
+  registerCarrierRoute(ctx, {
     path: REVEAL_ROUTE,
-    handler: (req: any, res: any) => {
+    methods: ['POST'],
+    requestBody: 'buffered',
+    label: 'dsh-auto-approval-llm: reveal route',
+  }, (req: any, res: any) => {
       if (!isTrustedRequest(req, trustedHosts)) {
         responseJson(res, 403, { ok: false, error: 'forbidden' })
         return
@@ -2779,17 +2772,16 @@ export function installRevealRoute(ctx: any): void {
       const release = callId ? pendingPanelReleases.get(callId) : undefined
       if (release) release()
       responseJson(res, 200, { ok: true, value: { revealed: release !== undefined } })
-    },
-  }), 'dsh-auto-approval-llm: reveal route')
+  })
 }
 
 function installTestRoute(ctx: any, llm: any, endpointUrlFor: () => string = () => ''): void {
-  const webServer = ctx.get('webServer')
-  if (!webServer) return
-  ctx.effect(() => webServer.register({
-    kind: 'exact',
+  registerCarrierRoute(ctx, {
     path: TEST_ROUTE,
-    handler: async (req: any, res: any) => {
+    methods: ['POST'],
+    requestBody: 'buffered',
+    label: 'dsh-auto-approval-llm: test route',
+  }, async (req: any, res: any) => {
       // The online branch performs a server-side HTTP request driven by
       // request-body settings, so it must sit on the same trust plane as the
       // settings/credential routes: loopback-same-origin only. Otherwise any
@@ -2912,8 +2904,7 @@ function installTestRoute(ctx: any, llm: any, endpointUrlFor: () => string = () 
           error: error instanceof Error ? error.message : String(error),
         })
       }
-    },
-  }), 'dsh-auto-approval-llm: test route')
+  })
 }
 
 // Provider/model catalog for the Issue #5 model-source pickers. Read-only
@@ -2921,12 +2912,12 @@ function installTestRoute(ctx: any, llm: any, endpointUrlFor: () => string = () 
 // no adapter internals cross the wire (dsh-llm already detaches these). Sits
 // on the same loopback-only plane as the settings card that consumes it.
 export function installLlmCatalogRoutes(ctx: any, llm: any): void {
-  const webServer = ctx.get('webServer')
-  if (!webServer) return
-  ctx.effect(() => webServer.register({
-    kind: 'exact',
+  registerCarrierRoute(ctx, {
     path: PROVIDERS_ROUTE,
-    handler: async (req: any, res: any) => {
+    methods: ['GET'],
+    requestBody: 'buffered',
+    label: 'dsh-auto-approval-llm: providers route',
+  }, async (req: any, res: any) => {
       if (!isTrustedRequest(req, [])) {
         responseJson(res, 403, { ok: false, error: 'forbidden' })
         return
@@ -2945,12 +2936,13 @@ export function installLlmCatalogRoutes(ctx: any, llm: any): void {
           error: error instanceof Error ? error.message : String(error),
         })
       }
-    },
-  }), 'dsh-auto-approval-llm: providers route')
-  ctx.effect(() => webServer.register({
-    kind: 'exact',
+  })
+  registerCarrierRoute(ctx, {
     path: LLM_MODELS_ROUTE,
-    handler: async (req: any, res: any) => {
+    methods: ['GET'],
+    requestBody: 'buffered',
+    label: 'dsh-auto-approval-llm: llm-models route',
+  }, async (req: any, res: any) => {
       if (!isTrustedRequest(req, [])) {
         responseJson(res, 403, { ok: false, error: 'forbidden' })
         return
@@ -2980,12 +2972,13 @@ export function installLlmCatalogRoutes(ctx: any, llm: any): void {
           error: error instanceof Error ? error.message : String(error),
         })
       }
-    },
-  }), 'dsh-auto-approval-llm: llm-models route')
-  ctx.effect(() => webServer.register({
-    kind: 'exact',
+  })
+  registerCarrierRoute(ctx, {
     path: REASONING_EFFORTS_ROUTE,
-    handler: async (req: any, res: any) => {
+    methods: ['GET'],
+    requestBody: 'buffered',
+    label: 'dsh-auto-approval-llm: reasoning-efforts route',
+  }, async (req: any, res: any) => {
       if (!isTrustedRequest(req, [])) {
         responseJson(res, 403, { ok: false, error: 'forbidden' })
         return
@@ -3020,22 +3013,21 @@ export function installLlmCatalogRoutes(ctx: any, llm: any): void {
         // an empty effort list (default-only picker) beats a hard error here.
         responseJson(res, 200, { ok: true, value: { efforts: [], defaultEffort: null } })
       }
-    },
-  }), 'dsh-auto-approval-llm: reasoning-efforts route')
+  })
 }
 
 export function installSessionModeRoute(ctx: any): void {
-  const webServer = ctx.get('webServer')
-  if (!webServer) return
   // Bounded once-per-id note for "this process has no live agent for that id".
   // The status code no longer carries that fact — it is a normal answer — so
   // keep it diagnosable behind the debug switch instead of losing it entirely.
   const unknownSessionLogged = new Set<string>()
   const UNKNOWN_SESSION_LOG_CAP = 32
-  ctx.effect(() => webServer.register({
-    kind: 'exact',
+  registerCarrierRoute(ctx, {
     path: SESSION_MODE_ROUTE,
-    handler: async (req: any, res: any) => {
+    methods: ['GET'],
+    requestBody: 'buffered',
+    label: 'dsh-auto-approval-llm: session mode route',
+  }, async (req: any, res: any) => {
       if (!isTrustedRequest(req, trustedHosts)) {
         responseJson(res, 403, { ok: false, error: 'forbidden' })
         return
@@ -3079,8 +3071,7 @@ export function installSessionModeRoute(ctx: any): void {
       const raw = rawPresetOf(permissionPresets, agent.session)
       const mode = raw !== undefined && gateNames.includes(raw) ? GATED_PRESET : (raw ?? null)
       responseJson(res, 200, { ok: true, value: { mode } })
-    },
-  }), 'dsh-auto-approval-llm: session mode route')
+  })
 }
 
 /**
@@ -5799,12 +5790,12 @@ export function apply(ctx: Context, rawConfig: Config): void {
 
   // ── /stats (composer status chip data) ─────────────────────────────────
   function installStatsRoute(ctx: any): void {
-    const webServer = ctx.get('webServer')
-    if (!webServer) return
-    ctx.effect(() => webServer.register({
-      kind: 'exact',
+    registerCarrierRoute(ctx, {
       path: STATS_ROUTE,
-      handler: async (req: any, res: any) => {
+      methods: ['GET'],
+      requestBody: 'buffered',
+      label: 'dsh-auto-approval-llm: stats route',
+    }, async (req: any, res: any) => {
         if (!isTrustedRequest(req, trustedHosts)) {
           responseJson(res, 403, { ok: false, error: 'forbidden' })
           return
@@ -5855,8 +5846,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
             },
           },
         })
-      },
-    }), 'dsh-auto-approval-llm: stats route')
+    })
   }
 
   // ── /approval-mode + /approval-reset + /approval-reset-all (optional) ──

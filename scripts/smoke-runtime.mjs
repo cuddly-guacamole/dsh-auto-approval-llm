@@ -22,7 +22,7 @@ base.search = ''
 base.hash = ''
 
 const HEADERS = { Host: `${base.hostname}${base.port ? `:${base.port}` : ''}` }
-const ROUTES = '/_dsh/auto-approval-llm'
+const ROUTES = '/api/auto-approval-llm'
 
 async function probe(path, { expect, headers = {} } = {}) {
   const res = await fetch(`${base.origin}${path}`, { headers: { ...HEADERS, ...headers } })

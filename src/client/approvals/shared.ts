@@ -5,10 +5,10 @@
 // (review-status/feedback) and never on any dsh client protocol type —
 // duck-typed structural interfaces only.
 
-export const FEEDBACK_ROUTE = '/_dsh/auto-approval-llm/feedback'
-export const REVIEW_STATUS_ROUTE = '/_dsh/auto-approval-llm/review-status'
-export const SESSION_REVIEW_STATUS_ROUTE = '/_dsh/auto-approval-llm/session-review-status'
-export const REVEAL_ROUTE = '/_dsh/auto-approval-llm/reveal-approval'
+export const FEEDBACK_ROUTE = '/api/auto-approval-llm/feedback'
+export const REVIEW_STATUS_ROUTE = '/api/auto-approval-llm/review-status'
+export const SESSION_REVIEW_STATUS_ROUTE = '/api/auto-approval-llm/session-review-status'
+export const REVEAL_ROUTE = '/api/auto-approval-llm/reveal-approval'
 
 /**
  * How long a review-status request may be held open before the host answers

@@ -28,7 +28,7 @@ const REQUIRED_SERVICES = [
   "commands",
 ];
 
-const ROUTE_PREFIX = "/_dsh/auto-approval-llm";
+const ROUTE_PREFIX = "/api/auto-approval-llm";
 const SETTINGS_ROUTE = `${ROUTE_PREFIX}/settings`;
 
 /** Routes apply() registers whenever the web carrier is present. */

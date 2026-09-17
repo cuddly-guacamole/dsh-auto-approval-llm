@@ -20,8 +20,8 @@ import { runAuthChecks } from './verify-auth.mjs'
 
 const HOST = '127.0.0.1'
 const PORT = 3080
-const SETTINGS_ROUTE = '/_dsh/auto-approval-llm/settings'
-const CREDENTIAL_ROUTE = '/_dsh/auto-approval-llm/reviewer-credential'
+const SETTINGS_ROUTE = '/api/auto-approval-llm/settings'
+const CREDENTIAL_ROUTE = '/api/auto-approval-llm/reviewer-credential'
 const here = dirname(fileURLToPath(import.meta.url))
 const MOCK_REVIEWER = join(here, 'mock-reviewer.mjs')
 

@@ -22,8 +22,8 @@ import { join } from "node:path";
 import { apply } from "../../lib/index.js";
 import { setRuntimePathsForTests } from "../../lib/auto/runtime-paths.js";
 
-export const FEEDBACK_ROUTE = "/_dsh/auto-approval-llm/feedback";
-export const REVIEW_STATUS_ROUTE = "/_dsh/auto-approval-llm/review-status";
+export const FEEDBACK_ROUTE = "/api/auto-approval-llm/feedback";
+export const REVIEW_STATUS_ROUTE = "/api/auto-approval-llm/review-status";
 
 /** Config keys that resolveConfig consumes or that gate the driven branches. */
 export function baseConfig(overrides = {}) {
