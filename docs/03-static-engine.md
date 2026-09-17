@@ -16,7 +16,7 @@ host 编排在 `src/index.ts`，真正「长脑子」的静态规则引擎在 `s
 | `classifier.ts` <span class="lnum">classifier.ts#</span> | 100 | 预分类提示词、参数脱敏、严格响应解析 |
 | `dsh-classifier.ts` <span class="lnum">dsh-classifier.ts#</span> | 140 | 复用 `ctx.llm` 做低 token 分类请求（temperature 0） |
 | `decision.ts` <span class="lnum">decision.ts#</span> | 913 | 纯决策函数：评审解析、人机竞速、来源标注、熔断状态机、静态名单 |
-| `trust.ts` <span class="lnum">trust.ts#</span> | 344 | web 路由信任平面（loopback/LAN 边界、Host 伪造防护、在线端点 URL 校验） |
+| `trust.ts` <span class="lnum">trust.ts#</span> | 307 | web 路由信任平面（loopback/LAN 边界、Host 伪造防护、在线端点 URL 校验） |
 | `artifacts.ts` <span class="lnum">artifacts.ts#</span> | 140 | 本会话成功创建路径的内存出处登记（删除豁免依据） |
 | `audit.ts` <span class="lnum">audit.ts#</span> | 147 | append-only 审批审计（清空留墓碑、5MiB 裁剪；审计路径可被测试接缝重定向） |
 | `review-mode.ts` <span class="lnum">review-mode.ts#</span> | 51 | 每会话评审模式持久化快照 |

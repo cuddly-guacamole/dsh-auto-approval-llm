@@ -25,7 +25,7 @@ import z from '@deepseek-ai/schemastery'
 import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { appendFileSync, existsSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { isIP } from 'node:net'
-import { networkInterfaces, homedir } from 'node:os'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { methodOf, registerCarrierFetchRoute } from './auto/carrier-route.js'
 import { ArtifactRegistry } from './auto/artifacts.js'
@@ -102,10 +102,10 @@ import {
 } from './auto/preset-migration.js'
 
 export const name = 'dsh-auto-approval-llm'
-// `webServer` is intentionally absent from this list: a carrier that never
-// provides it (Electron desktop) must still start the plugin. apply() binds the
-// route block to the carrier with ctx.inject(['webServer'], ...) instead, so the
-// routes appear when the service arrives and stay absent otherwise.
+// No web-server service is listed here: a carrier that never provides one
+// (Electron desktop) must still start the plugin. apply() binds the route block
+// to the carrier's Fetch registry instead, so the routes appear when that
+// registry arrives and stay absent otherwise.
 export const inject = ['approval', 'permissionPresets', 'sessions', 'tools', 'llm', 'agents', 'settings', 'commands']
 
 export interface Config {
@@ -2185,7 +2185,12 @@ async function readJson(request: Request, maxBytes = 64 * 1024): Promise<any> {
 // functional: the panel close stays the client's protocol-level respond, and
 // a follow state that is not released early is swept by its own TTL.
 
-/** Resolve the trusted Host authorities: webRuntime service → argv → LAN IPv4. */
+/**
+ * Resolve the trusted Host authorities from the web runtime service, then the
+ * `--trusted-host` argv values. The web runtime already folds the bind-bound LAN
+ * literals into its snapshot; when no source is present the plane stays
+ * loopback-only (fail-closed) instead of probing a web-server service.
+ */
 function resolveTrustedHosts(ctx: any): string[] {
   const webRuntime = ctx?.get?.('webRuntime') as { trustedHosts?: string[] } | undefined
   const fromRuntime = webRuntime?.trustedHosts
@@ -2197,18 +2202,7 @@ function resolveTrustedHosts(ctx: any): string[] {
     if (arg === '--trusted-host' && args[index + 1] !== undefined) argvTrusted.push(args[index + 1])
     else if (arg.startsWith('--trusted-host=')) argvTrusted.push(arg.slice('--trusted-host='.length))
   }
-  if (argvTrusted.length > 0) return argvTrusted
-  const bindHost = (ctx?.get?.('webServer') as { host?: string } | undefined)?.host
-  if (bindHost === '0.0.0.0') {
-    const lan: string[] = []
-    for (const ifaces of Object.values(networkInterfaces())) {
-      for (const iface of ifaces ?? []) {
-        if (iface.family === 'IPv4' && !iface.internal) lan.push(iface.address)
-      }
-    }
-    return lan
-  }
-  return []
+  return argvTrusted
 }
 
 export function installFeedbackRoute(ctx: any): void {
@@ -4291,13 +4285,10 @@ export function apply(ctx: Context, rawConfig: Config): void {
 
   watchNotices(anyCtx, () => config, () => gateNames)
   trustedHosts = resolveTrustedHosts(anyCtx)
-  // Route registration lives in its own fiber keyed on `webServer`: a carrier
-  // without that service leaves the routes unregistered while the rest of the
-  // plugin keeps running, and a carrier that provides it later still gets them
-  // on arrival. Every installer keeps its own `ctx.get('webServer')` guard.
-  // Routes bind themselves to the carrier inside registerCarrierFetchRoute(): the
-  // block no longer waits on `webServer`, so a carrier without it still gets the
-  // routes once its Fetch registry mounts.
+  // Route registration lives on the carrier's Fetch registry: a carrier without
+  // it leaves the routes unregistered while the rest of the plugin keeps running,
+  // and a carrier that mounts the registry later still gets them on arrival.
+  // Every installer binds itself inside registerCarrierFetchRoute().
   installFeedbackRoute(anyCtx)
   installSettingsRoute(anyCtx, settings)
   installReviewerCredentialRoute(anyCtx)

@@ -2,7 +2,7 @@
  * Contract: the plugin boots without a web server and binds its routes to the
  * carrier-neutral Fetch registry.
  *
- * The desktop carrier disables the only `webServer` provider, so a hard inject
+ * The desktop carrier disables the only web-server provider, so a hard inject
  * entry would hold the whole fiber in PENDING there. The service is not
  * required, and each route binds itself to `connection.fetch` — waiting for the
  * registry rather than probing once, because composition rows mount in
@@ -59,9 +59,9 @@ function carrierStub() {
   return { service, specs };
 }
 
-function installerContext({ webServer, settings }) {
+function installerContext({ settings }) {
   return {
-    get: (name) => (name === "webServer" ? webServer : name === "settings" ? settings : undefined),
+    get: (name) => (name === "settings" ? settings : undefined),
     effect: (fn) => fn(),
   };
 }
@@ -123,11 +123,18 @@ test("the settings route needs both the carrier and the settings service", () =>
   assert.deepEqual([...withBoth.specs.keys()], [SETTINGS_ROUTE]);
 
   const noCarrier = carrierStub();
-  const serverOnly = installerContext({ webServer: undefined, settings: { writable: true } });
+  const queued = [];
+  const serverOnly = {
+    get: (name) => (name === "settings" ? { writable: true } : undefined),
+    effect: (fn) => fn(),
+    inject: (deps) => { queued.push(deps); return { dispose: () => {} }; },
+  };
   installSettingsRoute(serverOnly, { writable: true });
+  assert.deepEqual(queued, [["connection"]], "no carrier: the settings route waits for the connection service");
   assert.equal(noCarrier.specs.size, 0, "no carrier: the settings route must not register");
 
   const noSettings = carrierStub();
-  installSettingsRoute(installerContext({ webServer: undefined, settings: undefined }), undefined);
+  const carrierOnlyCtx = { get: (name) => (name === "connection" ? noSettings.service : undefined), effect: (fn) => fn() };
+  installSettingsRoute(carrierOnlyCtx, undefined);
   assert.equal(noSettings.specs.size, 0, "no settings service: the settings route must not register");
 });

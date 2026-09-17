@@ -1,6 +1,6 @@
 # 15 · 质量保障体系
 
-> *1769 tests · runtime proofs*
+> *1761 tests · runtime proofs*
 
 ## 15.1　契约测试覆盖地图（按主题归纳）
 
@@ -19,7 +19,7 @@
 | 探针 | probe.test.mjs 12 例：temp-root/工作区外拒绝、recent-creates 上限与去旧 |
 | 重试 | review retry 族：瞬时故障判定、预算滚动、Retry-After、认证错误不重发 |
 | 脱敏 | sanitizeClassifierText/Arguments/ReviewReason（AWS/PEM/sk-/Bearer）；description 在注入边界脱敏 |
-| 信任/传输 | isTrustedRequest（loopback Host 要真回路对端、LAN 白名单、空白名单=特权、cross-site/cross-origin 拒）；validateReviewerBaseUrl 明文 http 回环栅栏 |
+| 信任/传输 | isTrustedFetchRequest（回环权威接受、非 HTTP scheme 视作载波回环、LAN 白名单、空白名单=特权、cross-site/cross-origin 拒）；validateReviewerBaseUrl 明文 http 回环栅栏 |
 | 并发/一致性 | createKeyedMutex（同键原子无丢失更新/异键并发/异常保链）；exports↔产物一致性 |
 | 摩擦报告/审计渲染 | friction-report.test.mjs：翻案方向（ESCALATE 与 classifier 判定均不可翻案）、空转护栏（无带方向的 LLM 判定 → `VACUOUS`，纯 classifier 窗口不得判通过）、窗口按**最后活动时间**取最近 N 个会话（长命会话不被挤掉）、撤销按时间入窗、失败码直方图（`attempts[].code`，非数组不抛）、参数校验与退出码映射（PASS 0 / FAIL 1 / VACUOUS 2 / INSUFFICIENT 3）；audit-query-format.test.mjs：decision 行形状逐字不变、非决策行按 type 分派并保留真实载荷（`files`/`plane`+`count`+`errors`/`key`/`allows` 等）、`at` 缺失降级为 `?`、参数校验 |
 | 权限变更观测 | permission-change.test.mjs：三种权限平面事件读成 `{scope,to}`（`permission/preset` / `sandbox/mode` / `approval/policy`，含 `never`↔`ask` 双向）、畸形与邻近事件不误判、被拒 decision 的 id 指针（最新优先/上限/仅 rejected）、装配锚钉「每一处 `permission-change` 都落在 `appendAuditLine(` 之后且不在 `pushHistory(` 内」 |
@@ -29,7 +29,7 @@
 | 授权证据窗口与人工出手率 | trusted-intent-window.test.mjs：4 条证据窗口的溢出计数（slot cap 后重复候选=去重不计、独有候选=溢出计、inbox 先入、逐文本截断与预算的交互、经超长问题答案触达预算的真实路径、被拒文本重复出现计双）、拒因 note 的零/非零两分支与措辞纪律（无 retry/approve 字面、无 dangling 值）、deny 落点结构锚、trusted-intents 事件量化 `overflowed` 标志进去重签名、audit-query 对该字段的渲染与缺字段静默 / client-human-gate.test.mjs：人工来源名单与 `scripts/friction-report.mjs` **运行时 import 逐项相等**、空窗口判 vacuous 不作零声称、缺 source/非字符串 source 只进分母、round 边界、中英三键齐备且文案带窗口限定、bundle 装配锚（派生调用 + 三个浮层状态键） |
 | 循环防护 | loop-guard.test.mjs：循环键稳定（对象键序无关、工具名入键、缺参数回退工具级键）、严格连续状态机（`a→a→b→a` 永不触发、count===threshold 恰触发一次、fire-and-reset 人工放行不买豁免）、有界 64（最近最少更新者先淘汰：重触的键存活、被淘汰的是次旧键）、阈值钳制（1→2 带 warned、非数值=关、floor 在钳制前）/ loop-guard-wiring.test.mjs：**恰四个**自动放行站点被门控（src+编译产物双计）、allowlist 与 rule-allow 通道负向切片零命中、跨面标记读位于 deny 终局之后且先于 static allow、one-shot 读即删、pinned 形状恰三处且先于 `learnAttempt`（无 takeover handle、无 learnable、reject 钉死）、门函数体无 pushHistory/无熔断、disposal 与 sweep 有界、audit-query 渲染 `consecutive`/`threshold` |
 
-195 个测试文件，合计 **1769 例**（node --test 全绿基线）。
+195 个测试文件，合计 **1761 例**（node --test 全绿基线）。
 
 ## 15.2　验收命令与运行时证据
 
@@ -48,7 +48,7 @@ npm run gate   # 清构建产物 → 类型 → 构建 → 全量测试 → 数�
 ```bash
 node_modules/.bin/tsc -p tsconfig.json   # 类型（policy/shell/paths 不再 @ts-nocheck）
 node_modules/.bin/tsdown                  # 客户端 bundle
-node --test "tests/**/*.test.mjs"        # 1769/1769 全绿
+node --test "tests/**/*.test.mjs"        # 1761/1761 全绿
 ```
 
 :::

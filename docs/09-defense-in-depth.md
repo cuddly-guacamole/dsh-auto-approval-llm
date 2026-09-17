@@ -16,7 +16,7 @@
 
 **L7 诚实来源**：决议注明谁定的（timeout/llm/auto/human/abort）；advisory ≠ 接管；cancelled 永不假装人决定过。
 
-**L8 传输与密钥**：`isTrustedRequest`：Host 头可伪造 → 回环 Host 强制真实对端也回环；白名单 Host 才准入；`sec-fetch-site:cross-site` 拒、Origin 须同源。在线评审密钥存 DSH 凭据库、按次解析、前端只显「已配置」；明文 http 仅限回环。
+**L8 传输与密钥**：`isTrustedFetchRequest`：载波层已先行做主机／Origin／会话校验，插件再按 Host 权威（缺失时退回请求 URL）判定——回环权威准入，非 HTTP scheme 视作载波回环，白名单 Host 才准入；`sec-fetch-site:cross-site` 拒、Origin 须同源。在线评审密钥存 DSH 凭据库、按次解析、前端只显「已配置」；明文 http 仅限回环。
 
 **L9 可审计**：history + append-only audit（清空留墓碑）；审计存普通文件，**主模型无法把审计读回来当注入通道**；调试时序 `approval-debug.jsonl` 可区分「LLM 太慢」与「误标超时」。
 :::

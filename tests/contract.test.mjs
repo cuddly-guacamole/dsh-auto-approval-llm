@@ -28,7 +28,7 @@ import { hardDenyReason, assessTool } from '../lib/auto/policy.js'
 import { isCriticalPath } from '../lib/auto/paths.js'
 import { probeTargetFacts } from '../lib/auto/probe.js'
 import { ArtifactRegistry } from '../lib/auto/artifacts.js'
-import { isTrustedRequest, isLoopbackHostname, isLoopbackIp, isPublicIpAddress, isPublicIpv4, isPublicIpv6, resolvePublicReviewerTarget, reviewerProbeTargetAllowed, validateReviewerBaseUrl } from '../lib/auto/trust.js'
+import { isLoopbackHostname, isLoopbackIp, isPublicIpAddress, isPublicIpv4, isPublicIpv6, resolvePublicReviewerTarget, reviewerProbeTargetAllowed, validateReviewerBaseUrl } from '../lib/auto/trust.js'
 import { parseClassifierDecision } from '../lib/auto/classifier.js'
 import { MODEL_REASON_MAX_CHARS } from '../lib/auto/constants.js'
 import { RISK_NAME_PATTERN, RISK_REASON_PATTERN } from '../lib/auto/risk-tokens.js'
@@ -1297,55 +1297,6 @@ test('parseRulesText: common anchored patterns remain accepted (no over-block)',
   assert.equal(parseRulesText('(ab){1,3} | deny | arguments').errors.length, 0, 'bounded closed-count groups stay authorable')
 })
 
-// ── 7th audit round — A1: LAN-bind loopback-source hardening ───────────────
-test('isTrustedRequest: loopback Host demands an actually-loopback peer (A1)', () => {
-  const socket = (ip) => ({ socket: { remoteAddress: ip } })
-  // Loopback peer + loopback Host -> trusted.
-  assert.equal(isTrustedRequest({ headers: { host: 'localhost:8080' }, ...socket('127.0.0.1') }, []), true)
-  assert.equal(isTrustedRequest({ headers: { host: '127.0.0.1' }, ...socket('::ffff:127.0.0.1') }, []), true)
-  // A peer spoofing `Host: localhost` from a non-loopback source must be
-  // rejected even when the LAN whitelist is non-empty (the A1 hole).
-  assert.equal(isTrustedRequest({ headers: { host: 'localhost:8080' }, ...socket('192.168.1.50') }, ['192.168.1.10']), false)
-  assert.equal(isTrustedRequest({ headers: { host: '127.0.0.1' }, ...socket('10.0.0.5') }, ['10.0.0.5']), false)
-  assert.equal(isTrustedRequest({ headers: { host: 'localhost' }, ...socket('192.168.1.9') }, []), false)
-})
-
-test('isTrustedRequest: LAN peer addressing by a whitelisted LAN IP stays trusted (A1)', () => {
-  // Host = a whitelisted LAN IP (non-loopback) from any LAN peer -> trusted.
-  assert.equal(isTrustedRequest({ headers: { host: '192.168.1.50:3000' }, socket: { remoteAddress: '192.168.1.60' } }, ['192.168.1.50']), true)
-  // Just-another-LAN-peer with Host=localhost must not be elevated to loopback.
-  assert.equal(isTrustedRequest({ headers: { host: 'localhost' }, socket: { remoteAddress: '192.168.1.60' } }, ['192.168.1.50']), false)
-  // Non-whitelisted non-loopback Host is always rejected.
-  assert.equal(isTrustedRequest({ headers: { host: '10.0.0.99' }, socket: { remoteAddress: '127.0.0.1' } }, ['192.168.1.50']), false)
-})
-
-test('isTrustedRequest: privileged plane (empty whitelist) stays loopback-only', () => {
-  assert.equal(isTrustedRequest({ headers: { host: 'localhost' }, socket: { remoteAddress: '127.0.0.1' } }, []), true)
-  assert.equal(isTrustedRequest({ headers: { host: 'localhost' }, socket: { remoteAddress: '192.168.1.9' } }, []), false)
-  assert.equal(isTrustedRequest({ headers: { host: '192.168.1.9' }, socket: { remoteAddress: '127.0.0.1' } }, []), false)
-})
-
-test('isTrustedRequest: cross-site and Origin mismatch are rejected', () => {
-  const loop = { headers: { host: 'localhost', ...{ 'sec-fetch-site': 'cross-site' } }, socket: { remoteAddress: '127.0.0.1' } }
-  assert.equal(isTrustedRequest(loop, []), false)
-  assert.equal(isTrustedRequest({ headers: { host: 'localhost', origin: 'http://evil.com', 'sec-fetch-site': 'same-site' }, socket: { remoteAddress: '127.0.0.1' } }, []), false)
-  assert.equal(isTrustedRequest({ headers: { host: 'localhost', origin: 'http://localhost' }, socket: { remoteAddress: '127.0.0.1' } }, []), true)
-})
-
-test('isTrustedRequest: IPv6 loopback combinations (M2, 2026-09-03 audit)', () => {
-  // Bracket and bare forms of the IPv6 loopback Host, with loopback peers.
-  assert.equal(isTrustedRequest({ headers: { host: '[::1]:8080' }, socket: { remoteAddress: '::1' } }, []), true, '[::1]:8080 + ::1 peer')
-  assert.equal(isTrustedRequest({ headers: { host: '[::1]' }, socket: { remoteAddress: '::1' } }, []), true, 'bracketed [::1] + ::1 peer')
-  assert.equal(isTrustedRequest({ headers: { host: '[::1]:8080' }, socket: { remoteAddress: '::ffff:127.0.0.1' } }, []), true, 'IPv4-mapped loopback peer')
-  // A BARE `::1` Host is not a valid URL authority (new URL throws), so the
-  // request is rejected before any whitelist logic — fail-closed, and HTTP
-  // clients always bracket IPv6 Host headers anyway.
-  assert.equal(isTrustedRequest({ headers: { host: '::1' }, socket: { remoteAddress: '::1' } }, []), false, 'bare ::1 Host is unparseable -> rejected')
-  // Loopback Host from a non-loopback peer must stay rejected.
-  assert.equal(isTrustedRequest({ headers: { host: '[::1]:8080' }, socket: { remoteAddress: '192.168.1.9' } }, []), false, 'IPv6 loopback Host, LAN peer -> rejected')
-  assert.equal(isTrustedRequest({ headers: { host: '[::1]:8080' }, socket: { remoteAddress: '::ffff:192.168.1.9' } }, []), false, 'IPv4-mapped LAN peer -> rejected')
-})
-
 test('isLoopbackHostname: IPv4-mapped IPv6 loopback is a loopback authority', () => {
   // `new URL('http://[::ffff:127.0.0.1]')` compresses the dotted tail to hex,
   // so this is the spelling a parsed Host actually presents.
@@ -1370,34 +1321,6 @@ test('isLoopbackHostname: IPv4-mapped IPv6 loopback is a loopback authority', ()
   assert.equal(isLoopbackHostname('[::ffff:8f00:1]'), false, 'mapped hex outside 127/8')
   assert.equal(isLoopbackHostname('::ffff:127.0.0.1.evil.com'), false, 'suffix past the mapped address')
   assert.equal(isLoopbackHostname('evil.com'), false)
-})
-
-test('isTrustedRequest: an IPv4-mapped IPv6 loopback Host is trusted on the privileged plane', () => {
-  // Regression: the Host authority a local client sends as [::ffff:127.0.0.1]
-  // reaches the predicate as [::ffff:7f00:1]; judging it non-loopback made
-  // every plugin route answer 403 to a genuine local caller.
-  const host = new URL('http://[::ffff:127.0.0.1]:3080').host
-  assert.equal(host, '[::ffff:7f00:1]:3080', 'pin the normalization this fix depends on')
-  assert.equal(isTrustedRequest({ headers: { host }, socket: { remoteAddress: '::ffff:127.0.0.1' } }, []), true, 'mapped Host + mapped peer -> trusted')
-  assert.equal(isTrustedRequest({ headers: { host }, socket: { remoteAddress: '::1' } }, []), true, 'mapped Host + ::1 peer -> trusted')
-  assert.equal(isTrustedRequest({ headers: { host, origin: `http://${host}` }, socket: { remoteAddress: '127.0.0.1' } }, []), true, 'same-origin request stays trusted')
-  // The loopback-peer demand still applies to this spelling.
-  assert.equal(isTrustedRequest({ headers: { host }, socket: { remoteAddress: '192.168.1.9' } }, []), false, 'mapped loopback Host from a LAN peer -> rejected')
-  assert.equal(isTrustedRequest({ headers: { host, origin: 'http://evil.com' }, socket: { remoteAddress: '::1' } }, []), false, 'cross-origin still rejected')
-})
-
-test('isTrustedRequest: Origin edge cases fail closed (M3, 2026-09-03 audit)', () => {
-  assert.equal(isTrustedRequest({ headers: { host: 'localhost:8080', origin: 'http://localhost:9999' }, socket: { remoteAddress: '127.0.0.1' } }, []), false, 'same host, different port -> rejected')
-  assert.equal(isTrustedRequest({ headers: { host: 'localhost:8080', origin: 'null' }, socket: { remoteAddress: '127.0.0.1' } }, []), false, 'sandboxed-iframe null Origin -> rejected')
-  assert.equal(isTrustedRequest({ headers: { host: 'localhost:8080', origin: 'not-a-url' }, socket: { remoteAddress: '127.0.0.1' } }, []), false, 'unparseable Origin -> rejected')
-})
-
-test('isTrustedRequest: explicit host:port whitelist entries match exactly (M4, 2026-09-03 audit)', () => {
-  const entry = (host, port) => ({ headers: { host: `${host}:${port}` }, socket: { remoteAddress: '192.168.1.60' } })
-  assert.equal(isTrustedRequest(entry('192.168.1.50', 3000), ['192.168.1.50:3000']), true, 'exact host:port entry matches')
-  assert.equal(isTrustedRequest(entry('192.168.1.50', 3001), ['192.168.1.50:3000']), false, 'different port does not match a pinned entry')
-  assert.equal(isTrustedRequest(entry('192.168.1.50', 3001), ['192.168.1.50']), true, 'a port-less entry still matches any port')
-  assert.equal(isTrustedRequest({ headers: { host: '0.0.0.0:3080' }, socket: { remoteAddress: '127.0.0.1' } }, []), false, 'Host 0.0.0.0 is not loopback and not whitelisted')
 })
 
 // ── FEEDBACK route: loopback privileged domain ──────────────────────────────

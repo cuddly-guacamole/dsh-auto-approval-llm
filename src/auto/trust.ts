@@ -44,43 +44,6 @@ function trustedAuthorityMatches(entry: string, hostUrl: URL): boolean {
 }
 
 /**
- * Whether a request may reach plugin routes: Host whitelist + same-origin, and
- * — whenever the Host claims to be loopback — an actually-loopback TCP peer.
- *
- * The Host header is HTTP-controlled and can be forged by any client that can
- * reach the port. On a web server bound to 0.0.0.0 with a LAN trust list, a
- * non-loopback peer could otherwise smuggle `Host: localhost` to masquerade as
- * a loopback caller; the socket source-IP check closes that hole unconditionally
- * instead of only on the empty-whitelist (privileged) plane.
- */
-export function isTrustedRequest(req: { headers?: any; socket?: any }, trustedHosts: string[]): boolean {
-  const host = req.headers?.host
-  if (host === undefined) return false
-  let hostUrl: URL
-  try {
-    hostUrl = new URL(`http://${host}`)
-  } catch {
-    return false
-  }
-  const loopbackHost = isLoopbackHostname(hostUrl.hostname)
-  if (!loopbackHost) {
-    if (!trustedHosts.some(entry => trustedAuthorityMatches(entry, hostUrl))) return false
-    // A non-loopback Host that matched the LAN whitelist is trusted by the LAN
-    // boundary; only the loopback case demands a loopback peer.
-  } else if (!isLoopbackIp(req.socket?.remoteAddress)) {
-    return false
-  }
-  if (req.headers?.['sec-fetch-site'] === 'cross-site') return false
-  const origin = req.headers?.origin
-  if (origin === undefined) return true
-  try {
-    return new URL(origin).host === hostUrl.host
-  } catch {
-    return false
-  }
-}
-
-/**
  * Fetch-shaped trust predicate for the carrier-neutral route plane.
  *
  * A Fetch handler has no socket: the carrier owns the transport and already

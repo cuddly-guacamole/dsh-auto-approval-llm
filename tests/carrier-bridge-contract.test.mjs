@@ -1,12 +1,11 @@
 /**
- * Contract: the Fetch bridge preserves the request/response surface the
- * Node-shaped handlers rely on.
+ * Contract: the native Fetch handlers preserve the request/response surface a
+ * carrier dispatches against.
  *
  * The live desktop carrier cannot be exercised from here, so these tests pin
- * the bridge facts a carrier depends on: the body is forwarded byte-for-byte
- * (including the reader's chunk boundaries), a client abort releases a held
- * response instead of leaking the hold, and a method the route does not carry
- * still answers its own 405 with its own Allow list.
+ * the facts a carrier depends on: the body is forwarded byte-for-byte, a client
+ * abort releases a held response instead of leaking the hold, and a method the
+ * route does not carry still answers its own 405 with its own Allow list.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -43,7 +42,7 @@ test("a request body is forwarded and the route's own size cap still applies", a
   assert.equal(small.status, 200, "a well-formed body must reach the handler");
 
   // The handler caps JSON bodies at 64 KiB; reaching that branch proves the
-  // bridge delivered the bytes rather than dropping or truncating them.
+  // request body reached the handler rather than being dropped or truncated.
   const oversized = JSON.stringify({ callId: "unknown-call", padding: "x".repeat(70 * 1024) });
   const big = await feedback.fetch(new Request(`http://127.0.0.1:3080${PREFIX}/feedback`, {
     method: "POST",

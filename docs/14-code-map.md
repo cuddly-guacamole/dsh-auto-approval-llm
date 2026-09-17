@@ -6,11 +6,11 @@
 
 ```text
 src/
-├─ index.ts              宿主编排：apply()、四挂点接线、16 路由、命令、评审器、审计、学习接线  5902 行
+├─ index.ts              宿主编排：apply()、四挂点接线、16 路由、命令、评审器、审计、学习接线  5893 行
 ├─ auto/                 静态评估纯函数层（29 文件，按字母序）
 │    ├─ artifacts.ts     140  本会话成功创建路径登记（删除豁免依据）
 │    ├─ audit.ts         147  append-only 审批审计（清空留墓碑、5MiB 保尾）
-│    ├─ carrier-route.ts 212  载波中立路由注册：Fetch/Node 桥与 delete-op 归一
+│    ├─ carrier-route.ts 75  载波中立路由注册：原生 Fetch handler 与 delete-op 归一
 │    ├─ category.ts      912  12 类三态开关层：归类/优先级合并/指令钳制/信任目录模式
 │    ├─ classifier.ts    100  预分类提示词、参数脱敏、严格响应解析
 │    ├─ constants.ts     141  数值默认唯一事实源（倒计时/熔断/截断/学习族阈值）
@@ -36,7 +36,7 @@ src/
 │    ├─ shell.ts         3496 bash/pwsh 词法分解 + 整行熔断 + 逐段静态分类（最大单文件）
 │    ├─ symlink.ts       182  符号链接创建与目标校验
 │    ├─ tool-stats.ts    94   工具调用统计收集
-│    └─ trust.ts         344  web 路由信任平面（loopback/LAN 边界、Host 伪造防护、在线端点 URL 校验）
+│    └─ trust.ts         307  web 路由信任平面（loopback/LAN 边界、Host 伪造防护、在线端点 URL 校验）
 └─ client/
      ├─ index.ts         React 客户端主体 3003 行（设置卡 8 子卡/面板增强/应答 watcher 装配/浮动按钮/CSS）
      ├─ approvals/       应答模块（0.0.12 起；0.0.16 起单协议——remote 源适配 + shared 协议无关核心；rc.2 legacy/feature 已删）
@@ -91,3 +91,4 @@ verify-*.mjs            3 个运行时验证脚本（verify-auth / verify-config
 
 **exports**：`.`（lib/index.js + types）、`./client`（lib/client.js + types contact）、`./package.json`；peerDeps 覆盖 cordis ≥4.0.1<5、dsh-llm / dsh-tools / dsh-session / dsh-permission-presets / dsh-user-approval ≥0.1.5-rc.2<2 || ≥0.1.6-alpha.1<2、schemastery ^3.18.0 —— 并集同时覆盖 `<0.1.6` 的旧 `auto` 别名窗口与 0.1.6 系列（含 rc）。新增 `src/auto/preset-migration.ts` 承载多信号宿主能力探测、raw identity gate、同签名懒迁移与自有档 spec enforcement；最低支持宿主提升到 0.1.6 系列时移除 legacy/unknown 分支与 `auto` 客户端 variant。
 > 行为化支架新增登记（191 files / 1747 cases 时点）：`tests/helpers/host-ctx.mjs`（基础设施，非用例）+ `tests/h2-artifact-provenance-behavior.test.mjs` + `tests/h9-loop-guard-behavior.test.mjs` + `tests/m1-feedback-timeout-routing.test.mjs`。
+> 载波原生化新增登记：`tests/helpers/carrier-route.mjs`（Fetch 注册表驱动夹具，基础设施非用例）+ `tests/trusted-fetch-request.test.mjs`（Fetch 信任判定契约；原 `isTrustedRequest` 的权威侧用例迁入此文件）。

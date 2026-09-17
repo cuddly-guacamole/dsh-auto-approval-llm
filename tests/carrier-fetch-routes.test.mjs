@@ -1,6 +1,6 @@
 /**
  * Contract: the routes register on the carrier-neutral Fetch registry and the
- * Node-shaped handlers keep their behaviour across the bridge.
+ * native Fetch handlers keep their behaviour end to end.
  *
  * The web carrier mounts that registry under `/api` on its web server; a
  * shell-owned carrier dispatches the same handler directly. These tests drive
@@ -9,12 +9,17 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   installFeedbackRoute,
   installHistoryRoute,
   installLatencyRoute,
   installReviewStatusRoute,
+  setHistoryFilePathForTests,
 } from "../lib/index.js";
+import { setAuditFilePathForTests } from "../lib/auto/audit.js";
 
 const PREFIX = "/api/auto-approval-llm";
 
@@ -83,16 +88,34 @@ test("a foreign network authority stays on the privileged plane's outside", asyn
 });
 
 test("the delete op reaches the DELETE branch over a POST", async () => {
-  const { ctx, specs } = carrierContext();
-  installHistoryRoute(ctx);
-  const response = await callFetch(specs.get(`${PREFIX}/history`), `http://127.0.0.1:3080${PREFIX}/history`, {
-    method: "POST",
-    headers: { host: "127.0.0.1:3080", "x-auto-approval-op": "delete" },
-  });
-  assert.equal(response.status, 200);
-  const body = await response.json();
-  assert.equal(body.ok, true);
-  assert.deepEqual(body.value, { records: [] });
+  // The DELETE branch truncates history.jsonl and appends an audit tombstone;
+  // both seams must point at a scratch path or running this suite would clear
+  // the live runtime state of a running dsh.
+  const dir = mkdtempSync(join(tmpdir(), "carrier-history-delete-"));
+  const historyFile = join(dir, "history.jsonl");
+  const auditFile = join(dir, "audit.jsonl");
+  writeFileSync(historyFile, "");
+  writeFileSync(auditFile, "");
+  setHistoryFilePathForTests(historyFile);
+  setAuditFilePathForTests(auditFile);
+  try {
+    const { ctx, specs } = carrierContext();
+    installHistoryRoute(ctx);
+    const response = await callFetch(specs.get(`${PREFIX}/history`), `http://127.0.0.1:3080${PREFIX}/history`, {
+      method: "POST",
+      headers: { host: "127.0.0.1:3080", "x-auto-approval-op": "delete" },
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.ok, true);
+    assert.deepEqual(body.value, { records: [] });
+    assert.equal(readFileSync(historyFile, "utf8"), "", "the DELETE truncates the scratch history file");
+    assert.match(readFileSync(auditFile, "utf8"), /"type":"clear"/, "the DELETE writes its tombstone to the scratch audit file");
+  } finally {
+    setHistoryFilePathForTests(undefined);
+    setAuditFilePathForTests(undefined);
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("a method the route does not carry still answers its own 405", async () => {

@@ -50,16 +50,6 @@ export function baseConfig(overrides = {}) {
   };
 }
 
-function fakeResponse() {
-  const state = { statusCode: 0, body: "" };
-  const res = {
-    setHeader: () => {},
-    writeHead: (code) => { state.statusCode = code; },
-    end: (chunk) => { state.body = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk ?? ""); },
-  };
-  return { res, state };
-}
-
 function getRequest(options = {}) {
   const headers = options.headers ?? {};
   const host = options.host ?? "localhost:8080";
@@ -97,15 +87,10 @@ export function createHostContext(options = {}) {
   };
   // `deferConnection` models a carrier whose Fetch registry mounts only later
   // (or never): until arriveConnection() runs, ctx.inject(['connection'], ...)
-  // callbacks queue instead of firing. The web server stays available so a
-  // context that only offers it still exercises the fallback shape.
+  // callbacks queue instead of firing.
   let connectionReady = options.deferConnection !== true;
   const connectionService = {
     fetch: { register: (spec) => { routes.set(spec.path, spec); return () => {}; } },
-  };
-  const webServerService = {
-    host: undefined,
-    register: (desc) => { routes.set(desc.path, desc); return () => {}; },
   };
   const get = (name) => {
     if (name === "approval") return { config: { policy: "ask" } };
@@ -113,7 +98,6 @@ export function createHostContext(options = {}) {
     if (name === "tools") return {};
     if (name === "llm") return {};
     if (name === "connection") return connectionReady ? connectionService : undefined;
-    if (name === "webServer") return webServerService;
     return undefined;
   };
   const pendingInjects = [];
@@ -146,7 +130,6 @@ export function createHostContext(options = {}) {
       if (pending.names.every((name) => get(name) !== undefined)) pending.callback(pending.childCtx);
     }
   };
-  const arriveWebServer = arriveConnection;
   setRuntimePathsForTests({ stateDir });
   const config = baseConfig({ workspaceRoot, dshHome, ...(options.config ?? {}) });
   apply(ctx, config);
@@ -195,32 +178,24 @@ export function createHostContext(options = {}) {
   const callRoute = async (path, req) => {
     const desc = routes.get(path);
     if (desc === undefined) throw new Error("route not registered: " + path);
-    // A carrier registration carries a Fetch handler; a web-server registration
-    // carries the Node-shaped one. Both drive the same handler body.
-    if (typeof desc.fetch === "function") {
-      const headers = new Headers();
-      for (const [name, value] of Object.entries(req.headers ?? {})) headers.set(name, String(value));
-      let payload;
-      if (req[Symbol.asyncIterator] !== undefined) {
-        const chunks = [];
-        for await (const chunk of req) chunks.push(Buffer.from(chunk));
-        payload = Buffer.concat(chunks);
-      }
-      const response = await desc.fetch(new Request(`http://127.0.0.1:3080${path}`, {
-        method: req.method,
-        headers,
-        ...(payload === undefined ? {} : { body: payload }),
-      }));
-      const text = await response.text();
-      let body = text;
-      try { body = JSON.parse(text); } catch { /* keep raw text */ }
-      return { statusCode: response.status, body };
+    if (typeof desc.fetch !== "function") throw new Error("route is not registered on the Fetch registry: " + path);
+    const headers = new Headers();
+    for (const [name, value] of Object.entries(req.headers ?? {})) headers.set(name, String(value));
+    let payload;
+    if (req[Symbol.asyncIterator] !== undefined) {
+      const chunks = [];
+      for await (const chunk of req) chunks.push(Buffer.from(chunk));
+      payload = Buffer.concat(chunks);
     }
-    const { res, state } = fakeResponse();
-    await desc.handler(req, res);
-    let body = state.body;
-    try { body = JSON.parse(state.body); } catch { /* keep raw text */ }
-    return { statusCode: state.statusCode, body };
+    const response = await desc.fetch(new Request(`http://127.0.0.1:3080${path}`, {
+      method: req.method,
+      headers,
+      ...(payload === undefined ? {} : { body: payload }),
+    }));
+    const text = await response.text();
+    let body = text;
+    try { body = JSON.parse(text); } catch { /* keep raw text */ }
+    return { statusCode: response.status, body };
   };
   const readReviewStatus = (callId) => callRoute(REVIEW_STATUS_ROUTE, getRequest({ headers: { "x-auto-approval-call-id": callId } }));
   const postFeedback = (callId, outcome = "rejected") => callRoute(FEEDBACK_ROUTE, postRequest({ callId, outcome, auto: true }));
@@ -275,6 +250,5 @@ export function createHostContext(options = {}) {
     routes,
     handlers,
     arriveConnection,
-    arriveWebServer,
   };
 }
