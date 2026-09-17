@@ -24,7 +24,9 @@ const LIB = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
 /** The compiled guard registration closure, sliced between its own markers. */
 function guardRegion() {
   const start = LIB.indexOf('anyCtx.tools?.guard?.((exec) => {')
-  const end = LIB.indexOf('// ── direct-human-approval tool', start)
+  // Locate the next top-level block by code (the direct-human registration
+  // gate), not by a comment a reformatter or minifier could drop.
+  const end = LIB.indexOf('config.directHumanEnabled === true', start)
   assert.ok(start !== -1, 'the guard registration is locatable')
   assert.ok(end > start, 'the guard registration ends before the direct-human block')
   return LIB.slice(start, end)

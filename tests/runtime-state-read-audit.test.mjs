@@ -139,7 +139,11 @@ test('host: pre-execute emits a durable appendAuditLine for runtime-state reads'
 test('host: the durable event is default-on and independent of the debug switch', () => {
   // debugLog gates on `if (!debugOn) return`; the appendAuditLine emission for
   // runtime-state-read must not live inside that gated function.
-  const debugBody = SRC.slice(SRC.indexOf('function debugLog('), SRC.indexOf('// One shared loud path'))
+  const debugStart = SRC.indexOf('function debugLog(')
+  // The body ends at the next top-level function declaration; a comment
+  // marker would vanish under a reformatter or minifier.
+  const debugEnd = SRC.indexOf('function reportRulesParseErrors', debugStart + 1)
+  const debugBody = SRC.slice(debugStart, debugEnd)
   assert.ok(debugBody.includes('if (!debugOn) return'), 'precondition: debugLog is debug-gated')
   assert.ok(!debugBody.includes('appendAuditLine'), 'the durable append is not inside the debug-gated function')
   const probe = SRC.slice(SRC.indexOf('const stateReads ='), SRC.indexOf('const fetchAuditTarget ='))

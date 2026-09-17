@@ -83,7 +83,7 @@ test('the copy never claims the denial itself can be bypassed', () => {
 test('the card renders both paragraphs as display-only copy', () => {
   const body = CLIENT_SRC.slice(
     CLIENT_SRC.indexOf('const buildAdvancedBody'),
-    CLIENT_SRC.indexOf('// Timers & breaker card body'),
+    CLIENT_SRC.indexOf('const buildTimerBody'),
   )
   for (const key of OPENINGS) {
     assert.ok(body.includes(`t('${key}')`), `the Advanced card renders ${key}`)
