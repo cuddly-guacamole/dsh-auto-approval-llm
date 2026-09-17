@@ -1,6 +1,6 @@
 /**
  * Host-line contract: the peer range promises 0.1.5-rc.2 (legacy shape) and
- * 0.1.6-alpha.1 (modern shape). This file pins the promised table, the exact
+ * the 0.1.6 prerelease line (modern shape: alpha.1, alpha.2). This file pins the promised table, the exact
  * version pinning, the reverse controls that make a wrong-tree acceptance
  * impossible, and the shipped preset composition. The last case drives the
  * locally installed host line through the real permission-presets service, so
@@ -28,11 +28,13 @@ import {
 const patch = readFileSync(join(ROOT, "cordis.patch.yml"), "utf8")
 
 test("the promised line table separates the legacy and modern shapes", () => {
-  assert.deepEqual(Object.keys(HOST_LINES).sort(), ["alpha1", "rc2"])
+  assert.deepEqual(Object.keys(HOST_LINES).sort(), ["alpha1", "alpha2", "rc2"])
   assert.equal(HOST_LINES.rc2.version, "0.1.5-rc.2")
   assert.equal(HOST_LINES.rc2.capability, "legacy")
   assert.equal(HOST_LINES.alpha1.version, "0.1.6-alpha.1")
   assert.equal(HOST_LINES.alpha1.capability, "modern")
+  assert.equal(HOST_LINES.alpha2.version, "0.1.6-alpha.2")
+  assert.equal(HOST_LINES.alpha2.capability, "modern")
 })
 
 test("every declared dsh peer is pinned exactly on both lines", () => {
@@ -44,6 +46,16 @@ test("every declared dsh peer is pinned exactly on both lines", () => {
     assert.deepEqual(manifest.dependencies, manifest.overrides)
     for (const name of peers) assert.equal(manifest.dependencies[name], line.version)
   }
+})
+
+test("a transitively floated dsh package is pinned by an override only", () => {
+  const peers = dshPeers()
+  const floated = "@deepseek-ai/dsh-agent"
+  const manifest = scratchManifest(HOST_LINES.alpha1, peers, [floated])
+  assert.deepEqual(Object.keys(manifest.dependencies).sort(), peers.slice().sort())
+  assert.equal(manifest.dependencies[floated], undefined)
+  assert.equal(manifest.overrides[floated], HOST_LINES.alpha1.version)
+  for (const name of peers) assert.equal(manifest.overrides[name], HOST_LINES.alpha1.version)
 })
 
 test("the installed-tree check rejects the other line and an empty tree", () => {

@@ -20,6 +20,7 @@ const CR = String.fromCharCode(13)
 export const HOST_LINES = {
   rc2: { version: "0.1.5-rc.2", capability: "legacy" },
   alpha1: { version: "0.1.6-alpha.1", capability: "modern" },
+  alpha2: { version: "0.1.6-alpha.2", capability: "modern" },
 }
 
 /** The dsh packages this plugin declares as host peers, read from the manifest. */
@@ -28,10 +29,16 @@ export function dshPeers(root = ROOT) {
   return Object.keys(manifest.peerDependencies || {}).filter(name => name.startsWith("@deepseek-ai/dsh-"))
 }
 
-/** The scratch manifest: exact versions plus overrides for every declared peer. */
-export function scratchManifest(line, peers = dshPeers()) {
+/**
+ * The scratch manifest: exact versions for every declared peer, plus the same
+ * versions as overrides. `extraPins` adds overrides only — a transitive
+ * `dsh-*` that resolved above the line (the registry can publish a newer
+ * prerelease inside the same tuple) is pinned without becoming a dependency.
+ */
+export function scratchManifest(line, peers = dshPeers(), extraPins = []) {
   const pinned = Object.fromEntries(peers.map(name => [name, line.version]))
-  return { name: "dsh-host-line-scratch", private: true, type: "module", dependencies: pinned, overrides: pinned }
+  const overrides = Object.fromEntries([...new Set([...peers, ...extraPins])].map(name => [name, line.version]))
+  return { name: "dsh-host-line-scratch", private: true, type: "module", dependencies: pinned, overrides }
 }
 
 /** name -> version for every top-level @deepseek-ai package in a prefix. */
@@ -237,9 +244,20 @@ export async function runLine(key, options = {}) {
   if (!existsSync(join(ROOT, "lib", "auto", "preset-migration.js"))) throw new Error("lib/ is not built; run npm test or npx tsc first")
   const app = mkdtempSync(join(tmpdir(), "dsh-host-line-" + key + "-"))
   try {
-    writeFileSync(join(app, "package.json"), JSON.stringify(scratchManifest(line), null, 2))
     const npm = process.platform === "win32" ? "npm.cmd" : "npm"
-    execFileSync(npm, ["install", "--no-audit", "--no-fund"], { cwd: app, stdio: "inherit", shell: process.platform === "win32" })
+    const install = () => execFileSync(npm, ["install", "--no-audit", "--no-fund"], { cwd: app, stdio: "inherit", shell: process.platform === "win32" })
+    writeFileSync(join(app, "package.json"), JSON.stringify(scratchManifest(line), null, 2))
+    install()
+    // A transitive dsh-* can resolve above the line when the registry publishes a
+    // newer prerelease of the same tuple; pin every floated name and install
+    // again so the whole tree lands on the requested line.
+    const floated = Object.entries(installedVersions(app))
+      .filter(([name, version]) => name.startsWith("@deepseek-ai/dsh-") && version !== line.version)
+      .map(([name]) => name)
+    if (floated.length > 0) {
+      writeFileSync(join(app, "package.json"), JSON.stringify(scratchManifest(line, dshPeers(), floated), null, 2))
+      install()
+    }
     const versions = installedVersions(app)
     const packages = assertInstalledLine(line, versions)
     assertNpmTree(app, line)
@@ -279,7 +297,7 @@ const isMain = process.argv[1] !== undefined && import.meta.url === pathToFileUR
 if (isMain) {
   const options = parseArgs(process.argv.slice(2))
   if (options.help) {
-    process.stdout.write("usage: node scripts/test-host-lines.mjs [--line rc2|alpha1|all] [--keep]" + LF)
+    process.stdout.write("usage: node scripts/test-host-lines.mjs [--line rc2|alpha1|alpha2|all] [--keep]" + LF)
   } else {
     for (const key of options.lines) {
       const result = await runLine(key, { keep: options.keep })
