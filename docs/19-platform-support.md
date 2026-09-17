@@ -16,6 +16,7 @@
 |---|---|---|
 | Windows（Git Bash） | ✅ 正式 | 主开发/测试环境 |
 | macOS / Linux / WSL | 🟡 欢迎反馈 | 代码已适配（见 19.1），尚未经真实用户验证 |
+| Electron 桌面版（dsh desktop） | 🟡 已适配 · 待实机验证 | 桌面载体不提供 `webServer`：路由注册在 connection 的载波中立 Fetch 注册表（见 19.5），插件启动不再依赖该服务 |
 | Android 浏览器访问 dsh web | ⚠️ 仅收集反馈 | 窄视口/触屏下的设置卡与审批面板体验可反馈，**不承诺支持**（不按手机宽度改造官方 UI） |
 | Android 原生环境（Auto 档，machine value `auto-approval`） | ❌ 明确不支持 | Termux / root / adb / shizuku 等环境差异过大；国产安卓即使 root 也存在各种定制路径，Auto 档在此类环境视为玩家实验场景 |
 
@@ -35,3 +36,14 @@ Auto 档的安全模型假设一个**稳定、可预期的文件系统与 shell 
 | 敏感信息 | 请先移除 API 密钥、凭据、完整对话与无关工作区路径 |
 
 > 若你的环境是 Android 原生 + Auto 档，我们可能直接关闭 issue 并指向本页。
+
+## 19.5　桌面载体（Electron 桌面版）
+
+dsh 桌面端（Electron）**不提供 `webServer` 服务**，也不在本地打开 HTTP 端口：Web UI 资源与 Fetch 流量经 `dsh-app://` 协议与分帧字节管道交给内置的 dsh 子进程。因此本插件的路由不注册在 web 服务上，而是注册到 connection 的**载波中立 Fetch 注册表**（`connection.fetch.register`）——web 载体把该注册表挂在 web server 的 `/api/auto-approval-llm/*` 前缀下，shell 载体直接分派同一个 handler。
+
+两条载体差异：
+
+- **命令方法**：注册表只承载 `GET`／`HEAD`／`POST`。删除语义（清空审批历史、清空延迟遥测、吊销学习条目、清除评审密钥）以 `POST` + 请求头 `x-auto-approval-op: delete` 表达。
+- **信任栅栏**：web 载体上这些路由与其它 `/api` 消费者一样，先过载波层的主机／Origin 校验与会话认证（未认证即 401），再进入插件自身的主机白名单与回路判定，因此非浏览器消费者需要携带会话；桌面载体不经 HTTP，由 shell 持有传输本身作为信任边界。
+
+桌面载体的权威（Host／Origin）形态、cookie 行为与长轮询超时尚未在真机确认——桌面安装包目前未公开发布，待其可得后按同批施工方案收尾。
