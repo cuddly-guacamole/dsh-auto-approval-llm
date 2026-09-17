@@ -94,7 +94,12 @@ test("the delete op reaches the DELETE branch over a POST", async () => {
   const dir = mkdtempSync(join(tmpdir(), "carrier-history-delete-"));
   const historyFile = join(dir, "history.jsonl");
   const auditFile = join(dir, "audit.jsonl");
-  writeFileSync(historyFile, "");
+  // The history seed MUST be non-empty: an empty seed makes the truncation
+  // assertion vacuous (an untouched file also reads ""), so a regression that
+  // stopped honoring the override would silently truncate the live file while
+  // this test stayed green. The audit seed stays empty because its guard is
+  // the appended tombstone, which an untouched file cannot produce.
+  writeFileSync(historyFile, '{"id":"a"}\n')
   writeFileSync(auditFile, "");
   setHistoryFilePathForTests(historyFile);
   setAuditFilePathForTests(auditFile);
