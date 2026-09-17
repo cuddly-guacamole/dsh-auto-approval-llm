@@ -2418,7 +2418,8 @@ function SettingsSection({ chrome = 'card' }: { chrome?: 'card' | 'plain' }) {
     }, saving ? t('settings.saving') : t('settings.save')),
   )
 
-  const content = React.createElement('div', { style: { display: 'grid', gap: 14, maxWidth: 720, padding: '0 2px' } },
+  // 720 caps the Settings dialog column; the embedded Plugins page section spans the full content width.
+  const content = React.createElement('div', { style: { display: 'grid', gap: 14, maxWidth: chrome === 'plain' ? 'none' : 720, padding: '0 2px' } },
     bannerMessage
       ? React.createElement('div', { className: 'dsa-alert dsa-alertError', role: 'alert' },
           React.createElement('span', { className: 'dsa-alertText' }, bannerMessage),
