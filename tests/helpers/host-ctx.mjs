@@ -95,19 +95,23 @@ export function createHostContext(options = {}) {
     // capability so the gate name set matches a legacy host.
     specOf: () => undefined,
   };
+  // `deferWebServer` models a carrier that provides the service only later
+  // (or never): the registrar stays unresolved until arriveWebServer() runs, so
+  // ctx.inject(['webServer'], ...) callbacks queue instead of firing.
+  let webServerReady = options.deferWebServer !== true;
+  const webServerService = {
+    host: undefined,
+    register: (desc) => { routes.set(desc.path, desc); return () => {}; },
+  };
   const get = (name) => {
     if (name === "approval") return { config: { policy: "ask" } };
     if (name === "permissionPresets") return permissionPresets;
     if (name === "tools") return {};
     if (name === "llm") return {};
-    if (name === "webServer") {
-      return {
-        host: undefined,
-        register: (desc) => { routes.set(desc.path, desc); return () => {}; },
-      };
-    }
+    if (name === "webServer") return webServerReady ? webServerService : undefined;
     return undefined;
   };
+  const pendingInjects = [];
   const ctx = {
     get,
     on: (event, fn) => {
@@ -120,6 +124,22 @@ export function createHostContext(options = {}) {
       const disposer = fn();
       if (typeof disposer === "function") disposers.push(disposer);
     },
+    // Contract-shaped stand-in for cordis ctx.inject(deps, cb): the callback
+    // runs as soon as every listed service resolves, on a child ctx that keeps
+    // the same handlers/effects so route disposers stay collectable.
+    inject: (deps, callback) => {
+      const names = Array.isArray(deps) ? deps : Object.keys(deps ?? {});
+      const childCtx = { get, on: ctx.on, effect: ctx.effect, inject: ctx.inject };
+      if (names.every((name) => get(name) !== undefined)) callback(childCtx, undefined);
+      else pendingInjects.push({ names, callback: (c) => callback(c, undefined), childCtx });
+      return { dispose: () => {} };
+    },
+  };
+  const arriveWebServer = () => {
+    webServerReady = true;
+    for (const pending of pendingInjects.splice(0)) {
+      if (pending.names.every((name) => get(name) !== undefined)) pending.callback(pending.childCtx);
+    }
   };
   setRuntimePathsForTests({ stateDir });
   const config = baseConfig({ workspaceRoot, dshHome, ...(options.config ?? {}) });
@@ -225,5 +245,8 @@ export function createHostContext(options = {}) {
     readAuditLines,
     waitFor,
     dispose,
+    routes,
+    handlers,
+    arriveWebServer,
   };
 }

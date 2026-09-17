@@ -101,7 +101,11 @@ import {
 } from './auto/preset-migration.js'
 
 export const name = 'dsh-auto-approval-llm'
-export const inject = ['approval', 'permissionPresets', 'sessions', 'tools', 'llm', 'agents', 'webServer', 'settings', 'commands']
+// `webServer` is intentionally absent from this list: a carrier that never
+// provides it (Electron desktop) must still start the plugin. apply() binds the
+// route block to the carrier with ctx.inject(['webServer'], ...) instead, so the
+// routes appear when the service arrives and stay absent otherwise.
+export const inject = ['approval', 'permissionPresets', 'sessions', 'tools', 'llm', 'agents', 'settings', 'commands']
 
 export interface Config {
   enabled: boolean
@@ -4331,26 +4335,32 @@ export function apply(ctx: Context, rawConfig: Config): void {
 
   watchNotices(anyCtx, () => config, () => gateNames)
   trustedHosts = resolveTrustedHosts(anyCtx)
-  installFeedbackRoute(anyCtx)
-  installSettingsRoute(anyCtx, settings)
-  installReviewerCredentialRoute(anyCtx)
-  installHistoryRoute(anyCtx)
-  installLatencyRoute(anyCtx)
-  installToolStatsRoute(anyCtx)
-  installReviewStatusRoute(anyCtx)
-  installSessionReviewStatusRoute(anyCtx)
-  installRevealRoute(anyCtx)
-  installLearningStoreRoute(anyCtx, (key: string) =>
-    // Serialize revoke + persist under the same per-key mutex the learning
-    // writers use, so a concurrent recordConfirm cannot interleave.
-    learningMutex.run(key, () => revokeLearning(learningStore, key)).then((done) => {
-      if (done) persistLearningGuarded()
-      return done
-    }))
-  installTestRoute(anyCtx, llm, () => config.endpointUrl)
-  installLlmCatalogRoutes(anyCtx, llm)
-  installSessionModeRoute(anyCtx)
-  installStatsRoute(anyCtx)
+  // Route registration lives in its own fiber keyed on `webServer`: a carrier
+  // without that service leaves the routes unregistered while the rest of the
+  // plugin keeps running, and a carrier that provides it later still gets them
+  // on arrival. Every installer keeps its own `ctx.get('webServer')` guard.
+  anyCtx.inject(['webServer'], (webCtx: any) => {
+    installFeedbackRoute(webCtx)
+    installSettingsRoute(webCtx, settings)
+    installReviewerCredentialRoute(webCtx)
+    installHistoryRoute(webCtx)
+    installLatencyRoute(webCtx)
+    installToolStatsRoute(webCtx)
+    installReviewStatusRoute(webCtx)
+    installSessionReviewStatusRoute(webCtx)
+    installRevealRoute(webCtx)
+    installLearningStoreRoute(webCtx, (key: string) =>
+      // Serialize revoke + persist under the same per-key mutex the learning
+      // writers use, so a concurrent recordConfirm cannot interleave.
+      learningMutex.run(key, () => revokeLearning(learningStore, key)).then((done) => {
+        if (done) persistLearningGuarded()
+        return done
+      }))
+    installTestRoute(webCtx, llm, () => config.endpointUrl)
+    installLlmCatalogRoutes(webCtx, llm)
+    installSessionModeRoute(webCtx)
+    installStatsRoute(webCtx)
+  })
 
   // Sweep expired follow-phase statuses so a client that never ACKs (closed
   // tab / headless page) cannot leak callId keys in reviewStates.
