@@ -58,7 +58,7 @@ test('the copy keeps the two accuracy limits of the opening', () => {
   assert.ok(zh.includes('结构化') || zh.includes('write/edit'), 'zh copy limits the opening to structured writes')
   assert.ok(en.includes('structured') || en.includes('write/edit'), 'en copy limits the opening to structured writes')
   // The fenced subtrees cannot be named by any opening.
-  for (const fenced of ['sessions', 'plugins', 'credentials']) {
+  for (const fenced of ['sessions', 'plugins', 'credentials', 'profiles']) {
     assert.ok(zh.includes(fenced), `zh copy names the fenced subtree ${fenced}`)
     assert.ok(en.includes(fenced), `en copy names the fenced subtree ${fenced}`)
   }

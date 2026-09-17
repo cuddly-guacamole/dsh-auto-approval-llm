@@ -4,7 +4,10 @@
  * the credential store is the dotted file, and the operator configuration is
  * `settings.yaml` — so a `trustedDshSubpaths` entry naming either of those
  * re-opened it and the structured tools got a static `allow` on the file that
- * holds this plugin's own reviewer credential and security switches.
+ * holds this plugin's own reviewer credential and security switches. `profiles`
+ * is fenced for the same reason: `profiles/<profile>/cordis.patch.yml` is the DSH
+ * plugin-assembly carrier, and the plugin-zone code carve-out only covers a
+ * plugin repository itself, not that profile subtree.
  * Run: node --test tests/audit-dsh-openings-fence.test.mjs
  */
 import test from 'node:test'
@@ -25,13 +28,13 @@ test('the real credential and settings files are inside the fence', () => {
 })
 
 test('the credential tree and transcript tree stay fenced', () => {
-  for (const name of ['credentials', 'credentials.json', 'sessions', 'plugins']) {
+  for (const name of ['credentials', 'credentials.json', 'sessions', 'plugins', 'profiles']) {
     assert.deepEqual(openings(name), [], `${name} must stay fenced`)
   }
 })
 
 test('an ordinary subtree stays openable (no fence over-reach)', () => {
-  for (const name of ['skills', 'profiles', 'llm-catalog']) {
+  for (const name of ['skills', 'llm-catalog']) {
     assert.equal(openings(name).length, 1, `${name} must remain openable`)
   }
 })

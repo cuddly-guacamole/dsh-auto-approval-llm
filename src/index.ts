@@ -457,7 +457,11 @@ export function resolveConfig(raw: Config): Config {
   // `credentials/` and `credentials.json`, neither of which exists in this
   // tree, let an opening re-expose the credential store and the operator
   // configuration file — the very trees the clamps exist to keep closed.
-  const FENCED_DSH_SUBTREES = ['sessions', 'plugins', 'credentials', 'credentials.json', '.credentials.yaml', 'settings.yaml']
+  // `profiles` joins the fence because `profiles/*/cordis.patch.yml` is the
+  // DSH plugin-assembly carrier: an opening there let an Auto session rewrite
+  // which plugins load and with what config (the plugin-zone code carve-out
+  // only covers a plugin repository itself, not this profile subtree).
+  const FENCED_DSH_SUBTREES = ['sessions', 'plugins', 'credentials', 'credentials.json', '.credentials.yaml', 'settings.yaml', 'profiles']
   for (const dir of raw.trustedDshSubpaths ?? []) {
     if (typeof dir !== 'string' || dir.trim() === '' || !/^(?:[A-Za-z]:[\\/]|\\\\|\/|~[\\/])/.test(dir)) {
       console.warn(`[dsh-auto-approval-llm] ignoring non-absolute trustedDshSubpath "${String(dir)}"`)
