@@ -278,7 +278,7 @@ export function registeredSlots(source) {
 /** Quoted slot names of the official client slot directory. */
 export function officialSlots(source) {
   const slots = new Set()
-  const pattern = /['"]((?:conversation|settings|sidebar|workspace|status|dialog|panel|composer)[a-zA-Z]*(?:\.[a-zA-Z]+)+)['"]/g
+  const pattern = /['"]((?:conversation|settings|sidebar|workspace|status|dialog|panel|composer|plugins)[a-zA-Z]*(?:\.[a-zA-Z]+)+)['"]/g
   for (const match of source.matchAll(pattern)) slots.add(match[1])
   return [...slots]
 }
@@ -389,6 +389,12 @@ function checkApprovalLabels(repoRoot, root) {
   return result(ITEMS.approval, 'ok', `all ${expected.length} expected button labels present: ${expected.join(', ')}`)
 }
 
+/**
+ * Slot names this bundle still registers for older promised host lines while
+ * the installed host has retired them. Reported, never silently skipped.
+ */
+export const RETIRED_LINE_SLOTS = new Set(['settings.plugin.item'])
+
 /** Item 3: every slot this repository registers must still exist in the official directory. */
 function checkSlots(repoRoot, root) {
   const artifact = firstExisting([
@@ -411,11 +417,14 @@ function checkSlots(repoRoot, root) {
   if (directory.size === 0) {
     return result(ITEMS.slots, 'WARN', `no slot names could be parsed from ${artifact}`)
   }
-  const missing = registered.filter(name => !directory.has(name))
+  const missing = registered.filter(name => !directory.has(name) && !RETIRED_LINE_SLOTS.has(name))
   if (missing.length > 0) {
     return result(ITEMS.slots, 'FAIL', `registered slots absent from the official directory: ${missing.join(', ')}`)
   }
-  return result(ITEMS.slots, 'ok', `all ${registered.length} registered slots present in a directory of ${directory.size}: ${registered.join(', ')}`)
+  const present = registered.filter(name => directory.has(name))
+  const retired = registered.filter(name => !directory.has(name))
+  const suffix = retired.length > 0 ? `; retired-line slots not declared here: ${retired.join(', ')}` : ''
+  return result(ITEMS.slots, 'ok', `all ${present.length} current registered slots present in a directory of ${directory.size}: ${present.join(', ')}${suffix}`)
 }
 
 /**

@@ -43,6 +43,8 @@ const LOCALE_NS = 'dsh-auto-approval-llm'
 // or a different browser may see it again, which is acceptable for
 // low-sensitivity copy.
 const ONBOARDING_SEEN_KEY = 'dsa-onboarding-seen-v1'
+// Package name the Plugins panel keys a bundle's own configuration by.
+const PLUGIN_PACKAGE_NAME = '@quill507/dsh-auto-approval-llm'
 let localeService: any = null
 let t: any = (key: string, params?: Record<string, unknown>) => {
   let text = (zh as any)[key] ?? key
@@ -725,19 +727,37 @@ function CapsuleSelect(props: { value: string; options: CapsuleOption[]; onChang
   )
 }
 
-function SettingsSection() {
+/**
+ * Plugins-panel config entry (0.1.6-alpha.2+): the bundle page asks for the
+ * settings form. The page draws the bundle title, version, description and
+ * component rows itself.
+ */
+function PluginConfigEntry({ view }: { view?: 'summary' | 'page' }) {
+  if (view !== 'page') return null
+  return React.createElement(SettingsSection, { chrome: 'plain' })
+}
+
+function SettingsSection({ chrome = 'card' }: { chrome?: 'card' | 'plain' }) {
   const [snapshot, setSnapshot] = React.useState<SettingsSnapshot | null>(null)
   const [draft, setDraft] = React.useState<Draft | null>(null)
   const [saving, setSaving] = React.useState(false)
   const [message, setMessage] = React.useState('')
   const [error, setError] = React.useState('')
-  const [open, setOpen] = React.useState(false)
+  const [open, setOpen] = React.useState(chrome === 'plain')
   // First-use onboarding: read the one-shot flag lazily at mount. The flag is
   // persisted when the card is collapsed (expanded-and-seen implies done), so
   // the block appears at most until the first collapse, never again.
   const [onboardingDismissed, setOnboardingDismissed] = React.useState<boolean>(() => {
     try { return (globalThis as any).localStorage?.getItem(ONBOARDING_SEEN_KEY) === '1' } catch { return false }
   })
+  // The embedded form has no collapse action, so the one-shot flag is written
+  // when the entry unmounts instead of on a collapse.
+  React.useEffect(() => {
+    if (chrome !== 'plain') return undefined
+    return () => {
+      try { (globalThis as any).localStorage?.setItem(ONBOARDING_SEEN_KEY, '1') } catch {}
+    }
+  }, [])
   const toggleCard = () => {
     const next = !open
     if (open && !next) {
@@ -2471,6 +2491,9 @@ function SettingsSection() {
     ),
     error ? React.createElement('p', { className: 'dsa-failed', role: 'status' }, error) : null,
   );
+  if (chrome === 'plain') {
+    return React.createElement('div', { className: 'dsa-embed' }, content)
+  }
   return React.createElement('li', { className: open ? 'dsa-card dsa-cardOpen' : 'dsa-card' },
     React.createElement('button', {
       type: 'button',
@@ -2825,6 +2848,7 @@ function installSettingsCardStyles(): () => void {
 .dsa-chevron{color:var(--dsw-alias-label-tertiary);flex:none;transition:transform .16s}
 .dsa-chevronOpen{transform:rotate(180deg)}
 .dsa-body{border-top:1px solid var(--dsw-alias-border-l2);margin:0 16px;padding:12px 0 8px}
+.dsa-embed{display:block}
 .dsa-field{flex-direction:column;gap:6px;padding:12px 0;display:flex}
 .dsa-field+.dsa-field{border-top:1px solid var(--dsw-alias-border-l2)}
 .dsa-label{color:var(--dsw-alias-label-primary);font-size:13px;font-weight:500;line-height:1.5}
@@ -2985,6 +3009,13 @@ export function apply(ctx: any): void {
   ctx.effect(() => watchRemoteApprovals(ctx), 'dsh-auto-approval-llm: approval watcher (remote)')
   ctx.effect(() => watchSessionApprovals(ctx), 'dsh-auto-approval-llm: session approval watcher')
   watchSessionModeChanges(ctx)
+  // The Plugins panel keys a bundle's own configuration by package name; the
+  // Settings card slot remains registered for the older promised host lines.
+  ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({
+    name: 'plugins.bundle.config',
+    key: PLUGIN_PACKAGE_NAME,
+    locale: LOCALE_NS,
+  }, PluginConfigEntry))
   ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
     name: 'settings.plugin.item',
     id: 'auto-approval-llm-card',

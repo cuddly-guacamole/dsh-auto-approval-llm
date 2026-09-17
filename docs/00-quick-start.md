@@ -28,7 +28,7 @@ dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 ## 30 秒验证
 
 1. 把会话或预设切到 **Auto 档**：`/permission auto-approval`。
-2. 打开 设置 → 插件 → 自动审批，确认卡片出现；默认配置即可工作（`enabled` 默认开）。
+2. 打开侧边栏 插件 → auto-approval-llm 配置页，确认表单出现（更早宿主线：设置 → 插件 → 自动审批）；默认配置即可工作（`enabled` 默认开）。
 3. 让 agent 执行一条只读命令（例如 `ls`）：常规操作走静态放行，审批面板不出现。
 4. 让 agent 执行一条静态规则看不明白的调用（例如含变量拼接的动态命令）：应出现官方审批面板与倒计时，或由 LLM 评审接管。
 

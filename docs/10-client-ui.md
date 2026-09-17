@@ -3,10 +3,11 @@
 
 ## Slot 注册
 
-| slot | id | order | 组件 |
+| slot | key / id | 说明 | 组件 |
 |---|---|---|---|
-| `settings.plugin.item` | `auto-approval-llm-card` | 30 | SettingsSection |
-| `conversation.session.header.utilities` | `…-session-panel` | -10 | SessionApprovalPanel |
+| `plugins.bundle.config` | key `@quill507/dsh-auto-approval-llm` | 0.1.6-alpha.2+ 的 Plugins 面板：bundle 页描述与组件行之间内联表单（仅 `view:'page'`）；页自己画标题/面包屑 | PluginConfigEntry → SettingsSection(`chrome:'plain'`) |
+| `settings.plugin.item` | key `auto-approval-llm` | 更早宿主线（rc.2 / 0.1.6-alpha.1）的 Settings 卡片；alpha2 起该槽不再声明，`inject` 等待不触发（无副作用） | SettingsSection |
+| `conversation.session.header.utilities` | id `…-session-panel` | 会话标题栏控件 | SessionApprovalPanel |
 
 另有：会话标题栏的自动审批控件（分离按钮：左主区显示状态并在有倒计时时提前展开面板，右下箭头打开审批记录浮层）、`auto-icon.ts`（给权限菜单的 Auto 注入盾形图标 + 选择时的风险确认弹窗「我已了解风险」）、`locale.ts`（zh/en）。官方权限选择器自带的风险确认只覆盖宿主内置档；自定义 `auto-approval` 档的风险确认由本插件客户端自研弹窗补。
 
@@ -44,10 +45,10 @@ flowchart TD
 
 `answerOnce`（shared）只把 `outcome ∈ {allowed-once, rejected}` 传上网（POST /feedback + 协议应答 `pending.answer(outcome)`，对已 settle 实例抛错被静默处置），通告文案由宿主生成；`answeredApprovals` 统一以 `sessionId:callId` 为键保证同一审批只答一次。
 
-## 10.2　设置卡解剖（settings.plugin.item）
+## 10.2　设置表单解剖（plugins.bundle.config / settings.plugin.item）
 
 ```text
-li.dsa-card（可折叠；任一卡脏 → 头部「未保存」徽标）
+外层：li.dsa-card（更早宿主线的 Settings 卡，可折叠；任一卡脏 → 头部「未保存」徽标）/ div.dsa-embed（alpha2 Plugins 面板内联表单，无外层折叠头）
 ├─ 非法配置红横幅 + 「尝试修复」        ← 检测表镜像 host schema；3 值来源枚举（session/preset/endpoint）
 ├─ 调试横幅（debug=on 时）+「关闭调试」
 ├─ 顶层开关区（3 个即时保存 CapsuleSelect）

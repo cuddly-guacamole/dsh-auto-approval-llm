@@ -84,6 +84,10 @@ const REPO_FILES = {
   ].join('\n'),
   'src/client/index.ts': [
     'export function apply(ctx: any): void {',
+    "  ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({",
+    "    name: 'plugins.bundle.config',",
+    "    key: '@quill507/dsh-auto-approval-llm',",
+    '  }))',
     "  ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({",
     "    name: 'settings.plugin.item',",
     "    id: 'auto-approval-llm-card',",
@@ -150,7 +154,8 @@ const OFFICIAL_FILES = {
     '  "conversation.session.header",',
     '  "conversation.session.header.utilities",',
     '  "conversation.input.dock",',
-    '  "settings.plugin.item",',
+    '  "plugins.bundle.config",',
+    '  "plugins.item",',
     '  "settings.plugin.usage",',
     '  "settings.general.item",',
     '];',
@@ -235,12 +240,19 @@ test('a missing approval button label fails and prints the difference', t => {
 test('a missing slot fails and prints the slot name', t => {
   const { repo, official } = scenario(t, {
     officialMutate(files) {
-      files['dsh-cordis-client-runner/lib/client.js'] = files['dsh-cordis-client-runner/lib/client.js'].replace('  "settings.plugin.item",\n', '')
+      files['dsh-cordis-client-runner/lib/client.js'] = files['dsh-cordis-client-runner/lib/client.js'].replace('  "conversation.session.header.utilities",\n', '')
     },
   })
   const { status, output } = runCheck({ repo, official })
   assert.equal(status, 1, output)
-  assert.match(output, /^check-official-anchors: FAIL {2}slot-directory {2}.*settings\.plugin\.item/m)
+  assert.match(output, /^check-official-anchors: FAIL {2}slot-directory {2}.*conversation\.session\.header\.utilities/m)
+})
+
+test('a retired-line slot absent from the installed directory is reported, not failed', t => {
+  const { repo, official } = scenario(t)
+  const { status, output } = runCheck({ repo, official })
+  assert.equal(status, 0, output)
+  assert.match(output, /^check-official-anchors: ok {2}slot-directory {2}.*retired-line slots not declared here: settings\.plugin\.item/m)
 })
 
 test('a seed table without a required platform specifier fails', t => {
