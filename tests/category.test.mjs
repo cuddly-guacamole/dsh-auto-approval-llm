@@ -395,9 +395,27 @@ test('aggressive: ordinary external targets are position-relaxed', () => {
 })
 
 test('workdir does not participate in position gating (documented)', () => {
-  const verdict = assessShell('cat D:/other/x', 'bash', roots, artifacts, undefined)
-  assert.equal(verdict.decision, 'ask')
-  assert.equal(cat('cat D:/other/x'), 'readOnly')
+  // The bash policy plane receives only the command text: assessShell(source,
+  // ...) and hardDenyShellReason(source, shell, roots) have no workdir
+  // parameter, so a relative operand is anchored to the session workspace. The
+  // executor, by contrast, runs the line with cwd = the tool's workdir
+  // argument. This test pins the policy half of that asymmetry: the verdict
+  // must be identical with and without a workdir argument, and the absolute
+  // spelling of the same target must be judged differently.
+  const rel = 'cat auto-approval-llm/audit.jsonl'
+  const abs = 'cat C:/Users/u/.dsh/auto-approval-llm/audit.jsonl'
+  const without = { name: 'bash', arguments: { command: rel } }
+  const withWorkdir = { name: 'bash', arguments: { command: rel, workdir: 'C:/Users/u/.dsh' } }
+  assert.equal(
+    assessTool(withWorkdir, roots, artifacts).decision,
+    assessTool(without, roots, artifacts).decision,
+    'adding a workdir argument must not change the policy verdict',
+  )
+  assert.equal(assessTool(without, roots, artifacts).decision, 'allow')
+  assert.equal(assessTool({ name: 'bash', arguments: { command: abs } }, roots, artifacts).decision, 'ask')
+  assert.equal(assessShell(rel, 'bash', roots, artifacts, undefined).decision, 'allow')
+  assert.equal(assessShell(abs, 'bash', roots, artifacts, undefined).decision, 'ask')
+  assert.equal(cat(rel), 'readOnly')
 })
 
 test('nested-exec / opaque stays out of auto', () => {
