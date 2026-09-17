@@ -4093,9 +4093,9 @@ test('reviewer credential delete also clears file-fallback key line', () => {
   // branch. A file-level `includes` is also satisfied by the helper's own
   // definition line, so the call could be removed while this stayed green.
   const route = region(src, 'export function installReviewerCredentialRoute', 'export function installHistoryRoute')
-  const deleteAt = route.indexOf("if (req.method === 'DELETE') {")
+  const deleteAt = route.indexOf("if (method === 'DELETE') {")
   assert.notEqual(deleteAt, -1, 'the credential route must handle DELETE')
-  const deleteBranch = route.slice(deleteAt, route.indexOf('const body = await readJsonBody(req);', deleteAt))
+  const deleteBranch = route.slice(deleteAt, route.indexOf('const body = await readJson(request);', deleteAt))
   assert.ok(deleteBranch.includes('clearReviewerKeyFromCredentialFile()'), 'the DELETE branch must invoke the file clear')
   assert.ok(deleteBranch.includes('fileClear ==='), 'the DELETE branch must report a failed file clear instead of a silent ok')
   const clientSrc = readFileSync(new URL('../src/client/index.ts', import.meta.url), 'utf8')

@@ -27,7 +27,7 @@ import { appendFileSync, existsSync, readFileSync, realpathSync, renameSync, sta
 import { isIP } from 'node:net'
 import { networkInterfaces, homedir } from 'node:os'
 import { join } from 'node:path'
-import { methodOf, registerCarrierFetchRoute, registerCarrierRoute } from './auto/carrier-route.js'
+import { methodOf, registerCarrierFetchRoute } from './auto/carrier-route.js'
 import { ArtifactRegistry } from './auto/artifacts.js'
 import { appendAuditLine, recordAuditClear } from './auto/audit.js'
 import { AGGRESSIVE_BUILTIN, applyCategoryDirective, CATEGORY_KEYS, categoryDirectiveFor, type CategoryKey, HARD_LOCKED_CATEGORIES, LOCKED_CATEGORIES, realpathCriticalReason, sensitiveBasenameAt } from './auto/category.js'
@@ -80,7 +80,7 @@ import {
   writeRuntimeAtomic,
 } from './auto/runtime-paths.js'
 import { runtimeStateReadHits } from './auto/shell.js'
-import { isLoopbackHostname, isTrustedFetchRequest, isTrustedRequest, resolvePublicReviewerTarget, reviewerProbeTargetAllowed, validateReviewerBaseUrl } from './auto/trust.js'
+import { isLoopbackHostname, isTrustedFetchRequest, resolvePublicReviewerTarget, reviewerProbeTargetAllowed, validateReviewerBaseUrl } from './auto/trust.js'
 import { aggregateToolStats } from './auto/tool-stats.js'
 import { normalizeLane, normalizeSharedEndpoint, resolveTransport } from './auto/model-channel.js'
 import { callEndpointText, createPinnedLookup, requestEndpointText } from './auto/endpoint-call.js'
@@ -2170,31 +2170,6 @@ async function readJson(request: Request, maxBytes = 64 * 1024): Promise<any> {
   return JSON.parse(Buffer.concat(chunks).toString('utf8'))
 }
 
-function responseJson(res: any, status: number, body: any): void {
-  const bytes = Buffer.from(JSON.stringify(body))
-  res.setHeader('Content-Type', 'application/json; charset=utf-8')
-  res.setHeader('Content-Length', String(bytes.length))
-  res.setHeader('Cache-Control', 'no-store')
-  res.setHeader('X-Content-Type-Options', 'nosniff')
-  res.writeHead(status)
-  res.end(bytes)
-}
-
-async function readJsonBody(req: any, maxBytes = 64 * 1024): Promise<any> {
-  const contentType = req.headers?.['content-type']?.split(';', 1)[0]?.trim().toLowerCase()
-  if (contentType !== 'application/json') throw new TypeError('Content-Type must be application/json')
-  const chunks: Buffer[] = []
-  let bytes = 0
-  for await (const chunk of req) {
-    const part = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
-    bytes += part.length
-    if (bytes > maxBytes) throw new RangeError(`request body exceeds ${maxBytes} bytes`)
-    chunks.push(part)
-  }
-  if (chunks.length === 0) throw new TypeError('request body is empty')
-  return JSON.parse(Buffer.concat(chunks).toString('utf8'))
-}
-
 // ── web request trust (RISK-01/RISK-02) ────────────────────────────────────
 // Mirrors the official dsh-client-connection `isTrustedApiRequest`: a Host
 // loopback/LAN-whitelist fence against DNS rebinding, plus same-origin
@@ -2338,29 +2313,26 @@ export function installSettingsRoute(ctx: any, settings: any): void {
     }
   }
 
-  registerCarrierRoute(ctx, {
+  registerCarrierFetchRoute(ctx, {
     path: SETTINGS_ROUTE,
     methods: ['GET', 'POST'],
     requestBody: 'buffered',
     label: 'dsh-auto-approval-llm: settings route',
-  }, async (req: any, res: any) => {
+  }, async (request: Request): Promise<Response> => {
+      const method = methodOf(request)
       // Configuration plane: loopback-same-origin only (privileged domain,
       // mirroring the official settings/credentials fence).
-      if (!isTrustedRequest(req, [])) {
-        responseJson(res, 403, { ok: false, error: 'forbidden' })
-        return
+      if (!isTrustedFetchRequest(request, [])) {
+        return json(403, { ok: false, error: 'forbidden' })
       }
       try {
-        if (req.method === 'GET') {
-          responseJson(res, 200, { ok: true, value: describeSettings() })
-          return
+        if (method === 'GET') {
+          return json(200, { ok: true, value: describeSettings() })
         }
-        if (req.method !== 'POST') {
-          res.setHeader('Allow', 'GET, POST')
-          responseJson(res, 405, { ok: false, error: 'method-not-allowed' })
-          return
+        if (method !== 'POST') {
+          return json(405, { ok: false, error: 'method-not-allowed' }, { Allow: 'GET, POST' })
         }
-        const body = await readJsonBody(req)
+        const body = await readJson(request)
         // A plain object is required: an array passes `typeof === 'object'` and
         // then spreads to `{}` in preserveHostKeys, silently resetting every
         // card key to the schema default behind a 200.
@@ -2375,9 +2347,9 @@ export function installSettingsRoute(ctx: any, settings: any): void {
         }
         const value = preserveHostKeys(settings.get(SETTINGS_NS) ?? {}, body.value)
         await settings.replace(SETTINGS_NS, value, body.expectedRevision)
-        responseJson(res, 200, { ok: true, value: describeSettings() })
+        return json(200, { ok: true, value: describeSettings() })
       } catch (error) {
-        responseJson(res, 400, {
+        return json(400, {
           ok: false,
           error: error instanceof Error ? error.message : String(error),
         })
@@ -2386,29 +2358,28 @@ export function installSettingsRoute(ctx: any, settings: any): void {
 }
 
 export function installReviewerCredentialRoute(ctx: any): void {
-  registerCarrierRoute(ctx, {
+  registerCarrierFetchRoute(ctx, {
     path: REVIEWER_CREDENTIAL_ROUTE,
     methods: ['GET', 'POST'],
     requestBody: 'buffered',
     label: 'dsh-auto-approval-llm: reviewer credential route',
-  }, async (req: any, res: any) => {
+  }, async (request: Request): Promise<Response> => {
+      const method = methodOf(request)
       // Credential plane: loopback-same-origin only (privileged domain).
-      if (!isTrustedRequest(req, [])) {
-        responseJson(res, 403, { ok: false, error: 'forbidden' })
-        return
+      if (!isTrustedFetchRequest(request, [])) {
+        return json(403, { ok: false, error: 'forbidden' })
       }
       // Resolve the service per request: the provider mounts asynchronously
       // after apply(), so a closure captured earlier would stay undefined and
       // report "unavailable" even when the store is up.
       const credentials = ctx.get('credentials')
       try {
-        if (req.method === 'GET') {
+        if (method === 'GET') {
           if (!credentials) {
-            responseJson(res, 200, { ok: true, value: { configured: false, source: undefined, writable: false } })
-            return
+            return json(200, { ok: true, value: { configured: false, source: undefined, writable: false } })
           }
           const info = await credentials.describe(REVIEWER_CREDENTIAL_REF)
-          responseJson(res, 200, {
+          return json(200, {
             ok: true,
             value: {
               configured: info?.configured === true,
@@ -2416,9 +2387,8 @@ export function installReviewerCredentialRoute(ctx: any): void {
               writable: info?.writable === true,
             },
           })
-          return
         }
-        if (req.method === 'DELETE') {
+        if (method === 'DELETE') {
           // DELETEs carry no body, so this branch must run before the JSON
           // body reader (which requires a JSON content type).
           // Never report a cleared credential unless the store actually
@@ -2428,8 +2398,7 @@ export function installReviewerCredentialRoute(ctx: any): void {
           if (credentials) {
             const cleared = await credentials.unset(REVIEWER_CREDENTIAL_REF).then(() => true).catch(() => false)
             if (!cleared) {
-              responseJson(res, 400, { ok: false, error: 'credential clear failed on the store' })
-              return
+              return json(400, { ok: false, error: 'credential clear failed on the store' })
             }
           }
           // Also drop the shared-file fallback source (the line this plugin
@@ -2440,28 +2409,23 @@ export function installReviewerCredentialRoute(ctx: any): void {
           // next review would contradict by sending the key again.
           const fileClear = clearReviewerKeyFromCredentialFile()
           if (fileClear === 'failed') {
-            responseJson(res, 400, { ok: false, error: 'credential clear failed on the shared credential file' })
-            return
+            return json(400, { ok: false, error: 'credential clear failed on the shared credential file' })
           }
-          responseJson(res, 200, { ok: true })
-          return
+          return json(200, { ok: true })
         }
-        const body = await readJsonBody(req)
-        if (req.method !== 'POST') {
-          res.setHeader('Allow', 'GET, POST')
-          responseJson(res, 405, { ok: false, error: 'method-not-allowed' })
-          return
+        const body = await readJson(request)
+        if (method !== 'POST') {
+          return json(405, { ok: false, error: 'method-not-allowed' }, { Allow: 'GET, POST' })
         }
         if (!credentials) {
-          responseJson(res, 400, { ok: false, error: 'credential service unavailable' })
-          return
+          return json(400, { ok: false, error: 'credential service unavailable' })
         }
         const apiKey = typeof body?.apiKey === 'string' ? body.apiKey.trim() : ''
         if (!apiKey) throw new TypeError('apiKey is required')
         await credentials.set(REVIEWER_CREDENTIAL_REF, apiKey)
-        responseJson(res, 200, { ok: true })
+        return json(200, { ok: true })
       } catch (error) {
-        responseJson(res, 400, {
+        return json(400, {
           ok: false,
           error: error instanceof Error ? error.message : String(error),
         })
@@ -2568,19 +2532,19 @@ export function installToolStatsRoute(ctx: any): void {
 }
 
 export function installLearningStoreRoute(ctx: any, revoke: (key: string) => Promise<boolean>): void {
-  registerCarrierRoute(ctx, {
+  registerCarrierFetchRoute(ctx, {
     path: LEARNING_STORE_ROUTE,
     methods: ['GET', 'POST'],
     requestBody: 'buffered',
     label: 'dsh-auto-approval-llm: learning-store route',
-  }, async (req: any, res: any) => {
+  }, async (request: Request): Promise<Response> => {
+      const method = methodOf(request)
       // The learning store is a privileged surface: read-only list + single
       // revoke. Same-origin loopback/LAN-whitelist gate as every other route.
-      if (!isTrustedRequest(req, trustedHosts)) {
-        responseJson(res, 403, { ok: false, error: 'forbidden' })
-        return
+      if (!isTrustedFetchRequest(request, trustedHosts)) {
+        return json(403, { ok: false, error: 'forbidden' })
       }
-      if (req.method === 'GET') {
+      if (method === 'GET') {
         // Display view of the store: keys are opaque hashes (never the raw
         // signature), the skeleton is the redacted zero-value template that
         // the store already persisted — nothing secret crosses the wire.
@@ -2593,48 +2557,43 @@ export function installLearningStoreRoute(ctx: any, revoke: (key: string) => Pro
           firstAt: e.firstAt,
           lastAt: e.lastAt,
         })).sort((a, b) => b.lastAt - a.lastAt)
-        responseJson(res, 200, { ok: true, value: { entries } })
-        return
+        return json(200, { ok: true, value: { entries } })
       }
-      if (req.method === 'DELETE') {
+      if (method === 'DELETE') {
         // Same error contract as every sibling route: a JSON body over the
         // limit is a 413 and any other failure a JSON 400. Without this the
         // host answered a bare, non-JSON 400 that the settings card could not
         // read, so the revoke failed silently in the UI.
         try {
-          const body = await readJsonBody(req)
+          const body = await readJson(request)
           if (typeof body?.key !== 'string' || body.key === '') {
             throw new TypeError('key is required')
           }
           const removed = await revoke(body.key)
           if (removed !== true) {
-            responseJson(res, 404, { ok: false, error: 'learning entry not found' })
-            return
+            return json(404, { ok: false, error: 'learning entry not found' })
           }
           if (!persistLearningGuarded()) {
             // The revoke applied in memory but not on disk, and the file is what
             // the next boot loads: claiming success here would resurrect the
             // entry silently (the same false success the history route refuses).
-            responseJson(res, 500, {
+            return json(500, {
               ok: false,
               error: 'learning revoke could not be persisted: the entry was removed in memory only and returns after a restart',
             })
-            return
           }
           // Revoking a learned entry changes future decisions — leave a
           // recoverable audit trail (mirrors recordAuditClear's discipline).
           appendAuditLine(JSON.stringify({ type: 'learning-revoked', at: Date.now(), key: body.key }))
-          responseJson(res, 200, { ok: true, value: { removed: true } })
+          return json(200, { ok: true, value: { removed: true } })
         } catch (error) {
-          responseJson(res, error instanceof RangeError ? 413 : 400, {
+          return json(error instanceof RangeError ? 413 : 400, {
             ok: false,
             error: error instanceof Error ? error.message : String(error),
           })
         }
-        return
       }
-      res.setHeader('Allow', 'GET, POST')
-      responseJson(res, 405, { ok: false, error: 'method-not-allowed' })
+      return json(405, { ok: false, error: 'method-not-allowed' }, { Allow: 'GET, POST' })
   })
 }
 
@@ -2776,51 +2735,47 @@ export function sessionReviewFingerprint(sessionId: string): string {
  * than inventing a panel.
  */
 export function installRevealRoute(ctx: any): void {
-  registerCarrierRoute(ctx, {
+  registerCarrierFetchRoute(ctx, {
     path: REVEAL_ROUTE,
     methods: ['POST'],
     requestBody: 'buffered',
     label: 'dsh-auto-approval-llm: reveal route',
-  }, (req: any, res: any) => {
-      if (!isTrustedRequest(req, trustedHosts)) {
-        responseJson(res, 403, { ok: false, error: 'forbidden' })
-        return
+  }, (request: Request): Response => {
+      const method = methodOf(request)
+      if (!isTrustedFetchRequest(request, trustedHosts)) {
+        return json(403, { ok: false, error: 'forbidden' })
       }
-      if (req.method !== 'POST') {
-        res.setHeader('Allow', 'POST')
-        responseJson(res, 405, { ok: false, error: 'method-not-allowed' })
-        return
+      if (method !== 'POST') {
+        return json(405, { ok: false, error: 'method-not-allowed' }, { Allow: 'POST' })
       }
-      const callId = String(req.headers?.['x-auto-approval-call-id'] ?? '').trim()
+      const callId = String(request.headers.get('x-auto-approval-call-id') ?? '').trim()
       const release = callId ? pendingPanelReleases.get(callId) : undefined
       if (release) release()
-      responseJson(res, 200, { ok: true, value: { revealed: release !== undefined } })
+      return json(200, { ok: true, value: { revealed: release !== undefined } })
   })
 }
 
 function installTestRoute(ctx: any, llm: any, endpointUrlFor: () => string = () => ''): void {
-  registerCarrierRoute(ctx, {
+  registerCarrierFetchRoute(ctx, {
     path: TEST_ROUTE,
     methods: ['POST'],
     requestBody: 'buffered',
     label: 'dsh-auto-approval-llm: test route',
-  }, async (req: any, res: any) => {
+  }, async (request: Request): Promise<Response> => {
+      const method = methodOf(request)
       // The online branch performs a server-side HTTP request driven by
       // request-body settings, so it must sit on the same trust plane as the
       // settings/credential routes: loopback-same-origin only. Otherwise any
       // LAN peer that passes `trustedHosts` (when the web server binds
       // 0.0.0.0) could turn the host process into an SSRF-to-loopback probe.
-      if (!isTrustedRequest(req, [])) {
-        responseJson(res, 403, { ok: false, error: 'forbidden' })
-        return
+      if (!isTrustedFetchRequest(request, [])) {
+        return json(403, { ok: false, error: 'forbidden' })
       }
-      if (req.method !== 'POST') {
-        res.setHeader('Allow', 'POST')
-        responseJson(res, 405, { ok: false, error: 'method-not-allowed' })
-        return
+      if (method !== 'POST') {
+        return json(405, { ok: false, error: 'method-not-allowed' }, { Allow: 'POST' })
       }
       try {
-        const body = await readJsonBody(req)
+        const body = await readJson(request)
 
         // Online-reviewer mode: hit the endpoint directly with the typed
         // (not-yet-saved) key and model from the draft. The key is never
@@ -2903,11 +2858,10 @@ function installTestRoute(ctx: any, llm: any, endpointUrlFor: () => string = () 
             if (probe.status < 200 || probe.status >= 300) {
               throw new Error(extractProbeErrorSummary(probe.status, probe.body))
             }
-            responseJson(res, 200, { ok: true, value: { reachable: true, modelFound: true } })
+            return json(200, { ok: true, value: { reachable: true, modelFound: true } })
           } finally {
             clearTimeout(timer)
           }
-          return
         }
 
         const provider = body?.provider
@@ -2917,12 +2871,12 @@ function installTestRoute(ctx: any, llm: any, endpointUrlFor: () => string = () 
         }
         const models = await llm.listModels(provider)
         const found = models.some((m: any) => m.id === model || m.name === model)
-        responseJson(res, 200, {
+        return json(200, {
           ok: true,
           value: { reachable: true, modelFound: found, count: models.length },
         })
       } catch (error) {
-        responseJson(res, 400, {
+        return json(400, {
           ok: false,
           error: error instanceof Error ? error.message : String(error),
         })
@@ -2935,88 +2889,80 @@ function installTestRoute(ctx: any, llm: any, endpointUrlFor: () => string = () 
 // no adapter internals cross the wire (dsh-llm already detaches these). Sits
 // on the same loopback-only plane as the settings card that consumes it.
 export function installLlmCatalogRoutes(ctx: any, llm: any): void {
-  registerCarrierRoute(ctx, {
+  registerCarrierFetchRoute(ctx, {
     path: PROVIDERS_ROUTE,
     methods: ['GET'],
     requestBody: 'buffered',
     label: 'dsh-auto-approval-llm: providers route',
-  }, async (req: any, res: any) => {
-      if (!isTrustedRequest(req, [])) {
-        responseJson(res, 403, { ok: false, error: 'forbidden' })
-        return
+  }, async (request: Request): Promise<Response> => {
+      const method = methodOf(request)
+      if (!isTrustedFetchRequest(request, [])) {
+        return json(403, { ok: false, error: 'forbidden' })
       }
-      if (req.method !== 'GET') {
-        res.setHeader('Allow', 'GET')
-        responseJson(res, 405, { ok: false, error: 'method-not-allowed' })
-        return
+      if (method !== 'GET') {
+        return json(405, { ok: false, error: 'method-not-allowed' }, { Allow: 'GET' })
       }
       try {
         const providers = (llm?.listProviders?.() ?? []).map((p: any) => ({ id: p.id, name: p.name ?? p.id }))
-        responseJson(res, 200, { ok: true, value: { providers } })
+        return json(200, { ok: true, value: { providers } })
       } catch (error) {
-        responseJson(res, 400, {
+        return json(400, {
           ok: false,
           error: error instanceof Error ? error.message : String(error),
         })
       }
   })
-  registerCarrierRoute(ctx, {
+  registerCarrierFetchRoute(ctx, {
     path: LLM_MODELS_ROUTE,
     methods: ['GET'],
     requestBody: 'buffered',
     label: 'dsh-auto-approval-llm: llm-models route',
-  }, async (req: any, res: any) => {
-      if (!isTrustedRequest(req, [])) {
-        responseJson(res, 403, { ok: false, error: 'forbidden' })
-        return
+  }, async (request: Request): Promise<Response> => {
+      const method = methodOf(request)
+      if (!isTrustedFetchRequest(request, [])) {
+        return json(403, { ok: false, error: 'forbidden' })
       }
-      if (req.method !== 'GET') {
-        res.setHeader('Allow', 'GET')
-        responseJson(res, 405, { ok: false, error: 'method-not-allowed' })
-        return
+      if (method !== 'GET') {
+        return json(405, { ok: false, error: 'method-not-allowed' }, { Allow: 'GET' })
       }
-      const url = new URL(req.url ?? '/', 'http://x')
+      const url = new URL(request.url, 'http://x')
       const provider = url.searchParams.get('provider') ?? ''
       if (!provider) {
-        responseJson(res, 400, { ok: false, error: 'provider is required' })
-        return
+        return json(400, { ok: false, error: 'provider is required' })
       }
       try {
         const models = await llm.listModels(provider)
-        responseJson(res, 200, {
+        return json(200, {
           ok: true,
           value: { models: models.map((m: any) => ({ provider: m.provider, id: m.id, name: m.name ?? m.id })) },
         })
       } catch (error) {
         // Unregistered provider surfaces as NO_ADAPTER — a 400 with the
         // adapter's message beats a bare stack in the picker.
-        responseJson(res, 400, {
+        return json(400, {
           ok: false,
           error: error instanceof Error ? error.message : String(error),
         })
       }
   })
-  registerCarrierRoute(ctx, {
+  registerCarrierFetchRoute(ctx, {
     path: REASONING_EFFORTS_ROUTE,
     methods: ['GET'],
     requestBody: 'buffered',
     label: 'dsh-auto-approval-llm: reasoning-efforts route',
-  }, async (req: any, res: any) => {
-      if (!isTrustedRequest(req, [])) {
-        responseJson(res, 403, { ok: false, error: 'forbidden' })
-        return
+  }, async (request: Request): Promise<Response> => {
+      const method = methodOf(request)
+      if (!isTrustedFetchRequest(request, [])) {
+        return json(403, { ok: false, error: 'forbidden' })
       }
-      if (req.method !== 'GET') {
-        res.setHeader('Allow', 'GET')
-        responseJson(res, 405, { ok: false, error: 'method-not-allowed' })
-        return
+      if (method !== 'GET') {
+        return json(405, { ok: false, error: 'method-not-allowed' }, { Allow: 'GET' })
       }
-      const url = new URL(req.url ?? '/', 'http://x')
+      const url = new URL(request.url, 'http://x')
       const provider = url.searchParams.get('provider') ?? ''
       const model = url.searchParams.get('model') ?? ''
       if (!provider || !model) {
-        responseJson(res, 400, { ok: false, error: 'provider and model are required' })
-        return
+        return json(400, { ok: false, error: 'provider and model are required' })
       }
       try {
         // Resolve the exact model's metadata from its owning adapter — the
@@ -3027,14 +2973,14 @@ export function installLlmCatalogRoutes(ctx: any, llm: any): void {
         const efforts = Array.isArray(reasoning?.efforts)
           ? reasoning.efforts.map((e: any) => ({ id: e.id, name: e.name ?? e.id }))
           : []
-        responseJson(res, 200, {
+        return json(200, {
           ok: true,
           value: { efforts, defaultEffort: reasoning?.defaultEffort ?? null },
         })
       } catch (error) {
         // Unknown provider/model or an adapter without resolveModel support —
         // an empty effort list (default-only picker) beats a hard error here.
-        responseJson(res, 200, { ok: true, value: { efforts: [], defaultEffort: null } })
+        return json(200, { ok: true, value: { efforts: [], defaultEffort: null } })
       }
   })
 }
@@ -3045,29 +2991,26 @@ export function installSessionModeRoute(ctx: any): void {
   // keep it diagnosable behind the debug switch instead of losing it entirely.
   const unknownSessionLogged = new Set<string>()
   const UNKNOWN_SESSION_LOG_CAP = 32
-  registerCarrierRoute(ctx, {
+  registerCarrierFetchRoute(ctx, {
     path: SESSION_MODE_ROUTE,
     methods: ['GET'],
     requestBody: 'buffered',
     label: 'dsh-auto-approval-llm: session mode route',
-  }, async (req: any, res: any) => {
-      if (!isTrustedRequest(req, trustedHosts)) {
-        responseJson(res, 403, { ok: false, error: 'forbidden' })
-        return
+  }, async (request: Request): Promise<Response> => {
+      const method = methodOf(request)
+      if (!isTrustedFetchRequest(request, trustedHosts)) {
+        return json(403, { ok: false, error: 'forbidden' })
       }
-      if (req.method !== 'GET') {
-        res.setHeader('Allow', 'GET')
-        responseJson(res, 405, { ok: false, error: 'method-not-allowed' })
-        return
+      if (method !== 'GET') {
+        return json(405, { ok: false, error: 'method-not-allowed' }, { Allow: 'GET' })
       }
       // Session id travels in a request header (never the URL query) so it
       // does not leak into devtools/logs/Referer — the same discipline as the
       // review-status call-id header (shared.ts documents the rule
       // client-side).
-      const sessionId = String(req.headers?.['x-auto-approval-session-id'] ?? '').trim()
+      const sessionId = String(request.headers.get('x-auto-approval-session-id') ?? '').trim()
       if (!sessionId) {
-        responseJson(res, 400, { ok: false, error: 'sessionId is required' })
-        return
+        return json(400, { ok: false, error: 'sessionId is required' })
       }
       const agents = ctx.get('agents')
       const permissionPresets = ctx.get('permissionPresets')
@@ -3084,8 +3027,7 @@ export function installSessionModeRoute(ctx: any): void {
           unknownSessionLogged.add(sessionId)
           debugLog({ ev: 'session-mode-unknown', sessionId })
         }
-        responseJson(res, 200, { ok: true, value: { mode: null } })
-        return
+        return json(200, { ok: true, value: { mode: null } })
       }
       // Report the durable raw identity normalized to the plugin's machine
       // name: a legacy `auto` session reads as auto-approval so the client
@@ -3093,7 +3035,7 @@ export function installSessionModeRoute(ctx: any): void {
       const gateNames = gatePresetNames(detectHostCapability(permissionPresets).capability)
       const raw = rawPresetOf(permissionPresets, agent.session)
       const mode = raw !== undefined && gateNames.includes(raw) ? GATED_PRESET : (raw ?? null)
-      responseJson(res, 200, { ok: true, value: { mode } })
+      return json(200, { ok: true, value: { mode } })
   })
 }
 
@@ -4353,7 +4295,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
   // without that service leaves the routes unregistered while the rest of the
   // plugin keeps running, and a carrier that provides it later still gets them
   // on arrival. Every installer keeps its own `ctx.get('webServer')` guard.
-  // Routes bind themselves to the carrier inside registerCarrierRoute(): the
+  // Routes bind themselves to the carrier inside registerCarrierFetchRoute(): the
   // block no longer waits on `webServer`, so a carrier without it still gets the
   // routes once its Fetch registry mounts.
   installFeedbackRoute(anyCtx)
@@ -5813,27 +5755,24 @@ export function apply(ctx: Context, rawConfig: Config): void {
 
   // ── /stats (composer status chip data) ─────────────────────────────────
   function installStatsRoute(ctx: any): void {
-    registerCarrierRoute(ctx, {
+    registerCarrierFetchRoute(ctx, {
       path: STATS_ROUTE,
       methods: ['GET'],
       requestBody: 'buffered',
       label: 'dsh-auto-approval-llm: stats route',
-    }, async (req: any, res: any) => {
-        if (!isTrustedRequest(req, trustedHosts)) {
-          responseJson(res, 403, { ok: false, error: 'forbidden' })
-          return
+    }, async (request: Request): Promise<Response> => {
+        const method = methodOf(request)
+        if (!isTrustedFetchRequest(request, trustedHosts)) {
+          return json(403, { ok: false, error: 'forbidden' })
         }
-        if (req.method !== 'GET') {
-          res.setHeader('Allow', 'GET')
-          responseJson(res, 405, { ok: false, error: 'method-not-allowed' })
-          return
+        if (method !== 'GET') {
+          return json(405, { ok: false, error: 'method-not-allowed' }, { Allow: 'GET' })
         }
         // Session id travels in a request header, never the URL query (same
         // discipline as SESSION_MODE_ROUTE).
-        const sessionId = String(req.headers?.['x-auto-approval-session-id'] ?? '').trim()
+        const sessionId = String(request.headers.get('x-auto-approval-session-id') ?? '').trim()
         if (!sessionId) {
-          responseJson(res, 400, { ok: false, error: 'sessionId is required' })
-          return
+          return json(400, { ok: false, error: 'sessionId is required' })
         }
         const agent = anyCtx.get('agents')?.get?.(sessionId)
         const authority = authorityFor({ agent })
@@ -5848,7 +5787,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
         const consecutive = denials.get(key) ?? 0
         const total = totalDenials.get(key) ?? 0
         const records = approvalHistory.filter((r) => r.sessionId === key)
-        responseJson(res, 200, {
+        return json(200, {
           ok: true,
           value: {
             mode,
