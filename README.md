@@ -135,7 +135,7 @@ dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 | `categoryPolicy` / `categoryMode` / `trustedDirs` | `{}` / `standard` / [] | 分类三态、位置模式与信任目录 |
 | `privilegeAutoReview` / `protectedAutoReview` | false | 分别解锁 privilege / protected（差别见 docs/17） |
 | `learningEnabled` / `learningThreshold` | false / 3 | 确认制学习开关与阈值（2–10） |
-| `editDiffPreview` / `reviewerContextFacts` | false | diff 预览 / 上下文增强复审（仅 YAML 可配） |
+| `editDiffPreview` / `reviewerContextFacts` | false | diff 预览 / 上下文增强复审（仅 YAML 可配）；`editDiffPreview` 计划 0.1.6-rc.1 退役（官方轨迹视图已有同类 diff） |
 | `slashCommandsEnabled` / `directHumanEnabled` | false | 注册 `/approval-*` 命令 / 直接人工通道（agent 可把操作路由给人；均需重启生效） |
 | `debug` / `redactResults` / `notifyUser` | false / false / true | 调试日志 / 结果脱敏 / 通过通知进会话 |
 

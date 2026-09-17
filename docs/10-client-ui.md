@@ -65,7 +65,7 @@ flowchart TD
     │                · privilegeAutoReview 开关（提权类别解锁，默认关；开启后 privilege 行可选 自动/拒绝）
 │    │                · 12 类逐行三态 CapsuleSelect（LOCKED 类只剩 继承/人工询问 可选；privilege 解锁后恢复三态）
 │    ├─ [安全底线] 确认制学习     learningEnabled(on/off) · learningThreshold(数字输入 min2 max10，保存钳回 2..10)（阈值行仅开关=on 时显示）（<span class="lnum">client/index.ts:L"const buildLearningBody"</span>）· 已学习条目区块（键哈希 + 脱敏骨架 + 计数，可单条吊销，落 `learning-revoked` 审计）
-│    ├─ 实用小功能    onboardingMessageEnabled（首次使用引导消息）· redactResults（成功结果二次脱敏）· editDiffPreview（默认关的增强开关）· rejectGuidance（拒绝引导提示）
+│    ├─ 实用小功能    onboardingMessageEnabled（首次使用引导消息）· redactResults（成功结果二次脱敏）· editDiffPreview（默认关的增强开关；计划 0.1.6-rc.1 退役）· rejectGuidance（拒绝引导提示）
 │    ├─ 在线评审模型   快速判断模型[来源: 跟随会话/DSH模型(catalog chips 填 Provider·Model)/自定义端点] · 深度评审模型[同构] · 自定义端点[共享：协议·API地址·模型·密钥(password型)「已配置|未配置」· 测试连接]（恢复默认=双通道回 session + 端点配置清空 + 清除密钥）；**端点块按需渲染**——仅当某通道来源=自定义端点，或端点地址/模型/密钥已有配置时出现（否则默认态少 4 行 + 密钥行 + 测试按钮）
 │    └─ 最近审批记录   搜索 · 分页(PAGE_SIZE=10) · 记录+[熔断]+原因(warn色) + LLM 响应耗时统计 · 清空历史(confirm)
 │    └─ 高级    defaultReviewMode · autoModeNotice · showSessionPanel（逐行即时保存，无独立 footer）· 仅配置文件可配的键（只读清单：按 `HOST_ONLY_KEYS` 单一 owner 逐键渲染「键名 + 当前生效值」，无控件、无保存路径；展开/收起由 `dsa-segBtn` 控制，计数写入文案 `{count}`）· 拒绝出口说明两段（DSH_HOME 写入的操作者开口 / 无开口的族；纯文案，无控件）

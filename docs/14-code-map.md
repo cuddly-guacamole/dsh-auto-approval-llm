@@ -6,7 +6,7 @@
 
 ```text
 src/
-├─ index.ts              宿主编排：apply()、四挂点接线、16 路由、命令、评审器、审计、学习接线  5897 行
+├─ index.ts              宿主编排：apply()、四挂点接线、16 路由、命令、评审器、审计、学习接线  5899 行
 ├─ auto/                 静态评估纯函数层（29 文件，按字母序）
 │    ├─ artifacts.ts     140  本会话成功创建路径登记（删除豁免依据）
 │    ├─ audit.ts         147  append-only 审批审计（清空留墓碑、5MiB 保尾）
@@ -16,7 +16,7 @@ src/
 │    ├─ constants.ts     141  数值默认唯一事实源（倒计时/熔断/截断/学习族阈值）
 │    ├─ decision.ts      913  纯决策函数：评审解析、人机竞速、来源标注、熔断、静态名单、host-only 键
 │    ├─ dsh-classifier.ts 140  复用 ctx.llm 的低 token 分类请求（temperature 0）
-│    ├─ editdiff.ts      469  编辑类工具行级 diff 预览（LCS、官方语义镜像、倒计时字面量剥离）
+│    ├─ editdiff.ts      472  编辑类工具行级 diff 预览（LCS、官方语义镜像、倒计时字面量剥离）
 │    ├─ endpoint-call.ts 256  共享端点连通性探测与模型校验
 │    ├─ latency.ts       169  LLM 评审耗时环形缓冲（settled/aborted 二分、1MB 轮转）
 │    ├─ learning.ts      584  确认制学习：签名、计数、回收、查找、消费闸
@@ -38,12 +38,12 @@ src/
 │    ├─ tool-stats.ts    94   工具调用统计收集
 │    └─ trust.ts         307  web 路由信任平面（loopback/LAN 边界、Host 伪造防护、在线端点 URL 校验）
 └─ client/
-     ├─ index.ts         React 客户端主体 3035 行（设置卡 8 子卡/面板增强/应答 watcher 装配/浮动按钮/CSS）
+     ├─ index.ts         React 客户端主体 3037 行（设置卡 8 子卡/面板增强/应答 watcher 装配/浮动按钮/CSS）
      ├─ approvals/       应答模块（0.0.12 起；0.0.16 起单协议——remote 源适配 + shared 协议无关核心；rc.2 legacy/feature 已删）
      │    ├─ remote.ts       229
      │    └─ shared.ts       656
      ├─ auto-icon.ts     权限菜单图标 + Auto 风险确认弹窗 657 行
-     ├─ locale.ts        zh/en 双语 560 行
+     ├─ locale.ts        zh/en 双语 562 行
      ├─ human-gate.ts    浮层「人工出手率」派生（HUMAN_SOURCES 与 scripts/friction-report 同源）
      ├─ host-keys.ts     47  仅配置文件可配键的只读渲染行（`HOST_ONLY_KEYS` 单一 owner → 键名 + 生效值；纯函数，无 React 依赖）
      └─ tool-chips.ts    150  工具芯片

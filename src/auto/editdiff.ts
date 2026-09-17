@@ -12,6 +12,9 @@
  * input, compare-class unreadable target, ambiguous edit, oversized input,
  * escape attempt) returns undefined so the caller fails closed by omitting
  * the preview entirely.
+ *
+ * RETIREMENT(0.1.6-rc.1): the official trajectory view renders prompt diffs;
+ * this module and the `editDiffPreview` key retire with the minimum host line.
  */
 import { lstatSync, readFileSync, realpathSync } from 'node:fs'
 import { dirname } from 'node:path'

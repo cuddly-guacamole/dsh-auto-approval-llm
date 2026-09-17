@@ -312,6 +312,7 @@ export const Config: z<Config> = z.object({
   // Line-level diff preview for edit-class approvals: display-only, fail-closed
   // (any read/diff failure omits the block), never part of the review payload.
   // Off by default (fail-closed): enable explicitly to see the panel diff.
+  // RETIREMENT(0.1.6-rc.1): the official trajectory view renders prompt diffs.
   editDiffPreview: z.boolean().default(false),
   // Rejected-call guidance for the agent (user-message injection with a
   // whitelist-only payload: source/category enums, never tool names or free
@@ -4682,6 +4683,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
     // Edit-class operations get a line-level diff preview of the target file
     // appended as a trailing marked block (display-only). Any failure, gate
     // rejection, or disabled config omits the block entirely.
+    // RETIREMENT(0.1.6-rc.1): superseded by the official trajectory prompt diff.
     let editDiffText: string | undefined
     if (config.editDiffPreview === true && EDIT_DIFF_TOOLS.has(String(req.toolName ?? ''))) {
       const roots = rootsFor({ agent: req.agent })

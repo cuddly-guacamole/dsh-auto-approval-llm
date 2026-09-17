@@ -145,6 +145,7 @@ function installApprovalPanelDecorations(): () => void {
     return { header, lines }
   }
 
+  // RETIREMENT(0.1.6-rc.1): the approval-panel diff block retires with the minimum host line.
   const renderDiffBlock = (panel: any, block: { header: string; lines: { kind: string; text: string }[] }) => {
     if (panel.querySelector('[data-dsa-edit-diff]')) return
     const wrap = doc.createElement('div')
@@ -2157,6 +2158,7 @@ function SettingsSection({ chrome = 'card' }: { chrome?: 'card' | 'plain' }) {
       options: onOffOptions(),
       onChange: (v: any) => update({ redactResults: v as 'on' | 'off' }),
     }), t('settings.rules.redactResultsHint')),
+    // RETIREMENT(0.1.6-rc.1): this key retires with the minimum host line.
     row(t('settings.rules.editDiffPreview'), React.createElement(CapsuleSelect, {
       value: draft.editDiffPreview,
       options: onOffOptions(),

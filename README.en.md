@@ -135,7 +135,7 @@ The table below lists the common keys only; **every key, its full semantics and 
 | `categoryPolicy` / `categoryMode` / `trustedDirs` | `{}` / `standard` / [] | Category tri-states, location mode and trusted directories |
 | `privilegeAutoReview` / `protectedAutoReview` | false | Unlock privilege / protected respectively (differences in docs/17) |
 | `learningEnabled` / `learningThreshold` | false / 3 | Confirmation-based learning switch and threshold (2–10) |
-| `editDiffPreview` / `reviewerContextFacts` | false | Diff preview / reviewer context facts (YAML only) |
+| `editDiffPreview` / `reviewerContextFacts` | false | Diff preview / reviewer context facts (YAML only); `editDiffPreview` is planned to retire in 0.1.6-rc.1 (the official trajectory view renders equivalent diffs) |
 | `slashCommandsEnabled` / `directHumanEnabled` | false | Register `/approval-*` commands / direct-human channel (the agent can route a call to a human; both need a restart) |
 | `debug` / `redactResults` / `notifyUser` | false / false / true | Debug log / redact successful results / approval notice in-session |
 

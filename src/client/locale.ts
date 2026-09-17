@@ -130,6 +130,7 @@ export const zh = {
   'settings.rules.rulesTextBlocked': '解析错误：任一行有错时整段声明规则失效，将按内置策略处理；修复后保存即恢复（维度行要求每项为 agent:… 或 workspace:… 的小写 key:value，值禁空/感叹号滥用/".."/尾斜杠）',
   'settings.rules.redactResults': '结果凭据掩码（redactResults）',
   'settings.rules.redactResultsHint': '开启后，工具成功执行的结果中疑似凭据（密钥/JWT/连接串等）会在进入模型视野前替换为 [redacted:...]；默认关闭',
+  // RETIREMENT(0.1.6-rc.1): this key and its hint retire with the minimum host line.
   'settings.rules.editDiffPreview': '编辑操作 diff 预览（editDiffPreview）',
   'settings.rules.editDiffPreviewHint': '开启后，进入人工审批的编辑类工具（write/edit/str_replace_editor/apply_patch）在审批面板展示目标文件的行级红绿 diff（目标仅限工作区内非受保护路径，≤1MiB/≤200 行/约 32KiB，失败自动省略）。纯展示：不参与任何裁决，不进 LLM 复审输入；默认关闭',
   'settings.reset': '恢复默认',
@@ -408,6 +409,7 @@ export const en: Record<LocaleKey, string> = {
   'settings.rules.rulesTextBlocked': 'Parse error: any invalid line disables the entire rules block (falls back to built-in policy); fix the lines and save to re-enable. Scope lines require each comma item to be a lowercase agent:… or workspace:… key:value; values must be non-empty and free of "!", ".." and trailing slashes',
   'settings.rules.redactResults': 'Result credential masking (redactResults)',
   'settings.rules.redactResultsHint': 'When on, credential-shaped material (keys/JWT/connection strings) in successful tool results is replaced with [redacted:...] before it reaches the model; off by default',
+  // RETIREMENT(0.1.6-rc.1): see the zh block.
   'settings.rules.editDiffPreview': 'Edit diff preview (editDiffPreview)',
   'settings.rules.editDiffPreviewHint': 'When on, edit-class tools (write/edit/str_replace_editor/apply_patch) entering human approval show a line-level red/green diff of the target file in the approval panel (in-workspace non-protected targets only, ≤1 MiB / ≤200 lines / ≈32 KiB, omitted automatically on any failure). Display-only: never part of any decision or of the LLM review input; off by default',
   'settings.reset': 'Reset defaults',
