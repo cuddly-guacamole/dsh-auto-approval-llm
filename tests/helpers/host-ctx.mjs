@@ -164,10 +164,14 @@ export function createHostContext(options = {}) {
     if (list.length === 0) throw new Error("no tools/result handler registered");
     for (const handler of list) await handler(exec, result);
   };
-  const invokePostExecute = (exec, result) => {
+  // `next` defaults to an undefined-resolving stub, but callers that need to
+  // prove the handler forwarded the call (rather than returning an accept)
+  // pass their own sentinel: asserting the stub's own undefined would be an
+  // oracle made of the test double, not of the production branch.
+  const invokePostExecute = (exec, result, next = async () => undefined) => {
     const list = handlersFor("tools/post-execute");
     if (list.length === 0) throw new Error("no tools/post-execute handler registered");
-    return list[0](exec, result, async () => undefined);
+    return list[0](exec, result, next);
   };
   const invokeApprovalRequest = (req, next) => {
     const list = handlersFor("approval/request");

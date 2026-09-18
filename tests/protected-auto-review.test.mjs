@@ -49,6 +49,11 @@ test('precondition: a protected read is an ask the reviewer is eligible for', ()
 
 test('default off: protected stays clamped to ask so no LLM takeover can answer it', () => {
   assert.equal(categoryDirective(cfg(), 'protected', { decision: 'ask', classifierEligible: true }), 'ask')
+  // Deliberate no-delta (not a bug): the LOCKED clamp returns before the
+  // eligible bit is read, so flipping it must not change this path. Pinning the
+  // false side keeps a refactor from re-ordering the clamp and silently handing
+  // locked categories to the reviewer lane.
+  assert.equal(categoryDirective(cfg(), 'protected', { decision: 'ask', classifierEligible: false }), 'ask')
   // Even an explicit auto cannot lift a locked category while the switch is off.
   assert.equal(
     categoryDirective(cfg({ categoryPolicy: { protected: 'auto' } }), 'protected', { decision: 'ask', classifierEligible: true }),
