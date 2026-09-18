@@ -364,7 +364,7 @@ export function startReviewPolling(
     if (status?.phase === 'follow') {
       // Publish the settlement before detaching so the chip can show the
       // outcome after the panel is gone (bounded TTL in the store).
-      approvalStatusStore.resolve(handle.sessionId, handle.callId!, status.source, status.action)
+      approvalStatusStore.resolve(handle.sessionId, handle.callId!, status.source, status.action, status.lockedAsk === true)
       if (status.source === 'human' || status.source === 'abort') {
         // The human answered the panel / the ask was cancelled: detaching is
         // enough — re-answering would re-respond to a settled approval and

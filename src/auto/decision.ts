@@ -66,6 +66,12 @@ export type TimeoutAction = 'reject' | 'allow'
 export interface HumanDecisionStatus {
   seconds: number
   action: TimeoutAction
+  /**
+   * The ask belongs to a locked category: its countdown action is pinned to
+   * reject by design, not chosen by `timeoutAction`. The timeout notice must
+   * say so instead of crediting "the configured timeout action".
+   */
+  lockedAsk?: boolean
 }
 
 export interface HumanDecisionOptions {
@@ -134,10 +140,13 @@ export async function raceHumanDecision(
       if (claimed || finishedByNext) return
       if (opts.callId !== undefined) {
         const actionText = opts.status.action === 'allow' ? 'approved' : 'rejected'
-        opts.recordTimeout(
-          opts.callId,
-          `[dsh-auto-approval-llm] no human response in ${opts.status.seconds}s: auto-${actionText} by the configured timeout action (timeout — not a user denial)`,
-        )
+        // A locked-category ask pins `action` to reject: nothing the user
+        // configured decided this, so the notice must name the lock instead of
+        // crediting `timeoutAction` (misattribution that read as "you set this").
+        const timeoutText = opts.status.lockedAsk === true
+          ? `[dsh-auto-approval-llm] no human response in ${opts.status.seconds}s: locked category cannot be released — ${actionText} (timeout — not a user denial)`
+          : `[dsh-auto-approval-llm] no human response in ${opts.status.seconds}s: auto-${actionText} by the configured timeout action (timeout — not a user denial)`
+        opts.recordTimeout(opts.callId, timeoutText)
       }
       settle(opts.status.action === 'allow' ? 'allowed-once' : 'rejected', true)
     }, humanMs)
@@ -803,11 +812,14 @@ export type FollowSource = 'human' | 'llm' | 'timeout' | 'abort'
 export interface FollowStatusInput {
   risk: 'LOW' | 'MEDIUM' | 'HIGH'
   outcome?: string
+  /** Locked-category countdown: the follow record must carry the lock so the
+   * client's chip does not credit the user's `timeoutAction` for the rejection. */
+  lockedAsk?: boolean
 }
 
 export type FollowResolution =
   | { kind: 'keep' }
-  | { kind: 'publish'; follow: { risk: 'LOW' | 'MEDIUM' | 'HIGH'; phase: 'follow'; action: 'allow' | 'reject'; seconds: 0; source: FollowSource } }
+  | { kind: 'publish'; follow: { risk: 'LOW' | 'MEDIUM' | 'HIGH'; phase: 'follow'; action: 'allow' | 'reject'; seconds: 0; source: FollowSource; lockedAsk?: true } }
 
 /**
  * Decide the follow-phase status to publish after an approval resolution.
@@ -831,6 +843,10 @@ export function followResolution(
   opts: { timedOut: boolean; aborted: boolean },
 ): FollowResolution {
   if (currentPhase === 'follow') return { kind: 'keep' }
+  // Carry the locked-category provenance into the follow record: the terminal
+  // chip reads `source`/`action` only, and without this flag a pinned-reject
+  // locked ask is indistinguishable from a user-configured timeout rejection.
+  const lockedAsk = input.lockedAsk === true ? ({ lockedAsk: true } as const) : {}
   if (opts.timedOut) {
     return {
       kind: 'publish',
@@ -840,6 +856,7 @@ export function followResolution(
         action: input.outcome === 'allowed-once' ? 'allow' : 'reject',
         seconds: 0,
         source: 'timeout',
+        ...lockedAsk,
       },
     }
   }
@@ -848,7 +865,7 @@ export function followResolution(
     // the panel without implying a user answer.
     return {
       kind: 'publish',
-      follow: { risk: input.risk, phase: 'follow', action: 'reject', seconds: 0, source: 'abort' },
+      follow: { risk: input.risk, phase: 'follow', action: 'reject', seconds: 0, source: 'abort', ...lockedAsk },
     }
   }
   return {
@@ -859,6 +876,7 @@ export function followResolution(
       action: input.outcome === 'allowed-once' ? 'allow' : 'reject',
       seconds: 0,
       source: 'human',
+      ...lockedAsk,
     },
   }
 }

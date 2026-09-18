@@ -70,7 +70,7 @@ export function watchSessionApprovals(ctx: any, options: SessionWatchOptions = {
       seen.add(callId)
       live.add(callId)
       if (review.phase === 'follow') {
-        approvalStatusStore.resolve(sessionId, callId, review.source, review.action ?? 'reject')
+        approvalStatusStore.resolve(sessionId, callId, review.source, review.action ?? 'reject', review.lockedAsk === true)
       } else {
         approvalStatusStore.publishStatus(sessionId, callId, review)
       }

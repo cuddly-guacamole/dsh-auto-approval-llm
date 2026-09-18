@@ -4723,7 +4723,9 @@ export function apply(ctx: Context, rawConfig: Config): void {
           return gate.wait().then(() => (gate.isCancelled() ? undefined : next()))
         }
         const raced = await raceHumanDecision(delegate, {
-          status: { seconds: status.seconds, action: status.action },
+          // A locked-category status is pinned to reject; tell the racer so its
+          // timeout notice can name the lock instead of the configured action.
+          status: { seconds: status.seconds, action: status.action, ...(status.lockedAsk === true ? { lockedAsk: true } : {}) },
           callId: req.callId,
           recordTimeout: (id, text) => recordTimeoutFeedback(id, text),
         }, handle)
@@ -4764,7 +4766,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
         const current = reviewStates.get(req.callId)
         const resolution = followResolution(
           current?.phase,
-          { risk: status.risk, outcome },
+          { risk: status.risk, outcome, ...(status.lockedAsk === true ? { lockedAsk: true } : {}) },
           { timedOut, aborted },
         )
         if (resolution.kind === 'publish') {

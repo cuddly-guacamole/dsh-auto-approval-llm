@@ -27,6 +27,8 @@ export interface HostStatus {
   /** Monotonic per-ask revision; an older revision never overwrites a newer one. */
   revision?: number
   source?: ApprovalSource
+  /** Locked-category ask: its action is pinned to reject, not configured. */
+  lockedAsk?: boolean
 }
 
 export interface ApprovalRecord {
@@ -45,6 +47,11 @@ export interface ApprovalRecord {
   deadline: number
   revision: number
   source?: ApprovalSource
+  /**
+   * The ask is a locked category: its countdown/terminal action is pinned to
+   * reject by design, so the chip must not credit `timeoutAction` for it.
+   */
+  lockedAsk?: boolean
   /** Local ms timestamp of the last change; terminal records expire from it. */
   observedAt: number
 }
@@ -73,7 +80,7 @@ export type ChipState =
   | { kind: 'breaker' }
   | { kind: 'allowed'; by: 'llm' | 'host' }
   | { kind: 'rejected'; by: 'llm' | 'host' }
-  | { kind: 'timeout'; action: 'allow' | 'reject' }
+  | { kind: 'timeout'; action: 'allow' | 'reject'; lockedAsk?: boolean }
   | { kind: 'human' }
   | { kind: 'cancelled' }
 
@@ -87,7 +94,9 @@ export function chipState(record: ApprovalRecord | undefined, now: number, offli
   if (record.phase === 'follow') {
     if (record.source === 'abort') return { kind: 'cancelled' }
     if (record.source === 'human') return { kind: 'human' }
-    if (record.source === 'timeout') return { kind: 'timeout', action: record.action }
+    if (record.source === 'timeout') {
+      return { kind: 'timeout', action: record.action, ...(record.lockedAsk === true ? { lockedAsk: true } : {}) }
+    }
     if (record.source === 'llm') {
       return record.action === 'allow' ? { kind: 'allowed', by: 'llm' } : { kind: 'rejected', by: 'llm' }
     }
@@ -121,7 +130,7 @@ export interface ApprovalStatusStore {
   /** Apply a host review-status payload. */
   publishStatus(sessionId: string, callId: string, status: HostStatus): void
   /** Record a settled ask (the panel is closing or closed). */
-  resolve(sessionId: string, callId: string, source: ApprovalSource | undefined, action: 'allow' | 'reject'): void
+  resolve(sessionId: string, callId: string, source: ApprovalSource | undefined, action: 'allow' | 'reject', lockedAsk?: boolean): void
   /** The pending left the snapshot without a settled record. */
   dropPending(sessionId: string, callId: string): void
   clearSession(sessionId: string): void
@@ -179,12 +188,16 @@ export function createApprovalStatusStore(now: () => number = Date.now): Approva
     callId: string,
     source: ApprovalSource | undefined,
     action: 'allow' | 'reject',
+    lockedAsk = false,
   ) => {
     const key = recordKey(sessionId, callId)
     if (tombstones.has(key)) return
     const existing = records.get(key)
     if (existing && existing.phase === 'follow') return
     const at = now()
+    // A countdown publish already carried the lock; a follow payload (or the
+    // watcher's grace close) may not repeat it, so keep the earlier fact.
+    const locked = lockedAsk || existing?.lockedAsk === true
     records.set(key, {
       sessionId,
       callId,
@@ -197,6 +210,7 @@ export function createApprovalStatusStore(now: () => number = Date.now): Approva
       deadline: existing?.deadline ?? at,
       revision: (existing?.revision ?? -1) + 1,
       source,
+      ...(locked ? { lockedAsk: true } : {}),
       observedAt: at,
     })
     notify()
@@ -245,7 +259,7 @@ export function createApprovalStatusStore(now: () => number = Date.now): Approva
       const existing = records.get(key)
       const at = now()
       if (status.phase === 'follow') {
-        resolveRecord(sessionId, callId, status.source, status.action ?? 'reject')
+        resolveRecord(sessionId, callId, status.source, status.action ?? 'reject', status.lockedAsk === true)
         return
       }
       if (status.phase !== 'countdown') return
@@ -265,13 +279,14 @@ export function createApprovalStatusStore(now: () => number = Date.now): Approva
         anchoredAt: at,
         deadline: at + remainingMs,
         revision,
+        ...(status.lockedAsk === true || existing?.lockedAsk === true ? { lockedAsk: true } : {}),
         observedAt: at,
       })
       notify()
     },
 
-    resolve(sessionId, callId, source, action) {
-      resolveRecord(sessionId, callId, source, action)
+    resolve(sessionId, callId, source, action, lockedAsk) {
+      resolveRecord(sessionId, callId, source, action, lockedAsk === true)
     },
 
     dropPending(sessionId, callId) {

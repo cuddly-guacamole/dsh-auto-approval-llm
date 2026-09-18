@@ -2557,7 +2557,9 @@ function chipLabel(state: ChipState): string | null {
     case 'rejected':
       return state.by === 'llm' ? t('chip.rejectedLlm') : t('chip.rejected')
     case 'timeout':
-      return t(`chip.timeout.${state.action}`)
+      // A locked category is pinned to reject by design: its copy must not
+      // credit the user's timeoutAction for a decision the lock made.
+      return state.lockedAsk === true ? t('chip.lockedTimeout') : t(`chip.timeout.${state.action}`)
     case 'human':
       return t('chip.human')
     case 'cancelled':
