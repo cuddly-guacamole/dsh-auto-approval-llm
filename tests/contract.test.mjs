@@ -4022,7 +4022,7 @@ test('reviewer credential delete also clears file-fallback key line', () => {
   assert.ok(deleteBranch.includes('clearReviewerKeyFromCredentialFile()'), 'the DELETE branch must invoke the file clear')
   assert.ok(deleteBranch.includes('fileClear ==='), 'the DELETE branch must report a failed file clear instead of a silent ok')
   const clientSrc = readFileSync(new URL('../src/client/index.ts', import.meta.url), 'utf8')
-  assert.match(clientSrc, /fetch\(REVIEWER_CREDENTIAL_ROUTE, \{\n\s*method: 'POST',\n\s*headers: \{ 'Content-Type': 'application\/json', 'x-auto-approval-op': 'delete' \}/, 'client reset must issue a credential delete')
+  assert.match(clientSrc, /fetch\(REVIEWER_CREDENTIAL_ROUTE, \{\r?\n\s*method: 'POST',\r?\n\s*headers: \{ 'Content-Type': 'application\/json', 'x-auto-approval-op': 'delete' \}/, 'client reset must issue a credential delete')
   assert.ok(clientSrc.includes('settings.reviewResetDone'), 'client reset must report completion')
 })
 
