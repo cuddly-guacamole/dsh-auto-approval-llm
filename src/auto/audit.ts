@@ -123,7 +123,9 @@ export function appendAuditLine(line: string): boolean {
       if (rotated !== content) {
         // Atomic replace (tmp + rename, same directory) so a crash mid-rotate
         // can never leave a torn audit file; the original survives write errors.
-        const tmp = `${file}.tmp`
+        // The pid suffix mirrors the other rotations: two processes sharing a
+        // state directory must not rename each other's temp file away.
+        const tmp = `${file}.tmp.${process.pid}`
         writeFileSync(tmp, rotated)
         renameSync(tmp, file)
       }

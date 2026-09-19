@@ -26,7 +26,7 @@ const REPO_ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 const DSH_HOME = process.env.DSH_HOME?.trim() || join(homedir(), '.dsh')
 const SCRATCH_DIR = mkdtempSync(join(tmpdir(), 'dsh-audit-test-'))
 const AUDIT_FILE = join(SCRATCH_DIR, 'audit.jsonl')
-const AUDIT_TMP = `${AUDIT_FILE}.tmp`
+const AUDIT_TMP = `${AUDIT_FILE}.tmp.${process.pid}`
 
 setAuditFilePathForTests(AUDIT_FILE)
 after(() => {

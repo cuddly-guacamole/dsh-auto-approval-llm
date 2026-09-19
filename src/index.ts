@@ -1945,7 +1945,9 @@ export function clearReviewerKeyInFile(file: string): 'cleared' | 'absent' | 'fa
   const pattern = new RegExp(`^\\s*${REVIEWER_CREDENTIAL_REF}\\s*:.*$`, 'm')
   if (!pattern.test(text)) return 'absent'
   try {
-    writeFileSync(file, text.replace(pattern, ''))
+    // The credentials file is shared across providers; rewrite it through the
+    // atomic path so a crash mid-clear cannot truncate the whole store.
+    atomicWriteFile(file, text.replace(pattern, ''))
   } catch {
     return 'failed'
   }
