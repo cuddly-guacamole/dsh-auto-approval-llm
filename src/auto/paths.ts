@@ -228,6 +228,13 @@ export function isProtectedProjectPath(target, roots) {
     // `.example` template variant is documentation and stays readable.
     if (base === '.env' || /^\.env\.(?!example(?:\.|$))/.test(base))
         return true;
+    // Private-key material must be judged the same as the category plane's
+    // location-free sensitive-name table: the public half (`id_*.pub`) of the
+    // same pair stays a routine file.
+    if (base === 'id_rsa' || base === 'id_ed25519' || base === 'id_ecdsa' || base === 'id_dsa')
+        return true;
+    if (/\.pem$/.test(base) || /\.key$/.test(base))
+        return true;
     return false;
 }
 /**
