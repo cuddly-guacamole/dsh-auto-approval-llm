@@ -2075,6 +2075,12 @@ const reviewVerdicts = new Map<string, ReviewResult>()
 const resolvedCallIds = new Map<string, number>()
 const RESOLVED_TTL_MS = 30_000
 
+// callIds whose resolution was auto-answered by the client: the feedback route
+// records the marker while the ask is live, askHuman consumes it to label the
+// resolution `auto-*` instead of `human-*`, and the TTL sweep drops a marker
+// whose ask never settled. Never a source of truth for the outcome itself.
+const autoAnsweredCallIds = new Map<string, number>()
+
 // ── approval state registry ───────────────────────────────────────────────
 // Every plugin-lifetime callId-keyed approval map, grouped so cleanup can
 // never forget a member: /approval reset clears them all through
@@ -2089,6 +2095,7 @@ const approvalState = {
   followExpiry,
   reviewVerdicts,
   resolvedCallIds,
+  autoAnsweredCallIds,
   timeoutFeedback,
   decisionFeedback,
 }
@@ -2121,6 +2128,9 @@ function sweepFollowPhase(now = Date.now()): void {
   }
   for (const [callId, at] of resolvedCallIds) {
     if (now - at > RESOLVED_TTL_MS) resolvedCallIds.delete(callId)
+  }
+  for (const [callId, at] of autoAnsweredCallIds) {
+    if (now - at > RESOLVED_TTL_MS) autoAnsweredCallIds.delete(callId)
   }
 }
 
@@ -2260,6 +2270,9 @@ export function installFeedbackRoute(ctx: any): void {
         // settled human/LLM decision as "no response".
         if (knownCallId && !decisionFeedback.has(body.callId) && !resolvedCallIds.has(body.callId) &&
           reviewStatus?.phase !== 'follow') {
+          // A client auto-answer arrives with `auto: true`; mark it so the
+          // resolution is labelled `auto-*` rather than credited to a human.
+          if (body.auto === true) autoAnsweredCallIds.set(body.callId, Date.now())
           recordTimeoutFeedback(body.callId, `[dsh-auto-approval-llm] auto-${actionText} by the configured timeout action (timeout — not a user denial)`)
         }
         // The client has seen the follow phase and is answering: release the
@@ -4810,11 +4823,13 @@ export function apply(ctx: Context, rawConfig: Config): void {
     // settled the race) may label the resolution `llm-*`. An advisory review
     // verdict may still exist (followDecidable), but a human/timeout/auto
     // resolution is NOT an LLM decision, and the breaker must not count it.
+    const autoAnswer = req.callId !== undefined && autoAnsweredCallIds.has(req.callId)
+    if (req.callId !== undefined) autoAnsweredCallIds.delete(req.callId)
     const source = approvalSource({
       outcome,
       timedOut,
       claimed,
-      auto: false,
+      auto: autoAnswer,
       reviewerDecision: followDecidable ? follow.decision : undefined,
       ...(followFailed ? { reviewerFailure: true } : {}),
       ...(followBlocked ? { reviewerBlockedAllow: true } : {}),
