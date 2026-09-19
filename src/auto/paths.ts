@@ -122,6 +122,14 @@ export function canonicalizeWindowsNamespace(input) {
     const lower = input.toLowerCase();
     if (lower.startsWith('\\\\?\\unc\\'))
         return `\\\\${input.slice(8)}`;
+    // The \??\ and \\??\ spellings of the UNC prefix are the same redirect
+    // through the NT object manager; slicing the prefix off without restoring
+    // the \\ server form collapsed the target into a cwd-relative `UNC\…`
+    // path that every fuse read as an ordinary workspace-relative name.
+    if (lower.startsWith('\\\\??\\unc\\'))
+        return `\\\\${input.slice(9)}`;
+    if (lower.startsWith('\\??\\unc\\'))
+        return `\\\\${input.slice(8)}`;
     if (lower.startsWith('\\\\?\\'))
         return input.slice(4);
     if (lower.startsWith('\\\\??\\'))
