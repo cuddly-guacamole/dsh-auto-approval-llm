@@ -194,7 +194,7 @@ export function isFilesystemRoot(target) {
 /** Whether a target belongs to an operating-system or credential-critical tree. */
 export function isCriticalPath(target, roots) {
     const normalized = normalizePath(target, roots.workspace, roots.home);
-    const windowsCritical = /^[a-z]:\\(?:windows|window~\d+|program files|program files \(x86\)|programdata|progra~\d+|boot)(?:\\|$)/i.test(normalized);
+    const windowsCritical = /^[a-z]:\\(?:windows|window~\d+|program files|program files \(x86\)|programdata|program~\d+|progra~\d+|boot)(?:\\|$)/i.test(normalized);
     const critical = styleOf(normalized) === 'win32'
         ? []
         : ['/etc', '/bin', '/sbin', '/usr', '/system', '/library', '/private/etc', '/boot'];
