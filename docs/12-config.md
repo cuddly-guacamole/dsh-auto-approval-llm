@@ -20,7 +20,7 @@
 | `endpointUrl / endpointModel / endpointProtocol` | ''/''/openai | 共享自定义端点（两通道 endpoint 源共用）；openai · anthropic |
 | `timeoutAction` | reject | reject · allow · low-risk-allow |
 | `llmReviewScope` | low-or-above | 哪些档送审 |
-| `llmTakeoverScope` | medium-or-below | 哪些档可接管（取值 `low` / `medium-or-below` / `high-or-below`；schema 接受 `high-or-below` 但行为与 `medium-or-below` 等同——HIGH 分支从不把控制权交给 LLM，高风险恒落人工，选它不会带来 HIGH 自动化） |
+| `llmTakeoverScope` | medium-or-below | 哪些档可接管（取值 `low` / `medium-or-below` / `high-or-below`；schema 接受 `high-or-below` 但行为与 `medium-or-below` 等同——**reviewer takeover 车道**从不把 HIGH 的控制权交给 LLM，选它不会带来 HIGH 自动化）。注意预分类器快径（pre-execute 的 classifier 车道）不受此键约束：它按策略判定与 trusted 显式授权放行，与 reviewer takeover 是两条独立车道；本键只描述后者 |
 | `defaultReviewMode` | smart | manual · smart · unattended |
 | `lowRiskSeconds` | 5 | min 1 |
 | `mediumRiskSeconds` | 8 | min 1 |
