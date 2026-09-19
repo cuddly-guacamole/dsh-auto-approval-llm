@@ -58,6 +58,20 @@ test('the allowlist and declared-rule channels stay exempt (negative slices)', (
   }
 })
 
+test('the answerer allowlist branch is the gated one (docs/03 + docs/12 wording)', () => {
+  // The inline `source: 'allowlist-allow'` literal exists only in the
+  // pre-execute plane; the answerer names the same list through
+  // `staticDecision.source`. That branch IS loop-gated (the two planes use
+  // different authority predicates), so the slice above pins the pre-execute
+  // exemption and this pin holds the answerer side open.
+  const answererBranch = host.indexOf("if (staticDecision.kind === 'allow') {", host.indexOf("source: 'allowlist-allow'"))
+  assert.ok(answererBranch > 0, 'the answerer static-allow branch is locatable')
+  const answererSlice = host.slice(answererBranch, answererBranch + 700)
+  assert.ok(answererSlice.includes('loopGateFires('), 'the answerer allowlist branch stays loop-gated')
+  assert.ok(answererSlice.includes('source: staticDecision.source'), 'the branch books the allowlist source')
+  assert.equal([...host.matchAll(/loopGateFires\(/g)].length, 4, 'exactly four auto-allow sites stay gated')
+})
+
 test('the cross-plane pin is read after the deny terminals and before the static allow', () => {
   const categoryDenyAt = host.indexOf("source: 'category-deny'")
   const denyTerminalAt = host.indexOf("return 'rejected'", categoryDenyAt)

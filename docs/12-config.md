@@ -32,7 +32,7 @@
 | `maxConsecutiveDenials` | 3 | 0=关闭 |
 | `maxTotalDenials` | 20 | 0=关闭 |
 | `maxArgsChars` | 4000 | 参数取回截断 |
-| `loopDetectionThreshold` | 0 | 循环防护：同一调用（工具+参数哈希）被自动放行面连续静默放行 N 次后，第 N 次转**钉死拒绝倒计时**的人工询问（有人看=面板，无人看=超时自动拒）；0 关闭，1 自动钳到 2 并一次性告警；门只在自动放行面（static-allow / classifier-allow / 无评审 auto-allow 四个站点），allowlist 显式名单豁免，声明规则放行、学习放行与有人值守的超时放行不在门内；门 ask 刻意不接 LLM 接管；已学习签名的人工确认不被门控 ask 自动应答、门控 ask 也不可学习；manual 评审档落无倒计时人工询问；**启用后只读命令的连续重复也会被问**；参数超长（>1000 字符/25 项）可折叠为同键（多问方向）；关闭再开启后关闭前的连续计数仍生效；仅 YAML 可配（设置卡无此控件） |
+| `loopDetectionThreshold` | 0 | 循环防护：同一调用（工具+参数哈希）被自动放行面连续静默放行 N 次后，第 N 次转**钉死拒绝倒计时**的人工询问（有人看=面板，无人看=超时自动拒）；0 关闭，1 自动钳到 2 并一次性告警；门只在自动放行面（static-allow / classifier-allow / 无评审 auto-allow 四个站点；answerer 的 static-policy allow 即 allowlist 分支也在门内），pre-execute 的 allowlist 分支豁免，声明规则放行、学习放行与有人值守的超时放行不在门内；门 ask 刻意不接 LLM 接管；已学习签名的人工确认不被门控 ask 自动应答、门控 ask 也不可学习；manual 评审档落无倒计时人工询问；**启用后只读命令的连续重复也会被问**；参数超长（>1000 字符/25 项）可折叠为同键（多问方向）；关闭再开启后关闭前的连续计数仍生效；仅 YAML 可配（设置卡无此控件） |
 | `notifyUser` | true | 「模型通过」通知进会话 |
 | `onboardingMessageEnabled` | true | 首次 Auto 会话向 agent 注入一次性英文引导消息（上下文声明，非用户横幅）；关掉后不再注入 |
 | `autoModeNoticeEnabled` | true | 自动审批模式进入/退出时向 agent 注入英文上下文声明（独立开关） |

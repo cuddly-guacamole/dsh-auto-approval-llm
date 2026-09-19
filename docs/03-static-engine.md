@@ -94,7 +94,7 @@ flowchart TD
     B1["① 词法分解 decomposeCommandLine：单双引号状态机；反引号/$(... )/heredoc/() 分组/未闭合引号 → opaque（读不懂就不瞎判，转入工或语义复审） [lex]"]
     B1 --> B2["② 整行硬拒 hardDenyShellReason：sudo/doas/su/pkexec/runuser/runas/gsudo 提权（锚定段起始，含 { brace group）；set-executionpolicy/clear-disk/format-volume/bcdedit 等系统策略；curl/wget/iwr 的凭据外传；动态删除直指 home（四条熔断读「数据载荷剥离视图」，见下）[deny]"]
     B2 --> B3["③ 逐段结构判定：分解后每个段剥 wrapper（env/nohup/sudo 前缀/NAME=value）→ 命令名再验提权；重定向/删除目标过 hardDestructiveTargetReason；find 的 -delete/-exec 提权审查；date 的 -s/--set 时钟写（含缩写、融合与簇拼写；opaque 行内按同一 owner 回收）[segment]"]
-    B3 --> B4["④ 分类 classifyEffectiveCommand：删除（只许删本会话自建产物 artifacts.has，否则交人工）→ 只读命令（BASH_READ_ONLY 42 个 / PWSH_READ_ONLY 12 个 + git 只读 + sed -n + find 只读）→ 版本探测 → build/test → 创建(mkdir/touch/new-item) → cp/mv → git 变更 / 网络 / 基建（psql/kubectl/terraform…）→ 兜底「未识别命令，独立分类」 [classify]"]
+    B3 --> B4["④ 分类 classifyEffectiveCommand：删除（只许删本会话自建产物 artifacts.has，否则交人工）→ 只读命令（BASH_READ_ONLY 48 个 / PWSH_READ_ONLY 12 个 + git 只读 + sed -n + find 只读）→ 版本探测 → build/test → 创建(mkdir/touch/new-item) → cp/mv → git 变更 / 网络 / 基建（psql/kubectl/terraform…）→ 兜底「未识别命令，独立分类」 [classify]"]
 ```
 
 - 只读名单刻意**不含** `cd`（会改变后续段 cwd 解析基准）。
@@ -106,7 +106,7 @@ flowchart TD
 - **写目标提取不吃相对拼法**：只读命令的 `..` 中段与工作区外相对目标一律进入显式路径判定（`cat b/../../../../x` 与 `cat ../../../../x` 同裁决）。
 - **win32 段归一覆盖别名拼法**：MSYS 裸盘根（`/c`、`//c`）、盘根通配（`C:\*`、`/c/*`）与 NTFS 默认数据流后缀（`file::$DATA`/`file:$DATA`）在 `normalizePath` 的同一处归一到 `C:\` / 文件名本体，故盘根熔断与全部 basename 级保护（插件契约文件、受保护元数据、凭据名）不被拼法绕过。
 - **build/test 与版本探测快径目标守卫**：快径仅保留给「写目标全为 discard sink 或工作区内非敏感非受保护非运行态路径」——区外/敏感/受保护/运行态目标一律脱离快径进入正常评估（`categoryMode: aggressive` 与 trustedDirs 放宽模式同样生效）。
-- **循环防护（`loopDetectionThreshold`，默认关）**：同一调用（工具名+脱敏参数哈希，独立于学习签名的循环键）在**自动放行面**（static-allow / classifier-allow 的 pre-execute 站点与 answerer 的 static-allow / 无评审 auto-allow 站点，共四处）连续静默放行达到阈值时，第 N 次在写 allow 记录**之前**改判为 ask，并经 one-shot 跨面标记在 answerer 落入 LOCKED 同款**钉死拒绝倒计时**形状（不接 LLM takeover、不可学习；有人看=面板可放行，无人值守=超时自动拒）。计数严格连续（不同键即断链）、触发即清零（人工放行不买永久豁免）；allowlist 显式名单豁免；门自身不写 history、不碰熔断计数（触发留 `loop-guard` 非决策审计行，见 docs/11）。**边界**：只防卡死空转，微调参数即换键，不是安全边界；已学习签名的人工确认不被门控 ask 自动应答。
+- **循环防护（`loopDetectionThreshold`，默认关）**：同一调用（工具名+脱敏参数哈希，独立于学习签名的循环键）在**自动放行面**（static-allow / classifier-allow 的 pre-execute 站点与 answerer 的 static-allow / 无评审 auto-allow 站点，共四处）连续静默放行达到阈值时，第 N 次在写 allow 记录**之前**改判为 ask，并经 one-shot 跨面标记在 answerer 落入 LOCKED 同款**钉死拒绝倒计时**形状（不接 LLM takeover、不可学习；有人看=面板可放行，无人值守=超时自动拒）。计数严格连续（不同键即断链）、触发即清零（人工放行不买永久豁免）；allowlist 豁免仅指 pre-execute 的静态名单放行分支——answerer 的 static-policy allow 分支（同一显式名单、source=allowlist-allow）在门内，两平面 authority 谓词不同，绕过 pre-execute 抵达 answerer 的调用也要计数；门自身不写 history、不碰熔断计数（触发留 `loop-guard` 非决策审计行，见 docs/11）。**边界**：只防卡死空转，微调参数即换键，不是安全边界；已学习签名的人工确认不被门控 ask 自动应答。
 
 ## 3.4　路径保护清单 <span class="lnum">paths.ts#</span>
 
@@ -142,7 +142,7 @@ bash(rm\s+-\s*rf) | deny
 ```
 
 - 工具作用域可逗号多选（含 `*` 通配）；无括号则适配所有工具；field 缺省 `arguments`。
-- **最严命中即胜**：同时命中多条时按 `deny` > `human` > `allow` 取最严，与声明顺序无关；同严重度并列保持声明序、取首条作为审计对象。`evaluateRules` 先用 `extractRuleTargets` 抽取动作面，顺序为主投影优先：command/script/code/prompt/text → file_path/path/cwd/workdir → content（全部候选，content 不再是「前两者全空时才用」的兜底）；防锚定正则（如 `^git push`）被 JSON 信封击穿。**`deny`/`human` 规则对整条动作面逐一匹配**（多一个无关字段不能把规则点名的值藏起来；因此**未加锚的规则也会命中文件内容** `content`——写 `deny`/`human` 规则时请用锚点收窄），**`allow` 规则只匹配主投影**（即动作面里第一个非空候选；allow 是显式预授权，需锚在主投影上才生效）；取严意味着遍历全部声明规则（不短路），扫描保持规则数线性。
+- **最严命中即胜**：同时命中多条时按 `deny` > `human` > `allow` 取最严，与声明顺序无关；同严重度并列保持声明序、取首条作为审计对象。`evaluateRules` 先用 `extractRuleTargets` 抽取动作面，顺序为主投影优先：command/script/code/prompt/text → file_path/path/cwd/workdir → content（全部候选，content 不再是「前两者全空时才用」的兜底）；防锚定正则（如 `^git push`）被 JSON 信封击穿。**`deny`/`human` 规则对整条动作面逐一匹配**（多一个无关字段不能把规则点名的值藏起来；因此**未加锚的规则也会命中文件内容** `content`——写 `deny`/`human` 规则时请用锚点收窄），**`allow` 规则只匹配主投影**（即动作面里第一个非空候选；allow 是显式预授权，需锚在主投影上才生效。注意 pattern 是无尾锚的子串匹配——`^ls ` 同样命中主投影为 `ls; rm -rf /` 的调用，allow 规则请把结尾一并锚住）；取严意味着遍历全部声明规则（不短路），扫描保持规则数线性。
 - ReDoS 防护：长度 ≤2000；拒绝嵌套无界量词 `(a+)+`、交替外套量词、嵌套重复组、`{n,}` 计数重复。
 - **host 与浏览器设置卡共用同一份 `parseRulesText`**（错误逐行红字显示）。
 - 干跑 `rulesDryRun`：只记命中不执法（host 端 `if (config.rulesDryRun)` 两处：pre-execute 与 answerer）。

@@ -101,7 +101,7 @@ aggressive 下三个内置类别 `['networkExec','gitPush','publish']`（`AGGRES
 ## 17.7　trustedDirs 配置面
 
 - **校验**：仅收绝对路径；凭据树（.ssh/.gnupg/.aws/.azure/.kube）、home、dshHome、critical 路径内的条目 warn+丢弃，余下归一化入库（resolveConfig，<span class="lnum">index.ts:LresolveConfig</span>）。
-- **host-only**：15 员 host-only 键之一（<span class="lnum">decision.ts:LHOST_ONLY_KEYS</span>）——只能写在 settings.yaml / patch，设置卡保存不会抹掉它，也没有它的控件。
+- **host-only**：16 员 host-only 键之一（<span class="lnum">decision.ts:LHOST_ONLY_KEYS</span>）——只能写在 settings.yaml / patch，设置卡保存不会抹掉它，也没有它的控件。
 - **复检扩区**：symlink 守卫把 trustedDirs 并入受信复检区（workspace ∪ 插件区 ∪ trustedDirs，<span class="lnum">symlink.ts:L"const trustedZone: string[] = [...(roots.allowedDshSubpaths ?? []), ...(roots.trustedDirs ?? [])]"</span>）——文本上落进信任目录的目标照样做真实路径逃逸检查（realpath 逃逸硬拒，<span class="lnum">symlink.ts:L"const escape = realpathCriticalReason(textual, normalized, roots, roots.trustedDirs, realWsNormalized)"</span>）。
 
 ### 配置示例（默认零变化）

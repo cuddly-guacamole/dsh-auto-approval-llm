@@ -19,9 +19,9 @@
 
 | 档位 | 默认秒数 | 来源 |
 |---|---|---|
-| LOW | 5 s | `THRESHOLD_DEFAULTS.lowRiskSeconds（constants.ts:L87）` |
-| MEDIUM | 8 s | `…mediumRiskSeconds（L88）` |
-| HIGH | 10 s | `…highRiskSeconds（L89）` |
+| LOW | 5 s | `THRESHOLD_DEFAULTS.lowRiskSeconds（constants.ts:L110）` |
+| MEDIUM | 8 s | `…mediumRiskSeconds（L111）` |
+| HIGH | 10 s | `…highRiskSeconds（L112）` |
 
 ::: tip 单一事实源
 倒计时（5/8/10）、熔断（3/20）、截断（4000）等数值默认值**唯一**集中在 `src/auto/constants.ts` 的 `THRESHOLD_DEFAULTS`；host schema、host 回退、客户端草稿/重置均引用同一常量。查默认值以代码（constants.ts）为准，README 仅为速查（已同步 5/8/10）。

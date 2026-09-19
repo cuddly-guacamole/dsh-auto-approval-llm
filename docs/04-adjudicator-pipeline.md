@@ -6,16 +6,16 @@
 
 ```mermaid
 flowchart TD
-    A1["G0 门卫：enabled？有 permissionPresets？权威会话 raw identity preset ∈ gateNames（modern=[auto-approval]；宿主 <0.1.6 的 legacy 兼容 auto 别名）？（沿 subagent 父链上溯，子代理继承本档；非本档 → 交回 next 官方处理） [gate]"] -->|通过| A2["准备：sessionKey=权威会话 id；收集 trustedUserMessages（直接用户消息 ≤4 条/4000 字符）；findToolCallArguments 取参数（截断到 4000）；classifyStaticRisk 在此算出 风险档+类别指令（L2509，一次计算全层复用） [ctx]"]
-    A2 --> A3["G1 声明规则：rulesText 非空 → 解析，你写的规矩最大。deny→rejected(rule-deny)；allow→allowed-once(rule-allow)；human→转人；解析错误→本层跳过继续 [B1]"]
+    A1["G0 门卫：enabled？有 permissionPresets？权威会话 raw identity preset ∈ gateNames（modern=[auto-approval]；宿主 <0.1.6 的 legacy 兼容 auto 别名）？（沿 subagent 父链上溯，子代理继承本档；非本档 → 交回 next 官方处理） [gate]"] -->|通过| A2["准备：sessionKey=权威会话 id；收集 trustedUserMessages（直接用户消息 ≤4 条/4000 字符）；findToolCallArguments 取参数（截断到 4000）；classifyStaticRisk 在此算出 风险档+类别指令（answerer 入口一次计算全层复用） [ctx]"]
+    A2 --> A10["策略层硬拒：静态评估 risk==='DENY'（插件运行态文件等）→ 立即 rejected(policy-deny)：无倒计时、不计熔断、不发布 review-status。**先于声明规则**——reason 维度 allow 规则不得翻硬拒 [policy·deny]"]
+    A10 -->|非 DENY| A3["G1 声明规则：rulesText 非空 → 解析，你写的规矩最大。deny→rejected(rule-deny)；allow→allowed-once(rule-allow)；human→转人；scope 规则缺上下文 → 降级人工并留 rules-context-missing 审计行；解析错误→本层跳过继续 [B1]"]
     A3 -->|未命中| A4["G2a 静态名单 · denyList：精确工具名命中 → rejected(denyList-deny) [lists·deny]"]
     A4 -->|未命中| A5["类别层 · deny：directive==='deny' → rejected(category-deny)，与 denyList 同构的终端拒绝，提权重试不可绕过 [category·deny]"]
     A5 -->|非 deny| A6["G2b 静态名单 · allowlist/humanOnlyList：allow→allowed-once(allowlist-allow)；human→转人；有意不读熔断 [lists]"]
     A6 -->|continue| A7["类别层 · ask：directive==='ask' → 无条件转人（status-less askHuman，无宿主倒计时，跳过一切自动路径） [category·ask]"]
     A7 -->|inherit| A8["G3 评审模式：manual → 一律转人（无 LLM 无倒计时）；unattended → autoUnattended=true [B3]"]
     A8 -->|smart / unattended| A9["G4 熔断闸：连续≥3 或 累计≥20 被 LLM（判定）拒绝 → 转人且无自动倒计时（只等人点，不再替你超时） [breaker]"]
-    A9 -->|未触发| A10["策略层 DENY：静态评估带硬拒理由（插件运行态文件等）→ 立即 rejected(policy-deny)：无倒计时、不计熔断、不发布 review-status [policy·deny]"]
-    A10 -->|非 DENY| A11["学习层 learned-allow：learningEnabled 且签名命中历史人工确认 → **仍须过一次标准在线评审**，clean ALLOW 才放行（source=learned-allow），其余一律回退原风险分支（§18） [learn·allow]"]
+    A9 -->|未触发| A11["学习层 learned-allow：learningEnabled 且签名命中历史人工确认 → **仍须过一次标准在线评审**，clean ALLOW 才放行（source=learned-allow），其余一律回退原风险分支（§18） [learn·allow]"]
     A11 -->|未命中 / 回退| A12["G5 风险分档：LOW / MEDIUM / HIGH；算 llmReviews（reviewScope）与 llmTakeover（takeoverScope）；秒数 5/8/10 [risk]"]
     A12 -->|按档分派 ↓| A13["按档分派"]
 ```

@@ -16,7 +16,7 @@
 
 </div>
 
-`Auto 档`（machine value `auto-approval`；host 显示名 `Auto approval`；中文客户端显示 `自动审批`）= `sandbox: danger-full-access` + `approval: ask`。本插件在本档会话里充当 `approval/request` 的**唯一终结裁决者**：常规操作经静态规则直接放行，危险/模糊操作走「静态规则 → LLM 分类 → LLM/人工裁决 → 倒计时兜底 → 熔断」，全程保留人工与审计兜底。宿主 `>= 0.1.6` 的 `auto` 归上游 `@deepseek-ai/dsh-experimental-auto-review`（Auto review / EXP），；本插件只接管 `auto-approval` 档、上游只接管 `auto` 档（按 derived preset 判档），两者**作用于不同档位、可同时启用**。
+`Auto 档`（machine value `auto-approval`；host 显示名 `Auto approval`；中文客户端显示 `自动审批`）= `sandbox: danger-full-access` + `approval: ask`。本插件在本档会话里充当 `approval/request` 的**唯一终结裁决者**：常规操作经静态规则直接放行，危险/模糊操作走「静态规则 → LLM 分类 → LLM/人工裁决 → 倒计时兜底 → 熔断」，全程保留人工与审计兜底。宿主 `>= 0.1.6` 的 `auto` 归上游 `@deepseek-ai/dsh-experimental-auto-review`（Auto review / EXP），本插件只接管 `auto-approval` 档、上游只接管 `auto` 档（按 derived preset 判档），两者**作用于不同档位、可同时启用**。
 
 ---
 
@@ -24,7 +24,7 @@
 
 1. **静态规则 + LLM 分类器** —— 只读/会话/工作区常规操作直接放行；危险、外部写、凭据外泄、受保护路径直接拒绝；模糊操作交 LLM 预分类。
 2. **写向量完整性加固** —— 含真实文件写重定向的命令段脱离只读快径；POSIX `tee` / `dd of=` / `sed -i` / `truncate` / `install` 以操作数目标参与按目标闸门；直写插件运行态文件无条件硬拒。
-3. **12 分类三态开关 + 信任目录双模式** —— 每类可配 `auto` / `ask` / `deny`，**默认全部 `inherit` = 行为零变化**；危险类（delete / protected / disk）锁定为 `ask`；`trustedDirs` 与 `categoryMode` 控制「常规位置」范围。→ [docs/17](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/blob/main/docs/17-category-switches.md)
+3. **12 分类三态开关 + 信任目录双模式** —— 每类可配 `auto` / `ask` / `deny`，**默认全部 `inherit`**（HARD_LOCKED 的 delete / disk 除外——未配置也恒被接管为 `ask` 倒计时）；delete / disk / privilege / protected 四类保持锁定，`trustedDirs` 与 `categoryMode` 控制「常规位置」范围（分层细节见 docs/17）。→ [docs/17](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/blob/main/docs/17-category-switches.md)
 4. **双通道模型来源** —— 快速判断与深度评审各可独立选择：跟随会话模型（默认）/ DSH 已配置模型 / 自定义端点。端点密钥存 DSH 凭据存储，前端只显示「已配置」、永不回显。
 5. **分级倒计时 + 超时兜底 + LLM 接管** —— 低/中/高三档倒计时（默认 5 / 8 / 10 秒）；超时按 `timeoutAction`（拒绝 / 通过 / 低风险自动同意）结算；中风险下 LLM 在窗口内给出明确结论即接管。关浏览器也不悬挂（host 计时器独裁）。
 6. **熔断与循环防护** —— 连续/累计被 LLM 拒绝达阈值则转人工（`/approval-reset` 重置）；**循环防护**（默认关）把「被自动放行面连续放行的同一调用」转为钉死拒绝倒计时。
@@ -132,7 +132,7 @@ dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 | `rulesText` | '' | 声明式规则（支持 `[agent:…]` / `[workspace:…]`） |
 | `allowlist` / `denyList` / `humanOnlyList` | [] | 工具名精确匹配名单 |
 | `classifierSource` / `reviewerSource` | `session` | 两通道模型来源：session / preset / endpoint |
-| `endpointUrl` / `endpointModel` / `endpointProtocol` | '' / '' / `openai` | 共享自定义端点（不再维护但保留） |
+| `endpointUrl` / `endpointModel` / `endpointProtocol` | '' / '' / `openai` | 共享自定义端点 |
 | `categoryPolicy` / `categoryMode` / `trustedDirs` | `{}` / `standard` / [] | 分类三态、位置模式与信任目录 |
 | `privilegeAutoReview` / `protectedAutoReview` | false | 分别解锁 privilege / protected（差别见 docs/17） |
 | `learningEnabled` / `learningThreshold` | false / 3 | 确认制学习开关与阈值（2–10） |

@@ -24,7 +24,7 @@
 
 1. **Static rules + LLM classifier** — read-only, session and workspace routine calls pass; dangerous calls, external writes, credential exfiltration and protected paths are denied; ambiguous calls go to the LLM pre-classifier.
 2. **Write-vector hardening** — command segments carrying a real file-write redirect leave the read-only fast path; the POSIX heads `tee` / `dd of=` / `sed -i` / `truncate` / `install` join the per-target gate through their operands; direct writes to plugin runtime-state files are unconditionally hard-denied.
-3. **Tri-state switches for 12 categories + trusted-directory mode** — each category is configurable as `auto` / `ask` / `deny`, and **every default is `inherit` = zero behavior change**; the dangerous categories (delete / protected / disk) are locked to `ask`; `trustedDirs` and `categoryMode` define what counts as a routine location. → [docs/17](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/blob/main/docs/17-category-switches.md)
+3. **Tri-state switches for 12 categories + trusted-directory mode** — each category is configurable as `auto` / `ask` / `deny`, and **every default is `inherit`** (except the HARD_LOCKED delete / disk, which are taken over as a locked `ask` countdown even when unconfigured); the four locked categories (delete / disk / privilege / protected) stay locked; `trustedDirs` and `categoryMode` define what counts as a routine location. → [docs/17](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/blob/main/docs/17-category-switches.md)
 4. **Dual-channel model sources** — the fast classifier and the deep reviewer each pick their own source: the session model (default) / a DSH-configured model / a custom endpoint. Endpoint keys live in the DSH credential store; the frontend only shows "Configured" and never echoes them.
 5. **Tiered countdown + timeout fallback + LLM takeover** — low/medium/high countdowns (default 5 / 8 / 10 s); on timeout the action follows `timeoutAction` (reject / allow / auto-approve low-risk); at medium risk an explicit LLM verdict inside the window takes over. Closing the browser never hangs (the host timer is authoritative).
 6. **Breaker and loop guard** — consecutive or cumulative LLM denials hand the call to a human (`/approval-reset` resets); the **loop guard** (off by default) turns a call that the auto-allow surface keeps allowing into a pinned-reject countdown.
@@ -132,7 +132,7 @@ The table below lists the common keys only; **every key, its full semantics and 
 | `rulesText` | '' | Declarative rules (`[agent:…]` / `[workspace:…]` prefixes) |
 | `allowlist` / `denyList` / `humanOnlyList` | [] | Exact tool-name lists |
 | `classifierSource` / `reviewerSource` | `session` | Model source per channel: session / preset / endpoint |
-| `endpointUrl` / `endpointModel` / `endpointProtocol` | '' / '' / `openai` | Shared custom endpoint (no longer maintained, kept for compatibility) |
+| `endpointUrl` / `endpointModel` / `endpointProtocol` | '' / '' / `openai` | Shared custom endpoint |
 | `categoryPolicy` / `categoryMode` / `trustedDirs` | `{}` / `standard` / [] | Category tri-states, location mode and trusted directories |
 | `privilegeAutoReview` / `protectedAutoReview` | false | Unlock privilege / protected respectively (differences in docs/17) |
 | `learningEnabled` / `learningThreshold` | false / 3 | Confirmation-based learning switch and threshold (2–10) |
