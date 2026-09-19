@@ -370,8 +370,12 @@ export function preserveHostKeys(
 ): Record<string, unknown> {
   const out: Record<string, unknown> = { ...submitted }
   for (const key of HOST_ONLY_KEYS) {
-    // The stored value always wins, regardless of what was submitted.
+    // The stored value always wins, regardless of what was submitted. A key
+    // with no stored value yet is stripped outright: the namespace-empty
+    // first save must not become the one request that plants a workspace or
+    // DSH root through the settings route.
     if (key in current) out[key] = current[key]
+    else delete out[key]
   }
   return out
 }
