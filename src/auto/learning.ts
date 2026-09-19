@@ -31,7 +31,7 @@ import { readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { basename } from 'node:path'
 import { extractToolPath } from './decision.js'
 import { CategoryConfig, CategoryRoots, categorizeCommandSegments, CommandSegmentDecision, sensitiveBasenameAt, LOCKED_CATEGORIES } from './category.js'
-import { isProtectedProjectPath, normalizePath } from './paths.js'
+import { isCriticalPath, isProtectedProjectPath, normalizePath } from './paths.js'
 import { THRESHOLD_DEFAULTS } from './constants.js'
 import { redactSecrets } from './redact.js'
 import { decomposeCommandLine } from './shell.js'
@@ -373,7 +373,10 @@ export function learningFuseDecision(input: {
   const target = rawPathArgs === undefined ? undefined : extractToolPath(rawPathArgs)
   if (target === undefined) return false
   const normalized = normalizePath(target, input.roots.workspace, input.roots.home)
-  return sensitiveBasenameAt(normalized, input.roots) || isProtectedProjectPath(normalized, input.roots)
+  // The policy and shell read faces pair the sensitive-name table with the
+  // critical-path set (own-home rc files, autostart trees); the learning fuse
+  // must not have a wider domain than the faces it learns from.
+  return sensitiveBasenameAt(normalized, input.roots) || isProtectedProjectPath(normalized, input.roots) || isCriticalPath(normalized, input.roots)
 }
 
 /** Structural + monotonicity validation; returns a clean entry or undefined. */
