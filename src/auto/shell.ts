@@ -156,7 +156,13 @@ export function decomposeCommandLine(source, shell) {
             continue;
         }
         if (char === '\n' || char === '\r') {
+            // A redirect operator keeps waiting for its target across a
+            // newline: bash accepts `printf x >\n~/.ssh/keys` as one command,
+            // so a pending redirect must survive the segment flush (a target
+            // word already in progress is consumed by the flush itself).
+            const carriedPending = started ? undefined : pending;
             flushSegment();
+            pending = carriedPending;
             nextPrecededBy = '\n';
             continue;
         }
