@@ -223,10 +223,10 @@ export function isProtectedProjectPath(target, roots) {
     const secretFileBases = ['.gitconfig', '.gitmodules', '.bashrc', '.bash_profile', '.zshrc', '.zprofile', '.profile', '.mcp.json', '.netrc', '.npmrc', '.pypirc'];
     if (secretFileBases.includes(base))
         return true;
-    // Environment-secret files (`.env`, `.env.local`, `.env.production`) hold
+    // Environment-secret files (`.env`, `.env.local`, `.env-production`) hold
     // real credentials and must not be silently read/written in auto mode. The
     // `.example` template variant is documentation and stays readable.
-    if (base === '.env' || /^\.env\.(?!example(?:\.|$))/.test(base))
+    if (base === '.env' || /^\.env[.\-](?!example(?:[.\-]|$))/.test(base))
         return true;
     // Private-key material must be judged the same as the category plane's
     // location-free sensitive-name table: the public half (`id_*.pub`) of the

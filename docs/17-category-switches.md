@@ -1,7 +1,7 @@
 # 17 · 类别开关与信任目录
 > *Tri-state category switches & trusted directories*
 
-静态引擎（§03）回答「**这一次调用**危不危险」，类别层回答「**这一类操作**要不要问」。工具与 shell 命令被归入 12 个类别，每类可配 `auto / ask / deny` 三态；未配置 = `inherit`，行为与没有这层时完全一致（HARD_LOCKED 的 delete/disk 除外，见 17.4）。全部实现是纯函数（<span class="lnum">src/auto/category.ts#</span>，916 行），宿主在两个接线点各自从零调用。
+静态引擎（§03）回答「**这一次调用**危不危险」，类别层回答「**这一类操作**要不要问」。工具与 shell 命令被归入 12 个类别，每类可配 `auto / ask / deny` 三态；未配置 = `inherit`，行为与没有这层时完全一致（HARD_LOCKED 的 delete/disk 除外，见 17.4）。全部实现是纯函数（<span class="lnum">src/auto/category.ts#</span>，917 行），宿主在两个接线点各自从零调用。
 
 ## 17.1　十二个类别与优先级 <span class="lnum">category.ts:LCATEGORY_PRECEDENCE</span>
 

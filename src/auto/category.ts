@@ -126,9 +126,10 @@ const SENSITIVE_BASE = (base: string): boolean => {
   if (base === '.gitconfig' || base === '.gitmodules' || base === '.netrc'
     || base === '.npmrc' || base === '.pypirc' || base === '.mcp.json') return true
   if (/^\.bash/.test(base)) return true
-  // `.env` and `.env.<suffix>`; `.env.example*` stays a documentation template.
+  // `.env` and `.env.<suffix>` / `.env-<suffix>`; `.env.example*` stays a
+  // documentation template.
   if (base === '.env') return true
-  if (/^\.env\.(?!example(?:\.|$))/.test(base)) return true
+  if (/^\.env[.\-](?!example(?:[.\-]|$))/.test(base)) return true
   // Private-key material at any position. The public half (`id_*.pub`) of the
   // same pair stays a routine file.
   if (base === 'id_rsa' || base === 'id_ed25519' || base === 'id_ecdsa' || base === 'id_dsa') return true
