@@ -2700,9 +2700,45 @@ function writeTargetHardDenyReason(target, roots) {
     return shellWriteToDshHomeDenied(normalized, roots);
 }
 
+/**
+ * Write targets of the `time` wrapper: GNU time writes its resource-usage
+ * report to the `-o`/`--output` value, and unwrap drops that value with the
+ * rest of the wrapper flags, so the report file reached no write fuse at all
+ * (`time --output=<outside> ls` was a static read-only allow while
+ * `sort -o <same target>` is fused). Only the flags before the wrapped
+ * command belong to `time`; after it, `-o` belongs to the wrapped command.
+ */
+function timeOutputFlagTargets(rawWords) {
+    if (commandNameWithoutExe(commandName(rawWords[0]?.text ?? '')) !== 'time')
+        return [];
+    const targets = [];
+    for (let index = 1; index < rawWords.length; index += 1) {
+        const word = rawWords[index];
+        const text = word.text;
+        if (!text.startsWith('-'))
+            break;
+        if (text === '-o' || text === '--output') {
+            const value = rawWords[index + 1];
+            if (value !== undefined) {
+                targets.push(value);
+                index += 1;
+            }
+            continue;
+        }
+        if (text.startsWith('--output=')) {
+            targets.push({ text: text.slice('--output='.length), dynamic: word.dynamic, glob: word.glob, quoted: word.quoted });
+            continue;
+        }
+        if (/^-o.+/.test(text)) {
+            targets.push({ text: text.slice(2), dynamic: word.dynamic, glob: word.glob, quoted: word.quoted });
+            continue;
+        }
+    }
+    return targets;
+}
+
 /** Output-flag write targets recovered from a line that cannot be decomposed. */
-function opaqueOutputFlagReason(source, shell, roots) {
-    if (shell !== 'bash')
+function opaqueOutputFlagReason(source, shell, roots) {    if (shell !== 'bash')
         return undefined;
     for (const segment of opaqueSegmentWords(source)) {
         const name = commandName(segment.words[0]?.text ?? '');
@@ -3224,7 +3260,10 @@ function classifyEffectiveCommand(name, words, segment, shell, roots, artifacts,
     // is a real write target even though no redirection token carries it, so
     // judge it with the same destructive fuse and keep the segment off the
     // static read-only allow.
-    const outputFlagWrites = readOnlyOutputFlagTargets(name, words, shell);
+    const outputFlagWrites = [
+        ...readOnlyOutputFlagTargets(name, words, shell),
+        ...timeOutputFlagTargets(segment.words),
+    ];
     for (const target of outputFlagWrites) {
         const reason = writeTargetHardDenyReason(target.text, roots);
         if (reason !== undefined)
