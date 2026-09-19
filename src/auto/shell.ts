@@ -312,7 +312,11 @@ function commandName(token) {
     return basename(token.replaceAll('\\', '/')).toLowerCase();
 }
 function dynamicHomeTarget(source) {
-    return /(?:\$\{?HOME\}?|\$env:(?:USERPROFILE|HOME)|%USERPROFILE%|%HOME%)/i.test(source);
+    if (/(?:\$\{?HOME\}?|\$env:(?:USERPROFILE|HOME)|%USERPROFILE%|%HOME%)/i.test(source))
+        return true;
+    // The plugin's own runtime root spells itself through a variable on the
+    // same faces; dshHomeExfil already recognizes this family.
+    return /(?:\$\{?DSH_HOME\}?|\$env:DSH_HOME|%DSH_HOME%)/i.test(source);
 }
 function sensitiveMarker(source) {
     // `.env.example*` is a documentation template (same carve-out as the
