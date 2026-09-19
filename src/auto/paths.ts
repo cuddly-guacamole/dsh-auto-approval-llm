@@ -228,7 +228,14 @@ export function isProtectedProjectPath(target, roots) {
     if (first !== undefined && ['.git', '.vscode', '.idea', '.husky', '.dsh'].includes(first))
         return true;
     const base = api.basename(normalized).toLowerCase();
-    const secretFileBases = ['.gitconfig', '.gitmodules', '.bashrc', '.bash_profile', '.zshrc', '.zprofile', '.profile', '.mcp.json', '.netrc', '.npmrc', '.pypirc'];
+    // The category plane's sensitive-name table fuses every `.bash*` basename;
+    // an explicit two-name list here left its siblings (`.bash_login`,
+    // `.bash_logout`, `.bash_aliases`) as ordinary project content — and the
+    // category-plane verdict stayed `protected` only to be overwritten by this
+    // allow.
+    if (/^\.bash/.test(base))
+        return true;
+    const secretFileBases = ['.gitconfig', '.gitmodules', '.zshrc', '.zprofile', '.zlogin', '.zlogout', '.profile', '.cshrc', '.tcshrc', '.kshrc', '.mcp.json', '.netrc', '.npmrc', '.pypirc'];
     if (secretFileBases.includes(base))
         return true;
     // Environment-secret files (`.env`, `.env.local`, `.env-production`) hold
