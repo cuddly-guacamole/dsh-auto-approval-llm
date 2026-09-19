@@ -5050,6 +5050,25 @@ export function apply(ctx: Context, rawConfig: Config): void {
     // asks. The auto→LOW injection already happened inside classifyStaticRisk.
     const classified = classifyStaticRisk(req, args)
 
+    // Policy hard-deny is a code-enforced terminal, so it answers before any
+    // declared rule on this plane too. Pre-execute already orders it that way;
+    // here a `reason`-dimension allow rule (invisible to pre-execute, which
+    // never sees the approval reason) could otherwise turn the deny into an
+    // allowed-once when the primary plane did not settle the call. Never a
+    // countdown status: timeoutAction=allow and LLM takeovers must not be able
+    // to answer an effect that is permanently forbidden.
+    if (classified.risk === 'DENY') {
+      recordDecisionFeedback(req.callId, formatDenyFeedback('policy', { toolName, reason: classified.reason }))
+      pushHistory({
+        sessionId: sessionKey,
+        toolName,
+        outcome: 'rejected',
+        source: 'policy-deny',
+        llmReason: undefined,
+      })
+      return 'rejected'
+    }
+
     // B1 declared rules (Claude-style Tool(pattern)) — evaluated first so a
     // user-defined policy takes precedence over the built-in lists.
     if (config.rulesText.trim() !== '') {
@@ -5274,7 +5293,6 @@ export function apply(ctx: Context, rawConfig: Config): void {
     }
     // Category layer results were computed above, before the declared rules.
     const staticRisk = classified.risk
-    const policyReason = classified.reason
     if (classified.directive === 'deny') {
       // Defense-in-depth terminal (pre-execute normally rejects first); same
       // shape as the denyList/policy deny: feedback + history + rejected.
@@ -5393,27 +5411,10 @@ export function apply(ctx: Context, rawConfig: Config): void {
       return askHuman(req, undefined, next, true)
     }
 
-    // Terminal hard-deny from the policy layer (e.g. a plugin runtime-state
-    // mutation): answer with an immediate rejection — never a countdown
-    // status, so timeoutAction=allow and LLM takeovers can neither answer it
-    // nor leave an "allowed" record against an effect that is permanently
-    // forbidden. Mirrors the rule-deny path: history gets one honest rejected
-    // entry, the breaker counters stay untouched (this is not an LLM denial).
-    if (staticRisk === 'DENY') {
-      recordDecisionFeedback(req.callId, formatDenyFeedback('policy', { toolName, reason: policyReason }))
-      pushHistory({
-        sessionId: sessionKey,
-        toolName,
-        outcome: 'rejected',
-        source: 'policy-deny',
-        llmReason: undefined,
-      })
-      return 'rejected'
-    }
     // Confirmation-learning query layer — the only wiring slot where a learned
     // allow may ever return: every preceding hard terminal (declared rules,
     // deny list, category deny, static allows/asks, manual mode, breaker trip,
-    // and the policy hard-deny immediately above) has already answered by the
+    // and the policy hard-deny at the top of this handler) has already answered by the
     // time this line runs, so a stored confirmation can structurally never
     // touch a hard-denied call. A miss, a failed verification, or any error
     // falls through to the ordinary LOW/MEDIUM/HIGH pipeline unchanged.

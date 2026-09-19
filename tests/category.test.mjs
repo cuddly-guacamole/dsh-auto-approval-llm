@@ -779,7 +779,7 @@ test('runtime-state fuse: a junction landing on plugin state resolves into the z
   }
 })
 
-test('T146: the learning query sits between the terminal policy-deny and risk application (slot Y)', () => {
+test('T146: the policy hard-deny answers first, and the learning query stays after it (slot Y)', () => {
   const answererStart = HOST_SRC.indexOf("ev: 'request'")
   const answerer = HOST_SRC.slice(answererStart)
   const breakerIdx = answerer.indexOf('breakerTripped(')
@@ -789,7 +789,7 @@ test('T146: the learning query sits between the terminal policy-deny and risk ap
   for (const [name, idx] of [['breakerTripped(', breakerIdx], ["'policy-deny'", denyIdx], ['learnAttempt', learnedIdx], ['llmRouteAvailable', routeIdx]]) {
     assert.ok(idx !== -1, `answerer contains ${name}`)
   }
-  assert.ok(breakerIdx < denyIdx, 'breaker trip precedes the DENY terminal')
+  assert.ok(denyIdx < breakerIdx, 'the policy hard-deny answers before the breaker ask')
   assert.ok(denyIdx < learnedIdx, 'the learning query comes AFTER the policy hard-deny — never before it')
   assert.ok(learnedIdx < routeIdx, 'the learning query comes BEFORE the risk branches consume the decision')
 })
