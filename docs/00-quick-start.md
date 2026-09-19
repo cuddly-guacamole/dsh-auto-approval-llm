@@ -15,7 +15,7 @@
 | Node | `^22.19.0 || >=24.0.0` |
 | 共存 | 本插件是 `auto-approval` 档 `approval/request` 的唯一终结裁决者 —— 同一档位不要再叠第二个审批插件；上游 `@deepseek-ai/dsh-experimental-auto-review`（`auto`，Auto review / EXP）是另一个档位，可同时启用 |
 
-> 从旧机器值 `auto` 升级：只迁移 `auto + danger-full-access + ask` 同签名存量会话；归档不处理，resume 时懒迁移。宿主 `>= 0.1.6` 无上游且无法迁移的存量会话打不开 = 文档化的 fail-closed（迁移口径见仓库 README「从旧 `auto` 档升级」）。
+> 从旧机器值 `auto` 升级：只迁移 `auto + danger-full-access + ask` 同签名存量会话（**modern host 上上游 auto-review 持有的同签名 `auto` 也会被改写：旋钮不变、应答主体从上游换成本插件**）；归档不处理，resume 时懒迁移。宿主 `>= 0.1.6` 无上游且无法迁移的存量会话打不开 = 文档化的 fail-closed（迁移口径见仓库 README「从旧 `auto` 档升级」）。
 
 ## 安装
 

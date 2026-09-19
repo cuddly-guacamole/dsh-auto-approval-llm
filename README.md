@@ -84,6 +84,7 @@ dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 ### 从旧 `auto` 档升级
 
 - **同签名门槛**：所有宿主只迁移 `raw preset = auto` 且 `sandbox = danger-full-access` 且 `approval = ask` 的存量会话；其它 `auto` 签名（含 `danger-full-access + never`）一律不迁移并告警。
+- **modern host 的主体变化**：宿主 `>= 0.1.6` 上若上游 auto-review 层持有同一签名的 `auto`，该会话同样会被改写成 `auto-approval`——沙箱/审批旋钮不变，但**应答主体从上游换成本插件**（上游不再接管该档）。这是同签名 rescue 语义的一部分，不是旋钮放宽。
 - **迁移时机**：归档会话不处理，只在 resume 进入 live 时懒迁移（`session/created` prepend）；插件加载时对已 live 会话做一次启动扫描，`agent/created` 兜底。迁移只重写 durable raw identity（`permission/preset`），**不写旋钮、不调用 `permissionPresets.set()`**。
 - **自有档 spec enforcement**：`auto-approval` 会话的 effective-never（`approval: never`，或 `approval: null` + base policy `never`）由插件写回 `ask`（`preset-spec-restore` 审计）；不会再翻转上游 `auto`。
 - **fail-closed**：宿主 `>= 0.1.6` 且未装上游 auto-review、且该存量会话在 `permissionPresets` 服务构造期已 live（插件来不及先迁移）时，宿主 pin 会先于插件拒绝该会话——**会话打不开，不是静默放行**。处置：停 dsh → 用可选离线迁移工具或手工导出/导入 → 再启动；也可在 profile 保留上游 auto-review 层。该 boot 期缺口在插件侧无法自动修复。
