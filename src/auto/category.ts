@@ -359,26 +359,6 @@ const GIT_LOCAL = new Set([
   'stash', 'am', 'revert', 'cherry-pick', 'fetch', 'pull',
 ])
 const WRAPPERS = new Set(['env', 'nohup', 'setsid', 'stdbuf', 'command', 'time', 'timeout', 'xargs', 'nice', 'ionice', 'busybox', 'toybox', 'watch', 'unbuffer'])
-const WRAPPER_VALUE_FLAGS: Record<string, RegExp> = {
-  xargs: /^-(?:n|I|i|P|L|s|d|E|a)$|^--(?:max-args|replace|max-procs|max-lines|max-chars|delimiter|eof|arg-file|process-slot-var)$/,
-  stdbuf: /^-(?:i|o|e)$|^--(?:input|output|error)$/,
-  nice: /^-(?:n)$|^--adjustment$/,
-  ionice: /^-(?:c|n|p|P|u)$|^--(?:class|classdata|pid|pgid|uid)$/,
-  // env: `-u/--unset NAME`, `-C/--chdir DIR` and `--argv0 NAME` consume the
-  // following word; `-S/--split-string` is spliced as a command line before
-  // this table is consulted, and an empty split string falls back to consuming
-  // the value. The separated spelling (`env -u FOO rm -rf X`) must not unwrap
-  // to the flag's value.
-  env: /^-(?:u|S|C)$|^--(?:unset|split-string|chdir|argv0)$/,
-  // timeout: `-s/--signal <SIG>` and `-k/--kill-after <DUR>` take a value. This
-  // table is a copy of the shell plane's authority (auto/shell.ts) and had lost
-  // the entry: `timeout -s KILL 5 rm -rf X` unwrapped to `KILL` here (unknown)
-  // while the shell plane saw `rm`, so the delete hard lock and the operator's
-  // delete categoryPolicy never fired for that spelling. Keep the two in step.
-  timeout: /^-(?:s|k)$|^--(?:signal|kill-after)$/,
-  time: /^-(?:o|f)$|^--(?:output|format)$/,
-  watch: /^-(?:n)$/,
-}
 const NESTED_INTERPRETERS = new Set(['node', 'deno', 'bun', 'python', 'python3', 'perl', 'ruby', 'php', 'osascript'])
 const NESTED_SHELLS = new Set(['sh', 'bash', 'zsh', 'fish', 'ksh', 'dash', 'cmd', 'cmd.exe', 'powershell', 'powershell.exe', 'pwsh', 'pwsh.exe'])
 const NESTED_EVAL = new Set(['eval', 'iex', 'invoke-expression'])

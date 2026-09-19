@@ -351,7 +351,6 @@ export function startReviewPolling(
       interval = undefined
     }
     approvalStatusStore.dropPending(handle.sessionId, handle.callId!)
-    approvalStatusStore.dropPending(handle.sessionId, handle.callId!)
     options.onDetach?.(timerKey)
   }
 

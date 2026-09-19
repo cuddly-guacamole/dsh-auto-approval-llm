@@ -30,6 +30,8 @@ export interface Roots {
     mode?: 'standard' | 'aggressive'
     /** Extra trusted directories injected live by rootsFor (standard mode only). */
     trustedDirs?: string[]
+    /** DSH_HOME subtrees the operator opened for shell maintenance, injected live by rootsFor. */
+    maintenanceDshPaths?: string[]
 }
 
 /** Minimal shape of a tool execution the classifier inspects. */

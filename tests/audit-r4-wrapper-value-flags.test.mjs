@@ -111,13 +111,10 @@ function tableOf(libPath) {
   return entries
 }
 
-test('the category copy is entry-for-entry parity with the shell authority', () => {
+test('the shell authority stays intact and category declares no local copy', () => {
   const shellTable = tableOf('../lib/auto/shell.js')
-  const categoryTable = tableOf('../lib/auto/category.js')
   assert.ok(shellTable.size >= 7, `the authority table lists every wrapper with a value flag (got ${shellTable.size})`)
-  assert.deepEqual(
-    [...categoryTable.entries()].sort(),
-    [...shellTable.entries()].sort(),
-    'the hand-copied table must match the authority entry by entry',
-  )
+  const categorySource = readFileSync(fileURLToPath(new URL('../lib/auto/category.js', import.meta.url)), 'utf8')
+  assert.doesNotMatch(categorySource, /const WRAPPER_VALUE_FLAGS/,
+    'the hand-copied table is retired; both planes read the shared shell owner')
 })

@@ -11,7 +11,7 @@ src/
 │    ├─ artifacts.ts     140  本会话成功创建路径登记（删除豁免依据）
 │    ├─ audit.ts         149  append-only 审批审计（清空留墓碑、5MiB 保尾）
 │    ├─ carrier-route.ts 75  载波中立路由注册：原生 Fetch handler 与 delete-op 归一
-│    ├─ category.ts      917  12 类三态开关层：归类/优先级合并/指令钳制/信任目录模式
+│    ├─ category.ts      897  12 类三态开关层：归类/优先级合并/指令钳制/信任目录模式
 │    ├─ classifier.ts    100  预分类提示词、参数脱敏、严格响应解析
 │    ├─ constants.ts     141  数值默认唯一事实源（倒计时/熔断/截断/学习族阈值）
 │    ├─ decision.ts      935  纯决策函数：评审解析、人机竞速、来源标注、熔断、静态名单、host-only 键
@@ -24,7 +24,7 @@ src/
 │    ├─ model-channel.ts 119  模型通道路由与 provider 选择
 │    ├─ paths.ts         462  路径规范化、受保护/关键路径判定、受保护读取例外（Git ref 元数据）、运行态文件名单
 │    ├─ permission-change.ts 131  权限平面变更观测：逐平面基线门控 + 被拒 decision 指针
-│    ├─ policy.ts        653  assessTool 确定性第一遍分类（17 步）
+│    ├─ policy.ts        655  assessTool 确定性第一遍分类（17 步）
 │    ├─ preset-migration.ts 423  auto-approval 重命名与存量迁移：多信号宿主能力探测、raw identity gate、同签名懒迁移、自有档 effective-never 归一回 ask
 │    ├─ probe.ts         72   工作区事实只读探针（reviewerContextFacts 的元数据来源）
 │    ├─ redact.ts        223  秘密脱敏器（token/AWS/PEM/Bearer…，供参数/评审理由/骨架/结果共用）
@@ -35,13 +35,13 @@ src/
 │    ├─ runtime-paths.ts 293  运行态文件唯一路径 owner（`<DSH_HOME>/auto-approval-llm/` 规范位置；目录无法创建/拒绝写入时 fail-closed——append 失败返回 undefined，由调用方拒绝裁决，不回退包根、不搬家；open 阶段错误允许同路径重试一次，写后错误不重试）
 │    ├─ shell.ts         3610 bash/pwsh 词法分解 + 整行熔断 + 逐段静态分类（最大单文件）
 │    ├─ symlink.ts       182  符号链接创建与目标校验
-│    ├─ tool-stats.ts    94   工具调用统计收集
+│    ├─ tool-stats.ts    96   工具调用统计收集
 │    └─ trust.ts         307  web 路由信任平面（loopback/LAN 边界、Host 伪造防护、在线端点 URL 校验）
 └─ client/
      ├─ index.ts         React 客户端主体 3039 行（设置卡 8 子卡/面板增强/应答 watcher 装配/浮动按钮/CSS）
      ├─ approvals/       应答模块（0.0.12 起；0.0.16 起单协议——remote 源适配 + shared 协议无关核心；rc.2 legacy/feature 已删）
      │    ├─ remote.ts       229
-     │    └─ shared.ts       656
+     │    └─ shared.ts       655
      ├─ auto-icon.ts     权限菜单图标 + Auto 风险确认弹窗 657 行
      ├─ locale.ts        zh/en 双语 564 行
      ├─ human-gate.ts    浮层「人工出手率」派生（HUMAN_SOURCES 与 scripts/friction-report 同源）

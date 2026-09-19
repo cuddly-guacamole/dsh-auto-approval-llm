@@ -44,6 +44,8 @@ const ADJUDICATED_SOURCES = new Set([
   'human-allow', 'human-deny',
   'classifier-allow', 'classifier-deny',
   'timeout-allow', 'timeout-deny',
+  // No longer produced (the conflated label was retired), but the chips read
+  // the whole history file and older records may still carry it.
   'category-allow',
   'llm-allow', 'llm-deny',
 ])

@@ -39,10 +39,10 @@ test('the other wrapper value flags keep working (no over-wrap)', () => {
   assert.equal(category('timeout 5 ls'), 'readOnly')
 })
 
-test('the category wrapper table stays parity with the shell authority', () => {
+test('the category plane reads the shared table instead of a local copy', () => {
   const categoryLib = readFileSync(fileURLToPath(new URL('../lib/auto/category.js', import.meta.url)), 'utf8')
   const shellLib = readFileSync(fileURLToPath(new URL('../lib/auto/shell.js', import.meta.url)), 'utf8')
   const timeoutFlag = /timeout:\s*\/\^-\(\?:s\|k\)\$/.source
-  assert.match(categoryLib, new RegExp(timeoutFlag), 'category.ts must keep the timeout value flags')
+  assert.doesNotMatch(categoryLib, /WRAPPER_VALUE_FLAGS\s*[:=]/, 'a local copy can drift; category must not declare one')
   assert.match(shellLib, new RegExp(timeoutFlag), 'shell.ts is the table authority')
 })
