@@ -616,9 +616,27 @@ function nestedExecution(name, words) {
     // and decayed to an LLM-answerable `unknown`, while the same program without
     // the suffix was a nested-execution boundary. Normalizing here covers every
     // caller of this owner at once.
-    const base = commandNameWithoutExe(name);
-    if (['node', 'deno', 'bun', 'python', 'python3', 'perl', 'ruby', 'php', 'osascript'].includes(base)) {
-        const index = words.findIndex((word, wordIndex) => wordIndex > 0 && /^(?:-c|-e|-E|--eval|--exec|--command|--print)$/.test(word.text));
+    const base = commandNameWithoutExe(name).replace(/\d+(?:\.\d+)*$/, '');
+    if (['node', 'deno', 'bun', 'python', 'python3', 'perl', 'ruby', 'php', 'lua', 'osascript'].includes(base)) {
+        // `-e` at the end of a fused short cluster (`-pe`, `-ne`, `-le`) still
+        // takes the following word as the program, exactly like a bare `-e`.
+        const inlineFlag = /^(?:-c|-E|--eval|--exec|--command|--print|-[a-zA-Z]*e)$/;
+        const index = words.findIndex((word, wordIndex) => {
+            if (wordIndex === 0)
+                return false;
+            if (inlineFlag.test(word.text))
+                return true;
+            // Interpreter-specific inline-program spellings: node evaluates
+            // through `-p` (print), php through `-r`, and deno takes its
+            // program from the `eval` subcommand.
+            if (base === 'node' && /^-p(?:e)?$/.test(word.text))
+                return true;
+            if (base === 'php' && /^-r$/.test(word.text))
+                return true;
+            if (base === 'deno' && word.text === 'eval')
+                return true;
+            return false;
+        });
         if (index >= 0)
             return { ...(words[index + 1] === undefined ? {} : { source: words[index + 1].text }) };
         return undefined;
@@ -702,7 +720,7 @@ function destructiveNestedSource(source) {
     // A backtick substitution is a segment boundary like `$(`, so it belongs in
     // the anchor set: `` `rm -rf /` `` starts the nested source right after the
     // backtick and used to miss every anchor here.
-    return /(?:^|[\s;&|()`"'])(?:rm|rmdir|unlink|shred|remove-item|del|erase)(?:\s|$)|\b(?:shutil\.rmtree|os\.(?:remove|unlink|rmdir|removedirs)|file\.(?:delete|unlink)|directory\.delete)\s*\(|\.(?:rm|rmsync|unlink|unlinksync|rmdir|rmdirsync|delete)\s*\(|\b(?:delete\s+from|drop\s+(?:table|database)|truncate\s+table)\b/i.test(source);
+    return /(?:^|[\s;&|()`"'])(?:rm|rmdir|unlink|shred|remove-item|del|erase)(?:\s|$)|\b(?:shutil\.rmtree|os\.(?:remove|unlink|rmdir|removedirs)|file\.(?:delete|unlink)|directory\.delete)\s*\(|\.(?:rm|rmsync|removesync|unlink|unlinksync|rmdir|rmdirsync|delete)\s*\(|\b(?:delete\s+from|drop\s+(?:table|database)|truncate\s+table)\b/i.test(source);
 }
 /**
  * Whether a visible nested-execution source combines a file-write function
@@ -1647,6 +1665,18 @@ export function perlInPlaceTargets(words) {
     return targets;
 }
 /**
+ * Ruby's in-place mode (`-i`, optionally with a backup suffix) mirrors the
+ * perl shape: the program is the `-e` value (fused or separated) or the first
+ * bare operand; everything left is rewritten in place. Both planes delegate to
+ * the shared perl implementation so the two interpreters stay in step.
+ */
+export function rubyEditsInPlace(words) {
+    return perlEditsInPlace(words);
+}
+export function rubyInPlaceTargets(words) {
+    return perlInPlaceTargets(words);
+}
+/**
  * Write targets of a sort invocation: the output file (`-o`, `-oFILE`,
  * `--output[=]`) and the temporary directory (`-T`, `-TDIR`,
  * `--t[emporary-directory][=]`). The short `-t` is NOT one of them — it is the
@@ -1740,6 +1770,8 @@ function writesThroughOperands(name, words) {
         return unzipWriteTargets(words).length > 0;
     if (name === 'perl')
         return perlEditsInPlace(words);
+    if (name === 'ruby')
+        return rubyEditsInPlace(words);
     if (name === 'rsync')
         return rsyncWriteTargets(words).length > 0;
     return false;
@@ -1907,6 +1939,8 @@ function segmentHardDenyReason(segment, shell, roots) {
             writeOperands = unzipWriteTargets(unwrapped.words);
         else if (name === 'perl')
             writeOperands = perlInPlaceTargets(unwrapped.words);
+        else if (name === 'ruby')
+            writeOperands = rubyInPlaceTargets(unwrapped.words);
         else if (name === 'rsync')
             writeOperands = rsyncWriteTargets(unwrapped.words);
         else
@@ -3109,7 +3143,10 @@ function assessSegment(segment, shell, roots, artifacts, owner) {
     const words = unwrapped.words;
     const name = commandName(words[0].text);
     const nested = nestedExecution(name, words);
-    if (nested !== undefined) {
+    if (nested !== undefined && !writesThroughOperands(name, words)) {
+        // An in-place edit (`perl -i -pe`, `ruby -i`) is judged by the write
+        // head below, which sees its file targets; the nested branch must not
+        // outrank it and lose the target-aware tier.
         if (routineInlineProbe(name, nested.source))
             return allowed('routine inline package or version probe');
         if (nested.encoded === true)
