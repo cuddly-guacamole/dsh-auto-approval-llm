@@ -236,7 +236,12 @@ export function signatureFor(input: SignatureInput): SignatureResult | undefined
     if (input.kind === 'tool') {
       const template = toolTemplate(input.toolName, input.args)
       if (template === undefined || template.length > SKELETON_MAX) return undefined
-      return { signature: template, skeleton: redactSecrets(template) }
+      const skeleton = redactSecrets(template)
+      // Same gate as the shell branch: the write side must never persist an
+      // entry the load-side validation would refuse (which would silently
+      // reset the confirmation count on the next restart).
+      if (!SKELETON_ALLOWED.test(template) || !skeletonGateOk(skeleton)) return undefined
+      return { signature: template, skeleton }
     }
     if (input.kind !== 'shell-bash' && input.kind !== 'shell-pwsh') return undefined
     const shell = input.kind === 'shell-bash' ? 'bash' : 'pwsh'
