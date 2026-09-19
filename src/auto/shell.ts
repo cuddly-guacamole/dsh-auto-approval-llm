@@ -1549,9 +1549,14 @@ function derivedOperand(source, text) {
 function tarDiskMode(words) {
     for (let index = 1; index < words.length; index += 1) {
         const text = wordText(words[index]);
-        if (text === '--create') return 'c';
-        if (text === '--extract' || text === '--get') return 'x';
-        if (text === '--list') return 't';
+        // GNU tar resolves unambiguous long-option prefixes. The prefixes here
+        // are the unique ones of the disk-mode options: --create against
+        // --catenate/--concatenate/--compare, --extract/--get against
+        // --exclude, --list against --label. A genuinely ambiguous stem
+        // (`--c`, `--e`) stays unrecognized rather than guessed.
+        if (/^--cr/.test(text)) return 'c';
+        if (/^--extr/.test(text) || /^--ge/.test(text)) return 'x';
+        if (/^--li/.test(text)) return 't';
         const cluster = /^-([a-zA-Z]+)$/.exec(text);
         if (cluster !== null) {
             for (const flag of cluster[1]) {
@@ -1579,18 +1584,25 @@ export function tarWriteTargets(words) {
     for (let index = 1; index < words.length; index += 1) {
         const word = words[index];
         const text = wordText(word);
-        if (text === '-f' || text === '--file' || text === '-C' || text === '--directory') {
-            const takesFile = text === '-f' || text === '--file';
-            if ((takesFile && mode === 'c') || (!takesFile && mode === 'x')) {
+        // Long options resolve through their unambiguous prefixes (--fi…,
+        // --dir…), so the abbreviation spellings reach the same destination
+        // fuses as the full words. The separated-value branch below excludes
+        // the `=` forms: those carry their value inside the word itself.
+        const takesFile = text === '-f' || /^--fi[a-z]*$/.test(text);
+        const takesDir = text === '-C' || /^--dir[a-z]*$/.test(text);
+        if (takesFile || takesDir) {
+            if ((takesFile && mode === 'c') || (takesDir && mode === 'x')) {
                 const value = words[index + 1];
                 if (value !== undefined) targets.push(value);
             }
             index += 1;
             continue;
         }
-        if (text.startsWith('--file=') || text.startsWith('--directory=')) {
-            const takesFile = text.startsWith('--file=');
-            if ((takesFile && mode === 'c') || (!takesFile && mode === 'x')) {
+        const eqFile = /^--fi[a-z]*=/.test(text);
+        const eqDir = /^--dir[a-z]*=/.test(text);
+        if (eqFile || eqDir) {
+            const takesFileValue = eqFile;
+            if ((takesFileValue && mode === 'c') || (!takesFileValue && mode === 'x')) {
                 const value = text.slice(text.indexOf('=') + 1);
                 if (value !== '') targets.push(derivedOperand(word, value));
             }
