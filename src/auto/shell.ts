@@ -1370,11 +1370,19 @@ function isDateClockWriteFlag(token) {
  * ordinary `ask` and the unattended countdown settles it.
  */
 function dateClockWriteReason(name, tokens) {
-    if (name !== 'date')
-        return undefined;
-    return tokens.slice(1).some(token => isDateClockWriteFlag(token))
-        ? 'the system clock is not settable from agent sessions'
-        : undefined;
+    const reason = 'the system clock is not settable from agent sessions';
+    const base = commandNameWithoutExe(name);
+    if (base === 'date')
+        return tokens.slice(1).some(token => isDateClockWriteFlag(token)) ? reason : undefined;
+    // The platform siblings set the same clock with their own flag vocabulary;
+    // the date fuse's tier applies to them unchanged.
+    if (base === 'set-date')
+        return reason;
+    if (base === 'timedatectl')
+        return /\b(?:set-time|set-ntp|set-timezone)\b/.test(tokens.slice(1).join(' ')) ? reason : undefined;
+    if (base === 'hwclock')
+        return /(?:^|\s)(?:--systohc|--hctosys|--set)(?:\s|$|=)/.test(tokens.slice(1).join(' ')) ? reason : undefined;
+    return undefined;
 }
 /** The write targets a read-only command carries inside its own output flag. */
 function readOnlyOutputFlagTargets(name, words, shell) {
