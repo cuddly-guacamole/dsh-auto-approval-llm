@@ -14,7 +14,18 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { clearReviewerKeyInFile } from '../lib/index.js'
+
+test('the clear rewrites through the atomic path (source pin — the atomicity gain itself is not observable in a passing run)', () => {
+  const source = readFileSync(fileURLToPath(new URL('../src/index.ts', import.meta.url)), 'utf8')
+  const at = source.indexOf('export function clearReviewerKeyInFile')
+  assert.ok(at > 0, 'the clear owner is locatable')
+  const nextExport = source.indexOf('\nexport function', at + 1)
+  const body = source.slice(at, nextExport > 0 ? nextExport : undefined)
+  assert.match(body, /atomicWriteFile\(/, 'the clear must use the tmp+rename helper')
+  assert.doesNotMatch(body, /\bwriteFileSync\(/, 'a bare in-place rewrite must be gone')
+})
 
 test('a cleared store keeps its other providers and leaves no temp file behind', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsa-clear-atomic-'))
