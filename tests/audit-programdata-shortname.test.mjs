@@ -1,11 +1,13 @@
 /**
- * ProgramData's 8.3 short name (PROGRAM~1) must hit the system-critical fuse.
+ * Literal `PROGRAM~n` directory names must hit the system-critical fuse.
  *
  * The critical-path regex carried 8.3 forms for the Windows directory
- * (`WINDOW~1`) and Program Files (`PROGRA~1`) but not for ProgramData — whose
- * short name is `PROGRAM~1`, one letter too long for the `progra~\d`
- * alternative — so `C:\PROGRAM~1\…` escaped the system-critical fuse while
- * `C:\ProgramData\…` is denied.
+ * (`WINDOW~1`) and Program Files (`PROGRA~1`) but not for other
+ * `PROGRAM~n`-shaped literal names. (Correction from the review pass: the
+ * 8.3 short name of ProgramData is `PROGRA~3`, already covered by the
+ * `progra~\d` alternative — the 8.3 algorithm cannot produce the 9-character
+ * `PROGRAM~1`. This fuse now covers the literal `PROGRAM~n` spelling as
+ * fail-closed hardening of the family shape, not as a ProgramData alias.)
  *
  * Run: node --test tests/audit-programdata-shortname.test.mjs
  */
@@ -24,14 +26,16 @@ const roots = {
   mode: 'standard',
 }
 
-test('the 8.3 short name of ProgramData is system-critical', () => {
+test('the literal PROGRAM~n spellings are system-critical', () => {
   assert.match(String(hardDestructiveTargetReason('C:/PROGRAM~1/x', roots)), /critical/i)
   assert.match(String(hardDestructiveTargetReason('C:/PROGRAM~2/x', roots)), /critical/i)
 })
 
-test('the long spelling and the sibling short names keep their verdicts (control)', () => {
+test('the real short names keep their verdicts (control, unchanged)', () => {
   assert.match(String(hardDestructiveTargetReason('C:/ProgramData/x', roots)), /critical/i)
   assert.match(String(hardDestructiveTargetReason('C:/PROGRA~1/x', roots)), /critical/i)
+  assert.match(String(hardDestructiveTargetReason('C:/PROGRA~3/x', roots)), /critical/i,
+    'the actual 8.3 short name of ProgramData rides the existing progra~ alternative')
 })
 
 test('ordinary program-named directories stay non-critical (no over-block)', () => {
