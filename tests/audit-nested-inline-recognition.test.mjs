@@ -56,6 +56,24 @@ test('ruby in-place edits reach the same destination fuses as perl', () => {
   assert.match(String(ruby), /DSH_HOME/)
 })
 
+test('a destructive body inside an in-place edit stays locked regardless of the write target', () => {
+  // The write head owns the target judgment for in-place edits, but the
+  // nested danger ladder must still see the program body: a routine
+  // workspace target must not turn `perl -i -e 'system("rm -rf …")'` into a
+  // static allow (that regression shipped once — the ladder stands down
+  // only for the generic classifier fallback, never for the body fuses).
+  for (const command of [
+    `perl -i -e 'system("rm -rf C:/Users/u/.ssh")' C:/ws/notes.txt`,
+    `ruby -i -e 'system("rm -rf C:/Users/u/.ssh")' C:/ws/notes.txt`,
+    `perl -i -e 'unlink "C:/Users/u/.ssh/id_rsa"' C:/ws/notes.txt`,
+    `perl -i -e 'open(F,">","C:/Users/u/.dsh/x")' C:/ws/notes.txt`,
+  ]) {
+    const verdict = assess(command)
+    assert.ok(verdict, `${command} must not be a static allow`)
+    assert.equal(verdict.classifierEligible, false, `${command} must stay out of the classifier`)
+  }
+})
+
 test('non-inline spellings of the same interpreters keep their verdicts (no over-block)', () => {
   assert.equal(hardDeny('php -f C:/ws/script.php'), undefined)
   assert.equal(hardDeny('deno run C:/ws/script.ts'), undefined)
