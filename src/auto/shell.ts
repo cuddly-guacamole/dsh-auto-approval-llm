@@ -3200,10 +3200,7 @@ function assessSegment(segment, shell, roots, artifacts, owner) {
     const words = unwrapped.words;
     const name = commandName(words[0].text);
     const nested = nestedExecution(name, words);
-    if (nested !== undefined && !writesThroughOperands(name, words)) {
-        // An in-place edit (`perl -i -pe`, `ruby -i`) is judged by the write
-        // head below, which sees its file targets; the nested branch must not
-        // outrank it and lose the target-aware tier.
+    if (nested !== undefined) {
         if (routineInlineProbe(name, nested.source))
             return allowed('routine inline package or version probe');
         if (nested.encoded === true)
@@ -3233,7 +3230,13 @@ function assessSegment(segment, shell, roots, artifacts, owner) {
             if (nestedOutput !== undefined)
                 return denied(nestedOutput);
         }
-        return semanticReview('visible nested or inline-code execution requires independent classification');
+        // An in-place edit (`perl -i -pe`, `ruby -i`) whose program body
+        // survived the danger ladder above is judged by the write head below,
+        // which sees its file targets; the generic classifier fallback must
+        // not outrank it and lose the target-aware tier. Anything dangerous
+        // in the body already returned from the ladder.
+        if (!writesThroughOperands(name, words))
+            return semanticReview('visible nested or inline-code execution requires independent classification');
     }
     const base = classifyEffectiveCommand(name, words, segment, shell, roots, artifacts, owner, unwrapped.dynamicInput);
     if (base.decision !== 'allow' || writeTargetsAreRoutine(segment, shell, roots))
