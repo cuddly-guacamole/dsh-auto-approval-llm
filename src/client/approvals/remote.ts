@@ -1,10 +1,11 @@
 // Remote protocol adapter: subscribes to the optional `uiSession`
-// service's `pendingInteractions` HostObservable (getSnapshot() =>
-// Map<sessionId, PendingApproval>) and answers `kind === 'approval'` entries
-// on countdown expiry via `pending.answer(outcome)`. Pure observation — never
-// registers for `remote.$on('approval/request')` and never imports an
-// @deepseek-ai package; the PendingApproval shape is duck-typed so installs
-// without the ui-session service keep working with an idle watcher.
+// service's `sessionStatus` HostObservable (getSnapshot() =>
+// ReadonlyMap<sessionId, SessionStatus>, each carrying its highest-precedence
+// `pendingInteraction`) and answers `kind === 'approval'` entries on countdown
+// expiry via `pending.answer(outcome)`. Pure observation — never registers for
+// `remote.$on('approval/request')` and never imports an @deepseek-ai package;
+// the PendingApproval shape is duck-typed so installs without the ui-session
+// service keep working with an idle watcher.
 import {
   canonicalPendingKey,
   createSeenSessionTracker,
@@ -19,9 +20,9 @@ import { hasBreakerNote } from '../../auto/decision.js'
 import type { ApprovalHandle, ApprovalOutcome, WatcherOptions } from './shared.js'
 
 // Structural shape of a PendingApproval as surfaced by
-// ui-session.pendingInteractions. Deliberately not an import from any
-// @deepseek-ai package: duck-typing keeps the client bundle free of
-// unavailable dependencies.
+// ui-session.sessionStatus (each SessionStatus.pendingInteraction).
+// Deliberately not an import from any @deepseek-ai package: duck-typing keeps
+// the client bundle free of unavailable dependencies.
 export interface PendingApprovalLike {
   kind: 'approval'
   key: string
@@ -49,13 +50,13 @@ export function watchRemoteApprovals(ctx: any, options: WatcherOptions = {}): vo
   // browser tab grows this set with every historical session.
   const seenSessions = createSeenSessionTracker()
   let unsub: (() => void) | undefined
-  let pendingInteractions: any
+  let sessionStatus: any
   let disposed = false
 
   const stillVisible = (item: PendingApprovalLike): boolean => {
     try {
-      const snapshot = pendingInteractions?.getSnapshot()
-      const pending = snapshot?.get?.(item.sessionId)
+      const snapshot = sessionStatus?.getSnapshot()
+      const pending = snapshot?.get?.(item.sessionId)?.pendingInteraction
       return !!pending && pending.kind === 'approval' && pending.callId === item.callId
     } catch {
       return false
@@ -63,19 +64,20 @@ export function watchRemoteApprovals(ctx: any, options: WatcherOptions = {}): vo
   }
 
   const check = () => {
-    if (disposed || pendingInteractions === undefined) return
+    if (disposed || sessionStatus === undefined) return
     let snapshot: any
     try {
-      snapshot = pendingInteractions.getSnapshot()
+      snapshot = sessionStatus.getSnapshot()
     } catch {
       return
     }
     if (!snapshot || typeof snapshot.values !== 'function') return
     const seen = new Set<string>()
-    // Per-entry arming: the snapshot holds the latest entry per sessionId
-    // (precedence overshadows older pending), so each kind==='approval' item
-    // is matched by the callId it carries — never by map.get(sessionId).
-    for (const pending of snapshot.values()) {
+    // Per-entry arming: one SessionStatus carries the highest-precedence
+    // pending interaction for its session, so each kind==='approval' item is
+    // matched by the callId it carries — never by map.get(sessionId).
+    for (const status of snapshot.values()) {
+      const pending = status?.pendingInteraction
       if (!pending || pending.kind !== 'approval') continue
       const item: PendingApprovalLike = pending
       const callId = item.callId
@@ -130,21 +132,21 @@ export function watchRemoteApprovals(ctx: any, options: WatcherOptions = {}): vo
     }
   }
 
-  // Declarative arm: bind the watcher to uiSession.pendingInteractions. The
+  // Declarative arm: bind the watcher to uiSession.sessionStatus. The
   // service is a declared inject dependency, so this normally succeeds on the
   // first apply; `false` means the served client protocol has no such service.
   const arm = (): boolean => {
-    const pi = ctx.get('uiSession')?.pendingInteractions
+    const status = ctx.get('uiSession')?.sessionStatus
     if (
       disposed ||
-      pi === undefined ||
-      typeof pi.getSnapshot !== 'function' ||
-      typeof pi.subscribe !== 'function'
+      status === undefined ||
+      typeof status.getSnapshot !== 'function' ||
+      typeof status.subscribe !== 'function'
     ) {
       return false
     }
-    pendingInteractions = pi
-    unsub = pi.subscribe?.(check)
+    sessionStatus = status
+    unsub = status.subscribe?.(check)
     check()
     return true
   }
@@ -212,7 +214,7 @@ export function watchRemoteApprovals(ctx: any, options: WatcherOptions = {}): vo
     // A protocol mismatch (host serves no uiSession) is the only remaining
     // cause: warn once so the failure is visible instead of every official
     // panel silently becoming an unclosable ghost.
-    console.warn('[dsh-auto-approval-llm] approval watcher (remote): uiSession.pendingInteractions unavailable; approval auto-close disabled (offline panel)')
+    console.warn('[dsh-auto-approval-llm] approval watcher (remote): uiSession.sessionStatus unavailable; approval auto-close disabled (offline panel)')
   }
 
   ctx.effect(() => () => {

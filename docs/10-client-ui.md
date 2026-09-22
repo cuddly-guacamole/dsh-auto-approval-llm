@@ -17,16 +17,16 @@
 
 - 倒计时**不再写进官方按钮**。状态由共享显示存储 `approvals/status-store.ts` 提供，渲染在**会话标题栏的自动审批控件**上（`conversation.session.header.utilities`）：空闲显示控件名（自动审批），有事时显示粗档倒计时（>30s 只给「约 N 分钟」）、≤30s 的秒数、「即将自动放行…」，随后按结构化 phase/source 显示已被自动评审放行/拒绝、超时、人工、取消、需人工决定、熔断、断线；终局状态保留 **1.5s** 后回到空闲文字。断线时冻结最后确认的剩余值，不继续走秒。
 - 该控件是**分离按钮**（官方同款结构）：左主区只显示状态文字（暂无动作），右下箭头用官方 chevron 图标，点击打开审批记录浮层（统计 + 最近记录）；主区不再整块可点。
-- 面板延迟（`panelDelayMs`）：倒计时审批先只显示状态，经过该时长再让官方审批面板出现，期间输入框可用；窗口内评审给出结论则面板不出现；settled 的 ask 会取消延迟，绝不事后把请求转给客户端。延迟期间客户端用**会话级发现路由** `/session-review-status` 拿到本会话全部待审（官方面板未出现时 `uiSession.pendingInteractions` 里还没有条目）。host 侧 `/reveal-approval` 保留为「提前放行」通道，供后续给左主区接入动作时使用。
+- 面板延迟（`panelDelayMs`）：倒计时审批先只显示状态，经过该时长再让官方审批面板出现，期间输入框可用；窗口内评审给出结论则面板不出现；settled 的 ask 会取消延迟，绝不事后把请求转给客户端。延迟期间客户端用**会话级发现路由** `/session-review-status` 拿到本会话全部待审（官方面板未出现时 `uiSession.sessionStatus` 里还没有条目）。host 侧 `/reveal-approval` 保留为「提前放行」通道，供后续给左主区接入动作时使用。
 - 两处 document 级扫描都按窗口节流（`src/client/throttle.ts` 的尾随节流器）：权限图标装饰 ≤50ms 一次、审批面板扫描 ≤100ms 一次；窗口内合并、窗口末**必有一次尾随执行**（不丢最后一次 DOM 变更），插件安装时的首扫仍是立即执行，卸载/停用时节流器随 observer 一并 dispose。
 - 面板文本含熔断 marker（`BREAKER_MARKER`，结构化 token）→ 双按钮禁用 `breakerAntiHijackMs`。无状态下发的 ask 由 host 写 `AWAITING_MARKER`，客户端就地渲染为当前界面语言的句子（host 不再写英文散文）；**锁定类别**的恒拒倒计时（delete/disk、未解锁的 protected/privilege、凭据读取地板与按名通道拒绝）由 host 写 `LOCKED_ASK_MARKER`，客户端同样就地渲染——文案说明该类询问不接受对话内授权、只有在本面板点「允许一次」才能放行，且**不含秒数**（数字在会话标题栏控件上，写进面板体会立刻过时）。三个 marker 的检测与就地改写都**跳过 diff 预览节点**（host 侧另有 `stripPreviewMarkers` 兜底）。**残留通道（已登记）**：官方面板在同一节点里渲染工具调用的命令原文，该文本不过 host 的 marker 剥离，因此模型若把 marker 字面量写进命令参数，面板会显示那句 host 从未写过的话——对 `LOCKED_ASK_MARKER` 是文案欺骗（改变人的点击意愿，不改变裁决语义）；对 `BREAKER_MARKER` 则经 `breaker.apply` **真的禁用双按钮**（`breakerAntiHijackMs` 默认 0 时为 no-op，>0 时生效；既有性质，非本批引入）。要 fence 它需要官方面板给出 host 归属文本区的字段边界。
-- 非 UI 轮询器（0.0.12 起拆为 `approvals/` 模块）：客户端入口把 `remote`/`uiSession`/`slots`/`sessions` 声明为 inject 依赖（不再有 500ms×≤30 探针窗口）；`remote` watcher 观察 `uiSession.pendingInteractions`（rc.1 唯一协议源；rc.2 的 `snapshot.pending` 适配器已随 0.0.16 移除）；核心 `shared.startReviewPolling` GET `/review-status`（callId 走 `x-auto-approval-call-id` 头，不进 URL）并带 `x-auto-approval-wait-ms` **长轮询**（默认 20s 上限，服务端按 revision 变化即时唤醒；忽略该头的老 host 自动退化为 500ms 基准轮询），五分支处理 countdown/follow/grace/无状态。路由连续失败时按指数退避到 5s 上限、成功后立即回到基准：退避**只限制定时轮询**，观察不停止、也绝不由失败推导裁决；事件驱动的 `pollNow`（回连/可见性/解冻重对齐）**不受退避限制**，因此链路恢复时不会额外等一个退避周期。
+- 非 UI 轮询器（0.0.12 起拆为 `approvals/` 模块）：客户端入口把 `remote`/`uiSession`/`slots`/`sessions` 声明为 inject 依赖（不再有 500ms×≤30 探针窗口）；`remote` watcher 观察 `uiSession.sessionStatus`（每个 `SessionStatus.pendingInteraction`；rc.1 的旧协议源 `pendingInteractions` 已随宿主改名移除）；核心 `shared.startReviewPolling` GET `/review-status`（callId 走 `x-auto-approval-call-id` 头，不进 URL）并带 `x-auto-approval-wait-ms` **长轮询**（默认 20s 上限，服务端按 revision 变化即时唤醒；忽略该头的老 host 自动退化为 500ms 基准轮询），五分支处理 countdown/follow/grace/无状态。路由连续失败时按指数退避到 5s 上限、成功后立即回到基准：退避**只限制定时轮询**，观察不停止、也绝不由失败推导裁决；事件驱动的 `pollNow`（回连/可见性/解冻重对齐）**不受退避限制**，因此链路恢复时不会额外等一个退避周期。
 
 ## 10.1　应答状态机（自动应答的大脑，approvals/ 模块）
 
 ```mermaid
 flowchart TD
-    A["订阅协议源（remote: pendingInteractions），按 callId 匹配 kind==='approval' 项 → 布署轮询 [arm]"]
+    A["订阅协议源（remote: sessionStatus.pendingInteraction），按 callId 匹配 kind==='approval' 项 → 布署轮询 [arm]"]
     A -->|长轮询 review-status（默认 20s 上限，失败退避）| B1["① follow + source='human'/'abort'：人已决定或已取消 → 只收面板，绝不代答 [observe]"]
     A -->|长轮询 review-status（默认 20s 上限，失败退避）| B2["② follow 其他（llm/timeout）：收面板 + 上报 outcome [answer]"]
     A -->|长轮询 review-status（默认 20s 上限，失败退避）| B3["③ status 消失但曾是 countdown：宽限 FOLLOW_GRACE_MS=120s，仍 pending 才按记录动作自动应答 [grace]"]

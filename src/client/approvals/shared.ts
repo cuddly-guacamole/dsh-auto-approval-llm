@@ -1,6 +1,6 @@
 // Protocol-agnostic approval-responder core.
 //
-// Consumed by the remote protocol watcher (`pendingInteractions`) and by the
+// Consumed by the remote protocol watcher (`sessionStatus`) and by the
 // button hijack in index.ts. Depends only on the plugin's own host routes
 // (review-status/feedback) and never on any dsh client protocol type —
 // duck-typed structural interfaces only.

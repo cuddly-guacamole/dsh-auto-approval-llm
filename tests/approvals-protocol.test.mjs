@@ -149,7 +149,7 @@ function fakeRemoteEnv() {
   let map = new Map()
   return {
     uiSession: {
-      pendingInteractions: {
+      sessionStatus: {
         getSnapshot: () => map,
         subscribe: (fn) => {
           subs.add(fn)
@@ -164,6 +164,9 @@ function fakeRemoteEnv() {
     },
   }
 }
+
+/** One SessionStatus value, as the official sessionStatus snapshot carries it. */
+const statusOf = (pendingInteraction) => ({ pendingInteraction })
 
 // Fake ctx.connection.state (dsh-client-connection wire-root service): a
 // HostObservable {getSnapshot, subscribe} publishing the official
@@ -491,9 +494,9 @@ test('startReviewPolling: F4 regression — fast responses keep polling normally
   poller.dispose()
 })
 
-// ── remote watcher (alpha.1 pendingInteractions) ───────────────────────────
+// ── remote watcher (sessionStatus) ─────────────────────────────────────────
 
-test('remote watcher: pendingInteractions countdown → llm follow answers via pending.answer', async (t) => {
+test('remote watcher: sessionStatus countdown → llm follow answers via pending.answer', async (t) => {
   const { onCleanup } = perTest(t)
   const statuses = { c9: { phase: 'countdown', action: 'reject', seconds: 30 } }
   const feedbackLog = []
@@ -512,7 +515,7 @@ test('remote watcher: pendingInteractions countdown → llm follow answers via p
   const { ctx, cleanup } = fakeCtx({ uiSession: env.uiSession })
   watchRemoteApprovals(ctx, { pollMs: 10 })
   onCleanup(cleanup)
-  env.setMap(new Map([['s1', item]]))
+  env.setMap(new Map([['s1', statusOf(item)]]))
   await sleep(40)
   statuses.c9 = { phase: 'follow', source: 'llm', action: 'reject', seconds: 0 }
   await until(() => answerCalls.length === 1, 'answered via pending.answer')
@@ -542,7 +545,7 @@ test('remote watcher: answer() rejection is silently swallowed (already settled)
   const { ctx, cleanup } = fakeCtx({ uiSession: env.uiSession })
   watchRemoteApprovals(ctx, { pollMs: 10 })
   onCleanup(cleanup)
-  env.setMap(new Map([['s1', item]]))
+  env.setMap(new Map([['s1', statusOf(item)]]))
   await sleep(40)
   statuses.c9 = { phase: 'follow', source: 'llm', action: 'allow', seconds: 0 }
   await until(() => answerCalls === 1, 'first answer attempted')
@@ -569,13 +572,13 @@ test('remote watcher: item leaving the snapshot detaches the poller; re-add re-a
   const { ctx, cleanup } = fakeCtx({ uiSession: env.uiSession })
   watchRemoteApprovals(ctx, { pollMs: 10 })
   onCleanup(cleanup)
-  env.setMap(new Map([['s1', item]]))
+  env.setMap(new Map([['s1', statusOf(item)]]))
   await until(() => fetchLog.length >= 1, 'armed')
   env.setMap(new Map()) // interaction removed by the host
   const stopped = fetchLog.length
   await sleep(60)
   assert.ok(fetchLog.length <= stopped + 1, 'no polling after the interaction left the snapshot')
-  env.setMap(new Map([['s1', item]]))
+  env.setMap(new Map([['s1', statusOf(item)]]))
   await until(() => fetchLog.length > stopped + 1, 'a fresh re-add re-arms')
   cleanup()
 })
@@ -595,7 +598,7 @@ test('remote watcher: per-entry arming by the item callId it carries (no map.get
   const { ctx, cleanup } = fakeCtx({ uiSession: env.uiSession })
   watchRemoteApprovals(ctx, { pollMs: 10 })
   onCleanup(cleanup)
-  env.setMap(new Map([['s1', itemA], ['s2', itemB]]))
+  env.setMap(new Map([['s1', statusOf(itemA)], ['s2', statusOf(itemB)]]))
   await until(() => fetchLog.length >= 2, 'both entries armed')
   await sleep(30)
   statuses.ca = { phase: 'follow', source: 'llm', action: 'allow', seconds: 0 }
@@ -616,10 +619,10 @@ test('remote watcher: replacing the same-session entry disposes the old poller (
   const { ctx, cleanup } = fakeCtx({ uiSession: env.uiSession })
   watchRemoteApprovals(ctx, { pollMs: 10 })
   onCleanup(cleanup)
-  env.setMap(new Map([['s1', oldItem]]))
+  env.setMap(new Map([['s1', statusOf(oldItem)]]))
   await until(() => fetchLog.length >= 1, 'old entry armed')
   const cOldFetches = fetchLog.filter((f) => f.init?.headers?.['x-auto-approval-call-id'] === 'cOld').length
-  env.setMap(new Map([['s1', newItem]]))
+  env.setMap(new Map([['s1', statusOf(newItem)]]))
   await until(() => fetchLog.filter((f) => f.init?.headers?.['x-auto-approval-call-id'] === 'cNew').length >= 1, 'new entry armed')
   await sleep(60)
   const cOldAfter = fetchLog.filter((f) => f.init?.headers?.['x-auto-approval-call-id'] === 'cOld').length
@@ -661,7 +664,7 @@ test('remote watcher: disconnected→connected resync answers a follow the offli
   const { ctx, cleanup } = fakeCtx({ uiSession: env.uiSession, ...conn })
   watchRemoteApprovals(ctx, { pollMs: 60000 }) // standing interval far slower than resync
   onCleanup(cleanup)
-  env.setMap(new Map([['s1', item]]))
+  env.setMap(new Map([['s1', statusOf(item)]]))
   await until(() => fetchLog.length >= 1, 'armed')
   await sleep(300) // let the pollNow gap (200ms) lapse so resync polls can fire
   globalThis.fetch.setOffline(true) // stream drops: polls start failing
@@ -690,7 +693,7 @@ test('remote watcher: steady-state and first-connect never resync; connecting→
   const { ctx, cleanup } = fakeCtx({ uiSession: env.uiSession, ...conn })
   watchRemoteApprovals(ctx, { pollMs: 60000 }) // standing interval far slower than resync
   onCleanup(cleanup)
-  env.setMap(new Map([['s1', item]]))
+  env.setMap(new Map([['s1', statusOf(item)]]))
   await until(() => fetchLog.length >= 1, 'armed')
   await sleep(300) // pollNow gap lapses, so any later resync can actually poll
   const base = fetchLog.length
@@ -860,7 +863,7 @@ test('computeTextNodeRewrites: trailing newlines after the block are trimmed lik
 test('static anchors: remote-only wiring stays pinned; the legacy adapter is gone', async (t) => {
   const { onCleanup } = perTest(t)
   // The adapter is driven rather than grepped: its own header comment names
-  // `pendingInteractions` and `.answer(`, so a substring anchor is satisfied by
+  // `sessionStatus` and `.answer(`, so a substring anchor is satisfied by
   // prose. A live subscription plus an ask answered through `pending.answer` is
   // what the wiring claim actually means.
   const statuses = { c9: { phase: 'countdown', action: 'allow', seconds: 30 } }
@@ -879,8 +882,8 @@ test('static anchors: remote-only wiring stays pinned; the legacy adapter is gon
   const { ctx, cleanup } = fakeCtx({ uiSession: env.uiSession })
   watchRemoteApprovals(ctx, { pollMs: 10 })
   onCleanup(cleanup)
-  assert.equal(env.subscriberCount(), 1, 'the adapter must subscribe to pendingInteractions')
-  env.setMap(new Map([['s1', item]]))
+  assert.equal(env.subscriberCount(), 1, 'the adapter must subscribe to sessionStatus')
+  env.setMap(new Map([['s1', statusOf(item)]]))
   await sleep(40)
   statuses.c9 = { phase: 'follow', source: 'llm', action: 'allow', seconds: 0 }
   await until(() => answers.length === 1, 'the ask answered through pending.answer')

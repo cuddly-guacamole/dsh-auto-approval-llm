@@ -1,4 +1,4 @@
-// The client approval watcher used to reach `uiSession.pendingInteractions`
+// The client approval watcher used to reach the ui-session pending snapshot
 // through a bounded 500ms×30 probe loop, because the service is a browser-side
 // dynamic package that may register after the plugin mounts. The migration
 // declares the services as inject dependencies instead: cordis holds the
@@ -45,11 +45,11 @@ test('the client entry declares the approval services it resolves', () => {
   assert.equal(new Set(inject).size, inject.length, 'no duplicate declarations')
 })
 
-test('the watcher binds pendingInteractions without any probe interval', () => {
+test('the watcher binds sessionStatus without any probe interval', () => {
   assert.ok(remoteSource.includes("ctx.get('uiSession')"), 'the watcher resolves uiSession from the container')
   assert.ok(!remoteSource.includes('setInterval'), 'no interval may stand between apply and subscribe')
   assert.ok(!remoteSource.includes('visibilitychange'), 'the visibility re-probe must be gone')
-  assert.ok(remoteBundle.includes('pendingInteractions'), 'the compiled watcher still binds the snapshot service')
+  assert.ok(remoteBundle.includes('sessionStatus'), 'the compiled watcher still binds the snapshot service')
 })
 
 test('no retired probe symbol survives in the watcher, source or bundle', () => {
@@ -69,7 +69,7 @@ test('a protocol without uiSession warns once instead of idling in silence', () 
     const fakeCtx = { get: () => undefined, effect: () => never }
     watchRemoteApprovals(fakeCtx)
     assert.equal(warns.length, 1, 'exactly one warn breaks the silence')
-    assert.ok(warns[0].includes('uiSession.pendingInteractions unavailable'), 'the warn names the missing service')
+    assert.ok(warns[0].includes('uiSession.sessionStatus unavailable'), 'the warn names the missing service')
     assert.ok(warns[0].includes('auto-close disabled'), 'the warn states the consequence')
   } finally {
     console.warn = originalWarn
@@ -81,7 +81,7 @@ test('the watcher subscribes on apply when the service is present', () => {
   const never = () => null
   const fakeCtx = {
     get: (name) => name === 'uiSession'
-      ? { pendingInteractions: { getSnapshot: () => new Map(), subscribe: () => { subscribed = true; return never } } }
+      ? { sessionStatus: { getSnapshot: () => new Map(), subscribe: () => { subscribed = true; return never } } }
       : undefined,
     effect: () => never,
   }

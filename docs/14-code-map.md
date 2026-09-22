@@ -41,7 +41,7 @@ src/
 └─ client/
      ├─ index.ts         React 客户端主体 3039 行（设置卡 8 子卡/面板增强/应答 watcher 装配/浮动按钮/CSS）
      ├─ approvals/       应答模块（0.0.12 起；0.0.16 起单协议——remote 源适配 + shared 协议无关核心；rc.2 legacy/feature 已删）
-     │    ├─ remote.ts       229
+     │    ├─ remote.ts       231
      │    └─ shared.ts       655
      ├─ auto-icon.ts     权限菜单图标 + Auto 风险确认弹窗 657 行
      ├─ locale.ts        zh/en 双语 564 行
