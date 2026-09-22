@@ -288,7 +288,7 @@ test('session-mode GET: session id arrives in a request header; the query form i
   })
   assert.equal(ok.status, 200)
   assert.equal(ok.body.ok, true)
-  assert.equal(ok.body.value.mode, 'auto-approval', 'legacy raw auto is normalized to the machine name')
+  assert.equal(ok.body.value.mode, 'auto', 'a raw auto is reported as the upstream name, never the plugin preset')
   // Legacy query transport must not be honored: the header discipline is the
   // same as the review-status call-id (2026-09-03 audit).
   const legacy = await callJson(handler, {

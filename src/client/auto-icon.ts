@@ -23,9 +23,9 @@ export const PERMISSION_LABEL_SETS = {
     // rc.1 reworded the workspace-write preset in zh ("工作区内修改");
     // the rc.2 variant is gone.
     workspaceWrite: ['Workspace Write', '工作区内修改'],
-    // Host label is `Auto approval`; `Auto` stays for the legacy-patch /
-    // mixed-bundle compatibility window.
-    auto: ['Auto approval', '自动审批', 'Auto'],
+    // Host label is `Auto approval`; the legacy bare `Auto` spelling is no
+    // longer promised and no longer matches.
+    auto: ['Auto approval', '自动审批'],
     fullAccess: ['Full access', '完全权限'],
 };
 // Shield outline + bolt, drawn 1:1 like the official 16px permission glyphs
@@ -332,7 +332,7 @@ export function isAutoTrigger(element) {
     if (!element.matches('button[aria-label]'))
         return false;
     const label = element.getAttribute('aria-label') ?? '';
-    return /(?:访问模式|Access mode)[\s\S]*(?:Auto approval|Auto|自动审批)\s*$/i.test(label);
+    return /(?:访问模式|Access mode)[\s\S]*(?:Auto approval|自动审批)\s*$/i.test(label);
 }
 /** The direct text node(s) of an element (used by the settings selector). */
 function directText(element) {

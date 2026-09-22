@@ -84,7 +84,7 @@ function harness(options = {}) {
   const session = options.session ?? { id: options.id ?? 's1' }
   const deps = {
     permissionPresets,
-    capability: options.capability ?? 'legacy',
+    capability: options.capability ?? 'modern',
     approval: options.approval ?? { config: { policy: 'ask' } },
     append,
     audit: (line) => audits.push(JSON.parse(line)),
@@ -108,7 +108,7 @@ test('T1: capability is a multi-signal probe and mismatch fails closed', () => {
   assert.deepEqual(detectHostCapability(both), { capability: 'modern', reason: 'catalog+registerAuto' })
 
   const neither = service({ permissionState: () => ({}) })
-  assert.deepEqual(detectHostCapability(neither), { capability: 'legacy', reason: 'rc2-shape' })
+  assert.deepEqual(detectHostCapability(neither), { capability: 'unknown', reason: 'unrecognized-shape' })
 
   const onlyRegister = service({ permissionState: () => ({}), registerAuto: () => {} })
   assert.deepEqual(detectHostCapability(onlyRegister), { capability: 'unknown', reason: 'registerAuto/catalog mismatch' })
@@ -119,8 +119,8 @@ test('T1: capability is a multi-signal probe and mismatch fails closed', () => {
   assert.deepEqual(detectHostCapability(undefined), { capability: 'unknown', reason: 'no-permission-state' })
   assert.deepEqual(detectHostCapability(service({ permissionState: null })), { capability: 'unknown', reason: 'no-permission-state' })
 
-  // `specOf('auto')` reserved shape without the modern surfaces is unknown, not
-  // legacy: we cannot tell what an `auto` row means there.
+  // `specOf('auto')` reserved shape without the modern surfaces is unknown: we
+  // cannot tell what an `auto` row means there.
   const reservedNoSurfaces = service({
     permissionState: () => ({}),
     specOf: (name) => (name === LEGACY_AUTO_PRESET ? { sandbox: 'danger-full-access', approval: 'never' } : undefined),
@@ -138,24 +138,21 @@ test('T1: capability is a multi-signal probe and mismatch fails closed', () => {
   assert.deepEqual(detectHostCapability(modernReserved), { capability: 'modern', reason: 'reserved-shape' })
 })
 
-test('T2: gate names per capability; raw auto is an alias only on legacy', () => {
+test('T2: the gate carries the plugin preset on every capability', () => {
   assert.deepEqual(gatePresetNames('modern'), [GATED_PRESET])
-  assert.deepEqual(gatePresetNames('legacy'), [GATED_PRESET, LEGACY_AUTO_PRESET])
   assert.deepEqual(gatePresetNames('unknown'), [GATED_PRESET])
 
-  const modern = service({ permissionState: () => ({ preset: LEGACY_AUTO_PRESET }) })
-  const legacy = service({ permissionState: () => ({ preset: LEGACY_AUTO_PRESET }) })
+  const foreignAuto = service({ permissionState: () => ({ preset: LEGACY_AUTO_PRESET }) })
   const gated = service({ permissionState: () => ({ preset: GATED_PRESET }) })
 
   assert.equal(isGatedSession(gated, { id: 's' }, gatePresetNames('modern')), true)
-  assert.equal(isGatedSession(modern, { id: 's' }, gatePresetNames('modern')), false)
-  assert.equal(isGatedSession(legacy, { id: 's' }, gatePresetNames('legacy')), true)
-  assert.equal(isGatedSession(legacy, { id: 's' }, gatePresetNames('unknown')), false)
+  assert.equal(isGatedSession(foreignAuto, { id: 's' }, gatePresetNames('modern')), false)
+  assert.equal(isGatedSession(foreignAuto, { id: 's' }, gatePresetNames('unknown')), false)
 
   // A throw while reading the raw state reads as not-gated.
   const throwing = service({ permissionState: () => { throw new Error('projection not registered') } })
   assert.equal(isGatedSession(throwing, { id: 's' }, gatePresetNames('modern')), false)
-  assert.equal(isGatedSession(modern, undefined, gatePresetNames('modern')), false)
+  assert.equal(isGatedSession(foreignAuto, undefined, gatePresetNames('modern')), false)
 })
 
 test('T-G1: the gate reads raw identity, so a never override cannot slide it off', () => {
@@ -206,7 +203,7 @@ test('T4/T-G4: a null override over a never base policy is effective never', () 
 })
 
 test('T-G3: foreign raw auto is never normalized, on every capability', () => {
-  for (const capability of ['modern', 'legacy', 'unknown']) {
+  for (const capability of ['modern', 'unknown']) {
     const h = harness({ capability, initial: { preset: LEGACY_AUTO_PRESET, sandbox: 'danger-full-access', approval: 'never' } })
     assert.equal(enforceOwnSpec(h.session, h.deps), 'skip-foreign', `${capability}: foreign auto stays untouched`)
     assert.equal(h.appends.length, 0, `${capability}: zero appends`)
@@ -248,14 +245,14 @@ test('T6: only the same signature migrates; every other auto shape is skipped', 
     { preset: LEGACY_AUTO_PRESET, sandbox: 'read-only', approval: null },
     { preset: LEGACY_AUTO_PRESET, sandbox: null, approval: 'ask' },
   ]
-  for (const capability of ['modern', 'legacy']) {
+  for (const capability of ['modern']) {
     for (const initial of nonSignature) {
       const h = harness({ capability, initial })
       assert.equal(runPresetMigration(h.session, h.deps), 'skipped', `${capability} ${JSON.stringify(initial)}`)
       assert.equal(h.appends.length, 0, `${capability}: no identity append for a non-signature auto`)
     }
   }
-  for (const capability of ['modern', 'legacy']) {
+  for (const capability of ['modern']) {
     const h = harness({ capability })
     assert.equal(runPresetMigration(h.session, h.deps), 'migrated')
     assert.deepEqual(h.appends, [{ type: 'permission/preset', data: { preset: GATED_PRESET } }])

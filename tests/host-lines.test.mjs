@@ -1,7 +1,7 @@
 /**
- * Host-line contract: the peer range promises 0.1.5-rc.2 (legacy shape) and
- * the 0.1.6 prerelease line (modern shape: alpha.1, alpha.2). This file pins the promised table, the exact
- * version pinning, the reverse controls that make a wrong-tree acceptance
+ * Host-line contract: the peer range promises the 0.1.7-alpha.1 line (modern
+ * shape: `catalog` + `registerAuto`). This file pins the promised table, the
+ * exact version pinning, the reverse controls that make a wrong-tree acceptance
  * impossible, and the shipped preset composition. The last case drives the
  * locally installed host line through the real permission-presets service, so
  * the harness itself cannot rot into a pure fake.
@@ -27,17 +27,16 @@ import {
 
 const patch = readFileSync(join(ROOT, "cordis.patch.yml"), "utf8")
 
-test("the promised line table separates the legacy and modern shapes", () => {
-  assert.deepEqual(Object.keys(HOST_LINES).sort(), ["alpha1", "alpha2", "rc2"])
-  assert.equal(HOST_LINES.rc2.version, "0.1.5-rc.2")
-  assert.equal(HOST_LINES.rc2.capability, "legacy")
-  assert.equal(HOST_LINES.alpha1.version, "0.1.6-alpha.1")
-  assert.equal(HOST_LINES.alpha1.capability, "modern")
-  assert.equal(HOST_LINES.alpha2.version, "0.1.6-alpha.2")
-  assert.equal(HOST_LINES.alpha2.capability, "modern")
+/** A host line the manifest no longer promises; every reverse control uses it. */
+const FOREIGN_LINE = { version: "0.1.6-alpha.2", capability: "modern" }
+
+test("the promised line table carries the modern shape only", () => {
+  assert.deepEqual(Object.keys(HOST_LINES).sort(), ["alpha3"])
+  assert.equal(HOST_LINES.alpha3.version, "0.1.7-alpha.1")
+  assert.equal(HOST_LINES.alpha3.capability, "modern")
 })
 
-test("every declared dsh peer is pinned exactly on both lines", () => {
+test("every declared dsh peer is pinned exactly on the promised line", () => {
   const peers = dshPeers()
   assert.ok(peers.length > 0, "the manifest declares no dsh peer")
   for (const line of Object.values(HOST_LINES)) {
@@ -51,47 +50,46 @@ test("every declared dsh peer is pinned exactly on both lines", () => {
 test("a transitively floated dsh package is pinned by an override only", () => {
   const peers = dshPeers()
   const floated = "@deepseek-ai/dsh-agent"
-  const manifest = scratchManifest(HOST_LINES.alpha1, peers, [floated])
+  const manifest = scratchManifest(HOST_LINES.alpha3, peers, [floated])
   assert.deepEqual(Object.keys(manifest.dependencies).sort(), peers.slice().sort())
   assert.equal(manifest.dependencies[floated], undefined)
-  assert.equal(manifest.overrides[floated], HOST_LINES.alpha1.version)
-  for (const name of peers) assert.equal(manifest.overrides[name], HOST_LINES.alpha1.version)
+  assert.equal(manifest.overrides[floated], HOST_LINES.alpha3.version)
+  for (const name of peers) assert.equal(manifest.overrides[name], HOST_LINES.alpha3.version)
 })
 
-test("the installed-tree check rejects the other line and an empty tree", () => {
+test("the installed-tree check rejects a foreign line and an empty tree", () => {
   const good = {
-    "@deepseek-ai/cordis": "4.0.2",
-    "@deepseek-ai/dsh-llm": HOST_LINES.rc2.version,
-    "@deepseek-ai/dsh-session": HOST_LINES.rc2.version,
+    "@deepseek-ai/cordis": "4.0.3",
+    "@deepseek-ai/dsh-llm": HOST_LINES.alpha3.version,
+    "@deepseek-ai/dsh-session": HOST_LINES.alpha3.version,
   }
-  assert.deepEqual(assertInstalledLine(HOST_LINES.rc2, good), [
-    "@deepseek-ai/dsh-llm@" + HOST_LINES.rc2.version,
-    "@deepseek-ai/dsh-session@" + HOST_LINES.rc2.version,
+  assert.deepEqual(assertInstalledLine(HOST_LINES.alpha3, good), [
+    "@deepseek-ai/dsh-llm@" + HOST_LINES.alpha3.version,
+    "@deepseek-ai/dsh-session@" + HOST_LINES.alpha3.version,
   ].sort())
-  mustReject("a tree on the other line", () => assertInstalledLine(HOST_LINES.rc2, { "@deepseek-ai/dsh-session": HOST_LINES.alpha1.version }))
-  mustReject("a tree with no dsh package", () => assertInstalledLine(HOST_LINES.rc2, { "@deepseek-ai/cordis": "4.0.2" }))
+  mustReject("a tree on the dropped line", () => assertInstalledLine(HOST_LINES.alpha3, { "@deepseek-ai/dsh-session": FOREIGN_LINE.version }))
+  mustReject("a tree with no dsh package", () => assertInstalledLine(HOST_LINES.alpha3, { "@deepseek-ai/cordis": "4.0.3" }))
 })
 
 test("the npm-tree check rejects problems and nested foreign copies", () => {
-  const good = { dependencies: { "@deepseek-ai/dsh-session": { version: HOST_LINES.rc2.version } } }
-  assert.deepEqual(assertTreeLine(HOST_LINES.rc2, good), ["@deepseek-ai/dsh-session@" + HOST_LINES.rc2.version])
+  const good = { dependencies: { "@deepseek-ai/dsh-session": { version: HOST_LINES.alpha3.version } } }
+  assert.deepEqual(assertTreeLine(HOST_LINES.alpha3, good), ["@deepseek-ai/dsh-session@" + HOST_LINES.alpha3.version])
   const nested = {
     dependencies: {
       "@deepseek-ai/dsh-tools": {
-        version: HOST_LINES.rc2.version,
-        dependencies: { "@deepseek-ai/dsh-session": { version: HOST_LINES.alpha1.version } },
+        version: HOST_LINES.alpha3.version,
+        dependencies: { "@deepseek-ai/dsh-session": { version: FOREIGN_LINE.version } },
       },
     },
   }
-  mustReject("a nested copy on the other line", () => assertTreeLine(HOST_LINES.rc2, nested))
-  mustReject("an npm problem list", () => assertTreeLine(HOST_LINES.rc2, { problems: ["extraneous: @deepseek-ai/dsh-llm"], dependencies: good.dependencies }))
-  mustReject("an empty npm tree", () => assertTreeLine(HOST_LINES.rc2, { dependencies: {} }))
+  mustReject("a nested copy on a foreign line", () => assertTreeLine(HOST_LINES.alpha3, nested))
+  mustReject("an npm problem list", () => assertTreeLine(HOST_LINES.alpha3, { problems: ["extraneous: @deepseek-ai/dsh-llm"], dependencies: good.dependencies }))
+  mustReject("an empty npm tree", () => assertTreeLine(HOST_LINES.alpha3, { dependencies: {} }))
 })
 
-test("the capability check rejects the other branch", () => {
-  assert.equal(assertCapability(HOST_LINES.alpha1, "modern"), "modern")
-  mustReject("a legacy reading on the modern line", () => assertCapability(HOST_LINES.alpha1, "legacy"))
-  mustReject("a modern reading on the legacy line", () => assertCapability(HOST_LINES.rc2, "modern"))
+test("the capability check rejects the retired legacy reading", () => {
+  assert.equal(assertCapability(HOST_LINES.alpha3, "modern"), "modern")
+  mustReject("a legacy reading on the promised line", () => assertCapability(HOST_LINES.alpha3, "legacy"))
 })
 
 test("the preset table is read from the shipped composition", () => {
@@ -121,6 +119,5 @@ test("the locally installed host line drives the real service", async () => {
   assert.equal(observed.capability, line.capability)
   assert.equal(observed.outcome, "migrated")
   assert.equal(observed.neverOutcome, "skipped")
-  assert.equal(observed.gateNames.includes("auto"), line.capability === "legacy")
-  assert.equal(observed.gateNames.includes("auto-approval"), true)
+  assert.deepEqual([...observed.gateNames], ["auto-approval"])
 })

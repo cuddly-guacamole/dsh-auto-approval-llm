@@ -4,6 +4,7 @@
 // Retained per the MIT License: this is a substantial portion of the original.
 import { randomUUID } from 'node:crypto';
 import { classifierSystemPrompt, parseClassifierDecision } from './classifier.js';
+import { PLUGIN_MESSAGE_SOURCE } from './message-source.js';
 import { callEndpointText } from './endpoint-call.js';
 function classifierPayload(input) {
     return JSON.stringify({
@@ -22,7 +23,7 @@ function classifierMessage(input) {
         id: `auto-mode-classifier-${randomUUID()}`,
         role: 'user',
         content: [{ type: 'text', text: classifierPayload(input) }],
-        source: { kind: 'plugin', plugin: 'dsh-auto-approval-llm' },
+        source: PLUGIN_MESSAGE_SOURCE,
     });
 }
 function jsonText(text) {

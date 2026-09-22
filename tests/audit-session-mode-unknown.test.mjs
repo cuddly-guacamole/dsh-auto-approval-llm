@@ -64,11 +64,11 @@ test('an unknown session id is a 200 with a null mode, never a 404', async () =>
   assert.equal(res.body.value.mode, null, 'the success shape expresses "no mode known" as null')
 })
 
-test('a known legacy auto session reports the normalized machine name', async () => {
+test('a raw auto session reports auto: the retired alias no longer normalizes', async () => {
   const spec = sessionModeHarness()
   const res = await callJson(spec, get('sess-1'))
   assert.equal(res.status, 200)
-  assert.equal(res.body.value.mode, 'auto-approval', 'a legacy raw auto is normalized for the panel')
+  assert.equal(res.body.value.mode, 'auto', 'a raw auto belongs to the upstream row, not the plugin preset')
 })
 
 test('a modern upstream auto session stays auto (not the plugin preset)', async () => {

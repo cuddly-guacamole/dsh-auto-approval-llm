@@ -17,7 +17,7 @@
  */
 import { GATED_PRESET, LEGACY_AUTO_PRESET } from './constants.js'
 
-export type HostCapability = 'modern' | 'legacy' | 'unknown'
+export type HostCapability = 'modern' | 'unknown'
 
 export interface CapabilityResult {
   capability: HostCapability
@@ -118,15 +118,11 @@ export function detectHostCapability(permissionPresets: any): CapabilityResult {
   if (hasRegisterAuto && hasCatalog) {
     return { capability: 'modern', reason: reservedShape ? 'reserved-shape' : 'catalog+registerAuto' }
   }
-  if (reservedShape) {
-    return { capability: 'unknown', reason: 'legacy-but-reserved-shape' }
-  }
-  return { capability: 'legacy', reason: 'rc2-shape' }
+  return { capability: 'unknown', reason: reservedShape ? 'legacy-but-reserved-shape' : 'unrecognized-shape' }
 }
 
-/** Gate name set per capability: `auto` is an alias on legacy hosts only. */
-export function gatePresetNames(capability: HostCapability): readonly string[] {
-  if (capability === 'legacy') return [GATED_PRESET, LEGACY_AUTO_PRESET]
+/** Gate name set: the plugin's own preset is the only gated identity. */
+export function gatePresetNames(_capability: HostCapability): readonly string[] {
   return [GATED_PRESET]
 }
 

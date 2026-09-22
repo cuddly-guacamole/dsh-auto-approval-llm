@@ -18,9 +18,7 @@ const CR = String.fromCharCode(13)
 
 /** One row per promised host line. The entry asserts the version exactly. */
 export const HOST_LINES = {
-  rc2: { version: "0.1.5-rc.2", capability: "legacy" },
-  alpha1: { version: "0.1.6-alpha.1", capability: "modern" },
-  alpha2: { version: "0.1.6-alpha.2", capability: "modern" },
+  alpha3: { version: "0.1.7-alpha.1", capability: "modern" },
 }
 
 /** The dsh packages this plugin declares as host peers, read from the manifest. */
@@ -297,7 +295,7 @@ const isMain = process.argv[1] !== undefined && import.meta.url === pathToFileUR
 if (isMain) {
   const options = parseArgs(process.argv.slice(2))
   if (options.help) {
-    process.stdout.write("usage: node scripts/test-host-lines.mjs [--line rc2|alpha1|alpha2|all] [--keep]" + LF)
+    process.stdout.write("usage: node scripts/test-host-lines.mjs [--line alpha3|all] [--keep]" + LF)
   } else {
     for (const key of options.lines) {
       const result = await runLine(key, { keep: options.keep })

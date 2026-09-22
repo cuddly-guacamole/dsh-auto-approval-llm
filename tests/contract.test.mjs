@@ -3813,7 +3813,7 @@ test('onboarding injection: only after the AUTO gate, through queueNotice, plugi
   assert.ok(markAt > gateAt, 'injection must run only after the AUTO gate')
   assert.ok(queueAt > markAt, 'injection must go through the notice queue')
   // Channel invariant: the notice never fakes a user message.
-  assert.ok(src.includes("source: { kind: 'plugin', plugin: 'dsh-auto-approval-llm' }"))
+  assert.ok(src.includes('source: PLUGIN_MESSAGE_SOURCE'))
   // Flush path is injectNotice (never a bare session append): the flush body
   // must contain the injectNotice call, and both helpers exist module-level
   // (injectNotice is defined before flushNotices uses it).
@@ -4075,12 +4075,12 @@ test('permission menu gate: rc.1 zh labels match (workspace-write reworded)', ()
   })
   const zh = ['仅可查看', '工作区内修改', '自动审批', '完全权限']
   assert.equal(isPermissionMenu(fakeMenu(zh)), true, 'rc.1 zh menu must pass the gate')
-  const en = ['Read Only', 'Workspace Write', 'Auto', 'Full access']
+  const en = ['Read Only', 'Workspace Write', 'Auto approval', 'Full access']
   assert.equal(isPermissionMenu(fakeMenu(en)), true, 'en menu must still pass the gate')
   assert.ok(PERMISSION_LABEL_SETS.workspaceWrite.includes('工作区内修改'), 'current rc.1 variant must be declared')
   assert.ok(!PERMISSION_LABEL_SETS.workspaceWrite.includes('可写入工作区'), 'the rc.2 wording must be gone')
   // A menu missing one preset slot must stay rejected (no partial decoration).
-  const missing = ['仅可查看', 'Auto', '完全权限']
+  const missing = ['仅可查看', 'Auto approval', '完全权限']
   assert.equal(isPermissionMenu(fakeMenu(missing)), false, 'incomplete menu must not pass')
 })
 

@@ -67,9 +67,9 @@ flowchart TD
 
 ## Installation
 
-**Prerequisites**: the session or preset is on the **Auto tier** (machine value `auto-approval` = `danger-full-access` + `approval: ask`; switch with `/permission auto-approval`); DSH `0.1.5-rc.2`+; Node `^22.19.0 || >=24.0.0`.
+**Prerequisites**: the session or preset is on the **Auto tier** (machine value `auto-approval` = `danger-full-access` + `approval: ask`; switch with `/permission auto-approval`); DSH `0.1.7-alpha.1`+; Node `^22.19.0 || >=24.0.0`.
 
-Compatibility window: on hosts `>= 0.1.6` the name `auto` is reserved for the upstream `@deepseek-ai/dsh-experimental-auto-review` (Auto review / EXP), while this plugin only defines and gates `auto-approval`, so the two **own different tiers and can be enabled together**; on hosts `< 0.1.6` the plugin gate still accepts the legacy machine value `auto` alias, while the shipped patch defines only `auto-approval`. Removal trigger = raising the minimum supported host to the 0.1.6 series (rc counts).
+Compatibility window: the name `auto` is reserved for the upstream `@deepseek-ai/dsh-experimental-auto-review` (Auto review / EXP), while this plugin only defines and gates `auto-approval`, so the two **own different tiers and can be enabled together**; the minimum supported host is `0.1.7-alpha.1`, and the legacy machine value `auto` alias plus the legacy/unknown capability branches were removed with that floor (the shipped patch defines only `auto-approval`).
 
 ```bash
 dsh plugin --profile web add @quill507/dsh-auto-approval-llm

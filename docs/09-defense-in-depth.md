@@ -2,7 +2,7 @@
 > *Defense in depth*
 
 ::: tip 安全纵深 · 九层循环
-**L1 预设门（权限来源）**：只有处于本插件档的权威会话（递归上溯 subagent 父链）才进管线。判据是 durable raw identity（`permissionPresets.permissionState().preset`，不读会被 approval override 折叠掉的 `current()`）：宿主 `>= 0.1.6` 只认 `auto-approval`，宿主 `< 0.1.6` 兼容旧机器值 `auto` 别名（shipped patch 只定义 `auto-approval`）。`session/created` prepend、启动 live 扫描与 `agent/created` 对存量同签名 `auto + danger-full-access + ask` 做懒迁移（只重写 raw identity，不写旋钮、不调 `set()`）；自有档的 effective-never（`approval: never`，或 `approval: null` 且 base policy `never`）由插件写回 `ask`（`preset-spec-restore` 审计），**该 spec-restore 路径不碰上游 `auto`**。同签名 `auto` 迁移对持有者一视同仁：modern host 上上游 auto-review 持有的同签名 `auto` 也会被改写（旋钮不变，应答主体从上游换成本插件）。上游 `@deepseek-ai/dsh-experimental-auto-review` 只接管 `auto` 档（按 derived preset 判档），与本插件的 `auto-approval` 档互不接管，可同时启用。
+**L1 预设门（权限来源）**：只有处于本插件档的权威会话（递归上溯 subagent 父链）才进管线。判据是 durable raw identity（`permissionPresets.permissionState().preset`，不读会被 approval override 折叠掉的 `current()`）：最低支持宿主 `0.1.7-alpha.1`，只认 `auto-approval`（旧机器值 `auto` 别名已随下限抬升移除；shipped patch 只定义 `auto-approval`）。`session/created` prepend、启动 live 扫描与 `agent/created` 对存量同签名 `auto + danger-full-access + ask` 做懒迁移（只重写 raw identity，不写旋钮、不调 `set()`）；自有档的 effective-never（`approval: never`，或 `approval: null` 且 base policy `never`）由插件写回 `ask`（`preset-spec-restore` 审计），**该 spec-restore 路径不碰上游 `auto`**。同签名 `auto` 迁移对持有者一视同仁：modern host 上上游 auto-review 持有的同签名 `auto` 也会被改写（旋钮不变，应答主体从上游换成本插件）。上游 `@deepseek-ai/dsh-experimental-auto-review` 只接管 `auto` 档（按 derived preset 判档），与本插件的 `auto-approval` 档互不接管，可同时启用。
 
 **L2 同步硬拒闸门**：`ctx.tools.guard()`：凭据物质、受保护/关键/设备命名空间路径、shell 提权熔断 —— 命中即拒且不弹窗（比弹窗还要快、还要狠）。
 

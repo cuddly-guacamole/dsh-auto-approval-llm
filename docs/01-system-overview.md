@@ -2,7 +2,7 @@
 
 > *System Overview*
 
-这是一个挂在 **DeepSeek Harness** 上的 Cordis 插件：在 **Auto 权限预设**（machine value `auto-approval`，host 显示名 `Auto approval`；`sandbox: danger-full-access` + `approval: ask`）下，充当 `approval/request` 的**唯一终结裁决者**；判据是 durable raw identity（`permissionPresets.permissionState().preset`），宿主 `>= 0.1.6` 只认 `auto-approval`，宿主 `< 0.1.6` 兼容旧机器值 `auto` 别名。两面：**宿主端**（Node 进程，决策与安全）＋ **浏览器端**（Web GUI，设置与面板交互）。
+这是一个挂在 **DeepSeek Harness** 上的 Cordis 插件：在 **Auto 权限预设**（machine value `auto-approval`，host 显示名 `Auto approval`；`sandbox: danger-full-access` + `approval: ask`）下，充当 `approval/request` 的**唯一终结裁决者**；判据是 durable raw identity（`permissionPresets.permissionState().preset`），最低支持宿主 `0.1.7-alpha.1`，只认 `auto-approval`（旧机器值 `auto` 别名已随下限抬升移除）。两面：**宿主端**（Node 进程，决策与安全）＋ **浏览器端**（Web GUI，设置与面板交互）。
 
 **图例**
 

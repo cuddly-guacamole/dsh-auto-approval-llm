@@ -34,6 +34,7 @@ import { AGGRESSIVE_BUILTIN, applyCategoryDirective, CATEGORY_KEYS, categoryDire
 import { sanitizeClassifierArguments, sanitizeClassifierText, sanitizeReviewReason } from './auto/classifier.js'
 import { DIRECT_HUMAN_TOOL, GATED_PRESET, THRESHOLD_DEFAULTS } from './auto/constants.js'
 import { createDshClassifier, createEndpointClassifier } from './auto/dsh-classifier.js'
+import { PLUGIN_MESSAGE_SOURCE } from './auto/message-source.js'
 import { type RaceHumanHandle, type ReviewResult, type StaticRisk, AWAITING_MARKER, LOCKED_ASK_MARKER, REVIEW_TIMEOUT_NOTICE, applyBreaker, approvalSource, assembleReviewerSystem, breakerNote, breakerTripped, createKeyedMutex, DENY_CIRCUMVENTION_GUIDANCE, extractToolPath, followResolution, formatDenyFeedback, frameReviewerInput, lowRiskReviewOutcome, parseReview, stripCountdownMarkers, unattendedMustFailClosed, preserveHostKeys, raceHumanDecision, reviewSuggestionNote, reviewerAutoAllowBlocked, riskFromAssessment, staticListDecision, type ContextSummary } from './auto/decision.js'
 import { LATENCY_SUMMARY_WINDOW, clearLatencySamples, loadLatencySamples, pushLatencySample, summarizeLatency, type LatencySample } from './auto/latency.js'
 import { normalizeLoopThreshold, loopKeyFor, createLoopState, recordLoopCall, type LoopGuardState } from './auto/loop-guard.js'
@@ -921,7 +922,7 @@ async function runReviewAttempt(
     const prepared = await llm.prepareCall(callConfig, signal)
     const messages = [createUserMessage({
       content: [{ type: 'text', text: snapshot.payload }],
-      source: { kind: 'plugin', plugin: 'dsh-auto-approval-llm' },
+      source: PLUGIN_MESSAGE_SOURCE,
     })]
     const assembler = new BlockAssembler()
     // The stream options must match the prepared call's resolved config field
@@ -1043,7 +1044,7 @@ function injectNotice(session: any, agent: any, text: string): void {
     }
     agent.inject(createUserMessage({
       content: [{ type: 'text', text }],
-      source: { kind: 'plugin', plugin: 'dsh-auto-approval-llm' },
+      source: PLUGIN_MESSAGE_SOURCE,
     }))
     debugLog({ ev: 'notice-inject', sessionId: session?.id ?? null, ok: true })
   } catch (error) {
@@ -1300,7 +1301,7 @@ function watchNotices(ctx: any, getConfig: () => Config, getGateNames: () => rea
           ? `(Auto-approval) is now ACTIVE for this session: ${autoApprovalSummary(getConfig().timeoutAction)}.`
           : '(Auto-approval) is now INACTIVE for this session: the official approval flow applies again.',
       }],
-      source: { kind: 'plugin', plugin: 'dsh-auto-approval-llm' },
+      source: PLUGIN_MESSAGE_SOURCE,
     }))
     debugLog({ ev: 'auto-mode-notice', sessionId: session?.id ?? null, active })
   }
