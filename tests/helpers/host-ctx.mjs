@@ -80,8 +80,8 @@ export function createHostContext(options = {}) {
     names: ["auto-approval"],
     permissionState: () => ({ preset: "auto-approval", sandbox: "danger-full-access", approval: "ask" }),
     resolve: () => ({ sandbox: "danger-full-access", approval: "ask" }),
-    // No registerAuto/catalog: detectHostCapability must return the legacy
-    // capability so the gate name set matches a legacy host.
+    // No registerAuto/catalog and no specOf: detectHostCapability must return
+    // the unknown capability, so the gate name set stays the own preset only.
     specOf: () => undefined,
   };
   // `deferConnection` models a carrier whose Fetch registry mounts only later

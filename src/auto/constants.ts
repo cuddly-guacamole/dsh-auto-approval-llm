@@ -8,9 +8,9 @@ export const GATED_PRESET = 'auto-approval'
 
 /**
  * Machine name of the legacy "auto" preset. On hosts >= 0.1.6 the name is
- * reserved by the upstream auto-review integration; this plugin accepts it as
- * a gate alias only when the capability probe reports "legacy", and migrates
- * it by a raw permission/preset append (never permissionPresets.set()).
+ * reserved by the upstream auto-review integration and is not a gate name of
+ * this plugin; a same-signature raw session that bears it is migrated onto the
+ * own preset by a raw permission/preset append, never permissionPresets.set().
  */
 export const LEGACY_AUTO_PRESET = 'auto'
 

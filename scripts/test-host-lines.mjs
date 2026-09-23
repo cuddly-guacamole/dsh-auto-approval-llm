@@ -1,11 +1,12 @@
 #!/usr/bin/env node
-// Re-runnable entry for the promised host lines, the peer-range floor included.
-// Each line is installed into a scratch prefix under os.tmpdir() and driven
-// through the shipped migration decision layer against the real
-// permission-presets service of that exact line. Every installed dsh-* must
-// equal the requested version and the observed capability must equal the line
-// expectation, so a prefix that resolved the wrong line goes red instead of
-// certifying itself. The checkout node_modules is never touched.
+// Re-runnable entry for the promised host lines. Each line is installed into a
+// scratch prefix under os.tmpdir() and driven through the shipped migration
+// decision layer against the real permission-presets service of that exact
+// line. Every installed dsh-* must equal the requested version and the observed
+// capability must equal the line expectation, so a prefix that resolved the
+// wrong line goes red instead of certifying itself. A line the plugin does not
+// take over is registered as inert and asserts exactly that: it loads there,
+// gates nothing and writes nothing. The checkout node_modules is never touched.
 import { execFileSync } from "node:child_process"
 import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -16,11 +17,29 @@ export const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..")
 const LF = String.fromCharCode(10)
 const CR = String.fromCharCode(13)
 
-/** One row per promised host line. The entry asserts the version exactly. */
+/** The plugin's own preset name; the shipped patch composes it and only it. */
+export const GATED_PRESET = "auto-approval"
+
+/** The legacy `auto` preset name; on a modern host it belongs to the upstream integration. */
+const LEGACY_AUTO_PRESET = "auto"
+
+/**
+ * One row per promised host line. The entry asserts the version exactly and
+ * states the capability the probe must read on that line: a `modern` line
+ * carries the reserved `auto` surface and is driven through the migration,
+ * while any other reading means the plugin is registered there as inert — the
+ * entry then asserts that nothing is gated and nothing is written.
+ */
 export const HOST_LINES = {
-  alpha3: { version: "0.1.7-alpha.1", capability: "modern" },
+  rc2: { version: "0.1.5-rc.2", capability: "unknown" },
   alpha4: { version: "0.1.7-alpha.2", capability: "modern" },
 }
+
+/** The reason an inert line reads: no reserved `auto` surface, nothing recognisable. */
+const INERT_CAPABILITY_REASON = "unrecognized-shape"
+
+/** Decision-layer exports the probe drives; a module that loads without them is not this build. */
+const MIGRATION_SURFACE = ["detectHostCapability", "gatePresetNames", "isGatedSession", "runPresetMigration", "safeResolveSpec"]
 
 /** The dsh packages this plugin declares as host peers, read from the manifest. */
 export function dshPeers(root = ROOT) {
@@ -69,6 +88,47 @@ export function assertInstalledLine(line, installed) {
 export function assertCapability(line, capability) {
   if (capability !== line.capability) throw new Error("host line " + line.version + ": capability is " + capability + ", expected " + line.capability)
   return capability
+}
+
+/**
+ * Assert the observations a line must produce.
+ *
+ * A `modern` line carries the reserved `auto` surface, so the same-signature
+ * session must migrate onto the plugin's own preset. A line whose capability
+ * probe reads anything else is inert by construction — the plugin loads there,
+ * gates nothing and writes nothing — so that same session must stay exactly
+ * where the host left it. Both readings share this one check so the reverse
+ * controls in tests/host-lines.test.mjs can falsify either of them.
+ */
+export function assertLineOutcome(line, observed) {
+  const prefix = "host line " + line.version + ": "
+  if (observed.capability !== line.capability)
+    throw new Error(prefix + "capability is " + observed.capability + ", expected " + line.capability)
+  if (observed.gateNames.length !== 1 || observed.gateNames[0] !== GATED_PRESET)
+    throw new Error(prefix + "gate names are " + JSON.stringify(observed.gateNames) + ", expected " + JSON.stringify([GATED_PRESET]))
+  if (observed.neverOutcome !== "skipped" || observed.neverState.preset !== LEGACY_AUTO_PRESET || observed.neverState.approval !== "never")
+    throw new Error(prefix + "dfa+never changed (" + observed.neverOutcome + " / " + JSON.stringify(observed.neverState) + ")")
+  if (observed.gatedBefore !== false)
+    throw new Error(prefix + "the legacy auto identity is gated: isGatedSession(\"auto\") = " + observed.gatedBefore)
+  if (line.capability === "modern") {
+    if (observed.outcome !== "migrated")
+      throw new Error(prefix + "same-signature migration returned " + observed.outcome + " (" + observed.audits.join(" | ") + ")")
+    if (observed.state.preset !== GATED_PRESET || observed.state.sandbox !== "danger-full-access" || observed.state.approval !== "ask")
+      throw new Error(prefix + "migrated state is " + JSON.stringify(observed.state))
+    if (observed.current !== GATED_PRESET) throw new Error(prefix + "current() reads " + observed.current)
+    return observed
+  }
+  if (observed.reason !== INERT_CAPABILITY_REASON)
+    throw new Error(prefix + "an inert line read reason " + observed.reason + ", expected " + INERT_CAPABILITY_REASON)
+  if (observed.outcome !== "skipped")
+    throw new Error(prefix + "an inert line must not migrate; the same-signature run returned " + observed.outcome)
+  if (observed.audits.length !== 0)
+    throw new Error(prefix + "an inert line wrote " + observed.audits.length + " audit line(s): " + observed.audits.join(" | "))
+  if (observed.state.preset !== LEGACY_AUTO_PRESET || observed.state.sandbox !== "danger-full-access" || observed.state.approval !== "ask")
+    throw new Error(prefix + "an inert line moved the session to " + JSON.stringify(observed.state))
+  if (observed.gatedAfter !== false)
+    throw new Error(prefix + "an inert line left isGatedSession(\"auto\") = " + observed.gatedAfter)
+  return observed
 }
 
 /** Run a check that must throw. Used for the live reverse controls. */
@@ -202,16 +262,20 @@ export async function probeInstalledLine({ line, contextEntry, serviceEntry, mig
       return state
     },
   })
-  ctx.plugin(PermissionPresetService, { presets: presetTable, defaultPreset: "auto-approval" })
+  ctx.plugin(PermissionPresetService, { presets: presetTable, defaultPreset: GATED_PRESET })
   for (let attempt = 0; attempt < 100 && ctx.permissionPresets === undefined; attempt++) await new Promise(resolve => setTimeout(resolve, 10))
   const service = ctx.permissionPresets
   if (service === undefined) throw new Error("host line " + line.version + ": permission-presets did not register")
 
+  const missing = MIGRATION_SURFACE.filter(name => typeof migration[name] !== "function")
+  if (missing.length > 0) throw new Error("host line " + line.version + ": the compiled decision layer loaded without " + missing.join(", "))
+
   const capability = migration.detectHostCapability(service)
   assertCapability(line, capability.capability)
-  const target = migration.safeResolveSpec(service, "auto-approval")
+  const gateNames = [...migration.gatePresetNames(capability.capability)]
+  const target = migration.safeResolveSpec(service, GATED_PRESET)
   if (target === undefined || target.sandbox !== "danger-full-access" || target.approval !== "ask")
-    throw new Error("host line " + line.version + ": auto-approval resolved to " + JSON.stringify(target))
+    throw new Error("host line " + line.version + ": " + GATED_PRESET + " resolved to " + JSON.stringify(target))
 
   const makeSession = events => ({ id: "host-line-1", events, append(type, data) { this.events.push({ type, data }) } })
   const audits = []
@@ -223,35 +287,43 @@ export async function probeInstalledLine({ line, contextEntry, serviceEntry, mig
     warn: message => audits.push(JSON.stringify({ warn: message })),
   }
   const rescue = makeSession([
-    { type: "permission/preset", data: { preset: "auto" } },
+    { type: "permission/preset", data: { preset: LEGACY_AUTO_PRESET } },
     { type: "sandbox/mode", data: { mode: "danger-full-access" } },
     { type: "approval/policy", data: { policy: "ask" } },
   ])
+  // The gate predicate on the legacy identity itself, read before anything runs.
+  const gatedBefore = migration.isGatedSession(service, rescue, gateNames)
   const outcome = migration.runPresetMigration(rescue, deps)
-  if (outcome !== "migrated") throw new Error("host line " + line.version + ": same-signature migration returned " + outcome + " (" + audits.join(" | ") + ")")
+  // Read the audit writes of the same-signature run before the second session
+  // runs, so "wrote nothing" is measured on that run alone.
+  const rescueAudits = audits.slice()
   const state = service.permissionState(rescue)
-  if (state.preset !== "auto-approval" || state.sandbox !== "danger-full-access" || state.approval !== "ask")
-    throw new Error("host line " + line.version + ": migrated state is " + JSON.stringify(state))
   const current = service.current(rescue)
-  if (current !== "auto-approval") throw new Error("host line " + line.version + ": current() reads " + current)
+  const gatedAfter = migration.isGatedSession(service, rescue, gateNames)
 
   const never = makeSession([
-    { type: "permission/preset", data: { preset: "auto" } },
+    { type: "permission/preset", data: { preset: LEGACY_AUTO_PRESET } },
     { type: "sandbox/mode", data: { mode: "danger-full-access" } },
     { type: "approval/policy", data: { policy: "never" } },
   ])
   const neverOutcome = migration.runPresetMigration(never, deps)
   const neverState = service.permissionState(never)
-  if (neverOutcome !== "skipped" || neverState.preset !== "auto" || neverState.approval !== "never")
-    throw new Error("host line " + line.version + ": dfa+never changed (" + neverOutcome + " / " + JSON.stringify(neverState) + ")")
 
-  return {
+  const observed = {
     capability: capability.capability,
     reason: capability.reason,
+    gateNames,
     outcome,
+    audits: rescueAudits,
+    state,
+    current,
+    gatedBefore,
+    gatedAfter,
     neverOutcome,
-    gateNames: migration.gatePresetNames(capability.capability),
+    neverState,
   }
+  assertLineOutcome(line, observed)
+  return observed
 }
 
 /** Install one line into a scratch prefix and drive it. Returns the observations. */
@@ -314,11 +386,11 @@ const isMain = process.argv[1] !== undefined && import.meta.url === pathToFileUR
 if (isMain) {
   const options = parseArgs(process.argv.slice(2))
   if (options.help) {
-    process.stdout.write("usage: node scripts/test-host-lines.mjs [--line alpha3|alpha4|all] [--keep]" + LF)
+    process.stdout.write("usage: node scripts/test-host-lines.mjs [--line rc2|alpha4|all] [--keep]" + LF)
   } else {
     for (const key of options.lines) {
       const result = await runLine(key, { keep: options.keep })
-      process.stdout.write(result.key + ": " + result.version + " -> " + result.capability + " (" + result.reason + "); " + result.packages + " dsh packages; migration " + result.outcome + "; dfa+never " + result.neverOutcome + LF)
+      process.stdout.write(result.key + ": " + result.version + " -> " + result.capability + " (" + result.reason + "); " + result.packages + " dsh packages; migration " + result.outcome + "; dfa+never " + result.neverOutcome + "; gated[auto] " + result.gatedBefore + "->" + result.gatedAfter + "; " + result.audits.length + " audit lines" + LF)
     }
   }
 }
