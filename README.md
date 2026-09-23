@@ -8,7 +8,7 @@
 
 [![npm](https://img.shields.io/npm/v/@quill507%2Fdsh-auto-approval-llm?style=flat-square&label=npm&labelColor=454a54)](https://www.npmjs.com/package/@quill507/dsh-auto-approval-llm)
 [![downloads](https://img.shields.io/npm/dm/@quill507%2Fdsh-auto-approval-llm?style=flat-square&labelColor=454a54)](https://www.npmjs.com/package/@quill507/dsh-auto-approval-llm)
-![DSH](https://img.shields.io/badge/DSH-%3E%3D0.1.5--rc.2-4c6ef5?style=flat-square&labelColor=454a54)
+![DSH](https://img.shields.io/badge/DSH-0.1.5--rc.2%20%7C%200.1.7--alpha.2-4c6ef5?style=flat-square&labelColor=454a54)
 [![license](https://img.shields.io/badge/license-BSD--3--Clause-d29922?style=flat-square&labelColor=454a54)](https://opensource.org/licenses/BSD-3-Clause)
 [![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
 
@@ -30,8 +30,7 @@
 6. **熔断与循环防护** —— 连续/累计被 LLM 拒绝达阈值则转人工（`/approval-reset` 重置）；**循环防护**（默认关）把「被自动放行面连续放行的同一调用」转为钉死拒绝倒计时。
 7. **声明式规则 `rulesText`** —— `工具(正则) | allow|deny|human [| 字段]`，支持 `[agent:…]` / `[workspace:…]` 维度限定；解析出错时整段失效（设置卡有警示）。
 8. **确认制学习**（默认关）—— 同一签名被人工反复确认达阈值后自动放行，**每次放行前仍过一次标准在线评审**；条目可查看与吊销。→ [docs/18](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/blob/main/docs/18-confirm-learning.md)
-9. **编辑 diff 预览 + 上下文增强复审**（均默认关）—— 审批面板展示目标文件行级红绿 diff；复审输入可附加结构化工作区事实。均为纯展示 / 只读元数据，不进任何自动应答路径。
-10. **可审计、可观测** —— `history.jsonl` + append-only `audit.jsonl`；LLM 评审真实耗时统计；瞬时网关故障自动重试一次（认证类错误不重发凭据）。
+9. **可审计、可观测** —— `history.jsonl` + append-only `audit.jsonl`；LLM 评审真实耗时统计；瞬时网关故障自动重试一次（认证类错误不重发凭据）。
 
 ---
 
@@ -67,9 +66,9 @@ flowchart TD
 
 ## 安装
 
-**前置**：会话/预设处于 **Auto 档**（machine value `auto-approval` = `danger-full-access` + `approval: ask`，用 `/permission auto-approval` 切换）；DSH `0.1.7-alpha.1`+；Node `^22.19.0 || >=24.0.0`。
+**前置**：会话/预设处于 **Auto 档**（machine value `auto-approval` = `danger-full-access` + `approval: ask`，用 `/permission auto-approval` 切换）；DSH `0.1.7-alpha.2`；Node `^22.19.0 || >=24.0.0`。
 
-兼容窗口：`auto` 是上游 `@deepseek-ai/dsh-experimental-auto-review`（Auto review / EXP）的保留名，本插件只定义/接管 `auto-approval`，两者**分档并存、可同时启用**；最低支持宿主 = `0.1.7-alpha.1`，旧机器值 `auto` 别名与 legacy/unknown 能力分支已随下限抬升移除（shipped patch 只定义 `auto-approval`）。
+兼容窗口：`auto` 是上游 `@deepseek-ai/dsh-experimental-auto-review`（Auto review / EXP）的保留名，本插件只定义/接管 `auto-approval`，两者**分档并存、可同时启用**。宿主承诺**两条线**：`0.1.7-alpha.2` = 完整支持（peer `>=0.1.5-rc.2 <2 || >=0.1.7-alpha.2 <2`）；`0.1.5-rc.2` = **只登记安装兼容**——插件在该线能装能加载，但**不接管 `auto` 档**（`gatePresetNames()` 仍只含 `auto-approval`、`isGatedSession("auto")` 为 false、同签名迁移 `skipped` 且零 audit 写入），故不在该线上使用。区间上界 `<2` **不构成对中间线的支持承诺**。旧机器值 `auto` 别名与 legacy/unknown 能力分支已随下限抬升移除（shipped patch 只定义 `auto-approval`）。
 
 ```bash
 dsh plugin --profile web add @quill507/dsh-auto-approval-llm
@@ -136,7 +135,6 @@ dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 | `categoryPolicy` / `categoryMode` / `trustedDirs` | `{}` / `standard` / [] | 分类三态、位置模式与信任目录 |
 | `privilegeAutoReview` / `protectedAutoReview` | false | 分别解锁 privilege / protected（差别见 docs/17） |
 | `learningEnabled` / `learningThreshold` | false / 3 | 确认制学习开关与阈值（2–10） |
-| `editDiffPreview` / `reviewerContextFacts` | false | diff 预览 / 上下文增强复审（仅 YAML 可配）；`editDiffPreview` 计划 0.1.6-rc.1 退役（官方轨迹视图已有同类 diff） |
 | `slashCommandsEnabled` / `directHumanEnabled` | false | 注册 `/approval-*` 命令 / 直接人工通道（agent 可把操作路由给人；均需重启生效） |
 | `debug` / `redactResults` / `notifyUser` | false / false / true | 调试日志 / 结果脱敏 / 通过通知进会话 |
 
@@ -180,7 +178,6 @@ dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 - **`protectedAutoReview` 开启且类别未显式配置**时，受保护询问为无倒计时人工询问、**永不自动结算** —— 无人值守会一直等。
 - **凭据物质不受解锁开关影响**：`.env` / `.npmrc` 这类读取即便开启 `protectedAutoReview` 仍保持锁定（方向偏严，可能误拒）。
 - **opaque 行**（含 `(` / `{` / `$(` / heredoc 的复合命令）在类别层归为 `unknown`：既不被解锁、也不进凭据读取地板，即不额外收紧也不额外放宽。
-- **diff 预览涉及的旧内容会随会话 approval/asked 日志明文持久化**（官方契约 log-only、模型上下文不可见）。
 - **非 Windows 平台未经真实用户验证**。
 
 ---

@@ -1,6 +1,6 @@
 # 15 · 质量保障体系
 
-> *1915 tests · runtime proofs*
+> *1865 tests · runtime proofs*
 
 ## 15.1　契约测试覆盖地图（按主题归纳）
 
@@ -15,8 +15,6 @@
 | shell 熔断 | 提权（sudo/doas/su/pkexec/runuser/runas/gsudo、brace group、VAR= 前缀、operator 拼接）；exfil（curl/wget/.dsh/.env、动态 home 拼写）；find 破坏性；date 时钟写（-s/--set 及缩写/融合拼写）终裁；只读判定不过多拦 |
 | 类别层 | category.test.mjs 110 例：归类、优先级合并取严、LOCKED 四类钳制、unknown/harnessInternal 恒 inherit、信任目录模式与敏感名熔丝 |
 | 确认制学习 | contract 内 learning 族：签名剪枝（dynamic/glob/quoted/冒号形参/危险头命令）、confirmActionFor 三态、learnGateEligible 双门、evict TTL/LRU、lookup 工作区隔离、cap 状态 |
-| diff 预览 | editdiff.test.mjs 34 例：LCS 边界、官方语义镜像、倒计时字面量剥离、不可读目标省略规则 |
-| 探针 | probe.test.mjs 12 例：temp-root/工作区外拒绝、recent-creates 上限与去旧 |
 | 重试 | review retry 族：瞬时故障判定、预算滚动、Retry-After、认证错误不重发 |
 | 脱敏 | sanitizeClassifierText/Arguments/ReviewReason（AWS/PEM/sk-/Bearer）；description 在注入边界脱敏 |
 | 信任/传输 | isTrustedFetchRequest（回环权威接受、非 HTTP scheme 视作载波回环、LAN 白名单、空白名单=特权、cross-site/cross-origin 拒）；validateReviewerBaseUrl 明文 http 回环栅栏 |
@@ -29,7 +27,7 @@
 | 授权证据窗口与人工出手率 | trusted-intent-window.test.mjs：4 条证据窗口的溢出计数（slot cap 后重复候选=去重不计、独有候选=溢出计、inbox 先入、逐文本截断与预算的交互、经超长问题答案触达预算的真实路径、被拒文本重复出现计双）、拒因 note 的零/非零两分支与措辞纪律（无 retry/approve 字面、无 dangling 值）、deny 落点结构锚、trusted-intents 事件量化 `overflowed` 标志进去重签名、audit-query 对该字段的渲染与缺字段静默 / client-human-gate.test.mjs：人工来源名单与 `scripts/friction-report.mjs` **运行时 import 逐项相等**、空窗口判 vacuous 不作零声称、缺 source/非字符串 source 只进分母、round 边界、中英三键齐备且文案带窗口限定、bundle 装配锚（派生调用 + 三个浮层状态键） |
 | 循环防护 | loop-guard.test.mjs：循环键稳定（对象键序无关、工具名入键、缺参数回退工具级键）、严格连续状态机（`a→a→b→a` 永不触发、count===threshold 恰触发一次、fire-and-reset 人工放行不买豁免）、有界 64（最近最少更新者先淘汰：重触的键存活、被淘汰的是次旧键）、阈值钳制（1→2 带 warned、非数值=关、floor 在钳制前）/ loop-guard-wiring.test.mjs：**恰四个**自动放行站点被门控（src+编译产物双计）、allowlist 与 rule-allow 通道负向切片零命中、跨面标记读位于 deny 终局之后且先于 static allow、one-shot 读即删、pinned 形状恰三处且先于 `learnAttempt`（无 takeover handle、无 learnable、reject 钉死）、门函数体无 pushHistory/无熔断、disposal 与 sweep 有界、audit-query 渲染 `consecutive`/`threshold` |
 
-225 个测试文件，合计 **1915 例**（node --test 全绿基线）。
+222 个测试文件，合计 **1865 例**（node --test 全绿基线）。
 
 ## 15.2　验收命令与运行时证据
 
@@ -48,20 +46,20 @@ npm run gate   # 清构建产物 → 类型 → 构建 → 全量测试 → 数�
 ```bash
 node_modules/.bin/tsc -p tsconfig.json   # 类型（policy/shell/paths 不再 @ts-nocheck）
 node_modules/.bin/tsdown                  # 客户端 bundle
-node --test "tests/**/*.test.mjs"        # 1915/1915 全绿
+node --test "tests/**/*.test.mjs"        # 1865/1865 全绿
 ```
 
 :::
 
-::: tip 宿主承诺线（0.1.7-alpha.1 下限线 / 0.1.7-alpha.2 本机已装线）
+::: tip 宿主承诺线（0.1.5-rc.2 安装兼容线 / 0.1.7-alpha.2 完整支持线）
 
 ```bash
 npm run test:host-lines               # 承诺线各装一次
-npm run test:host-lines -- --line alpha3 # 只跑 peer 下限线（0.1.7-alpha.1）
-npm run test:host-lines -- --line alpha4 # 只跑本机已装线（0.1.7-alpha.2）
+npm run test:host-lines -- --line rc2    # 只跑安装兼容线（0.1.5-rc.2，不接管 auto 档）
+npm run test:host-lines -- --line alpha4 # 只跑完整支持线（0.1.7-alpha.2）
 ```
 
-`scripts/test-host-lines.mjs` 在 `os.tmpdir()` 前缀里按精确版本装出 peer 承诺的宿主线，再把编译后的判定层驱动到该线真实的 `permission-presets` 服务上：断言每个 `@deepseek-ai/dsh-*` 恰为目标版本、能力探测落该线档位（modern = `catalog` + `registerAuto`；未识别即 unknown 且迁移 fail-closed）、同签名迁移在真实包上通过、`dfa+never` 原样保留；装错线或读错档位即红（含同前缀内的反向对照）。安装前缀只落在 `os.tmpdir()`，不触碰仓库 `node_modules`。该入口需要 npm registry 访问，故列为发版前手工步骤，不并入离线的 `npm run gate`；新增宿主线时在 `HOST_LINES` 加一行；同一 tuple 内上游发布更高预发布版时，首次安装后把浮高的传递 `dsh-*` 一并写进 `overrides` 二次安装，保证整树落在目标线。承诺表两行：`alpha3`（`0.1.7-alpha.1`，peer 下限线）与 `alpha4`（`0.1.7-alpha.2`，本机已装线），同为 modern 形态，两行的 install-tree 断言都通过：安装树里未安装的 optional peer 在 `npm ls` 里是一个既无 `version` 也无 `problem` 的裸节点，树断言只跳过这一种节点（带 `problem` 的节点仍判失败）。`tests/host-lines.test.mjs` 另有一条不装前缀的用例，直接驱动本机已装的服务。`session` 与 `sessionProjections` 状态机是测试桩；权限服务类与投影注册/`apply` 来自真实包。
+`scripts/test-host-lines.mjs` 在 `os.tmpdir()` 前缀里按精确版本装出 peer 承诺的宿主线，再把编译后的判定层驱动到该线真实的 `permission-presets` 服务上：断言每个 `@deepseek-ai/dsh-*` 恰为目标版本、能力探测落该线实际档位（modern = `catalog` + `registerAuto`；该线无这些注册面即 unknown，迁移 fail-closed）、同签名迁移在该线如实结算、`dfa+never` 原样保留；装错线或读错档位即红（含同前缀内的反向对照）。安装前缀只落在 `os.tmpdir()`，不触碰仓库 `node_modules`。该入口需要 npm registry 访问，故列为发版前手工步骤，不并入离线的 `npm run gate`；新增宿主线时在 `HOST_LINES` 加一行；同一 tuple 内上游发布更高预发布版时，首次安装后把浮高的传递 `dsh-*` 一并写进 `overrides` 二次安装，保证整树落在目标线。承诺表两行：`rc2`（`0.1.5-rc.2`）与 `alpha4`（`0.1.7-alpha.2`）。两行能力不同，断言按能力分读：`alpha4` 是 modern 形态，走「同签名迁移在真实包上通过」；`rc2` 只登记安装兼容——插件在该线能装能加载，但**不接管 `auto` 档**（`gatePresetNames()` 仍只含 `auto-approval`、`isGatedSession("auto")` 为 false、同签名迁移 `skipped` 且零 audit 写入），断言如实反转而非要求接管。两行的 install-tree 断言都通过：安装树里未安装的 optional peer 在 `npm ls` 里是一个既无 `version` 也无 `problem` 的裸节点，树断言只跳过这一种节点（带 `problem` 的节点仍判失败）。`tests/host-lines.test.mjs` 另有一条不装前缀的用例，直接驱动本机已装的服务。`session` 与 `sessionProjections` 状态机是测试桩；权限服务类与投影注册/`apply` 来自真实包。
 
 :::
 

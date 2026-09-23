@@ -36,7 +36,7 @@ flowchart TD
 - unattended 模式下 HIGH 超时强制转人/失败关闭，方向正确性不让步
 
 ::: tip askHuman 内部做了同一件事
-（<span class="lnum">index.ts:LaskHuman</span>）：把状态写进 `reviewStates`（客户端轮询用）→ 组装 notes（评审建议 / 「⚠️ Breaker」原因列表 / 「⏳ will auto-X in Ns」/ diff 预览）→ 追加到 `req.reason` → 走 `raceHumanDecision`（[§07](./07-human-race)）→ 计算诚实来源（`approvalSource`）→ `applyBreaker` 更新熔断 → `pushHistory` 落盘 → **学习层记账**（`human-allow` 计数、`human-deny` 清零，见 [§18](./18-confirm-learning)）。任何一环抛错（会话销毁/请求取消）→ 标记 abort、清残留、rethrow —— **绝不伪造裁决**。
+（<span class="lnum">index.ts:LaskHuman</span>）：把状态写进 `reviewStates`（客户端轮询用）→ 组装 notes（评审建议 / 「⚠️ Breaker」原因列表 / 「⏳ will auto-X in Ns」）→ 追加到 `req.reason` → 走 `raceHumanDecision`（[§07](./07-human-race)）→ 计算诚实来源（`approvalSource`）→ `applyBreaker` 更新熔断 → `pushHistory` 落盘 → **学习层记账**（`human-allow` 计数、`human-deny` 清零，见 [§18](./18-confirm-learning)）。任何一环抛错（会话销毁/请求取消）→ 标记 abort、清残留、rethrow —— **绝不伪造裁决**。
 :::
 
 ::: tip 类别层有第二个接线点

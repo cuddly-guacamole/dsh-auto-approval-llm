@@ -8,7 +8,7 @@
 | `plugins.row.config` | key `@quill507/dsh-auto-approval-llm#auto-approval-llm` | Plugins 面板里本 bundle 行的配置页（`view:'page'`）：页自己画标题/面包屑；设置表单由宿主交来的该命名空间 row form（`form.state` / `form.mutate`）读写 | PluginConfigEntry → SettingsSection(`chrome:'plain'`) |
 | `conversation.session.header.utilities` | id `…-session-panel` | 会话标题栏控件 | SessionApprovalPanel |
 
-上面两行就是本插件注册的全部座位。两个更早的注册点已退役：`plugins.bundle.config`（bundle 详情页拿不到宿主 form，故不承载配置表单）与 `settings.plugin.item`（该槽在承诺的宿主范围内（`>=0.1.7-alpha.1 <2`）都不存在声明，`inject` 永久等待、无副作用）。
+上面两行就是本插件注册的全部座位。两个更早的注册点已退役：`plugins.bundle.config`（bundle 详情页拿不到宿主 form，故不承载配置表单）与 `settings.plugin.item`（该槽在承诺的宿主范围内（`>=0.1.5-rc.2 <2 || >=0.1.7-alpha.2 <2`）都不存在声明，`inject` 永久等待、无副作用）。
 
 另有：会话标题栏的自动审批控件（分离按钮：左主区显示状态并在有倒计时时提前展开面板，右下箭头打开审批记录浮层）、`auto-icon.ts`（给权限菜单的 Auto 注入盾形图标 + 选择时的风险确认弹窗「我已了解风险」）、`locale.ts`（zh/en）。官方权限选择器自带的风险确认只覆盖宿主内置档；自定义 `auto-approval` 档的风险确认由本插件客户端自研弹窗补。
 
@@ -20,7 +20,7 @@
 - 该控件是**分离按钮**（官方同款结构）：左主区只显示状态文字（暂无动作），右下箭头用官方 chevron 图标，点击打开审批记录浮层（统计 + 最近记录）；主区不再整块可点。
 - 面板延迟（`panelDelayMs`）：倒计时审批先只显示状态，经过该时长再让官方审批面板出现，期间输入框可用；窗口内评审给出结论则面板不出现；settled 的 ask 会取消延迟，绝不事后把请求转给客户端。延迟期间客户端用**会话级发现路由** `/session-review-status` 拿到本会话全部待审（官方面板未出现时 `uiSession.sessionStatus` 里还没有条目）。host 侧 `/reveal-approval` 保留为「提前放行」通道，供后续给左主区接入动作时使用。
 - 两处 document 级扫描都按窗口节流（`src/client/throttle.ts` 的尾随节流器）：权限图标装饰 ≤50ms 一次、审批面板扫描 ≤100ms 一次；窗口内合并、窗口末**必有一次尾随执行**（不丢最后一次 DOM 变更），插件安装时的首扫仍是立即执行，卸载/停用时节流器随 observer 一并 dispose。
-- 面板文本含熔断 marker（`BREAKER_MARKER`，结构化 token）→ 双按钮禁用 `breakerAntiHijackMs`。无状态下发的 ask 由 host 写 `AWAITING_MARKER`，客户端就地渲染为当前界面语言的句子（host 不再写英文散文）；**锁定类别**的恒拒倒计时（delete/disk、未解锁的 protected/privilege、凭据读取地板与按名通道拒绝）由 host 写 `LOCKED_ASK_MARKER`，客户端同样就地渲染——文案说明该类询问不接受对话内授权、只有在本面板点「允许一次」才能放行，且**不含秒数**（数字在会话标题栏控件上，写进面板体会立刻过时）。三个 marker 的检测与就地改写都**跳过 diff 预览节点**（host 侧另有 `stripPreviewMarkers` 兜底）。**残留通道（已登记）**：官方面板在同一节点里渲染工具调用的命令原文，该文本不过 host 的 marker 剥离，因此模型若把 marker 字面量写进命令参数，面板会显示那句 host 从未写过的话——对 `LOCKED_ASK_MARKER` 是文案欺骗（改变人的点击意愿，不改变裁决语义）；对 `BREAKER_MARKER` 则经 `breaker.apply` **真的禁用双按钮**（`breakerAntiHijackMs` 默认 0 时为 no-op，>0 时生效；既有性质，非本批引入）。要 fence 它需要官方面板给出 host 归属文本区的字段边界。
+- 面板文本含熔断 marker（`BREAKER_MARKER`，结构化 token）→ 双按钮禁用 `breakerAntiHijackMs`。无状态下发的 ask 由 host 写 `AWAITING_MARKER`，客户端就地渲染为当前界面语言的句子（host 不再写英文散文）；**锁定类别**的恒拒倒计时（delete/disk、未解锁的 protected/privilege、凭据读取地板与按名通道拒绝）由 host 写 `LOCKED_ASK_MARKER`，客户端同样就地渲染——文案说明该类询问不接受对话内授权、只有在本面板点「允许一次」才能放行，且**不含秒数**（数字在会话标题栏控件上，写进面板体会立刻过时）。三个 marker 的检测与就地改写都只作用于 host 归属的文本节点，逐节点判定；**已知边界（已登记）**：React 把同一个 marker 拆进两个 span 时，逐节点判定会漏改（就地改写不做跨节点拼接）——漏改的后果是面板显示 marker 原文而非本地化句子，不改变裁决语义。**残留通道（已登记）**：官方面板在同一节点里渲染工具调用的命令原文，该文本不过 host 的 marker 剥离，因此模型若把 marker 字面量写进命令参数，面板会显示那句 host 从未写过的话——对 `LOCKED_ASK_MARKER` 是文案欺骗（改变人的点击意愿，不改变裁决语义）；对 `BREAKER_MARKER` 则经 `breaker.apply` **真的禁用双按钮**（`breakerAntiHijackMs` 默认 0 时为 no-op，>0 时生效；既有性质，非本批引入）。要 fence 它需要官方面板给出 host 归属文本区的字段边界。
 - 非 UI 轮询器（0.0.12 起拆为 `approvals/` 模块）：客户端入口把 `remote`/`uiSession`/`slots`/`sessions` 声明为 inject 依赖（不再有 500ms×≤30 探针窗口）；`remote` watcher 观察 `uiSession.sessionStatus`（每个 `SessionStatus.pendingInteraction`；rc.1 的旧协议源 `pendingInteractions` 已随宿主改名移除）；核心 `shared.startReviewPolling` GET `/review-status`（callId 走 `x-auto-approval-call-id` 头，不进 URL）并带 `x-auto-approval-wait-ms` **长轮询**（默认 20s 上限，服务端按 revision 变化即时唤醒；忽略该头的老 host 自动退化为 500ms 基准轮询），五分支处理 countdown/follow/grace/无状态。路由连续失败时按指数退避到 5s 上限、成功后立即回到基准：退避**只限制定时轮询**，观察不停止、也绝不由失败推导裁决；事件驱动的 `pollNow`（回连/可见性/解冻重对齐）**不受退避限制**，因此链路恢复时不会额外等一个退避周期。
 
 ## 10.1　应答状态机（自动应答的大脑，approvals/ 模块）
@@ -66,7 +66,7 @@ flowchart TD
     │                · privilegeAutoReview 开关（提权类别解锁，默认关；开启后 privilege 行可选 自动/拒绝）
 │    │                · 12 类逐行三态 CapsuleSelect（LOCKED 类只剩 继承/人工询问 可选；privilege 解锁后恢复三态）
 │    ├─ [安全底线] 确认制学习     learningEnabled(on/off) · learningThreshold(数字输入 min2 max10，保存钳回 2..10)（阈值行仅开关=on 时显示）（<span class="lnum">client/index.ts:L"const buildLearningBody"</span>）· 已学习条目区块（键哈希 + 脱敏骨架 + 计数，可单条吊销，落 `learning-revoked` 审计）
-│    ├─ 实用小功能    onboardingMessageEnabled（首次使用引导消息）· redactResults（成功结果二次脱敏）· editDiffPreview（默认关的增强开关；计划 0.1.6-rc.1 退役）· rejectGuidance（拒绝引导提示）
+│    ├─ 实用小功能    onboardingMessageEnabled（首次使用引导消息）· redactResults（成功结果二次脱敏）· rejectGuidance（拒绝引导提示）
 │    ├─ 在线评审模型   快速判断模型[来源: 跟随会话/DSH模型(catalog chips 填 Provider·Model)/自定义端点] · 深度评审模型[同构] · 自定义端点[共享：协议·API地址·模型·密钥(password型)「已配置|未配置」· 测试连接]（恢复默认=双通道回 session + 端点配置清空 + 清除密钥）；**端点块按需渲染**——仅当某通道来源=自定义端点，或端点地址/模型/密钥已有配置时出现（否则默认态少 4 行 + 密钥行 + 测试按钮）
 │    └─ 最近审批记录   搜索 · 分页(PAGE_SIZE=10) · 记录+[熔断]+原因(warn色) + LLM 响应耗时统计 · 清空历史(confirm)
 │    └─ 高级    defaultReviewMode · autoModeNotice · showSessionPanel（逐行即时保存，无独立 footer）· 仅配置文件可配的键（只读清单：按 `HOST_ONLY_KEYS` 单一 owner 逐键渲染「键名 + 当前生效值」，无控件、无保存路径；展开/收起由 `dsa-segBtn` 控制，计数写入文案 `{count}`）· 拒绝出口说明两段（DSH_HOME 写入的操作者开口 / 无开口的族；纯文案，无控件）
@@ -77,8 +77,8 @@ flowchart TD
 
 - **保存语义**：每卡只提交自己拥有的键（`sliceValueOf`），生成相对该命名空间的路径 op（`{op:'set',path:[键],value}` / `{op:'unset',path:[键]}`）交给宿主交来的 row form `mutate(ops, expectedRevision)`——写由宿主落盘，**未被任何 op 命名的键保持已存值**，所以保存 A 卡不会吞掉 B 卡未保存的编辑，也不会动到只读清单里的 host-only 键。顶层开关即时保存（预设行一次提交两个键、其余单键；多键补丁一次 mutation、一次并发校验）。学习子卡只提交 `LEARNING_KEYS = ['learningEnabled','learningThreshold']` 两键（<span class="lnum">client/index.ts:L"const LEARNING_KEYS"</span>），threshold 保存时钳入 2..10。评审卡「恢复默认」对 6 个「非空才提交」键（provider/model/endpoint 成对键）显式发 `unset`：路径 op 的语义是「没提到的键保持已存值」，不显式复位会让上一轮存过的值留在 settings.yaml。
 - **拿不到宿主 form 时只读降级**：宿主未交出可用 form（entry 未 ACTIVE，或该命名空间不在宿主的配置表单集合里）时，页面渲染「不可用」横幅 + 可编辑键的「键名 + 当前生效值」只读清单，**不渲染任何控件**（禁用的控件会显示 schema 默认值，读起来像配置丢了）。写通道与渲染同源：没有 form 就没有可用的保存动作。
-- **遗留配置导入**：row 配置页顶部提示条，**仅当** `~/.dsh/settings.yaml.imported` 的本插件段里存在「旧值 ≠ 当前有效值 ∧ 未被本 entry 显式声明」的可编辑键时出现；只导可编辑键，host-only 键由宿主/环境决定、**不导入**（提示条注明）；**必须点按钮**才写，页面打开本身不写任何键；导入后提示条换成「撤销本次导入」，撤销走同一条路径 op 通道把导入前的值写回。
-- **host-only 键保护**：16 员名单 `workspaceRoot / dshHome / tempRoots / trustedDirs / trustedDshSubpaths / maintenanceDshPaths / classifierTimeoutMs / classifierMaxOutputTokens / maxArgsChars / notifyUser / reviewerContextFacts / rulesDryRun / breakerAntiHijackMs / reviewMaxRetries / loopDetectionThreshold / autoSwitchPolicyToAsk（已退役的 host-owned 兼容残留）`（<span class="lnum">decision.ts:LHOST_ONLY_KEYS</span>）走 patch/YAML 配置：宿主只把 44 个可编辑键标为 volatile，row form 只投影这些键，对其它键的写入直接拒绝，因此卡片改不掉它们、也不会把它们从 settings.yaml 抹掉。**归属不变量**：没有设置卡控件的键必须在此名单内（<span class="lnum">settings-key-ownership.test.mjs:L"no silent-delete gap"</span>）。
+- **遗留配置导入**：row 配置页顶部提示条，**仅当** `~/.dsh/settings.yaml.imported` 的本插件段里存在「旧值 ≠ 当前有效值 ∧ 声明值 ≠ 出厂默认 ∧ 未被出厂 patch 层点名」的可编辑键时出现（三项全真才提议该键；第二项只比较值、不把「键在不在」当声明信号，因此首次保存之后横幅**仍在**；第三项 guard 排除 `timeoutAction` 与列表键）。只导可编辑键，host-only 键由宿主/环境决定、**不导入**（提示条注明）；**必须点按钮**才写，页面打开本身不写任何键；导入后提示条换成「撤销本次导入」，撤销走同一条路径 op 通道把导入前的值写回。**可证伪判据**：横幅键集在首次保存前后保持不变（本机实测恰 7 项），`timeoutAction` / `allowlist` 恒被排除。
+- **host-only 键保护**：15 员名单 `workspaceRoot / dshHome / tempRoots / trustedDirs / trustedDshSubpaths / maintenanceDshPaths / classifierTimeoutMs / classifierMaxOutputTokens / maxArgsChars / notifyUser / rulesDryRun / breakerAntiHijackMs / reviewMaxRetries / loopDetectionThreshold / autoSwitchPolicyToAsk（已退役的 host-owned 兼容残留）`（<span class="lnum">decision.ts:LHOST_ONLY_KEYS</span>）走 patch/YAML 配置：宿主只把 43 个可编辑键标为 volatile，row form 只投影这些键，对其它键的写入直接拒绝，因此卡片改不掉它们、也不会把它们从 settings.yaml 抹掉。**归属不变量**：没有设置卡控件的键必须在此名单内（<span class="lnum">settings-key-ownership.test.mjs:L"no silent-delete gap"</span>）。
 - **密钥永不出现在 settings value**：独立 `/reviewer-credential` 路由；输入框 password + new-password 自动完成；保存后立即清空不回显。
 
 ## 10.3　会话标题栏「自动审批」统计

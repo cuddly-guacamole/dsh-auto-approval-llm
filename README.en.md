@@ -8,7 +8,7 @@
 
 [![npm](https://img.shields.io/npm/v/@quill507%2Fdsh-auto-approval-llm?style=flat-square&label=npm&labelColor=454a54)](https://www.npmjs.com/package/@quill507/dsh-auto-approval-llm)
 [![downloads](https://img.shields.io/npm/dm/@quill507%2Fdsh-auto-approval-llm?style=flat-square&labelColor=454a54)](https://www.npmjs.com/package/@quill507/dsh-auto-approval-llm)
-![DSH](https://img.shields.io/badge/DSH-%3E%3D0.1.5--rc.2-4c6ef5?style=flat-square&labelColor=454a54)
+![DSH](https://img.shields.io/badge/DSH-0.1.5--rc.2%20%7C%200.1.7--alpha.2-4c6ef5?style=flat-square&labelColor=454a54)
 [![license](https://img.shields.io/badge/license-BSD--3--Clause-d29922?style=flat-square&labelColor=454a54)](https://opensource.org/licenses/BSD-3-Clause)
 [![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
 
@@ -30,8 +30,7 @@
 6. **Breaker and loop guard** — consecutive or cumulative LLM denials hand the call to a human (`/approval-reset` resets); the **loop guard** (off by default) turns a call that the auto-allow surface keeps allowing into a pinned-reject countdown.
 7. **Declarative rules `rulesText`** — `tool(regex) | allow|deny|human [| field]`, with `[agent:…]` / `[workspace:…]` dimension prefixes; a parse error invalidates the whole block (the settings card warns).
 8. **Confirmation-based learning** (off by default) — once one signature has been confirmed by a human repeatedly, it auto-allows, **still running a standard online review before every allow**; entries can be viewed and revoked. → [docs/18](https://github.com/cuddly-guacamole/dsh-auto-approval-llm/blob/main/docs/18-confirm-learning.md)
-9. **Edit-diff preview + reviewer context facts** (both off by default) — the approval panel shows a line-level diff of the target file, and the reviewer input can carry structured workspace facts. Both are display-only / read-only metadata and never enter any auto-answer path.
-10. **Auditable and observable** — `history.jsonl` plus an append-only `audit.jsonl`; real LLM review latency statistics; one automatic retry on transient gateway failures (auth-class errors never resend credentials).
+9. **Auditable and observable** — `history.jsonl` plus an append-only `audit.jsonl`; real LLM review latency statistics; one automatic retry on transient gateway failures (auth-class errors never resend credentials).
 
 ---
 
@@ -67,9 +66,9 @@ flowchart TD
 
 ## Installation
 
-**Prerequisites**: the session or preset is on the **Auto tier** (machine value `auto-approval` = `danger-full-access` + `approval: ask`; switch with `/permission auto-approval`); DSH `0.1.7-alpha.1`+; Node `^22.19.0 || >=24.0.0`.
+**Prerequisites**: the session or preset is on the **Auto tier** (machine value `auto-approval` = `danger-full-access` + `approval: ask`; switch with `/permission auto-approval`); DSH `0.1.7-alpha.2`; Node `^22.19.0 || >=24.0.0`.
 
-Compatibility window: the name `auto` is reserved for the upstream `@deepseek-ai/dsh-experimental-auto-review` (Auto review / EXP), while this plugin only defines and gates `auto-approval`, so the two **own different tiers and can be enabled together**; the minimum supported host is `0.1.7-alpha.1`, and the legacy machine value `auto` alias plus the legacy/unknown capability branches were removed with that floor (the shipped patch defines only `auto-approval`).
+Compatibility window: the name `auto` is reserved for the upstream `@deepseek-ai/dsh-experimental-auto-review` (Auto review / EXP), while this plugin only defines and gates `auto-approval`, so the two **own different tiers and can be enabled together**. Two host lines are promised: `0.1.7-alpha.2` = full support (peer `>=0.1.5-rc.2 <2 || >=0.1.7-alpha.2 <2`); `0.1.5-rc.2` = **installation compatibility only** — the plugin installs and loads on that line but **does not take over the `auto` tier** (`gatePresetNames()` still returns only `auto-approval`, `isGatedSession("auto")` is false, the same-signature migration is `skipped` with zero audit writes), so it is not used there. The upper bound `<2` **is not a support commitment for the lines in between**. The legacy machine value `auto` alias plus the legacy/unknown capability branches were removed with that floor (the shipped patch defines only `auto-approval`).
 
 ```bash
 dsh plugin --profile web add @quill507/dsh-auto-approval-llm
@@ -136,7 +135,6 @@ The table below lists the common keys only; **every key, its full semantics and 
 | `categoryPolicy` / `categoryMode` / `trustedDirs` | `{}` / `standard` / [] | Category tri-states, location mode and trusted directories |
 | `privilegeAutoReview` / `protectedAutoReview` | false | Unlock privilege / protected respectively (differences in docs/17) |
 | `learningEnabled` / `learningThreshold` | false / 3 | Confirmation-based learning switch and threshold (2–10) |
-| `editDiffPreview` / `reviewerContextFacts` | false | Diff preview / reviewer context facts (YAML only); `editDiffPreview` is planned to retire in 0.1.6-rc.1 (the official trajectory view renders equivalent diffs) |
 | `slashCommandsEnabled` / `directHumanEnabled` | false | Register `/approval-*` commands / direct-human channel (the agent can route a call to a human; both need a restart) |
 | `debug` / `redactResults` / `notifyUser` | false / false / true | Debug log / redact successful results / approval notice in-session |
 
@@ -180,7 +178,6 @@ When the directory cannot be written, the plugin **fails closed**: the audit gat
 - **With `protectedAutoReview` on and no explicit category policy**, a protected ask becomes an untimed human ask that **never settles on its own** — an unattended session will wait forever.
 - **Credential material is unaffected by the unlock switches**: reading `.env` / `.npmrc` and similar stays locked even with `protectedAutoReview` on (stricter than needed, so it can over-deny).
 - **Opaque lines** (compound commands containing `(` / `{` / `$(` / heredoc) fall into `unknown` at the category layer: they are neither unlocked nor covered by the credential-read floor, i.e. neither tightened nor relaxed.
-- **Old content involved in a diff preview persists in plain text in the session approval/asked log** (the official contract is log-only, invisible to the model context).
 - **Platforms other than Windows have not been verified by real users.**
 
 ---

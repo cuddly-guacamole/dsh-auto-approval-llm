@@ -15,13 +15,13 @@ host 编排在 `src/index.ts`，真正「长脑子」的静态规则引擎在 `s
 | `rules.ts` <span class="lnum">rules.ts#</span> | 459 | Claude-Code 风格声明规则解析/求值（纯函数，host 与浏览器共用） |
 | `classifier.ts` <span class="lnum">classifier.ts#</span> | 100 | 预分类提示词、参数脱敏、严格响应解析 |
 | `dsh-classifier.ts` <span class="lnum">dsh-classifier.ts#</span> | 141 | 复用 `ctx.llm` 做低 token 分类请求（temperature 0） |
-| `decision.ts` <span class="lnum">decision.ts#</span> | 1054 | 纯决策函数：评审解析、人机竞速、来源标注、熔断状态机、静态名单 |
+| `decision.ts` <span class="lnum">decision.ts#</span> | 1052 | 纯决策函数：评审解析、人机竞速、来源标注、熔断状态机、静态名单 |
 | `trust.ts` <span class="lnum">trust.ts#</span> | 307 | web 路由信任平面（loopback/LAN 边界、Host 伪造防护、在线端点 URL 校验） |
 | `artifacts.ts` <span class="lnum">artifacts.ts#</span> | 140 | 本会话成功创建路径的内存出处登记（删除豁免依据） |
 | `audit.ts` <span class="lnum">audit.ts#</span> | 149 | append-only 审批审计（清空留墓碑、5MiB 裁剪；审计路径可被测试接缝重定向） |
 | `review-mode.ts` <span class="lnum">review-mode.ts#</span> | 51 | 每会话评审模式持久化快照 |
 
-> 同层的其余模块（类别层 `category.ts`、学习层 `learning.ts`、diff 预览 `editdiff.ts`、耗时遥测 `latency.ts`、上下文探针 `probe.ts`、结果脱敏 `redact.ts`、重试 `retry.ts`）各有专章或见 [§14](./14-code-map) 全量清单。
+> 同层的其余模块（类别层 `category.ts`、学习层 `learning.ts`、耗时遥测 `latency.ts`、结果脱敏 `redact.ts`、重试 `retry.ts`）各有专章或见 [§14](./14-code-map) 全量清单。
 
 ## 3.1　assessTool —— 每一次调用的 18 步判定 <span class="lnum">policy.ts:LassessTool</span>
 

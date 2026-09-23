@@ -1,7 +1,7 @@
 # 12 · 配置全景
-> *60 keys, one source of truth*
+> *58 keys, one source of truth*
 
-60 键分两类：**44 个可编辑键**被宿主标为 volatile，由 row 配置页的宿主 form 读写；**16 个 host-only 键**只由 patch / `settings.yaml` 配置，在设置页只读展示、不可提交（清单见文末「host-only 键保护」）。
+58 键分两类：**43 个可编辑键**被宿主标为 volatile，由 row 配置页的宿主 form 读写；**15 个 host-only 键**只由 patch / `settings.yaml` 配置，在设置页只读展示、不可提交（清单见文末「host-only 键保护」）。
 
 ## 全部配置键（src/index.ts Config schema Z.object 原文）
 
@@ -45,8 +45,6 @@
 | `reviewMaxRetries` | 1 | LLM 审查首次失败后的额外重试次数（0-2；0=单次，1=默认；滚动剩余预算，见 src/auto/retry.ts）——**仅 YAML 可配**（设置卡无此控件） |
 | `reviewWaitSeconds` | 5 | 每次 LLM 评审尝试的等待时间（秒，1–10）；官方通道 TTFB 慢时调大，建议不超过低风险倒计时 |
 | `redactResults` | false | 开启后把成功工具结果也过一遍脱敏器再喂回模型（post-execute 侧） |
-| `reviewerContextFacts` | false | 上下文增强复审：给评审输入附加结构化工作区事实（只读元数据）；host-only 键：仅 settings.yaml 可配（设置卡无此控件） |
-| `editDiffPreview` | false | 编辑类工具进人工审批时展示行级红绿 diff（纯展示，不参与裁决）；**计划退役**：最低支持宿主达 `0.1.6-rc.1` 时移除（官方轨迹视图已渲染同类 prompt diff） |
 | `rejectGuidance` | true | 拒绝引导：被拒时向 agent 注入白名单式短说明（来源/类别枚举，不含工具名与自由文本），减少盲目重试（文案锚定「本次操作」，禁止改写/换工具规避，sanctioned 替代由拒绝理由点名）；同调用去重 + 60s 限 5 条，fail-closed。v0.0.17 起官方拒绝检测只认结构化错误形状（error.message/isError/官方 Error: 前缀）——read/grep 等成功工具输出里出现的 "user rejected tool" 字面量不再误触发（此前 13 次幽灵注入根因） |
 | `maintenanceDshPaths` | [] | host-only 键：DSH_HOME 中供运维维护的子目录（绝对路径数组）。其内 guard 的 DSH_HOME 硬拒只对**非运行态文件**放宽（技能/配置/文档）；插件运行态文件（history/audit/learning…）在其内仍恒拒，shell 写向量仍恒拒（常量例外 = 插件自身开发区 ∪ 会话工作区——后者须是 DSH_HOME plugins 直接子目录），fenced 子树（sessions/plugins/credentials*/profiles）不可指名。仅 patch/YAML 可配 |
 | `categoryPolicy` | {} | 12 类三态开关 `{类别: auto\|ask\|deny}`；未配置=inherit 行为零变化；未知键 warn+丢弃（resolveConfig），LOCKED 类仅收 ask（privilege 在 `privilegeAutoReview=true`、protected 在 `protectedAutoReview=true` 时例外，可收 auto/deny） |
@@ -59,7 +57,7 @@
 | `learningThreshold` | 3 | 触发学习放行所需的人工确认次数；保存时钳入 [2,10]（clampLearningThreshold），越界值由 resolveConfig 发 warn（<span class="lnum">index.ts:L"clamping learningThreshold"</span>） |
 | `directHumanEnabled` | false | 直接人工通道：agent 可调用 `dsa_request_user` 把后续操作路由给人工而非 LLM 分类器；默认关=零行为差异。工具仅在开启时于启动注册（工具集不可热换——开启需重启），审批通道读取实时，关掉立即停用已注册工具 |
 | `slashCommandsEnabled` | false | 命令面板注册 `/approval-mode` `/approval-reset` `/approval-reset-all`（评审模式查看/设置 + 熔断重置）。默认关=零命令表面积。命令集不可热换——仅在开启时于启动注册（开启需重启）；每个 handler 读取该开关实时，运行中关掉立即停用已注册命令 |
-| `<span class="badgeok">host-only ×16</span>` | — | workspaceRoot / dshHome / tempRoots / **trustedDirs** / **trustedDshSubpaths** / maintenanceDshPaths / classifierTimeoutMs(8s,100-60000) / classifierMaxOutputTokens(1024,64-4096) / maxArgsChars / notifyUser / **reviewerContextFacts** / **rulesDryRun** / **breakerAntiHijackMs** / **reviewMaxRetries** / **loopDetectionThreshold** / **autoSwitchPolicyToAsk**（<span class="lnum">decision.ts:LHOST_ONLY_KEYS</span>；宿主只把 44 个可编辑键标为 volatile，非 volatile 键不进 row form、写入被直接拒，卡片保存不会抹掉）。**归属不变量**：没有设置卡控件的键必须在此名单内（<span class="lnum">settings-key-ownership.test.mjs:L"no silent-delete gap"</span>） |
+| `<span class="badgeok">host-only ×15</span>` | — | workspaceRoot / dshHome / tempRoots / **trustedDirs** / **trustedDshSubpaths** / maintenanceDshPaths / classifierTimeoutMs(8s,100-60000) / classifierMaxOutputTokens(1024,64-4096) / maxArgsChars / notifyUser / **rulesDryRun** / **breakerAntiHijackMs** / **reviewMaxRetries** / **loopDetectionThreshold** / **autoSwitchPolicyToAsk**（<span class="lnum">decision.ts:LHOST_ONLY_KEYS</span>；宿主只把 43 个可编辑键标为 volatile，非 volatile 键不进 row form、写入被直接拒，卡片保存不会抹掉）。**归属不变量**：没有设置卡控件的键必须在此名单内（<span class="lnum">settings-key-ownership.test.mjs:L"no silent-delete gap"</span>）。`reviewerContextFacts` / `editDiffPreview` 两键已退役：host-only 名单与 schema 均不再含它们，settings.yaml 里的残留值被静默忽略（见「容易误解的七件事」第 3 件） |
 
 ## 三处设计亮点
 
@@ -68,7 +66,7 @@
 :::
 
 ::: tip host-only 键保护
-浏览器设置页不为这些键渲染**控件**：高级子卡按 `HOST_ONLY_KEYS` 单一 owner 给出只读清单（键名 + 当前生效值，无控件、无保存路径），计数由同一列表派生，并给出拒绝出口说明（DSH_HOME 写入仅由 `trustedDshSubpaths` / `maintenanceDshPaths` 开口，且只服务结构化 write/edit）。这些键不进宿主交来的 row form：宿主只把 44 个可编辑键标为 volatile，对其它路径的写入直接拒（`Config field "x" is not volatile`），因此设置页的保存动不到它们。
+浏览器设置页不为这些键渲染**控件**：高级子卡按 `HOST_ONLY_KEYS` 单一 owner 给出只读清单（键名 + 当前生效值，无控件、无保存路径），计数由同一列表派生，并给出拒绝出口说明（DSH_HOME 写入仅由 `trustedDshSubpaths` / `maintenanceDshPaths` 开口，且只服务结构化 write/edit）。这些键不进宿主交来的 row form：宿主只把 43 个可编辑键标为 volatile，对其它路径的写入直接拒（`Config field "x" is not volatile`），因此设置页的保存动不到它们。
 :::
 
 ::: tip 热更新
@@ -86,7 +84,7 @@
 4. **`safetyPrompt` 与 `rulesText` 分工不同**：前者拼进评审 system 提示词，保存即热生效（<span class="lnum">index.ts:L"assembleReviewerSystem(config.safetyPrompt, config.rulesText)"</span>）；后者是声明式执法规则，先于内置 allowlist/denyList 终局裁决 allow/deny/human（<span class="lnum">index.ts:L"B1 declared rules"</span>）。
 5. **`reviewerProvider` 键名已复活（2026-09-05 用户拍板）**：作为深度评审通道 `preset` 档的 provider 键与 `reviewerModel` 成对。它不再是「在线路由的 provider」——在线/自定义端点由共享 `endpointUrl`/`endpointModel`/`endpointProtocol` 承载，两通道 `endpoint` 源共用一份；`endpointProtocol` 默认 openai 保留 anthropic。旧 `reviewerBaseUrl` / `reviewerProtocol` / 2 档 `classifierModelSource` / `reviewerModelSource` 等键已由新体系取代（未发版直接换代，无兼容层）。
 6. **`showSessionPanel` / `breakerAntiHijackMs` 是纯客户端呈现键**：host 裁决路径从不读取，改它们不影响任何审批结论。
-7. **遗留导入横幅的「已被声明」判据读的是 entry 自己的 config，不是生效配置**：导入提案只提议「旧值 ≠ 生效值 **且** entry config 未点名的键」。entry config 是 patch 层内容（出厂 patch 合并 profile patch 的原始声明），因此**凡是用户在设置页改过或手写进 patch 的键都不再被提议**（否则一键导入会把用户能看见的值悄悄盖掉）；生效值那一半只回答「导入会不会真的改变什么」。**即前一条的推定**：entry config 的实际内容语义（原始 patch 层 vs schema 补齐的全键集）尚未实机证实——若宿主交来的是补齐全键的集合，则所有可编辑键都算「已被声明」，横幅**永不出现**（fail-closed，不写任何值）。实机先查这一条：横幅键集应恰为「值不同 且 未被声明」的那几项，profile patch 里已存的键不得被提议。
+7. **遗留导入横幅的判据 = 「旧值 ≠ 生效值 ∧ 声明值 ≠ 出厂默认 ∧ 该键未被出厂 patch 层点名」**：三项全真才提议该键。第一项回答「导入会不会真的改变什么」。第二项读 entry 自己的 config，但**只比较值、不把「键在不在」当声明信号**：宿主任意一次 mutate 都会把全量 volatile 投影整块写进 profile patch，因此首次保存之后 entry config 里会出现几乎全部可编辑键——若按「键存在即已声明」判定，横幅从此**永不出现**（这正是被取代的那条分支）。现在的口径是：**声明值恰好等于出厂默认时与「没改过」等价**，该键仍可被提议；只有声明了一个属于用户自己的值才算「已被声明」。第三项是 guard：出厂 patch 层（`cordis.patch.yml`）点名的键由 bundle 层承担，本就不属于「用户从旧配置里带来的差异」⇒ 不参与提议（`timeoutAction` 与三个列表键由此排除，列表值因此永不出现在提议集里）。**可证伪判据**：横幅键集在首次保存前后**保持不变**（本机实测恰 7 项：`reviewerReasoning` / `classifierReasoning` / `redactResults` / `categoryMode` / `privilegeAutoReview` / `protectedAutoReview` / `learningEnabled`），`timeoutAction` 与 `allowlist` 恒被排除。若某次保存后键集变小，说明判据又退回了「按键存在判声明」。
 :::
 
 ## 评审模式与命令
