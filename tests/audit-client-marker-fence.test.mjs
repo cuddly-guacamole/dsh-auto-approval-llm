@@ -8,13 +8,16 @@
  * awaiting marker made the client render the status-less copy. The markers now
  * come from the host reason recorded by the approval watcher, keyed by the same
  * `data-approval-key` the panel carries; the panel text is only where a genuine
- * marker is rewritten. The legacy preview helper is kept and unit-tested, but
- * it is no longer the fence the client relies on.
+ * marker is rewritten.
+ *
+ * The preview helpers that used to sit on that fence are retired; the sweep
+ * below is what keeps them retired (a deleted module is listed nowhere, so a
+ * removal that misses a reference has to fail here rather than pass silently).
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import { markerTextOutsidePreview } from '../lib/client/approvals/marker-text.js'
+import { readFileSync, readdirSync, existsSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import {
   forgetPendingReason,
   pendingReasonFor,
@@ -22,18 +25,35 @@ import {
   subscribePendingReasons,
 } from '../lib/client/approvals/shared.js'
 
-const client = readFileSync(new URL('../src/client/index.ts', import.meta.url), 'utf8')
+const at = (relative) => fileURLToPath(new URL(relative, import.meta.url))
+const client = readFileSync(at('../src/client/index.ts'), 'utf8')
 
-test('preview nodes never contribute to the legacy preview-free text', () => {
-  const text = markerTextOutsidePreview([
-    { text: 'host note ', inPreview: false },
-    { text: '+ [dsh-auto-approval-llm] 🛑 breaker', inPreview: true },
-    { text: '+ [dsh-auto-approval-llm] ⏸ awaiting-human', inPreview: true },
-    { text: ' tail', inPreview: false },
-  ])
-  assert.ok(!text.includes('🛑 breaker'), 'a preview line must not arm the breaker guard')
-  assert.ok(!text.includes('awaiting-human'), 'a preview line must not claim a status-less ask')
-  assert.equal(text, 'host note  tail', 'the rest of the panel text is kept')
+/** Every file under a directory, recursively, as `dir/name` paths. */
+function walk(dir) {
+  const out = []
+  for (const entry of readdirSync(at(`../${dir}`), { withFileTypes: true })) {
+    const rel = `${dir}/${entry.name}`
+    if (entry.isDirectory()) out.push(...walk(rel))
+    else out.push(rel)
+  }
+  return out
+}
+
+test('the retired preview module and its helpers are referenced nowhere', () => {
+  const files = walk('src')
+  // Nothing under src/ may name the retired module or its exported helpers:
+  // the file itself is gone, so a leftover import would be a build error, but
+  // a leftover CALL through a re-exported alias is exactly the silent kind of
+  // revival this sweep exists to catch.
+  for (const token of ['marker-text', 'markerTextOutsidePreview', 'MarkerTextNode']) {
+    const hits = files.filter((file) => readFileSync(at(`../${file}`), 'utf8').includes(token))
+    assert.deepEqual(hits, [], `${token} must have no reference left under src/`)
+  }
+  assert.ok(!existsSync(at('../src/client/approvals/marker-text.ts')), 'the retired module file must stay deleted')
+  // The compiled client bundle is what a browser actually loads, so the sweep
+  // covers the artifact too (a stale build output would keep shipping it).
+  const bundle = readFileSync(at('../lib/client.js'), 'utf8')
+  assert.ok(!bundle.includes('markerTextOutsidePreview'), 'the compiled client bundle must not carry it either')
 })
 
 test('the trusted reason store records, updates, bounds and clears', () => {
@@ -72,6 +92,12 @@ test('the scan reads the trusted reason, not the panel text', () => {
   assert.ok(scanBody.includes('trustedReason.includes(AWAITING_MARKER)'), 'the awaiting copy must read the trusted reason')
   assert.ok(scanBody.includes('hasLockedAskNote(trustedReason)'), 'the locked copy must read the trusted reason')
   assert.ok(!scanBody.includes('markerTextOutsidePreview('), 'panel text must no longer feed the marker decisions')
+  // A dead path must not come back as a live one: the retired preview helpers
+  // were the only readers of the panel's raw text inside this scan.
+  for (const gone of ['extractDiffBlock', 'renderDiffBlock', 'hideDiffBlock', 'applyTextNodeRewrites', 'nodeInsidePreview', 'data-dsa-edit-diff']) {
+    assert.ok(!scanBody.includes(gone), `${gone} must not reappear in the panel scan`)
+    assert.ok(!client.includes(gone), `${gone} must not reappear anywhere in the client`)
+  }
 })
 
 test('the host ownership of the marker literals is unchanged', () => {

@@ -19,7 +19,6 @@ const snapshotTools = { schemas: () => [] }
 const snapshotCredentials = (value) => ({ resolve: async () => ({ value }) })
 const snapshotConfig = (over = {}) => ({
   maxArgsChars: 4000,
-  reviewerContextFacts: false,
   safetyPrompt: '',
   rulesText: '',
   classifierSource: 'session',

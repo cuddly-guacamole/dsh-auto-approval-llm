@@ -1,6 +1,6 @@
 import React from 'react'
 import { Button, Input } from '@deepseek-ai/dsh-client-ui-primitives'
-import { normalizeTimeoutAction, hasBreakerNote, hasLockedAskNote, AWAITING_MARKER, LOCKED_ASK_MARKER, REVIEWER_SYSTEM, assembleReviewerSystem, EDIT_DIFF_BLOCK_END, EDIT_DIFF_BLOCK_START, EDITABLE_CONFIG_KEYS, HOST_ONLY_KEYS } from '../auto/decision.js'
+import { normalizeTimeoutAction, hasBreakerNote, hasLockedAskNote, AWAITING_MARKER, LOCKED_ASK_MARKER, REVIEWER_SYSTEM, assembleReviewerSystem, EDITABLE_CONFIG_KEYS, HOST_ONLY_KEYS } from '../auto/decision.js'
 import { THRESHOLD_DEFAULTS, DEFAULT_ALLOW_TOOL_GROUPS } from '../auto/constants.js'
 import { formatHostKeyValue, hostOnlyRows } from './host-keys.js'
 import { buildMutateOps, legacyImportBefore, legacyImportOf, legacyImportWrite, legacyUndoWrite, ROW_CONFIG_KEY, usableForm, type ConfigWrite, type LegacyImport, type RowConfigForm } from './row-config.js'
@@ -9,7 +9,7 @@ import { installAutoPermissionIcon, SHIELD_PATH, BOLT_PATH } from './auto-icon.j
 import { createTrailingThrottle, MIN_PANEL_SCAN_INTERVAL_MS } from './throttle.js'
 import { zh, en } from './locale.js'
 import { computePanelVisible } from './panel-visibility.js'
-import { computeTextNodeRewrites, createBreakerGuard, isLinkDown, pendingReasonFor, revealApproval, subscribePendingReasons } from './approvals/shared.js'
+import { createBreakerGuard, isLinkDown, pendingReasonFor, revealApproval, subscribePendingReasons } from './approvals/shared.js'
 import { approvalStatusStore, chipState, coarseMinutes } from './approvals/status-store.js'
 import type { ChipState } from './approvals/status-store.js'
 import { watchSessionApprovals } from './approvals/session-watch.js'
@@ -99,7 +99,7 @@ function watchSessionModeChanges(ctx: any): void {
 // The countdown is no longer written into the official buttons: status is
 // rendered by the header chip from the shared store, so the panel keeps its
 // own labels. What remains here is additive decoration of the panel's own
-// text — the hidden edit-diff preview block — plus the breaker anti-hijack
+// text — the localized marker copy — plus the breaker anti-hijack
 // window, which must arm as soon as the marker text appears.
 function installApprovalPanelDecorations(): () => void {
   const g = globalThis as any
@@ -117,75 +117,10 @@ function installApprovalPanelDecorations(): () => void {
     for (const el of leaves) el.style.whiteSpace = 'pre-line'
   }
 
-  // ── edit-diff preview ────────────────────────────────────────────────────
-  // The host appends a marked line-prefixed block ("[dsh-edit-diff]…[/dsh-edit-diff]")
-  // to the ask reason of edit-class approvals. The block is parsed from the
-  // panel's plain text and re-rendered as a colored line diff; the raw block
-  // text is then removed from the panel so it never double-displays. The
-  // delimiters come from the host module that also strips them from
-  // model-controlled text, so a forged block cannot be parsed here.
-  const DIFF_START = EDIT_DIFF_BLOCK_START
-  const DIFF_END = EDIT_DIFF_BLOCK_END
-
-  const extractDiffBlock = (text: string): { header: string; lines: { kind: string; text: string }[] } | null => {
-    const start = text.indexOf(DIFF_START)
-    if (start === -1) return null
-    const end = text.indexOf(DIFF_END, start)
-    if (end === -1) return null
-    const body = text.slice(start + DIFF_START.length, end).replace(/^\n/, '')
-    const [header = '', ...rawLines] = body.split('\n')
-    const lines: { kind: string; text: string }[] = []
-    for (const raw of rawLines) {
-      if (raw.startsWith('- ')) lines.push({ kind: 'del', text: raw.slice(2) })
-      else if (raw.startsWith('+ ')) lines.push({ kind: 'add', text: raw.slice(2) })
-      else if (raw.startsWith('· ')) lines.push({ kind: 'ctx', text: raw.slice(2) })
-      // Unknown-prefix lines are structural noise and stay ignored.
-    }
-    return { header, lines }
-  }
-
-  // RETIREMENT(0.1.6-rc.1): the approval-panel diff block retires with the minimum host line.
-  const renderDiffBlock = (panel: any, block: { header: string; lines: { kind: string; text: string }[] }) => {
-    if (panel.querySelector('[data-dsa-edit-diff]')) return
-    const wrap = doc.createElement('div')
-    wrap.setAttribute('data-dsa-edit-diff', '1')
-    wrap.className = 'dsa-diff'
-    const head = doc.createElement('div')
-    head.className = 'dsa-diffHead'
-    head.textContent = block.header
-    wrap.appendChild(head)
-    const collapsed = block.lines.length > 4
-    const body = doc.createElement('div')
-    body.className = 'dsa-diffBody'
-    if (collapsed) body.style.display = 'none'
-    for (const line of block.lines) {
-      const row = doc.createElement('div')
-      row.className = `dsa-diffLine dsa-diff${line.kind === 'del' ? 'Del' : line.kind === 'add' ? 'Add' : 'Ctx'}`
-      row.textContent = line.text
-      body.appendChild(row)
-    }
-    wrap.appendChild(body)
-    if (collapsed) {
-      const toggle = doc.createElement('button')
-      toggle.type = 'button'
-      toggle.className = 'dsa-diffToggle'
-      toggle.textContent = t('panel.diffExpand')
-      toggle.addEventListener('click', () => {
-        const open = body.style.display !== 'none'
-        body.style.display = open ? 'none' : 'block'
-        toggle.textContent = open ? t('panel.diffExpand') : t('panel.diffCollapse')
-      })
-      wrap.appendChild(toggle)
-    }
-    panel.appendChild(wrap)
-  }
-
-  // Remove the raw marker block from the panel text (idempotent). Only the
-  // deepest element carrying both markers is touched, so sibling text such as
-  // the countdown note survives intact. Stripping rewrites TEXT NODES only —
-  // rewriting the element's textContent would destroy its child structure
-  // (React splits long reasons into spans and the two markers often land in
-  // different children, F6).
+  // The panel's own text is rewritten in place by walking its TEXT NODES only —
+  // rewriting an element's textContent would destroy its child structure
+  // (React splits long reasons into spans and a marker often lands in a
+  // different child than its neighbours, F6).
   const collectTextNodes = (root: any, out: any[]): any[] => {
     for (const node of Array.from(root.childNodes ?? []) as any[]) {
       if (node.nodeType === 3) out.push(node)
@@ -194,43 +129,11 @@ function installApprovalPanelDecorations(): () => void {
     return out
   }
 
-  /** Whether a text node lives inside the rendered edit-diff preview block. */
-  const nodeInsidePreview = (node: any, panel: any): boolean => {
-    let el = node.parentNode
-    while (el && el !== panel) {
-      if (typeof el.hasAttribute === 'function' && el.hasAttribute('data-dsa-edit-diff')) return true
-      el = el.parentNode
-    }
-    return false
-  }
-
-  const applyTextNodeRewrites = (el: any) => {
-    const nodes = collectTextNodes(el, [])
-    if (!nodes.length) return
-    const texts = nodes.map((n: any) => n.data ?? '')
-    const rewrites = computeTextNodeRewrites(texts, DIFF_START, DIFF_END)
-    for (let i = 0; i < nodes.length; i++) {
-      if (rewrites[i] !== texts[i]) nodes[i].data = rewrites[i]
-    }
-  }
-
-  const hideDiffBlock = (panel: any) => {    for (const el of Array.from(panel.querySelectorAll('*')) as any[]) {
-      const text = el.textContent ?? ''
-      if (!text.includes(DIFF_START) || !text.includes(DIFF_END)) continue
-      const childCarries = Array.from(el.children).some((c: any) =>
-        (c.textContent ?? '').includes(DIFF_START) && (c.textContent ?? '').includes(DIFF_END))
-      if (childCarries) continue
-      applyTextNodeRewrites(el)
-      break
-    }
-  }
-
   // A status-less ask carries the host's machine marker where the panel body
   // would otherwise show an English sentence; the visible text is ours, in the
   // reader's language. Rewriting text nodes keeps React's structure intact.
   const renderAwaitingNote = (panel: any) => {
     for (const node of collectTextNodes(panel, [])) {
-      if (nodeInsidePreview(node, panel)) continue
       const data = node.data ?? ''
       if (!data.includes(AWAITING_MARKER)) continue
       node.data = data.split(AWAITING_MARKER).join(t('panel.awaitingHuman'))
@@ -243,7 +146,6 @@ function installApprovalPanelDecorations(): () => void {
   // shape as above so React's structure survives.
   const renderLockedAskNote = (panel: any) => {
     for (const node of collectTextNodes(panel, [])) {
-      if (nodeInsidePreview(node, panel)) continue
       const data = node.data ?? ''
       if (!data.includes(LOCKED_ASK_MARKER)) continue
       node.data = data.split(LOCKED_ASK_MARKER).join(t('panel.lockedAsk'))
@@ -258,18 +160,6 @@ function installApprovalPanelDecorations(): () => void {
       if (!key) continue
       liveKeys.add(key)
       enablePreLine(panel)
-      // The preview block is file content, and the rows rendered from it stay
-      // in the panel text after the raw block is hidden — so they are excluded
-      // on EVERY scan, not just the first one. Judging them would let a
-      // preview line arm the breaker guard (disabling the human's Reject /
-      // Allow buttons) or forge the status-less copy. The host strips the
-      // markers as well; this is the second fence.
-      const rawText = panel.textContent ?? ''
-      const block = extractDiffBlock(rawText)
-      if (block) {
-        renderDiffBlock(panel, block)
-        hideDiffBlock(panel)
-      }
       // The machine markers are read from the host reason the watcher recorded
       // for this key, never from the panel text: the panel also renders the
       // tool command echo, which the model controls, so a command argument
@@ -355,7 +245,6 @@ interface Draft {
   slashCommandsEnabled: 'on' | 'off'
   debug: 'on' | 'off'
   redactResults: 'on' | 'off'
-  editDiffPreview: 'on' | 'off'
   rejectGuidance: 'on' | 'off'
   categoryPolicy: Record<string, 'auto' | 'ask' | 'deny'>
   categoryMode: 'standard' | 'aggressive'
@@ -407,7 +296,6 @@ function draftOf(value: any): Draft {
     slashCommandsEnabled: value?.slashCommandsEnabled === true ? 'on' : 'off',
     debug: value?.debug === true ? 'on' : 'off',
     redactResults: value?.redactResults === true ? 'on' : 'off',
-    editDiffPreview: value?.editDiffPreview === true ? 'on' : 'off',
     rejectGuidance: value?.rejectGuidance === true ? 'on' : 'off',
     categoryPolicy: (typeof value?.categoryPolicy === 'object' && value.categoryPolicy !== null)
       ? { ...value.categoryPolicy }
@@ -455,7 +343,6 @@ function valueOf(draft: Draft): any {
     slashCommandsEnabled: draft.slashCommandsEnabled === 'on',
     debug: draft.debug === 'on',
     redactResults: draft.redactResults === 'on',
-    editDiffPreview: draft.editDiffPreview === 'on',
     rejectGuidance: draft.rejectGuidance === 'on',
     categoryPolicy: draft.categoryPolicy,
     categoryMode: draft.categoryMode,
@@ -518,7 +405,7 @@ function formatTookMs(ms: number | null): string {
 // unknown enum, out-of-range number). The settings card shows a red banner and
 // offers to delete those keys so the schema defaults recover.
 const INVALID_CONFIG_TYPES: Record<string, string> = {
-  enabled: 'boolean', rulesDryRun: 'boolean', notifyUser: 'boolean', debug: 'boolean', redactResults: 'boolean', editDiffPreview: 'boolean', rejectGuidance: 'boolean', learningEnabled: 'boolean',
+  enabled: 'boolean', rulesDryRun: 'boolean', notifyUser: 'boolean', debug: 'boolean', redactResults: 'boolean', rejectGuidance: 'boolean', learningEnabled: 'boolean',
   lowRiskSeconds: 'number', mediumRiskSeconds: 'number', highRiskSeconds: 'number', learningThreshold: 'number',
   maxConsecutiveDenials: 'number', maxTotalDenials: 'number', breakerAntiHijackMs: 'number', panelDelayMs: 'number', reviewMaxRetries: 'number',
   maxArgsChars: 'number', classifierTimeoutMs: 'number', classifierMaxOutputTokens: 'number',
@@ -1191,7 +1078,7 @@ function SettingsSection({ chrome = 'card', form }: { chrome?: 'card' | 'plain';
   // value, and these have to go back to the inherited one.
   const REVIEW_PAIR_KEYS = ['classifierProvider', 'classifierModel', 'reviewerProvider', 'reviewerModel', 'endpointUrl', 'endpointModel']
   const SECURITY_KEYS = ['safetyPrompt', 'allowlist', 'denyList', 'humanOnlyList', 'rulesText']
-  const UTILITY_KEYS = ['onboardingMessageEnabled', 'redactResults', 'editDiffPreview', 'rejectGuidance']
+  const UTILITY_KEYS = ['onboardingMessageEnabled', 'redactResults', 'rejectGuidance']
   const LEARNING_KEYS = ['learningEnabled', 'learningThreshold']
   const pick = (keys: string[], from: Draft): Partial<Draft> => {
     const out: any = {}
@@ -2328,12 +2215,6 @@ function SettingsSection({ chrome = 'card', form }: { chrome?: 'card' | 'plain';
       options: onOffOptions(),
       onChange: (v: any) => update({ redactResults: v as 'on' | 'off' }),
     }), t('settings.rules.redactResultsHint')),
-    // RETIREMENT(0.1.6-rc.1): this key retires with the minimum host line.
-    row(t('settings.rules.editDiffPreview'), React.createElement(CapsuleSelect, {
-      value: draft.editDiffPreview,
-      options: onOffOptions(),
-      onChange: (v: any) => update({ editDiffPreview: v as 'on' | 'off' }),
-    }), t('settings.rules.editDiffPreviewHint')),
     row(t('settings.utility.rejectGuidance'), React.createElement(CapsuleSelect, {
       value: draft.rejectGuidance,
       options: onOffOptions(),
@@ -3141,19 +3022,6 @@ function installSettingsCardStyles(): () => void {
 .dsa-resetButton{border-radius:8px!important;height:auto!important;padding:5px 14px!important}
 .dsa-actionButton{border-radius:8px!important;height:auto!important;padding:5px 14px!important}
 .dsa-alertNotice{color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l1)}
-.dsa-diff{border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2);margin:8px 0;padding:6px 10px;font-family:var(--ds-font-family-code,monospace);font-size:12px;line-height:1.6;max-height:280px;overflow:auto}
-.dsa-diffHead{color:var(--dsw-alias-label-primary);font-weight:600;padding:2px 0 4px;white-space:pre-line}
-.dsa-diffBody{display:grid}
-.dsa-diffLine{white-space:pre-wrap;word-break:break-word;padding:0 6px;border-left:3px solid transparent}
-.dsa-diffLine::before{display:inline-block;width:1.4em;margin-left:-6px;color:var(--dsw-alias-label-tertiary)}
-.dsa-diffDel{color:var(--dsw-alias-label-secondary);background:rgba(var(--dsw-alias-state-error-primary-rgb,236 19 19),0.10);border-left-color:var(--dsw-alias-state-error-primary)}
-.dsa-diffDel::before{content:'−';color:var(--dsw-alias-state-error-primary)}
-.dsa-diffAdd{color:var(--dsw-alias-label-secondary);background:rgba(var(--dsw-alias-state-success-primary-rgb,34 197 94),0.10);border-left-color:var(--dsw-alias-state-success-primary)}
-.dsa-diffAdd::before{content:'+';color:var(--dsw-alias-state-success-primary)}
-.dsa-diffCtx{color:var(--dsw-alias-label-tertiary)}
-.dsa-diffCtx::before{content:'·'}
-.dsa-diffToggle{appearance:none;background:transparent;border:0;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;cursor:pointer;padding:3px 6px;border-radius:6px}
-.dsa-diffToggle:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}
 .dsa-onboardingCard{border:1px solid var(--dsw-alias-border-l1);border-radius:14px;background:var(--dsw-alias-bg-layer-1);padding:12px 16px;display:flex;flex-direction:column;gap:8px}
 .dsa-onboardingTitle{color:var(--dsw-alias-label-primary);font-weight:600;font-size:13px;line-height:1.5}
 .dsa-onboardingList{display:flex;flex-direction:column;gap:4px;margin:0;padding-left:18px;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.6}

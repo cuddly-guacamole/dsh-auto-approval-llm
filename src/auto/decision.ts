@@ -302,7 +302,6 @@ export const HOST_ONLY_KEYS = [
   'classifierMaxOutputTokens',
   'maxArgsChars',
   'notifyUser',
-  'reviewerContextFacts',
   'rulesDryRun',
   'breakerAntiHijackMs',
   'reviewMaxRetries',
@@ -359,7 +358,6 @@ export const EDITABLE_CONFIG_KEYS = [
   'slashCommandsEnabled',
   'debug',
   'redactResults',
-  'editDiffPreview',
   'rejectGuidance',
   'categoryPolicy',
   'categoryMode',
@@ -624,15 +622,6 @@ export function extractToolPath(raw: string | undefined | null): string | undefi
   return undefined
 }
 
-/** Structured workspace facts for the reviewer (metadata only, never content). */
-export interface ContextSummary {
-  targetExists: boolean
-  targetKind: 'file' | 'dir' | 'missing'
-  targetSize: number | null
-  /** Session-created workspace-relative paths, newest first; absent → none. */
-  recentCreates?: string[]
-}
-
 export interface ReviewerInput {
   toolName: string
   description?: string | null
@@ -641,7 +630,6 @@ export interface ReviewerInput {
   workspaceRoot?: string
   targetRelative?: string | null
   inWorkspace?: boolean | null
-  contextSummary?: ContextSummary | null
 }
 
 /** Frame the reasoning-blind reviewer payload as one JSON text. */
@@ -660,20 +648,6 @@ export function frameReviewerInput(input: ReviewerInput): string {
       root: input.workspaceRoot ?? null,
       target_relative: input.targetRelative ?? null,
       in_workspace: input.inWorkspace ?? null,
-      // Omit-if-empty: with no context the payload stays byte-identical to the
-      // previous five-key workspace shape (cross-version freeze).
-      ...(input.contextSummary === undefined || input.contextSummary === null
-        ? {}
-        : {
-            context_summary: {
-              target_exists: input.contextSummary.targetExists,
-              target_kind: input.contextSummary.targetKind,
-              target_size: input.contextSummary.targetSize,
-              recent_creates: (input.contextSummary.recentCreates ?? [])
-                .map((p) => sanitizeClassifierText(p))
-                .slice(0, 8),
-            },
-          }),
     },
   })
 }
@@ -781,17 +755,6 @@ export function hasBreakerNote(text: string | undefined): boolean {
 export const COUNTDOWN_MARKER_PATTERN = /\[dsh-auto-approval-llm\]\s*⏳\s*will auto-(?:approve|reject) in \d+s/g
 
 /**
- * The edit-diff block delimiters. The host appends exactly one block at the END
- * of the ask reason, and the client re-renders (then hides) the first block it
- * finds — so a model-controlled base reason that spelled a complete block could
- * hijack the preview and push the real diff out of view. ONE owner: the host
- * strips these delimiters from model-controlled text (`stripCountdownMarkers`,
- * `stripPreviewMarkers`) and the client parses with the same constants.
- */
-export const EDIT_DIFF_BLOCK_START = '[dsh-edit-diff]'
-export const EDIT_DIFF_BLOCK_END = '[/dsh-edit-diff]'
-
-/**
  * Remove client-parseable markers from a base approval reason before the host
  * appends its own protocol notes. Every marker doubles as a browser signal, so
  * a model-controlled base reason that embedded one could otherwise arm the
@@ -807,8 +770,20 @@ export function stripCountdownMarkers(reason: string): string {
     '',
   ).split(BREAKER_MARKER).join('').split(AWAITING_MARKER).join('')
     .split(LOCKED_ASK_MARKER).join('')
-    .split(EDIT_DIFF_BLOCK_START).join('').split(EDIT_DIFF_BLOCK_END).join('')
     .replace(/[ \t]+$/gm, '').trim()
+}
+
+/**
+ * Assemble the final ask-human reason: strip client-parseable countdown
+ * markers from the model-controlled base text, then append the host notes.
+ * Every note this host publishes goes through here, so a model-authored base
+ * reason cannot arm a marker the host never set. The stripping owner is
+ * {@link stripCountdownMarkers}; this function is the single call site that
+ * puts a note on the reason.
+ */
+export function buildAskReason(baseReason: unknown, extra: string): string {
+  const cleaned = typeof baseReason === 'string' ? stripCountdownMarkers(baseReason) : baseReason
+  return cleaned ? `${cleaned}${extra}` : extra
 }
 
 // ── reviewer system assembly ─────────────────────────────────────────────────

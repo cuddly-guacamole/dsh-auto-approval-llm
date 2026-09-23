@@ -14,7 +14,6 @@ import {
   answerOnce,
   startReviewPolling,
   createBreakerGuard,
-  computeTextNodeRewrites,
   answeredApprovals,
   FEEDBACK_ROUTE,
   REVIEW_STATUS_ROUTE,
@@ -810,54 +809,6 @@ test('breaker guard: dispose cancels pending windows — no late restore, no tim
   assert.equal(allow.disabled, true)
 })
 
-// ── edit-diff marker stripping (computeTextNodeRewrites, F6) ───────────────
-
-const DS = '[dsh-edit-diff]'
-const DE = '[/dsh-edit-diff]'
-
-test('computeTextNodeRewrites: single text node with a complete pair removes the block, keeps surrounding text', () => {
-  assert.deepEqual(computeTextNodeRewrites([`before${DS}diff${DE}after`], DS, DE), ['beforeafter'])
-  assert.deepEqual(computeTextNodeRewrites([`${DS}diff${DE}tail`], DS, DE), ['tail'], 'block at the very start')
-  assert.deepEqual(computeTextNodeRewrites([`head${DS}diff${DE}`], DS, DE), ['head'], 'block at the very end')
-})
-
-test('computeTextNodeRewrites: markers split across two text nodes are removed exactly', () => {
-  const out = computeTextNodeRewrites([`A${DS}first`, `second${DE}B`], DS, DE)
-  assert.deepEqual(out, ['A', 'B'])
-})
-
-test('computeTextNodeRewrites: markers split across three text nodes are removed exactly', () => {
-  const out = computeTextNodeRewrites(['pre', DS, 'mid', DE, 'post'], DS, DE)
-  // 'mid' sits between the markers — it is diff body, so it goes too.
-  assert.deepEqual(out, ['pre', '', '', '', 'post'])
-  // The rewritten join equals the legacy textContent rewrite output.
-  assert.equal(out.join(''), 'prepost')
-})
-
-test('computeTextNodeRewrites: no markers → texts unchanged (idempotent)', () => {
-  const texts = ['hello', ' world']
-  assert.deepEqual(computeTextNodeRewrites(texts, DS, DE), texts)
-  // A complete pair already removed: rewrites are stable (no re-stripping).
-  const once = computeTextNodeRewrites([`a${DS}x${DE}b`], DS, DE)
-  assert.deepEqual(computeTextNodeRewrites(once, DS, DE), once)
-})
-
-test('computeTextNodeRewrites: forged or half markers are left alone (reverse case)', () => {
-  // A lone START marker with no END must consume nothing.
-  assert.deepEqual(computeTextNodeRewrites(['echo [dsh-edit-diff] hi'], DS, DE), ['echo [dsh-edit-diff] hi'])
-  // A lone END marker with no START must consume nothing.
-  assert.deepEqual(computeTextNodeRewrites(['echo [/dsh-edit-diff] hi'], DS, DE), ['echo [/dsh-edit-diff] hi'])
-  // Only the pair's own span is removed from a larger text; the rest survives.
-  assert.deepEqual(computeTextNodeRewrites([`cmd ${DS}inner${DE} ok`], DS, DE), ['cmd  ok'])
-})
-
-test('computeTextNodeRewrites: trailing newlines after the block are trimmed like the legacy rewrite', () => {
-  assert.deepEqual(computeTextNodeRewrites([`head${DS}x${DE}\n\n`], DS, DE), ['head'])
-  // A newline between the block and following text is a MIDDLE newline — the
-  // legacy `\n+$` trim never touched those, and neither does the rewrite.
-  assert.deepEqual(computeTextNodeRewrites([`head${DS}x${DE}\n`, 'tail'], DS, DE), ['head\n', 'tail'])
-})
-
 // ── static wiring anchors ──────────────────────────────────────────────────
 
 test('static anchors: remote-only wiring stays pinned; the legacy adapter is gone', async (t) => {
@@ -933,11 +884,15 @@ test('static anchors: the guard is armed by the breaker marker, not by localized
   assert.ok(!host.includes('⚠️ Breaker: model was'), 'the old inline note must be gone from the host')
 })
 
-test('static anchors: hideDiffBlock strips via text-node rewrites, never textContent rewrite (F6 pinned)', () => {
+test('static anchors: the panel text is rewritten node by node, never through textContent (F6 pinned)', () => {
   const shared = readFileSync(new URL('../src/client/approvals/shared.ts', import.meta.url), 'utf8')
   const client = readFileSync(new URL('../src/client/index.ts', import.meta.url), 'utf8')
-  assert.ok(client.includes('computeTextNodeRewrites(texts, DIFF_START, DIFF_END)'), 'index.ts must route stripping through the pure rewrite function')
-  assert.ok(client.includes('collectTextNodes'), 'index.ts must walk text nodes (never rewrites element children)')
+  assert.ok(client.includes('const collectTextNodes = (root: any, out: any[])'), 'index.ts must walk text nodes (never rewrites element children)')
+  assert.ok(client.includes("node.data = data.split(AWAITING_MARKER).join(t('panel.awaitingHuman'))"), 'the awaiting copy rewrites a text node in place')
+  assert.ok(client.includes("node.data = data.split(LOCKED_ASK_MARKER).join(t('panel.lockedAsk'))"), 'the locked copy rewrites a text node in place')
   assert.ok(!client.includes('el.textContent = cleaned'), 'the structure-destroying textContent rewrite must be gone (F6)')
-  assert.ok(shared.includes('export function computeTextNodeRewrites'), 'the rewrite function must be exported for testability')
+  // The preview pair-stripper was this file's only consumer and retired with
+  // it: neither the client nor the shared module may bring it back.
+  assert.ok(!client.includes('computeTextNodeRewrites'), 'the retired pair stripper must not come back into the client')
+  assert.ok(!shared.includes('computeTextNodeRewrites'), 'the retired pair stripper must not come back into the shared core')
 })

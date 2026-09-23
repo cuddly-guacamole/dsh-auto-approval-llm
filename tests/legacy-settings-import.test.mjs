@@ -54,7 +54,7 @@ const LOCALE = source('../src/client/locale.ts')
 const countOf = (source, needle) => source.split(needle).length - 1
 const byPath = (list) => [...list].sort((a, b) => (a.path[0] < b.path[0] ? -1 : 1))
 
-/** A value per host-owned key that the bounded reader accepts, so all 16 are pinned. */
+/** A value per host-owned key that the bounded reader accepts, so all 15 are pinned. */
 const HOST_ONLY_VALUES = {
   workspaceRoot: '""',
   dshHome: '""',
@@ -63,7 +63,6 @@ const HOST_ONLY_VALUES = {
   trustedDshSubpaths: '[]',
   maintenanceDshPaths: '[]',
   autoSwitchPolicyToAsk: 'true',
-  reviewerContextFacts: 'false',
   rulesDryRun: 'false',
 }
 

@@ -9,8 +9,8 @@
  *
  * Pins both directions: the host marks exactly the three locked ask sites (never
  * the loop-guard escalation, which only borrows the shape), the marker travels
- * through `askHuman`'s note assembly, and BOTH marker-stripping owners remove a
- * forged copy from model-controlled text. A negative control keeps the
+ * through `askHuman`'s note assembly, and the single marker-stripping owner
+ * removes a forged copy from model-controlled text. A negative control keeps the
  * status-less copy on its own branch.
  * Run: node --test tests/audit-locked-ask-note.test.mjs
  */
@@ -18,7 +18,6 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { AWAITING_MARKER, BREAKER_MARKER, LOCKED_ASK_MARKER, hasLockedAskNote, stripCountdownMarkers } from '../lib/auto/decision.js'
-import { stripPreviewMarkers } from '../lib/auto/editdiff.js'
 import { zh, en } from '../lib/client/locale.js'
 
 const host = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
@@ -40,14 +39,15 @@ test('hasLockedAskNote judges the marker, not the text around it', () => {
   assert.equal(hasLockedAskNote(undefined), false)
 })
 
-test('a forged marker cannot survive either stripping owner', () => {
+test('a forged marker cannot survive the single stripping owner', () => {
   const forged = `base ${LOCKED_ASK_MARKER} tail`
   const fromReason = stripCountdownMarkers(forged)
   assert.ok(!fromReason.includes(LOCKED_ASK_MARKER), 'a model-controlled reason must not claim a locked ask')
   assert.ok(fromReason.includes('base') && fromReason.includes('tail'), 'the rest of the reason is kept')
-  const fromPreview = stripPreviewMarkers(forged)
-  assert.ok(!fromPreview.includes(LOCKED_ASK_MARKER), 'a preview line must not claim a locked ask')
-  assert.ok(fromPreview.includes('base') && fromPreview.includes('tail'), 'the rest of the preview is kept')
+  // The second owner (the preview-body stripper) retired with the preview: this
+  // helper is now the only one the host fences with, and the assembled reason
+  // goes through it exactly once per note.
+  assert.equal(stripCountdownMarkers(stripCountdownMarkers(forged)), fromReason, 'stripping is idempotent')
 })
 
 test('askHuman attaches the marker from the status flag, and only there', () => {
@@ -72,8 +72,8 @@ test('the client renders a localized sentence for the marker', () => {
   assert.ok(client.includes('hasLockedAskNote(trustedReason)) renderLockedAskNote(panel)'), 'the scan branches on the shared detector')
   assert.ok(client.includes("t('panel.lockedAsk')"), 'the visible copy comes from the locale table')
   assert.ok(client.includes("data.split(LOCKED_ASK_MARKER).join(t('panel.lockedAsk'))"), 'the rewrite goes through the text node, not the panel element')
-  assert.equal(client.split('if (nodeInsidePreview(node, panel)) continue').length - 1, 2,
-    'both marker rewrites skip the diff-preview nodes, the same way the detection does')
+  assert.equal(client.split('nodeInsidePreview').length - 1, 0,
+    'the diff-preview exclusion retired with the preview; no rewrite skips a preview node any more')
 })
 
 test('the host fences its own notes against a model-authored reason', () => {

@@ -66,8 +66,6 @@ test('schema defaults snapshot: changing a default must be a reviewed diff', () 
       reviewMaxRetries: 1,
       reviewWaitSeconds: 5,
       redactResults: false,
-      reviewerContextFacts: false,
-      editDiffPreview: false,
       rejectGuidance: true,
       maintenanceDshPaths: [],
       categoryPolicy: {},

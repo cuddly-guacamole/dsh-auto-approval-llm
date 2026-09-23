@@ -35,11 +35,10 @@ import { sanitizeClassifierArguments, sanitizeClassifierText, sanitizeReviewReas
 import { DIRECT_HUMAN_TOOL, GATED_PRESET, THRESHOLD_DEFAULTS } from './auto/constants.js'
 import { createDshClassifier, createEndpointClassifier } from './auto/dsh-classifier.js'
 import { PLUGIN_MESSAGE_SOURCE } from './auto/message-source.js'
-import { type RaceHumanHandle, type ReviewResult, type StaticRisk, AWAITING_MARKER, EDITABLE_CONFIG_KEYS, HOST_ONLY_KEYS, LOCKED_ASK_MARKER, REVIEW_TIMEOUT_NOTICE, SHIPPED_PINNED_KEYS, applyBreaker, approvalSource, assembleReviewerSystem, breakerNote, breakerTripped, createKeyedMutex, DENY_CIRCUMVENTION_GUIDANCE, extractToolPath, followResolution, formatDenyFeedback, frameReviewerInput, lowRiskReviewOutcome, parseReview, stripCountdownMarkers, unattendedMustFailClosed, plainConfigValue, raceHumanDecision, reviewSuggestionNote, reviewerAutoAllowBlocked, riskFromAssessment, staticListDecision, type ContextSummary } from './auto/decision.js'
+import { type RaceHumanHandle, type ReviewResult, type StaticRisk, AWAITING_MARKER, EDITABLE_CONFIG_KEYS, HOST_ONLY_KEYS, LOCKED_ASK_MARKER, REVIEW_TIMEOUT_NOTICE, SHIPPED_PINNED_KEYS, applyBreaker, approvalSource, assembleReviewerSystem, breakerNote, breakerTripped, buildAskReason, createKeyedMutex, DENY_CIRCUMVENTION_GUIDANCE, extractToolPath, followResolution, formatDenyFeedback, frameReviewerInput, lowRiskReviewOutcome, parseReview, stripCountdownMarkers, unattendedMustFailClosed, plainConfigValue, raceHumanDecision, reviewSuggestionNote, reviewerAutoAllowBlocked, riskFromAssessment, staticListDecision } from './auto/decision.js'
 import { LATENCY_SUMMARY_WINDOW, clearLatencySamples, loadLatencySamples, pushLatencySample, summarizeLatency, type LatencySample } from './auto/latency.js'
 import { normalizeLoopThreshold, loopKeyFor, createLoopState, recordLoopCall, type LoopGuardState } from './auto/loop-guard.js'
 import { RECENT_REJECTION_CAP, baselineFromPermissionState, observePermissionChange, permissionChangeFromEvent, recentRejectionPointers, type PermissionState } from './auto/permission-change.js'
-import { buildAskReason, buildEditDiff, buildEditDiffText, EDIT_DIFF_ARGS_MAX_CHARS, EDIT_DIFF_TOOLS } from './auto/editdiff.js'
 import {
   clampLearningThreshold,
   confirmActionFor,
@@ -64,7 +63,6 @@ import {
 import { isWithin, isCriticalPath, normalizePath, resolveRoots, devZoneRootsFor } from './auto/paths.js'
 import { assessTool, hardDenyReason, structuredRuntimeStateReadHits, type Roots } from './auto/policy.js'
 import { resolveDeepest, symlinkEscapeReason } from './auto/symlink.js'
-import { probeTargetFacts } from './auto/probe.js'
 import { redactResultValue } from './auto/redact.js'
 import { agentKind, evaluateRules, parseRulesText, summarizeRulesParseErrors, type RuleParseError } from './auto/rules.js'
 import { isReviewRetryable, retryAfterMs, retryReviewLoop, toLlmFailure, type RetryAttempt, type ReviewFailure } from './auto/retry.js'
@@ -178,10 +176,6 @@ export interface Config {
   debug: boolean
   /** Mask credential-shaped material in successful tool results. */
   redactResults: boolean
-  /** Attach structured workspace facts (existence/kind/size, recent creates) to the review input. */
-  reviewerContextFacts: boolean
-  /** Show a line-level diff preview of edit-class targets on the human approval panel. */
-  editDiffPreview: boolean
   /** Inject short guidance to the agent when a tool call is rejected. */
   rejectGuidance: boolean
   /** DSH_HOME subtrees for operator maintenance (non-runtime-state files only). */
@@ -307,14 +301,6 @@ export const Config: z<Config> = z.object({
   // Result-side credential masking: off until the first-day value/content
   // read-path measurements are in (fail-closed default; opt-in per deployment).
   redactResults: z.boolean().default(false),
-  // Structured workspace-facts injection for the reviewer input (off by
-  // default so the default review payload stays byte-identical).
-  reviewerContextFacts: z.boolean().default(false),
-  // Line-level diff preview for edit-class approvals: display-only, fail-closed
-  // (any read/diff failure omits the block), never part of the review payload.
-  // Off by default (fail-closed): enable explicitly to see the panel diff.
-  // RETIREMENT(0.1.6-rc.1): the official trajectory view renders prompt diffs.
-  editDiffPreview: z.boolean().default(false),
   // Rejected-call guidance for the agent (user-message injection with a
   // whitelist-only payload: source/category enums, never tool names or free
   // text). On by default; rate-limited per callId and per 60s window.
@@ -640,10 +626,7 @@ export function resolveConfig(raw: Config): Config {
     mediumRiskSeconds: raw.mediumRiskSeconds ?? THRESHOLD_DEFAULTS.mediumRiskSeconds,
     highRiskSeconds: raw.highRiskSeconds ?? THRESHOLD_DEFAULTS.highRiskSeconds,
     redactResults: raw.redactResults === true,
-    reviewerContextFacts: raw.reviewerContextFacts === true,
     reviewWaitSeconds: raw.reviewWaitSeconds ?? THRESHOLD_DEFAULTS.reviewWaitSeconds,
-    // Default-off (fail-closed): only an explicit true enables the preview.
-    editDiffPreview: raw.editDiffPreview === true,
     // Default-off (fail-closed): only an explicit true enables guidance.
     rejectGuidance: raw.rejectGuidance === true,
   }
@@ -811,8 +794,6 @@ export async function buildReviewSnapshot(
     userMessages?: string[]
     workspaceRoot?: string
     home?: string
-    /** Context-fact sources, consumed only while `reviewerContextFacts` is on. */
-    contextFacts?: { artifacts: ArtifactRegistry; owner?: unknown }
   },
 ): Promise<ReviewSnapshot | { failure: string }> {
   // Reasoning-blind payload: tool identity + sanitized args + bounded direct
@@ -827,23 +808,6 @@ export async function buildReviewSnapshot(
     inWorkspace = isWithin(opts.workspaceRoot, normalized)
     targetRelative = normalized
   }
-  // Structured facts channel: deterministic metadata only, assembled after the
-  // normalized target is known. Any probe/list failure omits the whole summary
-  // (fail closed); the flag gate keeps the default payload unchanged.
-  let contextSummary: ContextSummary | undefined
-  if (config.reviewerContextFacts === true && typeof targetRelative === 'string'
-    && opts.workspaceRoot && opts.contextFacts !== undefined) {
-    const facts = probeTargetFacts(targetRelative, opts.workspaceRoot)
-    if (facts !== undefined) {
-      contextSummary = {
-        ...facts,
-        recentCreates: opts.contextFacts.artifacts.list(opts.contextFacts.owner, {
-          workspace: opts.workspaceRoot,
-          home: opts.home ?? opts.workspaceRoot,
-        }),
-      }
-    }
-  }
   const payload = frameReviewerInput({
     toolName: req.toolName,
     description: findToolDescription(tools, req.toolName),
@@ -852,7 +816,6 @@ export async function buildReviewSnapshot(
     workspaceRoot: opts.workspaceRoot ?? undefined,
     targetRelative,
     inWorkspace,
-    contextSummary,
   })
   // system = REVIEWER_SYSTEM + safetyPrompt + sanitized/bounded rules
   // summary (rules are constraints only; they can never authorize).
@@ -1028,7 +991,6 @@ async function reviewWithLLM(
     userMessages?: string[]
     workspaceRoot?: string
     home?: string
-    contextFacts?: { artifacts: ArtifactRegistry; owner?: unknown }
   } = {},
   retry: { maxRetries: number; budgetMs: number; asyncPath: boolean } = { maxRetries: 0, budgetMs: 5_000, asyncPath: false },
 ): Promise<{ review: ReviewResult; attempts: RetryAttempt[] }> {
@@ -5036,21 +4998,10 @@ export function apply(ctx: Context, rawConfig: Config): void {
       notes.push(AWAITING_MARKER)
     }
     const extra = notes.map((n) => `\n\n${n}`).join('')
-    // Edit-class operations get a line-level diff preview of the target file
-    // appended as a trailing marked block (display-only). Any failure, gate
-    // rejection, or disabled config omits the block entirely.
-    // RETIREMENT(0.1.6-rc.1): superseded by the official trajectory prompt diff.
-    let editDiffText: string | undefined
-    if (config.editDiffPreview === true && EDIT_DIFF_TOOLS.has(String(req.toolName ?? ''))) {
-      const roots = rootsFor({ agent: req.agent })
-      const rawArgs = findToolCallArguments(req.agent.session, req.callId, EDIT_DIFF_ARGS_MAX_CHARS)
-      const diff = buildEditDiff(String(req.toolName ?? ''), rawArgs, roots.workspace, roots.home)
-      if (diff !== undefined) editDiffText = buildEditDiffText(diff)
-    }
     // Strip any client-parseable auto-answer markers from the model-controlled
     // base reason first: only the notes this host appends below may arm the
     // browser watcher's countdown.
-    req.reason = buildAskReason(req.reason, extra, editDiffText)
+    req.reason = buildAskReason(req.reason, extra)
     let outcome: any
     let timedOut = false
     // Whether a decisive caller (an LLM takeover) authoritatively settled the
@@ -5290,7 +5241,6 @@ export function apply(ctx: Context, rawConfig: Config): void {
       userMessages?: string[]
       workspaceRoot?: string
       home?: string
-      contextFacts?: { artifacts: ArtifactRegistry; owner?: unknown }
     },
   ): Promise<'allowed-once' | undefined> => {
     try {
@@ -5392,9 +5342,6 @@ export function apply(ctx: Context, rawConfig: Config): void {
       userMessages: trustedUserMessages(authority),
       workspaceRoot: rootsFor({ agent: req.agent }).workspace,
       home: rootsFor({ agent: req.agent }).home,
-      ...(config.reviewerContextFacts === true
-        ? { contextFacts: { artifacts, owner: req.agent?.session } }
-        : {}),
     }
 
     const toolName = req.toolName

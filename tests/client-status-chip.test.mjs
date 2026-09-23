@@ -323,6 +323,12 @@ test('the surviving panel decorations are still mounted (no over-deletion)', () 
   assert.ok(clientSource.includes('hasBreakerNote(trustedReason)) breaker.apply(panel, key)'), 'the breaker guard must still arm from the marker')
   assert.ok(clientSource.includes('breaker.prune(liveKeys)'), 'the breaker sweep must remain')
   assert.ok(clientSource.includes('createTrailingThrottle(scan'), 'the throttled scan must remain')
-  assert.ok(clientSource.includes('data-dsa-edit-diff'), 'the edit-diff preview must remain')
+  assert.ok(clientSource.includes("t('panel.awaitingHuman')"), 'the awaiting copy must remain')
+  assert.ok(clientSource.includes('const collectTextNodes = (root: any, out: any[])'), 'the text-node walk must remain')
+  // The other half of the same rule: the retired preview is gone from the entry,
+  // and the decorations it sat beside did not go with it.
+  assert.ok(!clientSource.includes('data-dsa-edit-diff'), 'the edit-diff preview must be gone')
+  assert.ok(!clientSource.includes('dsa-diff'), 'the preview styles must be gone')
+  assert.ok(!clientSource.includes('editDiffPreview'), 'the preview key must have no client surface left')
   assert.ok(!clientSource.includes('const intervals = new Map'), 'the per-panel interval registry must be gone')
 })

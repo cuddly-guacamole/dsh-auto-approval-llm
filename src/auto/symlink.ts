@@ -10,8 +10,8 @@
  * realpath during a long process lifetime. A process-wide cached anchor made
  * every OTHER workspace's targets look like escapes (their realpaths are not
  * inside the first-resolved workspace) and hard-denied all of their file
- * mutations (multi-workspace regression audit). editdiff.ts and
- * probe.ts already resolve per call; this module keeps the guard on the same
+ * mutations (multi-workspace regression audit). Resolution stays per call
+ * everywhere in this plugin; this module keeps the guard on the same
  * discipline.
  */
 import { existsSync, realpathSync } from 'node:fs'

@@ -126,7 +126,6 @@ function startHost({ readRow, config = {}, plugin = apply } = {}) {
     learningEnabled: false,
     directHumanEnabled: false,
     redactResults: false,
-    editDiffPreview: false,
     maxArgsChars: 20000,
     highRiskSeconds: 30,
     loopDetectionThreshold: 0,

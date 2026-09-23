@@ -41,7 +41,6 @@ export function baseConfig(overrides = {}) {
     learningEnabled: false,
     directHumanEnabled: false,
     redactResults: false,
-    editDiffPreview: false,
     // findToolCallArguments receives this directly; undefined truncates wrong.
     maxArgsChars: 20000,
     highRiskSeconds: 30,
