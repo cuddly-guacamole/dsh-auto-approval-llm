@@ -4,14 +4,15 @@
  * Every settings key has exactly one owner:
  *   - card-owned: the settings card renders a control for it, so a card save
  *     may write it; or
- *   - host-owned: it is listed in HOST_ONLY_KEYS, so `preserveHostKeys` keeps
- *     the stored value and no card save can change it.
+ *   - host-owned: it is listed in HOST_ONLY_KEYS, so the card never submits it
+ *     and the host's own write keeps its stored value.
  *
- * POST /settings replaces the WHOLE namespace and refills only the
- * HOST_ONLY_KEYS entries, so a key present in neither set is physically deleted
- * from settings.yaml by the next unrelated card save — silently, with no banner
- * and no log. This gate pins the invariant that makes that class impossible,
- * and pins the three keys deliberately retired from the card.
+ * A card save reaches the store as path operations that name only the keys the
+ * card owns; the host applies them by stripping the volatile fields out of the
+ * stored namespace and merging the patch back over what remains, so a key in
+ * neither set is not written and not lost. This gate pins the invariant that
+ * keeps that split complete (every Config key is draft-projected or explicitly
+ * host-owned) plus the three keys deliberately retired from the card.
  *
  * Run: node --test tests/settings-key-ownership.test.mjs (tsc + tsdown first)
  */

@@ -95,7 +95,7 @@ dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 ## Quick start
 
 1. Switch the session or preset to the **Auto tier**: `/permission auto-approval`.
-2. Open Plugins → auto-approval-llm in the sidebar (older host lines: Settings → Plugins → Auto approval). **The defaults already work** (routine calls pass statically; ambiguous ones go to session-model review; on timeout `timeoutAction` applies, reject by default).
+2. Open Plugins → auto-approval-llm in the sidebar and use the row's "Configure <row name>" control to open the row configuration page; the settings form should appear (when the Host hands over no form for that namespace, the page shows the effective values read-only). **The defaults already work** (routine calls pass statically; ambiguous ones go to session-model review; on timeout `timeoutAction` applies, reject by default).
 3. To route reviews through a specific model: set the channel's model source to "DSH model" in the Online review model card and pick one, or choose "Custom endpoint" and fill in protocol / base URL / model / key → save → test connection.
 4. If panels feel too frequent: raise the medium-risk countdown, or set the timeout action to `Reject` / `Auto-approve low-risk`.
 

@@ -2,9 +2,9 @@
  * dsh-auto-approval-llm · route-handler contract tests (M5).
  *
  * Drive the registered web handlers directly with fake req/res, covering the
- * routes that previously had no handler-level coverage: settings (GET shape,
- * POST validation + host-only preservation), history (GET/DELETE + auth
- * fence) and review-status (never 404; {ok:false} contract).
+ * routes that previously had no handler-level coverage: settings (read-only GET
+ * shape + the retired write path) and review-status (never 404; {ok:false}
+ * contract).
  *
  * Feedback-route handler tests live in contract.test.mjs (loopback privileged
  * plane). Run: node --test tests/routes.test.mjs
@@ -41,11 +41,14 @@ function callJson(route, req) {
 function fakeSettings(initial) {
   let value = { ...initial }
   let revision = 1
+  let replaced = 0
   return {
     describe: () => [{ ns: 'auto-approval-llm', value, revision, applies: 'live' }],
     get: () => value,
+    replacedCount: () => replaced,
     writable: true,
     replace: async (ns, v, rev) => {
+      replaced += 1
       if (rev !== revision) throw new Error('revision conflict')
       value = v
       revision += 1
@@ -80,46 +83,44 @@ test('settings GET: loopback returns the describe shape; foreign Host is 403', a
   assert.equal(denied.body.ok, false)
 })
 
-test('settings POST: requires expectedRevision, preserves host-only keys', async () => {
+test('settings POST: the write path is retired — 405 with Allow: GET, no stored write', async () => {
   const settings = fakeSettings({ timeoutAction: 'reject', trustedDirs: ['C:/etc/x'] })
   const { registrations: regs } = capture(installSettingsRoute, settings)
   const handler = handlerOf(regs, 'settings')
-  // No JSON content type: the body reader refuses before the value guard runs,
-  // so this case alone can never tell whether a non-object value is rejected.
-  const missing = await callJson(handler, {
-    ...settingsReq({ method: 'POST' }),
-    body: null,
-  })
-  assert.equal(missing.status, 400)
-  assert.equal(missing.body.ok, false, 'POST without a value object fails')
-  assert.equal(missing.body.error, 'Content-Type must be application/json')
-  // A readable JSON body with a matching revision reaches the value guard: an
-  // array spreads to `{}` and a null spreads to `{}`, so both used to 200 and
-  // silently reset every card key to its schema default.
-  for (const value of [[], null]) {
-    const badValue = await callJson(handler, jsonPost({ value, expectedRevision: 1 }))
-    assert.equal(badValue.status, 400, `a ${JSON.stringify(value)} value must be rejected`)
-    assert.equal(badValue.body.ok, false)
-    assert.equal(badValue.body.error, 'value is required')
-  }
-  assert.equal(settings.get().timeoutAction, 'reject', 'a rejected save must not touch the stored settings')
-  const noRev = await callJson(handler, {
-    ...settingsReq({ method: 'POST' }),
-    headers: { host: 'localhost:3080', 'content-type': 'application/json' },
-    [Symbol.asyncIterator]: async function* () { yield JSON.stringify({ value: { timeoutAction: 'reject', trustedDirs: [] } }) },
-  })
-  assert.equal(noRev.status, 400, 'expectedRevision is mandatory')
-  const good = await callJson(handler, {
-    ...settingsReq({ method: 'POST' }),
-    headers: { host: 'localhost:3080', 'content-type': 'application/json' },
-    [Symbol.asyncIterator]: async function* () {
-      yield JSON.stringify({ value: { timeoutAction: 'allow', trustedDirs: [] }, expectedRevision: 1 })
-    },
-  })
-  assert.equal(good.status, 200)
-  assert.equal(good.body.value.value.timeoutAction, 'allow')
-  assert.deepEqual(good.body.value.value.trustedDirs, ['C:/etc/x'], 'host-only key survives the save')
-  assert.equal(good.body.ok, true)
+  // The card writes through the host form, so this route owns GET alone: a
+  // spec that still advertised POST would put a second writer back on the wire.
+  assert.deepEqual([...handler.methods], ['GET'], 'the settings route advertises GET only')
+  // The retired POST used to answer 200 and replace the whole namespace. It now
+  // has to fail loudly rather than silently degrade to a last-write-wins save.
+  const post = await callJson(handler, jsonPost({ value: { timeoutAction: 'allow', trustedDirs: [] }, expectedRevision: 1 }))
+  assert.equal(post.status, 405, 'POST is retired, never a silent 200')
+  assert.equal(post.headers.get('allow'), 'GET', 'the refusal names the surviving method')
+  assert.equal(post.body.ok, false)
+  assert.equal(post.body.error, 'method-not-allowed')
+  assert.equal(settings.replacedCount(), 0, 'a retired POST must not reach the settings plane')
+  assert.equal(settings.get().timeoutAction, 'reject', 'the stored settings are untouched')
+  // The read-only degradation snapshot (no host form: entry not ACTIVE) keeps
+  // serving the merged value plus the revision the card needs.
+  const snapshot = await callJson(handler, settingsReq())
+  assert.equal(snapshot.status, 200)
+  assert.equal(snapshot.body.ok, true)
+  assert.equal(snapshot.body.value.value.timeoutAction, 'reject')
+  assert.deepEqual(snapshot.body.value.value.trustedDirs, ['C:/etc/x'], 'the host-owned key still renders')
+  assert.equal(snapshot.body.value.revision, 1)
+  assert.equal(snapshot.body.value.writable, true)
+})
+
+test('settings route: no write branch survives in the compiled installer', () => {
+  const compiled = readFileSync(fileURLToPath(new URL('../lib/index.js', import.meta.url)), 'utf8')
+  const start = compiled.indexOf('function installSettingsRoute')
+  const end = compiled.indexOf('function installReviewerCredentialRoute')
+  assert.ok(start > 0 && end > start, 'the settings installer is locatable in the build')
+  const installer = compiled.slice(start, end)
+  assert.match(installer, /methods:\s*\[['"]GET['"]\]/, 'the route registers GET only')
+  assert.ok(!installer.includes('preserveHostKeys'), 'the retired host-key projection is not called')
+  assert.ok(!installer.includes('expectedRevision'), 'the optimistic-concurrency write guard is gone')
+  assert.ok(!installer.includes('readJson('), 'the route no longer reads a request body')
+  assert.ok(!installer.includes('.replace('), 'the whole-namespace write is gone')
 })
 
 // ── history route ─────────────────────────────────────────────────────────

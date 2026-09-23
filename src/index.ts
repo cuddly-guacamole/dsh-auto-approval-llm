@@ -35,7 +35,7 @@ import { sanitizeClassifierArguments, sanitizeClassifierText, sanitizeReviewReas
 import { DIRECT_HUMAN_TOOL, GATED_PRESET, THRESHOLD_DEFAULTS } from './auto/constants.js'
 import { createDshClassifier, createEndpointClassifier } from './auto/dsh-classifier.js'
 import { PLUGIN_MESSAGE_SOURCE } from './auto/message-source.js'
-import { type RaceHumanHandle, type ReviewResult, type StaticRisk, AWAITING_MARKER, LOCKED_ASK_MARKER, REVIEW_TIMEOUT_NOTICE, applyBreaker, approvalSource, assembleReviewerSystem, breakerNote, breakerTripped, createKeyedMutex, DENY_CIRCUMVENTION_GUIDANCE, extractToolPath, followResolution, formatDenyFeedback, frameReviewerInput, lowRiskReviewOutcome, parseReview, stripCountdownMarkers, unattendedMustFailClosed, preserveHostKeys, raceHumanDecision, reviewSuggestionNote, reviewerAutoAllowBlocked, riskFromAssessment, staticListDecision, type ContextSummary } from './auto/decision.js'
+import { type RaceHumanHandle, type ReviewResult, type StaticRisk, AWAITING_MARKER, EDITABLE_CONFIG_KEYS, HOST_ONLY_KEYS, LOCKED_ASK_MARKER, REVIEW_TIMEOUT_NOTICE, applyBreaker, approvalSource, assembleReviewerSystem, breakerNote, breakerTripped, createKeyedMutex, DENY_CIRCUMVENTION_GUIDANCE, extractToolPath, followResolution, formatDenyFeedback, frameReviewerInput, lowRiskReviewOutcome, parseReview, stripCountdownMarkers, unattendedMustFailClosed, plainConfigValue, raceHumanDecision, reviewSuggestionNote, reviewerAutoAllowBlocked, riskFromAssessment, staticListDecision, type ContextSummary } from './auto/decision.js'
 import { LATENCY_SUMMARY_WINDOW, clearLatencySamples, loadLatencySamples, pushLatencySample, summarizeLatency, type LatencySample } from './auto/latency.js'
 import { normalizeLoopThreshold, loopKeyFor, createLoopState, recordLoopCall, type LoopGuardState } from './auto/loop-guard.js'
 import { RECENT_REJECTION_CAP, baselineFromPermissionState, observePermissionChange, permissionChangeFromEvent, recentRejectionPointers, type PermissionState } from './auto/permission-change.js'
@@ -364,10 +364,28 @@ export const Config: z<Config> = z.object({
   slashCommandsEnabled: z.boolean().default(false),
 })
 
+// The host config plane projects only fields under a volatile ancestor and
+// refuses a write to any other key. Mark the card-owned keys volatile so the
+// settings card can read and write them; the host-owned keys stay ordinary so
+// no save can reach them. `extra` returns a new schema instance, so each marked
+// field is written back into the object's field map.
+for (const key of EDITABLE_CONFIG_KEYS) {
+  const dict = Config.dict as Record<string, any>
+  dict[key] = dict[key].extra('volatile', true)
+}
+
 /** One-time flag: the threshold=1 clamp warning fires once per process. */
 let loopThresholdWarned = false
 
 export function resolveConfig(raw: Config): Config {
+  // The host config plane resolves the schema before it hands the value over, so
+  // every volatile (card-owned) field arrives as a `{ get() }` reference rather
+  // than as its value: reading the reference directly yields an object, not the
+  // configured scalar. Unwrap the whole input once, here, so the single entry
+  // point covers every caller (boot, live re-read and each fallback branch) and
+  // the body below works on plain data. The unwrap is idempotent, so a second
+  // call on an already-plain config is a no-op.
+  raw = plainConfigValue(raw)
   // Retired guard key: schemastery neither rejects nor strips unknown keys and
   // resolveConfig spreads `...raw`, so the value must be explicitly read,
   // warned, and normalized here so no later code path can act on it.
@@ -1853,6 +1871,21 @@ const LLM_MODELS_ROUTE = '/api/auto-approval-llm/llm-models'
 const REASONING_EFFORTS_ROUTE = '/api/auto-approval-llm/reasoning-efforts'
 const LEARNING_STORE_ROUTE = '/api/auto-approval-llm/learning-store'
 const SETTINGS_NS = 'auto-approval-llm' as any
+// Budget for the first stored-config read. `settings.describe()` lists only the
+// entries whose fiber is ACTIVE, and this plugin's own fiber reaches ACTIVE only
+// after apply() returns, so the read cannot succeed synchronously; a sibling
+// entry or a config reload can push the transition later still. The first read
+// is retried on a fixed cadence until the row appears, bounded so a host that
+// never projects the row cannot become a poll loop: the first attempt runs on
+// the next tick, the rest every SETTINGS_FIRST_READ_RETRY_MS, and the budget is
+// spent after SETTINGS_FIRST_READ_MAX_ATTEMPTS attempts (worst case ≈ 2s).
+const SETTINGS_FIRST_READ_RETRY_MS = 50
+const SETTINGS_FIRST_READ_MAX_ATTEMPTS = 40
+// Raised when the budget is spent without a readable row: the card surfaces it,
+// so "the settings page shows shipped defaults" is distinguishable from "the
+// stored configuration was read and really is those defaults".
+const SETTINGS_UNAVAILABLE_ERROR =
+  'settings plane unavailable: the host never listed this plugin entry, so the stored configuration could not be read; running on the shipped defaults'
 
 // The online-reviewer API key lives in the DSH credential store (env-var
 // reference name), never in the settings value — the UI only ever sees
@@ -2294,43 +2327,291 @@ export function installFeedbackRoute(ctx: any): void {
   })
 }
 
-export function installSettingsRoute(ctx: any, settings: any): void {
+// ── retired settings document ─────────────────────────────────────────────
+// The host line that stores settings as a profile patch imported the previous
+// `settings.yaml` once and renamed it, so this namespace's stored values stayed
+// in that renamed file and never reached the live configuration. The reader
+// below is the only way back, and it is deliberately narrow: the file belongs to
+// the host, not to this plugin, and a wrong value would be written into the live
+// namespace by one click.
+
+/** Name the host line gives the settings document it imported. */
+export const LEGACY_SETTINGS_FILENAME = 'settings.yaml.imported'
+
+/**
+ * A scalar this reader recognises, and whether it recognises it at all.
+ *
+ * `known: false` drops the field. Every unsupported shape lands there on
+ * purpose: a nested mapping, a flow collection carrying entries, a quoted
+ * scalar with escapes, an anchor/alias, a block scalar, a `null`, and a scalar
+ * with a trailing comment all read as "not understood" rather than as a guess.
+ */
+function legacyScalar(text: string): { known: boolean; value?: unknown } {
+  const trimmed = text.trim()
+  if (trimmed === '' || trimmed === 'null' || trimmed === '~') return { known: false }
+  if (trimmed.startsWith('&') || trimmed.startsWith('*')) return { known: false }
+  if (trimmed === '[]') return { known: true, value: [] }
+  if (trimmed === '{}') return { known: true, value: {} }
+  if ('[{|}>&*!'.includes(trimmed[0] ?? '')) return { known: false }
+  const quoted = /^"(.*)"$/s.exec(trimmed) ?? /^'(.*)'$/s.exec(trimmed)
+  if (quoted !== null) {
+    const body = quoted[1] ?? ''
+    if (trimmed.startsWith('"') ? body.includes('\\') : body.includes("''")) return { known: false }
+    return { known: true, value: body }
+  }
+  if (trimmed.includes(' #')) return { known: false }
+  if (trimmed === 'true' || trimmed === 'false') return { known: true, value: trimmed === 'true' }
+  if (/^[+-]?\d+(?:\.\d+)?$/.test(trimmed)) return { known: true, value: Number(trimmed) }
+  return { known: true, value: trimmed }
+}
+
+/** A block list of scalars, or `known: false` when any item is another shape. */
+function legacyBlockList(items: readonly string[]): { known: boolean; value?: unknown } {
+  const out: unknown[] = []
+  for (const item of items) {
+    if (/^[A-Za-z_$][A-Za-z0-9_$]*:(?:[ \t]|$)/.test(item)) return { known: false }
+    const scalar = legacyScalar(item)
+    if (!scalar.known) return { known: false }
+    out.push(scalar.value)
+  }
+  return { known: true, value: out }
+}
+
+/**
+ * Values of one top-level `<ns>:` segment of a settings document.
+ *
+ * Bounded on purpose: it recognises the shape the host writes — a top-level
+ * segment header, then one indented `key: value` per field, with a scalar, an
+ * empty `[]`/`{}`, or a block list of scalars as the value — and treats every
+ * other shape as a field it does not understand, dropping it instead of
+ * guessing. Text with no such segment, an empty segment, a truncated line, a
+ * tab-indented or nested body: all yield fewer fields, never an exception.
+ */
+export function readSettingsSegment(text: string, ns: string): Record<string, unknown> {
+  const values: Record<string, unknown> = {}
+  let inSegment = false
+  let fieldIndent = -1
+  let name: string | null = null
+  let inline: string | undefined
+  let children: string[] = []
+  let unsupported = false
+  const commit = () => {
+    if (name !== null && !unsupported) {
+      const parsed = inline === undefined
+        ? (children.length === 0 ? { known: false } : legacyBlockList(children))
+        : legacyScalar(inline)
+      if (parsed.known) values[name] = parsed.value
+    }
+    name = null
+    inline = undefined
+    children = []
+    unsupported = false
+  }
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.replace(/[ \t]+$/, '')
+    const body = line.trimStart()
+    if (body === '' || body.startsWith('#')) continue
+    const indent = line.length - body.length
+    if (indent === 0) {
+      commit()
+      fieldIndent = -1
+      inSegment = body === `${ns}:`
+      continue
+    }
+    if (!inSegment) continue
+    if (fieldIndent < 0) fieldIndent = indent
+    if (indent > fieldIndent) {
+      // A line below the field level: the current field's own block list, or a
+      // shape this reader does not model (a nested mapping).
+      if (name !== null && inline === undefined && !unsupported && body.startsWith('- ')) children.push(body.slice(2))
+      else unsupported = true
+      continue
+    }
+    if (indent < fieldIndent) {
+      commit()
+      unsupported = true
+      continue
+    }
+    commit()
+    const field = /^([A-Za-z_$][A-Za-z0-9_$]*):(?:[ \t]+(.*))?$/.exec(body)
+    if (field === null) {
+      unsupported = true
+      continue
+    }
+    name = field[1] as string
+    inline = field[2]
+  }
+  commit()
+  return values
+}
+
+/** One segment of the retired document at `path`; an unreadable file reads as none. */
+export function readLegacySettings(path: string, ns: string): Record<string, unknown> {
+  try {
+    if (path === '' || !existsSync(path)) return {}
+    return readSettingsSegment(readFileSync(path, 'utf8'), ns)
+  } catch (error) {
+    console.warn('[dsh-auto-approval-llm] the retired settings document could not be read; nothing is offered for import', error)
+    return {}
+  }
+}
+
+/**
+ * The retired values still worth importing: keys the settings card may write,
+ * that the retired document carries, that nothing DECLARED carries, and whose
+ * value differs from the effective configuration.
+ *
+ * Two separate questions, because either one alone is wrong:
+ *
+ *   - `declared` — the configuration the entry owns. A card-owned key it names
+ *     is the operator's stored value: offering it would put a value the user can
+ *     see and edit back behind one click, so such a key is never offered, even
+ *     when the retired document disagrees with it.
+ *   - `current` — the effective configuration the route serves. A key whose
+ *     retired value equals the value already in effect changes nothing when it
+ *     is imported; offering it would only pin a schema default into an explicit
+ *     declaration. That is a no-op, and a batch of no-ops hides the fields the
+ *     import actually changes.
+ *
+ * The host-owned keys are excluded by name as well as by the editable list, so
+ * the plan stays correct even if the two lists ever overlap. A key the effective
+ * configuration does not carry counts as differing: absent is not equal.
+ */
+export function legacyImportPlan(legacy: Record<string, unknown>, declared: Record<string, unknown>, current: Record<string, unknown>): { keys: string[]; value: Record<string, unknown> } {
+  const keys: string[] = []
+  const value: Record<string, unknown> = {}
+  const hostOwned = new Set<string>(HOST_ONLY_KEYS)
+  for (const key of EDITABLE_CONFIG_KEYS) {
+    if (hostOwned.has(key)) continue
+    if (!Object.prototype.hasOwnProperty.call(legacy, key)) continue
+    if (legacy[key] === undefined) continue
+    if (Object.prototype.hasOwnProperty.call(declared, key)) continue
+    // A value comparison has to mean one thing across the document, the schema
+    // and the card: same type, same shape, same tree. Two values that agree that
+    // way are the same settings value whatever the plane stored as the carrier.
+    if (Object.prototype.hasOwnProperty.call(current, key) && sameConfigValue(legacy[key], current[key])) continue
+    keys.push(key)
+    value[key] = legacy[key]
+  }
+  return { keys, value }
+}
+
+/**
+ * Whether two configuration values are the same value: same type, same shape,
+ * same entries. A key that is absent on either side is not the same value, so a
+ * missing field reads as a difference rather than as a match against undefined.
+ *
+ * Configuration values are data — scalars, lists and plain records — so a
+ * structural walk is the whole comparison; `depth` bounds it against a value
+ * that is not the data its shape claims to be.
+ */
+function sameConfigValue(left: unknown, right: unknown, depth = 0): boolean {
+  if (left === right) return true
+  if (depth > 16) return false
+  if (left === null || right === null || typeof left !== 'object' || typeof right !== 'object') return false
+  const leftList = Array.isArray(left)
+  if (leftList !== Array.isArray(right)) return false
+  const leftKeys = Object.keys(left)
+  const rightKeys = Object.keys(right)
+  if (leftKeys.length !== rightKeys.length) return false
+  for (const key of leftKeys) {
+    if (!Object.prototype.hasOwnProperty.call(right, key)) return false
+    if (!sameConfigValue((left as Record<string, unknown>)[key], (right as Record<string, unknown>)[key], depth + 1)) return false
+  }
+  return true
+}
+
+/** One-time flag: the missing declarations report fires once per process. */
+let declaredConfigWarned = false
+
+/**
+ * The configuration the live namespace DECLARES: the entry's own config, i.e.
+ * the shipped patch layer merged with whatever the profile patch carries.
+ *
+ * The import offer asks this DECLARATION what it may OFFER, so a key it names is
+ * excluded. Whether a value is worth offering is the question
+ * `legacyImportPlan` answers against `current`, the effective resolved
+ * configuration: it carries every card-owned key because each has a schema
+ * default, so an offer needing a key ABSENT from `current` could never appear.
+ * `current` is also what the host's own configuration editor writes.
+ *
+ * Whether the host exposes the raw patch content or a schema-completed set of
+ * every key is the load-bearing unknown: only the raw patch leaves this offer's
+ * card-owned keys undeclared, while a completed set would declare them all and
+ * nothing would ever be offered. An entry the host does not expose reads as
+ * "nothing declared" and offers nothing, never a guess at the whole editable
+ * set.
+ */
+function declaredConfig(ctx: any): Record<string, unknown> | undefined {
+  const declared = ctx?.fiber?.entry?.options?.config
+  if (declared !== null && typeof declared === 'object' && !Array.isArray(declared)) {
+    return declared as Record<string, unknown>
+  }
+  if (!declaredConfigWarned) {
+    declaredConfigWarned = true
+    console.warn('[dsh-auto-approval-llm] the host exposed no entry configuration; the retired settings document is not offered for import')
+  }
+  return undefined
+}
+
+export function installSettingsRoute(ctx: any, settings: any, baseConfig: Record<string, unknown> = {}, dshHome = ''): void {
   if (!settings) return
 
-  // Tolerant snapshot: if a stored value fails schema validation, settings.describe
-  // may throw — never let that make GET 400 forever. Fall back to the raw stored
-  // value so the settings card can still render it and offer to clear the bad keys.
-  const describeSettings = (): { value: any; revision: number; writable: boolean; applies: string; configError: string | null } => {
+  // The retired document is read per request, never at startup: a missing or
+  // malformed file must not be able to affect the plugin's own load, and the
+  // answer has to follow the file rather than the boot state.
+  const legacyPath = dshHome === '' ? '' : join(dshHome, LEGACY_SETTINGS_FILENAME)
+  // The offer takes the effective configuration the snapshot is about to serve:
+  // one source of "the current value" for the page and for the offer, so a field
+  // the import would not change is not offered to change it.
+  const legacyImport = (current: Record<string, unknown>) => {
+    if (legacyPath === '') return { keys: [], value: {} }
+    const declared = declaredConfig(ctx)
+    if (declared === undefined) return { keys: [], value: {} }
+    return legacyImportPlan(readLegacySettings(legacyPath, SETTINGS_NS), declared, current)
+  }
+
+  // Read-only snapshot. The settings card writes through the host form the
+  // page owner hands it, so this route owns no write path; GET stays as the
+  // degradation source for a card that has no host form (entry not ACTIVE) and
+  // as the carrier of the configError banner.
+  //
+  // The host config plane exposes stored values through describe() keyed by the
+  // profile entry id, and projects only the volatile (card-owned) fields. The
+  // loader entry config supplies the host-owned keys, which the plane never
+  // returns, so the card keeps showing their effective values. A stored value
+  // that fails schema validation makes describe() throw: never let that turn
+  // GET into a permanent error — answer with the base so the card can still
+  // render and offer to clear the bad keys.
+  const describeSettings = (): { value: any; revision: number; writable: boolean; applies: string; configError: string | null; legacyImport: { keys: string[]; value: Record<string, unknown> } } => {
     try {
       const desc = settings.describe().find((row: any) => row.ns === SETTINGS_NS)
+      const value = { ...baseConfig, ...(desc?.value ?? {}) }
       return {
-        value: desc?.value ?? settings.get(SETTINGS_NS),
+        value,
         revision: desc?.revision ?? 0,
         writable: settings.writable,
         applies: desc?.applies ?? 'live',
         configError: configError ?? null,
+        legacyImport: legacyImport(value),
       }
     } catch (error) {
-      console.error('[dsh-auto-approval-llm] settings.describe failed, falling back to raw value', error)
-      let raw: any = {}
-      try {
-        raw = settings.get(SETTINGS_NS) ?? {}
-      } catch {
-        raw = {}
-      }
+      console.error('[dsh-auto-approval-llm] settings.describe failed, falling back to the entry config', error)
+      const value = { ...baseConfig }
       return {
-        value: raw,
+        value,
         revision: 0,
         writable: settings.writable,
         applies: 'live',
         configError: configError ?? (error instanceof Error ? error.message : String(error)),
+        legacyImport: legacyImport(value),
       }
     }
   }
 
   registerCarrierFetchRoute(ctx, {
     path: SETTINGS_ROUTE,
-    methods: ['GET', 'POST'],
+    methods: ['GET'],
     requestBody: 'buffered',
     label: 'dsh-auto-approval-llm: settings route',
   }, async (request: Request): Promise<Response> => {
@@ -2340,35 +2621,10 @@ export function installSettingsRoute(ctx: any, settings: any): void {
       if (!isTrustedFetchRequest(request, [])) {
         return json(403, { ok: false, error: 'forbidden' })
       }
-      try {
-        if (method === 'GET') {
-          return json(200, { ok: true, value: describeSettings() })
-        }
-        if (method !== 'POST') {
-          return json(405, { ok: false, error: 'method-not-allowed' }, { Allow: 'GET, POST' })
-        }
-        const body = await readJson(request)
-        // A plain object is required: an array passes `typeof === 'object'` and
-        // then spreads to `{}` in preserveHostKeys, silently resetting every
-        // card key to the schema default behind a 200.
-        if (typeof body?.value !== 'object' || body.value === null || Array.isArray(body.value)) {
-          throw new TypeError('value is required')
-        }
-        // Optimistic concurrency is mandatory: an omitted expectedRevision
-        // would silently degrade the save to last-write-wins and lose a
-        // concurrent editor's changes.
-        if (typeof body?.expectedRevision !== 'number') {
-          throw new TypeError('expectedRevision is required')
-        }
-        const value = preserveHostKeys(settings.get(SETTINGS_NS) ?? {}, body.value)
-        await settings.replace(SETTINGS_NS, value, body.expectedRevision)
-        return json(200, { ok: true, value: describeSettings() })
-      } catch (error) {
-        return json(400, {
-          ok: false,
-          error: error instanceof Error ? error.message : String(error),
-        })
+      if (method !== 'GET') {
+        return json(405, { ok: false, error: 'method-not-allowed' }, { Allow: 'GET' })
       }
+      return json(200, { ok: true, value: describeSettings() })
   })
 }
 
@@ -3403,40 +3659,43 @@ export function apply(ctx: Context, rawConfig: Config): void {
   const getCredentials = (): any => anyCtx.get('credentials')
 
   let config: Config
+  // Reads this plugin's own stored row from the host config plane. The plane
+  // projects only the volatile (card-owned) keys and exposes no get(); the
+  // loader entry config is the base that carries the host-owned keys. A row is
+  // present only while this plugin's own fiber is ACTIVE, so `undefined` means
+  // "nothing stored is visible right now" and never "the stored keys are gone".
+  let readSettingsRow: (() => any) | undefined
+  // Merges a stored row onto the loader entry config; an absent row resolves to
+  // the entry config alone, which is the fail-closed base.
+  let mergeStoredConfig: ((row: any) => Config) | undefined
+  // Set once a stored row has been read successfully. After that an empty
+  // describe() is never a downgrade signal (see the deferred read in apply).
+  let storedConfigLoaded = false
   // Never hard-crash apply() because of a bad config: every risky step is
   // isolated, we fall back to the (valid) patch defaults, and the error is
   // surfaced to the settings banner. A failed plugin fiber would only lose the
   // approval features; running on safe defaults + a visible error is better.
   try {
     if (settings) {
-      // Stale registrations from earlier builds may carry an invalid `applies`
-      // value; with the official hot-reload era the only legal value is
-      // 'live' (settings take effect without a restart). Normalize in place
-      // so a hot reload fixes a broken running process instead of re-breaking
-      // on the next `settings.describe()`. Mutating applies needs no
-      // re-resolve and creates no register disposer race.
-      const stale = (settings as any).registrations?.get?.(SETTINGS_NS)
-      if (stale !== undefined) {
-        if (stale.applies !== 'live') stale.applies = 'live'
-      }
-      try {
-        const registered = settings.describe().some((row: any) => row.ns === SETTINGS_NS)
-        if (!registered) settings.register(SETTINGS_NS, Config, { base: rawConfig, applies: 'live' })
-      } catch (error) {
-        // describe/register failed (e.g. a stored value breaks schema parse):
-        // attempt a fresh register so the namespace still exists, and never
-        // hard-fail apply.
-        console.error('[dsh-auto-approval-llm] settings describe/register failed, trying to re-register', error)
-        configError = error instanceof Error ? error.message : String(error)
+      readSettingsRow = (): any => {
         try {
-          settings.register(SETTINGS_NS, Config, { base: rawConfig, applies: 'live' })
-        } catch (e2) {
-          configError = e2 instanceof Error ? e2.message : String(e2)
+          return settings.describe().find((entry: any) => entry.ns === SETTINGS_NS)
+        } catch (error) {
+          console.error('[dsh-auto-approval-llm] settings.describe failed', error)
+          configError = error instanceof Error ? error.message : String(error)
+          return undefined
         }
       }
+      mergeStoredConfig = (row: any): Config =>
+        resolveConfig(row === undefined ? rawConfig : { ...rawConfig, ...row.value })
       try {
-        config = resolveConfig(settings.get(SETTINGS_NS))
+        const row = readSettingsRow()
+        config = mergeStoredConfig(row)
         configError = null
+        // A re-apply can already see the row; treat it as the loaded state so
+        // the deferred read does not mistake a later empty result for a
+        // first-read miss and retry over an already loaded config.
+        storedConfigLoaded = row !== undefined
       } catch (error) {
         // Illegal persisted value: run on safe defaults and surface the error
         // so the settings card can offer to clear the offending keys.
@@ -3496,24 +3755,78 @@ export function apply(ctx: Context, rawConfig: Config): void {
     })
   }
 
-  if (settings) {
-    anyCtx.on('settings/updated', (ns: string, next: any) => {
-      if (ns !== SETTINGS_NS) return
+  if (settings && readSettingsRow !== undefined) {
+    let retryTimer: ReturnType<typeof setTimeout> | undefined
+    let retryAttempts = 0
+    let retryDisposed = false
+    const stopRetry = (): void => {
+      if (retryTimer !== undefined) {
+        clearTimeout(retryTimer)
+        retryTimer = undefined
+      }
+    }
+    // The one live-config path: the host signal and the bounded first-read
+    // retry both land here, so a save-triggered reload and the startup read can
+    // never disagree about what "apply the stored config" means. Returns true
+    // when a stored row was read and applied.
+    const applyHostConfig = (): boolean => {
+      const row = readSettingsRow!()
+      // An empty describe() has two meanings, and neither is "the stored keys
+      // were cleared": before the first successful read the fiber is not ACTIVE
+      // yet, and afterwards the entry left ACTIVE (the host emits
+      // settings/document-updated for that transition too). The fail-closed
+      // entry-config base is already live in the first case and must stay live
+      // in the second, so an empty result never rewrites the running config.
+      if (row === undefined) return false
       try {
-        // Host-only keys (workspaceRoot/dshHome/tempRoots/trustedDirs/…) are
-        // preserved by the settings route itself (preserveHostKeys). A second
-        // construction-snapshot overwrite here against other plugins writing the
-        // same namespace directly is tracked as backlog, not implemented yet.
-        config = resolveConfig(next)
+        config = mergeStoredConfig!(row)
         configError = null
         debugOn = config.debug
         rebuildClassifier()
+        storedConfigLoaded = true
+        stopRetry()
         console.log('[dsh-auto-approval-llm] settings updated, applied live')
+        return true
       } catch (error) {
         console.error('[dsh-auto-approval-llm] live settings update failed', error)
         configError = error instanceof Error ? error.message : String(error)
+        return false
       }
+    }
+    // Bounded fallback for the first read: describe() skips an entry whose fiber
+    // is not ACTIVE, and this plugin's own fiber reaches ACTIVE only after apply
+    // returns, so the row is legitimately absent on the first attempt. Once a
+    // row has been read the chain stops and is never re-armed on its own.
+    const scheduleRetry = (): void => {
+      if (retryDisposed || storedConfigLoaded || retryTimer !== undefined) return
+      if (retryAttempts >= SETTINGS_FIRST_READ_MAX_ATTEMPTS) {
+        configError = SETTINGS_UNAVAILABLE_ERROR
+        return
+      }
+      const delay = retryAttempts === 0 ? 0 : SETTINGS_FIRST_READ_RETRY_MS
+      retryAttempts += 1
+      retryTimer = setTimeout(() => {
+        retryTimer = undefined
+        if (!applyHostConfig()) scheduleRetry()
+      }, delay)
+    }
+    // The deterministic signal: the host emits this with the profile entry id
+    // (our settings namespace) and a content-derived revision, for a save AND
+    // for the entry leaving the active set. Only our own namespace may touch
+    // our config. The signal re-arms a spent budget, because it is fresh
+    // evidence that the row should now be readable.
+    anyCtx.on('settings/document-updated', (ns: string, _revision: number) => {
+      if (ns !== SETTINGS_NS) return
+      retryAttempts = 0
+      if (!applyHostConfig()) scheduleRetry()
     })
+    anyCtx.effect(() => {
+      scheduleRetry()
+      return () => {
+        retryDisposed = true
+        stopRetry()
+      }
+    }, 'dsh-auto-approval-llm: deferred settings read')
   }
 
   // ── ported auto-mode policy (replaces @nanmicoder/dsh-auto-mode) ────────
@@ -3537,8 +3850,8 @@ export function apply(ctx: Context, rawConfig: Config): void {
   if (presetConfigAudit !== undefined) appendAuditLine(presetConfigAudit)
   const parentAgent = (sessionId: any) => anyCtx.get('agents')?.get(sessionId)
   // Every roots consumer re-reads mode/trustedDirs from the LIVE config (G4):
-  // neither key enters the frozen rootOptions, so a settings/updated hot swap
-  // is reflected by the very next call into policy/shell/category.
+  // neither key enters the frozen rootOptions, so a settings/document-updated
+  // hot swap is reflected by the very next call into policy/shell/category.
   const rootsFor = (exec: any) => {
     const roots = resolveRoots(exec.agent?.session.header.cwd, rootOptions) as {
       workspace: string
@@ -4311,7 +4624,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
   // and a carrier that mounts the registry later still gets them on arrival.
   // Every installer binds itself inside registerCarrierFetchRoute().
   installFeedbackRoute(anyCtx)
-  installSettingsRoute(anyCtx, settings)
+  installSettingsRoute(anyCtx, settings, plainConfigValue(rawConfig) as unknown as Record<string, unknown>, resolveRoots(process.cwd(), rootOptions).dshHome)
   installReviewerCredentialRoute(anyCtx)
   installHistoryRoute(anyCtx)
   installLatencyRoute(anyCtx)

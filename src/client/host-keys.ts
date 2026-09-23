@@ -3,8 +3,10 @@
  *
  * Kept dependency-free (no React, no DSH objects) so the derivation is
  * unit-testable: the card imports this, the contract test imports the compiled
- * module. The key list is HOST_ONLY_KEYS — the same owner `preserveHostKeys`
- * reads, so the card can never advertise a set the save path disagrees with.
+ * module. The key list is HOST_ONLY_KEYS, the single owner of the keys no
+ * settings-card write names: the Host patch writes only the paths an op
+ * carries, so their stored values survive every save and the card can never
+ * advertise a set the save path disagrees with.
  */
 import { HOST_ONLY_KEYS } from '../auto/decision.js'
 

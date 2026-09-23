@@ -8,16 +8,53 @@
  *    silently resets every card key behind a 200;
  *  - `clearInvalidKeys` POSTs but was the one settings write button without the
  *    read-only gate.
+ *
+ * The settings gap changed owner. The array guard sat on this plugin's own write
+ * route, and that route is retired: the card writes through the host form, so the
+ * route advertises GET only and the guard has no branch left to protect. The
+ * refusal now happens one step earlier, on the method gate — a write answers
+ * 405 + `Allow: GET` and never reaches the settings plane. The third case asserts
+ * that same invariant through the array payload it was written for, while
+ * `routes.test.mjs` pins the write-contract shape and `client-row-config.test.mjs`
+ * pins the card-side projection to `EDITABLE_CONFIG_KEYS`.
  * Run: node --test tests/audit-degradation-honesty.test.mjs
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { installSettingsRoute } from '../lib/index.js'
+import { carrierContext, findSpec, callSpec } from './helpers/carrier-route.mjs'
 
 const host = readFileSync(fileURLToPath(new URL('../src/index.ts', import.meta.url)), 'utf8')
 const client = readFileSync(fileURLToPath(new URL('../src/client/index.ts', import.meta.url)), 'utf8')
 const locale = readFileSync(fileURLToPath(new URL('../src/client/locale.ts', import.meta.url)), 'utf8')
+
+function fakeSettings(initial) {
+  let value = { ...initial }
+  let revision = 1
+  let replaced = 0
+  return {
+    describe: () => [{ ns: 'auto-approval-llm', value, revision, applies: 'live' }],
+    get: () => value,
+    replacedCount: () => replaced,
+    writable: true,
+    replace: async (ns, v, rev) => {
+      replaced += 1
+      if (rev !== revision) throw new Error('revision conflict')
+      value = v
+      revision += 1
+    },
+  }
+}
+
+function arrayPost(items) {
+  return {
+    method: 'POST',
+    headers: { host: 'localhost:3080', 'content-type': 'application/json' },
+    [Symbol.asyncIterator]: async function* () { yield JSON.stringify({ value: items, expectedRevision: 1 }) },
+  }
+}
 
 test('the panel says the history failed instead of rendering zeroes', () => {
   assert.match(client, /const \[historyUnavailable, setHistoryUnavailable\] = React\.useState\(false\)/)
@@ -41,8 +78,21 @@ test('the learning-store DELETE answers a JSON 413/400 like its siblings', () =>
   assert.match(body, /error: error instanceof Error \? error\.message : String\(error\)/, 'the failure text crosses the wire')
 })
 
-test('the settings POST refuses an array value', () => {
-  assert.match(host, /typeof body\?\.value !== 'object' \|\| body\.value === null \|\| Array\.isArray\(body\.value\)/)
+test('the settings POST refuses an array value', async () => {
+  // An array spread to `{}` and reset every card key behind a 200. The write
+  // route that used to guard against it is retired, so the refusal moved to the
+  // method gate: no write reaches the settings plane at all, array or not.
+  const settings = fakeSettings({ timeoutAction: 'reject', trustedDirs: ['C:/etc/x'] })
+  const { ctx, specs } = carrierContext()
+  installSettingsRoute(ctx, settings)
+  const handler = findSpec([...specs.values()], 'settings')
+  assert.deepEqual([...handler.methods], ['GET'], 'the settings route advertises GET only')
+  const post = await callSpec(handler, arrayPost([1, 2, 3]))
+  assert.equal(post.status, 405, 'an array value cannot reach a write path that no longer exists')
+  assert.equal(post.headers.get('allow'), 'GET', 'the refusal names the surviving method')
+  assert.equal(post.body.error, 'method-not-allowed')
+  assert.equal(settings.replacedCount(), 0, 'an array body must not reach the settings plane')
+  assert.deepEqual(settings.get(), { timeoutAction: 'reject', trustedDirs: ['C:/etc/x'] }, 'every card key keeps its stored value')
 })
 
 test('clearInvalidKeys is gated like every other settings write', () => {

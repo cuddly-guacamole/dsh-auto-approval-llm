@@ -2,14 +2,18 @@
 
 > *Client ↔ Host 的唯一通道*
 
-**没有 RPC**：客户端是静态 bundle（非动态 Cordis Package），无法用 `host.call`，全部走同源 fetch（注册在 connection 的载波中立 Fetch 注册表，见下表脚注）。统一 `json()` 响应（no-store + nosniff），body 强制 application/json ≤64KB，写操作全部带 `expectedRevision` 乐观并发。全站共 **16 条 `/api/auto-approval-llm/*` 路由**（host 常量 <span class="lnum">index.ts:LFEEDBACK_ROUTE</span>；client 引用 <span class="lnum">client/index.ts:LSETTINGS_ROUTE</span>、<span class="lnum">client/approvals/shared.ts:LFEEDBACK_ROUTE</span>），每条入口第一行都过 `isTrustedFetchRequest` 闸门，不存在无设防的「普通」路由。
+**没有 RPC**：客户端是静态 bundle（非动态 Cordis Package），无法用 `host.call`，全部走同源 fetch（注册在 connection 的载波中立 Fetch 注册表，见下表脚注）。统一 `json()` 响应（no-store + nosniff），body 强制 application/json ≤64KB；并发校验不在这张表上——配置写入的 `expectedRevision` 由宿主 form 承担（见下段），表内的写路由各自落到自己那层的所有者。全站共 **16 条 `/api/auto-approval-llm/*` 路由**（host 常量 <span class="lnum">index.ts:LFEEDBACK_ROUTE</span>；client 引用 <span class="lnum">client/index.ts:LSETTINGS_ROUTE</span>、<span class="lnum">client/approvals/shared.ts:LFEEDBACK_ROUTE</span>），每条入口第一行都过 `isTrustedFetchRequest` 闸门，不存在无设防的「普通」路由。
 
 **删除动作走 `POST` + `x-auto-approval-op: delete`**：路由注册在 connection 的载波中立 Fetch 注册表（`connection.fetch.register`），该注册表只承载 `GET`/`HEAD`/`POST`；Web 载体把它挂到 web server 的 `/api` 前缀，shell 载体直接分派同一个 handler，因此同一套路径在两种载体下都可达。表中方法列为 `GET/POST` 且用途含「清空/吊销」的行，其删除语义由该请求头触发。
+
+**配置写入不在本插件路由表里**：设置页的写由宿主完成——Plugins 面板把该行命名空间的 form 交给页面，页面提交路径 op，宿主落 profile patch；脚本要写配置时走宿主自己的平面 `POST /api/settings/mutate`（只读为 `POST /api/settings/describe`，需浏览器会话），`scripts/verify-runtime.mjs` 的设置轮即走该通道。本插件的 `/settings` 因此只剩只读一途。
+
+**`/settings` 只认 `GET`**：该路由按「非 GET 一律 405」处理，`HEAD` 探测同样落在那条拒绝上——拿到 **405 + `Allow: GET`**，而不是 GET 的响应头。这是 fail-closed 方向的取舍（该路由已无任何写路径可被绕开，拒绝不会放宽任何语义），以 `HEAD` 探测该端点可用性的操作者工具应改用 `GET`。
 
 | 路由 | 方法 | 用途 | 信任平面 |
 |---|---|---|---|
 | `/feedback` | POST | 客户端上报 outcome（auto:true）+ approval 完成 ACK | <span class="badgeerr">特权 [ ] 仅回环</span> |
-| `/settings` | GET/POST | 配置快照 {value,revision,writable,applies,configError} / 更新（preserveHostKeys） | <span class="badgeerr">特权 [ ] 仅回环</span> |
+| `/settings` | GET | 配置快照 {value,revision,writable,applies,configError}（**只读**；非 GET → 405 + `Allow: GET` + `{"ok":false,"error":"method-not-allowed"}`） | <span class="badgeerr">特权 [ ] 仅回环</span> |
 | `/reviewer-credential` | GET/POST | 端点密钥 {configured,writable}，永不回显 value | <span class="badgeerr">特权 [ ] 仅回环</span> |
 | `/test` | POST | 在线端点连通性探针（https 外网放行 + 公网地址强制 + fake-ip 豁免，8s 超时 max_tokens:1，非 2xx 带回错误摘要；仅当探针目标与已配置端点同址时才回退已存密钥）；模型库校验 modelFound | <span class="badgeerr">特权 [ ] 仅回环</span> |
 | `/providers` | GET | provider 目录 {id,name}（模型来源 picker 下拉） | <span class="badgeerr">特权 [ ] 仅回环</span> |

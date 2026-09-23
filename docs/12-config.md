@@ -1,6 +1,8 @@
 # 12 · 配置全景
 > *60 keys, one source of truth*
 
+60 键分两类：**44 个可编辑键**被宿主标为 volatile，由 row 配置页的宿主 form 读写；**16 个 host-only 键**只由 patch / `settings.yaml` 配置，在设置页只读展示、不可提交（清单见文末「host-only 键保护」）。
+
 ## 全部配置键（src/index.ts Config schema Z.object 原文）
 
 | 键 | 默认 | 说明 |
@@ -57,7 +59,7 @@
 | `learningThreshold` | 3 | 触发学习放行所需的人工确认次数；保存时钳入 [2,10]（clampLearningThreshold），越界值由 resolveConfig 发 warn（<span class="lnum">index.ts:L"clamping learningThreshold"</span>） |
 | `directHumanEnabled` | false | 直接人工通道：agent 可调用 `dsa_request_user` 把后续操作路由给人工而非 LLM 分类器；默认关=零行为差异。工具仅在开启时于启动注册（工具集不可热换——开启需重启），审批通道读取实时，关掉立即停用已注册工具 |
 | `slashCommandsEnabled` | false | 命令面板注册 `/approval-mode` `/approval-reset` `/approval-reset-all`（评审模式查看/设置 + 熔断重置）。默认关=零命令表面积。命令集不可热换——仅在开启时于启动注册（开启需重启）；每个 handler 读取该开关实时，运行中关掉立即停用已注册命令 |
-| `<span class="badgeok">host-only ×16</span>` | — | workspaceRoot / dshHome / tempRoots / **trustedDirs** / **trustedDshSubpaths** / maintenanceDshPaths / classifierTimeoutMs(8s,100-60000) / classifierMaxOutputTokens(1024,64-4096) / maxArgsChars / notifyUser / **reviewerContextFacts** / **rulesDryRun** / **breakerAntiHijackMs** / **reviewMaxRetries** / **loopDetectionThreshold** / **autoSwitchPolicyToAsk**（<span class="lnum">decision.ts:LHOST_ONLY_KEYS</span>；preserveHostKeys 回填，卡片保存不抹掉）。**归属不变量**：没有设置卡控件的键必须在此名单内——否则下一次任意卡片保存（整命名空间 replace）会把它从 settings.yaml 物理删除并静默回落默认（<span class="lnum">settings-key-ownership.test.mjs:L"no silent-delete gap"</span>） |
+| `<span class="badgeok">host-only ×16</span>` | — | workspaceRoot / dshHome / tempRoots / **trustedDirs** / **trustedDshSubpaths** / maintenanceDshPaths / classifierTimeoutMs(8s,100-60000) / classifierMaxOutputTokens(1024,64-4096) / maxArgsChars / notifyUser / **reviewerContextFacts** / **rulesDryRun** / **breakerAntiHijackMs** / **reviewMaxRetries** / **loopDetectionThreshold** / **autoSwitchPolicyToAsk**（<span class="lnum">decision.ts:LHOST_ONLY_KEYS</span>；宿主只把 44 个可编辑键标为 volatile，非 volatile 键不进 row form、写入被直接拒，卡片保存不会抹掉）。**归属不变量**：没有设置卡控件的键必须在此名单内（<span class="lnum">settings-key-ownership.test.mjs:L"no silent-delete gap"</span>） |
 
 ## 三处设计亮点
 
@@ -66,24 +68,25 @@
 :::
 
 ::: tip host-only 键保护
-浏览器设置卡不为这些键渲染**控件**：高级子卡按 `HOST_ONLY_KEYS` 单一 owner 给出只读清单（键名 + 当前生效值，无控件、无保存路径），计数由同一列表派生，并给出拒绝出口说明（DSH_HOME 写入仅由 `trustedDshSubpaths` / `maintenanceDshPaths` 开口，且只服务结构化 write/edit）。`preserveHostKeys` 在保存时把它们从当前值回填进提交对象，正则配置永不被卡片保存抹掉。
+浏览器设置页不为这些键渲染**控件**：高级子卡按 `HOST_ONLY_KEYS` 单一 owner 给出只读清单（键名 + 当前生效值，无控件、无保存路径），计数由同一列表派生，并给出拒绝出口说明（DSH_HOME 写入仅由 `trustedDshSubpaths` / `maintenanceDshPaths` 开口，且只服务结构化 write/edit）。这些键不进宿主交来的 row form：宿主只把 44 个可编辑键标为 volatile，对其它路径的写入直接拒（`Config field "x" is not volatile`），因此设置页的保存动不到它们。
 :::
 
 ::: tip 热更新
-`settings/updated` → `resolveConfig` + `rebuildClassifier`；配置非法 → 跑安全默认 + 设置卡红色横幅 +「尝试修复」（剔除非法键回存）。
+`settings/document-updated` → `resolveConfig` + `rebuildClassifier`；配置非法 → 跑安全默认 + 设置卡红色横幅 +「尝试修复」（剔除非法键回存）。
 :::
 
 ::: warning bundle 层覆盖
 （cordis.patch.yml）：bundle 不再覆盖任何安全行为开关。`humanOnlyList` 保持代码默认空列表：bash 回归正常管线（静态评估 → LLM 审查 → 人工兜底），不再被强制永远人工决定。
 :::
 
-::: warning 容易误解的六件事
+::: warning 容易误解的七件事
 1. **模型来源是每通道 3 档显式开关，半配 fail-closed**。`classifierSource` / `reviewerSource` 各自决定该通道走哪条：`session`（跟随会话模型）、`preset`（DSH 已配置模型，`*Provider`+`*Model` 成对）、`endpoint`（共享端点配置）。显式选了 `preset`/`endpoint` 却配置不全 → 快照层 fail-loud（`{failure}`），**绝不静默回落会话模型**（用户以为用了指定模型实际没有 = 被契约测试钉死的反模式）；仅 `session` 源携带残留垃圾值才静默清洗。端点缺密钥同样 fail-closed（debug 记 `reviewer-incomplete`）。评审路由可用性门是单一 `reviewerRouteAvailable` 谓词（覆盖三源），learning 门与主管线共用（<span class="lnum">index.ts:reviewerRouteAvailable</span>）。
 2. **`timeoutAction` 的 legacy 枚举迁移分支不可删**（`llm-low-risk-only` → `reject`，<span class="lnum">index.ts:L"timeoutAction === 'llm-low-risk-only'"</span>）：resolveConfig 是全有全无闸门——删掉映射后旧值走 throw，启动路径整库回落 patch 默认（<span class="lnum">index.ts:L"persisted config invalid, running defaults"</span>；热更新路径则保留旧 config），不是只重置这一个键。
 3. **移除顶层配置键后，旧 settings.yaml 的残留键默认被静默忽略**：残留键不会被剥离，而是随解析结果原样透传进运行时配置、只是再没有任何代码读取它——无警告无报错（`{...raw}` 透传，见 <span class="lnum">index.ts:L"export function resolveConfig"</span>；Config schema <span class="lnum">index.ts:L"export const Config"</span> 起）；弃用公告只能靠文档，不会有迁移提示。**例外 = `autoSwitchPolicyToAsk`**：`resolveConfig` 显式读它、warn 并归一回 `false`，保证退役后没有代码路径还能读到 true。
 4. **`safetyPrompt` 与 `rulesText` 分工不同**：前者拼进评审 system 提示词，保存即热生效（<span class="lnum">index.ts:L"assembleReviewerSystem(config.safetyPrompt, config.rulesText)"</span>）；后者是声明式执法规则，先于内置 allowlist/denyList 终局裁决 allow/deny/human（<span class="lnum">index.ts:L"B1 declared rules"</span>）。
 5. **`reviewerProvider` 键名已复活（2026-09-05 用户拍板）**：作为深度评审通道 `preset` 档的 provider 键与 `reviewerModel` 成对。它不再是「在线路由的 provider」——在线/自定义端点由共享 `endpointUrl`/`endpointModel`/`endpointProtocol` 承载，两通道 `endpoint` 源共用一份；`endpointProtocol` 默认 openai 保留 anthropic。旧 `reviewerBaseUrl` / `reviewerProtocol` / 2 档 `classifierModelSource` / `reviewerModelSource` 等键已由新体系取代（未发版直接换代，无兼容层）。
 6. **`showSessionPanel` / `breakerAntiHijackMs` 是纯客户端呈现键**：host 裁决路径从不读取，改它们不影响任何审批结论。
+7. **遗留导入横幅的「已被声明」判据读的是 entry 自己的 config，不是生效配置**：导入提案只提议「旧值 ≠ 生效值 **且** entry config 未点名的键」。entry config 是 patch 层内容（出厂 patch 合并 profile patch 的原始声明），因此**凡是用户在设置页改过或手写进 patch 的键都不再被提议**（否则一键导入会把用户能看见的值悄悄盖掉）；生效值那一半只回答「导入会不会真的改变什么」。**即前一条的推定**：entry config 的实际内容语义（原始 patch 层 vs schema 补齐的全键集）尚未实机证实——若宿主交来的是补齐全键的集合，则所有可编辑键都算「已被声明」，横幅**永不出现**（fail-closed，不写任何值）。实机先查这一条：横幅键集应恰为「值不同 且 未被声明」的那几项，profile patch 里已存的键不得被提议。
 :::
 
 ## 评审模式与命令

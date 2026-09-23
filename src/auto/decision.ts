@@ -279,19 +279,17 @@ export function unattendedMustFailClosed(review: {
 }
 
 /**
- * Fields that are configured host-side (via patch/YAML) and never edited by
- * the browser settings card. A card save must keep whatever the current
- * stored value holds for these — both when the submission omits them (the
- * full `settings.replace` would silently drop them) and when it carries a
- * value (a crafted payload must not repoint the workspace/DSH roots through
- * the settings route).
+ * Fields configured host-side (via patch/YAML) and never edited by the settings
+ * card. A card save reaches the store as path operations naming only the keys
+ * the card owns, and the host keeps every other key at its stored value; a
+ * carried value here is refused, so the settings route cannot repoint the
+ * workspace/DSH roots.
  *
- * Membership is the other half of the key-ownership invariant: a key with no
- * settings-card control must be listed here, otherwise the next card save
- * deletes it from settings.yaml and it silently falls back to its schema
- * default. `rulesDryRun`, `breakerAntiHijackMs` and `reviewMaxRetries` are the
- * card-retired keys that rely on this (tests/settings-key-ownership.test.mjs
- * pins the invariant in both directions).
+ * Membership is one half of the key-ownership invariant: a key with no
+ * settings-card control must be listed here, otherwise a key the card never
+ * submits is left uncovered by the two projections. `rulesDryRun`,
+ * `breakerAntiHijackMs` and `reviewMaxRetries` are the card-retired keys that
+ * rely on it (tests/settings-key-ownership.test.mjs pins that direction).
  */
 export const HOST_ONLY_KEYS = [
   'workspaceRoot',
@@ -312,6 +310,63 @@ export const HOST_ONLY_KEYS = [
   // Retired guard key: kept in the schema as a host-owned no-op so a card save
   // cannot delete it; resolveConfig warns and normalizes it to false.
   'autoSwitchPolicyToAsk',
+]
+
+/**
+ * Keys the settings card owns: it renders a control for each one and a card
+ * save may write it. The host config plane projects only fields under a
+ * volatile ancestor and refuses a write to any other key, so exactly these keys
+ * are marked volatile in the host Config schema. `HOST_ONLY_KEYS` and this list
+ * together cover every Config key, which the ownership gate pins in ONE
+ * direction (every Config key is draft-projected or listed there); nothing pins
+ * the converse, so a Config key that gains a card control before being added
+ * here is still silently dropped by a card save, with both gates green.
+ */
+export const EDITABLE_CONFIG_KEYS = [
+  'enabled',
+  'timeoutAction',
+  'llmReviewScope',
+  'llmTakeoverScope',
+  'defaultReviewMode',
+  'lowRiskSeconds',
+  'mediumRiskSeconds',
+  'highRiskSeconds',
+  'reviewWaitSeconds',
+  'safetyPrompt',
+  'reviewerModel',
+  'reviewerMaxTokens',
+  'reviewerReasoning',
+  'classifierReasoning',
+  'classifierSource',
+  'classifierProvider',
+  'classifierModel',
+  'reviewerSource',
+  'reviewerProvider',
+  'endpointUrl',
+  'endpointModel',
+  'endpointProtocol',
+  'allowlist',
+  'denyList',
+  'humanOnlyList',
+  'rulesText',
+  'maxConsecutiveDenials',
+  'maxTotalDenials',
+  'showSessionPanel',
+  'onboardingMessageEnabled',
+  'autoModeNoticeEnabled',
+  'panelDelayMs',
+  'directHumanEnabled',
+  'slashCommandsEnabled',
+  'debug',
+  'redactResults',
+  'editDiffPreview',
+  'rejectGuidance',
+  'categoryPolicy',
+  'categoryMode',
+  'privilegeAutoReview',
+  'protectedAutoReview',
+  'learningEnabled',
+  'learningThreshold',
 ]
 
 /**
@@ -378,6 +433,70 @@ export function preserveHostKeys(
     else delete out[key]
   }
   return out
+}
+
+/** The registered symbol a schemastery volatile config reference carries. */
+const VOLATILE_WRITE = Symbol.for('cosmokit.volatile.write')
+
+/**
+ * Whether a resolved config value is a volatile reference rather than data.
+ * A volatile schema field hands out a `{ get(), [write] }` reference, so every
+ * read of a config object must snapshot it before using the value. The `get`
+ * check keeps a data object that merely carries the shared symbol out of the
+ * unwrap path, which also makes the predicate total over plain data.
+ */
+export function isVolatileConfig(value: unknown): value is { get: () => unknown } {
+  return (
+    typeof value === 'object'
+    && value !== null
+    && VOLATILE_WRITE in value
+    && typeof (value as { get?: unknown }).get === 'function'
+  )
+}
+
+/** Whether `value` was already visited on the current walk (cycle guard). */
+function isCycle(seen: Set<object>, value: object): boolean {
+  if (seen.has(value)) return true
+  seen.add(value)
+  return false
+}
+
+/** Entering an object: a repeat visit on this path is a cycle, not a copy. */
+function objectEntries(seen: Set<object>, value: object): [string, unknown][] | undefined {
+  if (isCycle(seen, value)) return undefined
+  return Object.entries(value)
+}
+
+/**
+ * Deep plain snapshot: volatile references are replaced by their current value,
+ * plain objects and arrays are copied, and scalars pass through untouched. The
+ * walk is idempotent (unwrapping data changes nothing) and never mutates its
+ * argument; an object already open on this walk is kept as-is so a cyclic plain
+ * object cannot recurse forever, while a shared sibling is still copied.
+ */
+export function plainConfigValue<T>(value: T, seen: Set<object> = new Set()): T {
+  if (isVolatileConfig(value)) return plainConfigValue(value.get() as T, seen)
+  if (Array.isArray(value)) {
+    const entries = objectEntries(seen, value)
+    if (entries === undefined) return value
+    try {
+      return value.map((item) => plainConfigValue(item, seen)) as unknown as T
+    } finally {
+      seen.delete(value)
+    }
+  }
+  if (value !== null && typeof value === 'object') {
+    const entries = objectEntries(seen, value as object)
+    if (entries === undefined) return value
+    try {
+      return Object.fromEntries(
+        entries.map(([key, child]) => [key, plainConfigValue(child, seen)]),
+      ) as T
+    } finally {
+      seen.delete(value as object)
+    }
+  }
+  return value
 }
 
 export type StaticListDecision =

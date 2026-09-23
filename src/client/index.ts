@@ -1,8 +1,9 @@
 import React from 'react'
 import { Button, Input } from '@deepseek-ai/dsh-client-ui-primitives'
-import { normalizeTimeoutAction, hasBreakerNote, hasLockedAskNote, AWAITING_MARKER, LOCKED_ASK_MARKER, REVIEWER_SYSTEM, assembleReviewerSystem, EDIT_DIFF_BLOCK_END, EDIT_DIFF_BLOCK_START, HOST_ONLY_KEYS } from '../auto/decision.js'
+import { normalizeTimeoutAction, hasBreakerNote, hasLockedAskNote, AWAITING_MARKER, LOCKED_ASK_MARKER, REVIEWER_SYSTEM, assembleReviewerSystem, EDIT_DIFF_BLOCK_END, EDIT_DIFF_BLOCK_START, EDITABLE_CONFIG_KEYS, HOST_ONLY_KEYS } from '../auto/decision.js'
 import { THRESHOLD_DEFAULTS, DEFAULT_ALLOW_TOOL_GROUPS } from '../auto/constants.js'
-import { hostOnlyRows } from './host-keys.js'
+import { formatHostKeyValue, hostOnlyRows } from './host-keys.js'
+import { buildMutateOps, legacyImportBefore, legacyImportOf, legacyImportWrite, legacyUndoWrite, ROW_CONFIG_KEY, usableForm, type ConfigWrite, type LegacyImport, type RowConfigForm } from './row-config.js'
 import { parseRulesText } from '../auto/rules.js'
 import { installAutoPermissionIcon, SHIELD_PATH, BOLT_PATH } from './auto-icon.js'
 import { createTrailingThrottle, MIN_PANEL_SCAN_INTERVAL_MS } from './throttle.js'
@@ -43,8 +44,6 @@ const LOCALE_NS = 'dsh-auto-approval-llm'
 // or a different browser may see it again, which is acceptable for
 // low-sensitivity copy.
 const ONBOARDING_SEEN_KEY = 'dsa-onboarding-seen-v1'
-// Package name the Plugins panel keys a bundle's own configuration by.
-const PLUGIN_PACKAGE_NAME = '@quill507/dsh-auto-approval-llm'
 let localeService: any = null
 let t: any = (key: string, params?: Record<string, unknown>) => {
   let text = (zh as any)[key] ?? key
@@ -310,6 +309,10 @@ interface SettingsSnapshot {
   revision: number
   writable: boolean
   applies: string
+  /** Config-plane failure the route answered with, when one stands. */
+  configError?: string | null
+  /** Values the route offers from the retired settings document, when it offers any. */
+  legacyImport?: LegacyImport | undefined
 }
 
 interface Draft {
@@ -729,21 +732,68 @@ function CapsuleSelect(props: { value: string; options: CapsuleOption[]; onChang
 }
 
 /**
- * Plugins-panel config entry (0.1.6-alpha.2+): the bundle page asks for the
- * settings form. The page draws the bundle title, version, description and
- * component rows itself.
+ * What a row configuration entry renders when the page handed no usable form.
+ *
+ * The Plugins page renders the entry whether or not the Host serves this
+ * namespace to the client: the form stays absent while the profile entry is not
+ * ACTIVE and describes no volatile field, and it stays absent for good when the
+ * Host document takes no writes. Drawing the controls then would show every
+ * field at its default and offer a save that has no channel, so the entry says
+ * that it cannot be edited here and lists the values the route still serves —
+ * the form's own keys, from the resolved snapshot. The route's own failure, and
+ * the config plane's, are carried here too: they are the reason this branch is
+ * the one rendering.
  */
-function PluginConfigEntry({ view }: { view?: 'summary' | 'page' }) {
-  if (view !== 'page') return null
-  return React.createElement(SettingsSection, { chrome: 'plain' })
+function ConfigUnavailableBody({ value, error, configError }: { value: unknown; error?: string; configError?: string | null }) {
+  const resolved = (value ?? {}) as Record<string, unknown>
+  return React.createElement('div', {
+    style: { display: 'grid', gap: 14, padding: '0 2px' },
+    'data-dsa-settings-unavailable': 'true',
+  },
+    React.createElement('div', { className: 'dsa-alert dsa-alertError', role: 'alert' },
+      React.createElement('span', { className: 'dsa-alertText' }, t('settings.unavailable.banner')),
+    ),
+    React.createElement('p', { className: 'dsa-hint' }, t('settings.unavailable.hint')),
+    error ? React.createElement('p', { className: 'dsa-failed', role: 'status' }, error) : null,
+    configError
+      ? React.createElement('p', { className: 'dsa-failed', role: 'status' },
+          t('settings.pluginConfigError', { error: String(configError) }))
+      : null,
+    React.createElement('div', { className: 'dsa-defaultAllow' },
+      ...EDITABLE_CONFIG_KEYS.map((key) => React.createElement('div', {
+        key,
+        className: 'dsa-defaultAllowTools',
+        style: { alignItems: 'center' },
+      },
+        React.createElement('code', { className: 'dsa-defaultAllowTool' }, key),
+        React.createElement('span', { className: 'dsa-chipDesc', style: { wordBreak: 'break-all' } },
+          formatHostKeyValue(resolved[key]) ?? t('settings.advanced.yamlEmpty')),
+      )),
+    ),
+  )
 }
 
-function SettingsSection({ chrome = 'card' }: { chrome?: 'card' | 'plain' }) {
+/**
+ * Row config entry: the Plugins page opens it from this bundle's row and hands
+ * over the Host form of the row's settings namespace, which is the only writer
+ * of that namespace. The page draws the title, module, crumb and save chrome
+ * itself, so the entry renders the settings body alone.
+ */
+function PluginConfigEntry({ view, form }: { view?: 'summary' | 'page'; form?: RowConfigForm }) {
+  if (view !== 'page') return null
+  return React.createElement(SettingsSection, { chrome: 'plain', form })
+}
+
+function SettingsSection({ chrome = 'card', form }: { chrome?: 'card' | 'plain'; form?: RowConfigForm }) {
   const [snapshot, setSnapshot] = React.useState<SettingsSnapshot | null>(null)
   const [draft, setDraft] = React.useState<Draft | null>(null)
   const [saving, setSaving] = React.useState(false)
   const [message, setMessage] = React.useState('')
   const [error, setError] = React.useState('')
+  // A completed import, held so it can be taken back: the keys it wrote and the
+  // values they carried before it. Null means no import is waiting to be undone,
+  // which is also what a fresh page load starts from.
+  const [legacyUndo, setLegacyUndo] = React.useState<{ keys: readonly string[]; before: Record<string, unknown> } | null>(null)
   const [open, setOpen] = React.useState(chrome === 'plain')
   // First-use onboarding: read the one-shot flag lazily at mount. The flag is
   // persisted when the card is collapsed (expanded-and-seen implies done), so
@@ -847,13 +897,23 @@ function SettingsSection({ chrome = 'card' }: { chrome?: 'card' | 'plain' }) {
   const [chipLimit, setChipLimit] = React.useState(10)
   const CHIP_PAGE = 10
 
+  // The form the page handed over is the authoritative reader and the only
+  // writer of this namespace; without one the body renders read-only.
+  const writeForm = usableForm(form)
+  // The route still serves the values and the host-only keys the form does not
+  // carry, but the form is the authority on whether a write can land: keeping
+  // that flag true while a form is present stops a late route answer from
+  // disabling every control under a form that still accepts writes.
+  const routeSnapshot = (next: any): SettingsSnapshot =>
+    writeForm === undefined ? next : { ...next, writable: true }
+
   React.useEffect(() => {
     let disposed = false
     ;(globalThis as any).fetch(SETTINGS_ROUTE, { credentials: 'same-origin' })
       .then((r: any) => r.json())
       .then((data: any) => {
         if (disposed || !data?.ok) return
-        setSnapshot(data.value)
+        setSnapshot(routeSnapshot(data.value))
         setDraft(draftOf(data.value.value))
       })
       .catch((e: any) => {
@@ -868,13 +928,17 @@ function SettingsSection({ chrome = 'card' }: { chrome?: 'card' | 'plain' }) {
   // re-read before the next attempt. The local draft is kept: unsaved card
   // edits are user intent, and each save overlays its own card's keys on the
   // fresh baseline anyway.
-  const refreshSnapshot = async () => {
+  const refreshSnapshot = async (): Promise<SettingsSnapshot | undefined> => {
     try {
       const res = await (globalThis as any).fetch(SETTINGS_ROUTE, { credentials: 'same-origin' })
       const data = await res.json()
-      if (data?.ok) setSnapshot(data.value)
+      if (!data?.ok) return undefined
+      const next = routeSnapshot(data.value)
+      setSnapshot(next)
+      return next
     } catch {
       // best-effort: the next failed save retries the refresh
+      return undefined
     }
   }
 
@@ -1014,8 +1078,54 @@ function SettingsSection({ chrome = 'card' }: { chrome?: 'card' | 'plain' }) {
     return () => { disposed = true }
   }, [openLearning])
 
+  const hostState = writeForm?.state
+  // Fold the form's accepted values and revision into the baseline, so every
+  // control reads one value object whether the page has a form or the route
+  // snapshot is the only source. The form's snapshot keeps its identity until
+  // the Host answers again, so this runs once per accepted Host change.
+  React.useEffect(() => {
+    if (hostState === undefined) return
+    const value = hostState.value
+    if (value === undefined || value === null) return
+    setSnapshot((prev) => ({
+      value: { ...(prev?.value ?? {}), ...value },
+      revision: hostState.revision ?? prev?.revision ?? 0,
+      writable: true,
+      applies: prev?.applies ?? 'live',
+      configError: prev?.configError ?? null,
+      legacyImport: prev?.legacyImport,
+    }))
+  }, [hostState])
+
   if (!snapshot || !draft) {
     return React.createElement('div', { style: { padding: 12 } }, t('settings.loading'))
+  }
+
+  // One write channel for the whole form: the Host form, or nothing. The route
+  // it used to POST to is read-only now, so a body rendered without a form
+  // shows values and no control instead of a save that cannot land. The return
+  // value is whether anything was written: a request carrying only fields the
+  // plane does not own has nothing to send, and no caller may report success
+  // for it.
+  const submit = async (write: ConfigWrite): Promise<boolean> => {
+    if (writeForm === undefined) throw new Error(t('settings.unavailable.banner'))
+    const ops = buildMutateOps(write)
+    if (ops.length === 0) return false
+    const accepted = await writeForm.mutate(ops, writeForm.state.revision ?? snapshot.revision)
+    if (!accepted) throw new Error(t('settings.saveFailed'))
+    return true
+  }
+
+  // Read-only fallback: the entry renders its stored values instead of controls
+  // when the page handed no usable form.
+  if (writeForm === undefined) {
+    const readOnlyBody = React.createElement(ConfigUnavailableBody, {
+      value: snapshot.value,
+      error,
+      configError: snapshot.configError ?? null,
+    })
+    if (chrome === 'plain') return React.createElement('div', { className: 'dsa-embed' }, readOnlyBody)
+    return React.createElement('li', { className: 'dsa-card' }, readOnlyBody)
   }
 
   const update = (patch: Partial<Draft>) => {
@@ -1071,10 +1181,15 @@ function SettingsSection({ chrome = 'card' }: { chrome?: 'card' | 'plain' }) {
   // overlaid on the last-saved baseline; other cards' unsaved edits are left
   // in the local draft and never accidentally persisted by another card.
   // Keys with no card control are deliberately absent from every slice below:
-  // they are host-only (decision.ts HOST_ONLY_KEYS), so preserveHostKeys keeps
-  // their stored value and no save path can reach them.
+  // they are host-only (decision.ts HOST_ONLY_KEYS) and no mutate op names
+  // them, so the Host patch leaves their stored value in place.
   const TIMER_KEYS = ['panelDelayMs', 'lowRiskSeconds', 'mediumRiskSeconds', 'highRiskSeconds', 'maxConsecutiveDenials', 'maxTotalDenials', 'reviewWaitSeconds', 'directHumanEnabled', 'slashCommandsEnabled']
   const REVIEW_KEYS = ['classifierSource', 'classifierProvider', 'classifierModel', 'reviewerSource', 'reviewerProvider', 'reviewerModel', 'reviewerMaxTokens', 'reviewerReasoning', 'classifierReasoning', 'endpointUrl', 'endpointModel', 'endpointProtocol']
+  // The lane pairs and the shared endpoint config persist only while non-empty,
+  // so a projection drops them once a control clears them. Resetting a lane has
+  // to say so explicitly: a field a write does not mention keeps its stored
+  // value, and these have to go back to the inherited one.
+  const REVIEW_PAIR_KEYS = ['classifierProvider', 'classifierModel', 'reviewerProvider', 'reviewerModel', 'endpointUrl', 'endpointModel']
   const SECURITY_KEYS = ['safetyPrompt', 'allowlist', 'denyList', 'humanOnlyList', 'rulesText']
   const UTILITY_KEYS = ['onboardingMessageEnabled', 'redactResults', 'editDiffPreview', 'rejectGuidance']
   const LEARNING_KEYS = ['learningEnabled', 'learningThreshold']
@@ -1113,12 +1228,104 @@ function SettingsSection({ chrome = 'card' }: { chrome?: 'card' | 'plain' }) {
       ? t('settings.invalidConfig', { keys: invalidKeys.join(', ') })
       : null
   const anyDirty = timerDirty || reviewDirty || securityDirtyEff || categoryDirty || learningDirty
+  // Values the route offers from the retired settings document. A pending undo
+  // outranks them: while one import can still be taken back, the page shows that
+  // action instead of offering the same import a second time.
+  const importable = legacyImportOf(snapshot)
+  const legacyBanner = writeForm === undefined || (legacyUndo === null && importable === undefined)
+    ? null
+    : React.createElement('div', { className: 'dsa-alert dsa-alertNotice', role: 'status' },
+        React.createElement('span', { className: 'dsa-alertText' },
+          legacyUndo === null
+            ? t('settings.legacyImport.hint', { count: importable?.keys.length ?? 0 })
+            : t('settings.legacyImport.undoHint', { count: legacyUndo.keys.length }),
+        ),
+        legacyUndo === null
+          ? React.createElement(Button, {
+              variant: 'primary',
+              size: 'sm',
+              className: 'dsa-actionButton',
+              disabled: saving,
+              onClick: () => { void importLegacySettings() },
+            }, t('settings.legacyImport.button'))
+          : React.createElement(Button, {
+              variant: 'outline',
+              size: 'sm',
+              className: 'dsa-actionButton',
+              disabled: saving,
+              onClick: () => { void undoLegacyImport() },
+            }, t('settings.legacyImport.undoButton')),
+      )
 
   const broadcastSettings = (saved: any) => {
     breakerAntiHijackMs = saved?.value?.breakerAntiHijackMs ?? THRESHOLD_DEFAULTS.breakerAntiHijackMs
     const g = globalThis as any
     if (typeof g.CustomEvent === 'function') {
       g.dispatchEvent(new g.CustomEvent('dsh-auto-approval-llm:settings-changed'))
+    }
+  }
+
+  // Adopt a just-written payload locally: the form's snapshot with the accepted
+  // values arrives on the next Host answer, and until then the cards must read
+  // what was written instead of the values it replaced. The route read follows,
+  // so the revision fencing the next save is the Host's current one.
+  const adoptWrite = (payload: Record<string, unknown>) => {
+    const merged = { ...snapshot.value, ...payload }
+    broadcastSettings({ value: merged })
+    setSnapshot({ ...snapshot, value: merged })
+    void refreshSnapshot()
+    return merged
+  }
+
+  // The retired settings document is served by the read-only route; these two
+  // handlers are its ONLY writers, and each runs on a click. Nothing here — no
+  // effect, no mount, no refresh — builds an import op, so a page that is merely
+  // opened never writes the namespace.
+  const importLegacySettings = async () => {
+    if (writeForm === undefined) return
+    const imported = legacyImportOf(snapshot)
+    if (imported === undefined) return
+    setSaving(true)
+    setError('')
+    try {
+      const pending = legacyImportWrite(imported)
+      // Record what the affected fields carried BEFORE the write, so the undo
+      // restores the page the user was looking at rather than a rebuilt guess.
+      const before = legacyImportBefore(snapshot.value, pending.keys)
+      const written = await submit(pending.write)
+      if (!written) throw new Error(t('settings.legacyImport.failed'))
+      const accepted: Record<string, unknown> = {}
+      for (const key of pending.keys) accepted[key] = (pending.write.value ?? {})[key]
+      const merged = adoptWrite(accepted)
+      setDraft({ ...draft, ...pick(pending.keys, draftOf(merged)) })
+      setLegacyUndo({ keys: pending.keys, before })
+      setSnapshot((prev) => (prev === null ? prev : { ...prev, legacyImport: undefined }))
+      setMessage(t('settings.legacyImport.done', { count: pending.keys.length }))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const undoLegacyImport = async () => {
+    if (writeForm === undefined || legacyUndo === null) return
+    setSaving(true)
+    setError('')
+    try {
+      const written = await submit(legacyUndoWrite(legacyUndo.before, legacyUndo.keys))
+      if (!written) throw new Error(t('settings.legacyImport.failed'))
+      setLegacyUndo(null)
+      // The unset fields fall back to their schema default, which is a value the
+      // page can only read back from the route: adopt what it answers, so the
+      // controls show the restored configuration and not the imported one.
+      const fresh = await refreshSnapshot()
+      if (fresh !== undefined) setDraft(draftOf(fresh.value))
+      setMessage(t('settings.legacyImport.undone'))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -1136,20 +1343,13 @@ function SettingsSection({ chrome = 'card' }: { chrome?: 'card' | 'plain' }) {
     setSaving(true)
     setError('')
     try {
-      const res = await (globalThis as any).fetch(SETTINGS_ROUTE, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ expectedRevision: snapshot.revision, value: sliceValueOf(keys) }),
-        credentials: 'same-origin',
-      })
-      const data = await res.json()
-      if (!data?.ok) throw new Error(data?.error ?? t('settings.saveFailed'))
-      broadcastSettings(data.value)
-      setSnapshot(data.value)
+      const payload = sliceValueOf(keys)
+      await submit({ value: payload })
+      const merged = adoptWrite(payload)
       // Per-card ownership: only the just-saved keys are refreshed from the
-      // server baseline; unsaved edits held in other cards' local drafts are
+      // written baseline; unsaved edits held in other cards' local drafts are
       // preserved instead of being wiped by a full draft replacement.
-      setDraft({ ...draft, ...pick(keys, draftOf(data.value.value)) })
+      setDraft({ ...draft, ...pick(keys, draftOf(merged)) })
       setCardStatus({ id: cardId, kind: 'ok', text: t('settings.saved') })
       if (cardId === 'security') {
         setSecurityForcedDirty(false)
@@ -1175,7 +1375,7 @@ function SettingsSection({ chrome = 'card' }: { chrome?: 'card' | 'plain' }) {
   // toggled key is committed on the saved baseline, so unsaved edits inside the
   // other cards are never persisted or lost; the local draft keeps them.
   // Instant-save accepts a multi-key patch so one control can commit several
-  // keys atomically (single POST, single expectedRevision check).
+  // keys atomically (one mutation, one expectedRevision check).
   const instantSaveKeys = async (patch: Record<string, unknown>) => {
     const prevDraft = draft
     setDraft({ ...draft, ...(patch as Partial<Draft>) })
@@ -1183,16 +1383,9 @@ function SettingsSection({ chrome = 'card' }: { chrome?: 'card' | 'plain' }) {
     setMessage('')
     setError('')
     try {
-      const res = await (globalThis as any).fetch(SETTINGS_ROUTE, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ expectedRevision: snapshot.revision, value: sliceWithKeys(patch) }),
-        credentials: 'same-origin',
-      })
-      const data = await res.json()
-      if (!data?.ok) throw new Error(data?.error ?? t('settings.saveFailed'))
-      broadcastSettings(data.value)
-      setSnapshot(data.value)
+      const payload = sliceWithKeys(patch)
+      await submit({ value: payload })
+      adoptWrite(payload)
     } catch (e) {
       // The optimistic draft patch did not persist — roll it back so the
       // control reflects the stored value, and re-sync the revision.
@@ -1247,20 +1440,13 @@ function SettingsSection({ chrome = 'card' }: { chrome?: 'card' | 'plain' }) {
     setSaving(true); setError(''); setMessage('')
     setCardStatus(null)
     try {
-      const res = await (globalThis as any).fetch(SETTINGS_ROUTE, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ expectedRevision: snapshot.revision, value: valueOf(merged) }),
-        credentials: 'same-origin',
-      })
-      const data = await res.json()
-      if (!data?.ok) throw new Error(data?.error ?? t('settings.saveFailed'))
-      broadcastSettings(data.value)
-      // The server response is the new baseline: without adopting it the card
-      // keeps the pre-save revision, so the NEXT save from any card is rejected
-      // (400, expectedRevision) and the card reports "unsaved" against a value
-      // that is no longer stored. Every other save path adopts it here.
-      setSnapshot(data.value)
+      const payload = valueOf(merged)
+      await submit({ value: payload, unset: REVIEW_PAIR_KEYS })
+      // Adopt the write before reading the credential store: a reset that left
+      // the card on the pre-write revision would make the NEXT save from any
+      // card fail its revision fence and report "unsaved" against a value that
+      // is no longer stored. Every other save path adopts here too.
+      adoptWrite(payload)
       const del = await (globalThis as any).fetch(REVIEWER_CREDENTIAL_ROUTE, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-auto-approval-op': 'delete' },
@@ -1285,17 +1471,10 @@ function SettingsSection({ chrome = 'card' }: { chrome?: 'card' | 'plain' }) {
     setDraft({ ...draft, ...defaults })
     setSaving(true); setError(''); setMessage('')
     try {
-      const res = await (globalThis as any).fetch(SETTINGS_ROUTE, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ expectedRevision: snapshot.revision, value: valueOf(merged) }),
-        credentials: 'same-origin',
-      })
-      const data = await res.json()
-      if (!data?.ok) throw new Error(data?.error ?? t('settings.saveFailed'))
-      broadcastSettings(data.value)
-      setSnapshot(data.value)
-      setDraft(draftOf(data.value.value))
+      const payload = valueOf(merged)
+      await submit({ value: payload })
+      const next = adoptWrite(payload)
+      setDraft(draftOf(next))
       setMessage(t('settings.defaultsRestoredInstant'))
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -1441,30 +1620,21 @@ function SettingsSection({ chrome = 'card' }: { chrome?: 'card' | 'plain' }) {
     }
   }
 
-  // Remove stored keys that violate the schema so the defaults recover; POST a
-  // sanitized value (missing keys get their schema default on the next read).
+  // Return stored keys that violate the schema to their inherited value, so the
+  // defaults recover. A key the config plane does not own is not this form's to
+  // clear: it stays listed in the banner, and the ops drop it instead of asking
+  // for a write the Host would refuse.
   const clearInvalidKeys = async () => {
     if (!snapshot) return
     const bad = findInvalidConfigKeys(snapshot.value)
     if (bad.length === 0) return
     setSaving(true)
     try {
-      const sanitized: any = {}
-      for (const key of Object.keys(snapshot.value)) {
-        if (!bad.includes(key)) sanitized[key] = snapshot.value[key]
-      }
-      const res = await (globalThis as any).fetch(SETTINGS_ROUTE, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ expectedRevision: snapshot.revision, value: sanitized }),
-        credentials: 'same-origin',
-      })
-      const data = await res.json()
-      if (!data?.ok) throw new Error(data?.error ?? t('settings.saveFailed'))
-      broadcastSettings(data.value)
-      setSnapshot(data.value)
-      setDraft(draftOf(data.value.value))
-      setMessage(t('settings.invalidCleared'))
+      const wrote = await submit({ unset: bad })
+      // A key the plane does not own is nothing this form can clear, so it must
+      // not report a clear either: the banner listing it stays the truth.
+      setMessage(wrote ? t('settings.invalidCleared') : '')
+      void refreshSnapshot()
     } catch (e) {
       setMessage('')
       setError(e instanceof Error ? e.message : String(e))
@@ -2422,6 +2592,7 @@ function SettingsSection({ chrome = 'card' }: { chrome?: 'card' | 'plain' }) {
 
   // 720 caps the Settings dialog column; the embedded Plugins page section spans the full content width.
   const content = React.createElement('div', { style: { display: 'grid', gap: 14, maxWidth: chrome === 'plain' ? 'none' : 720, padding: '0 2px' } },
+    legacyBanner,
     bannerMessage
       ? React.createElement('div', { className: 'dsa-alert dsa-alertError', role: 'alert' },
           React.createElement('span', { className: 'dsa-alertText' }, bannerMessage),
@@ -2968,6 +3139,8 @@ function installSettingsCardStyles(): () => void {
 .dsa-alertError{color:var(--dsw-alias-state-error-primary);background:rgba(var(--dsw-alias-state-error-primary-rgb,236 19 19),0.08);border:1px solid var(--dsw-alias-state-error-primary)}
 .dsa-alertText{flex:1;min-width:0;overflow-wrap:anywhere}
 .dsa-resetButton{border-radius:8px!important;height:auto!important;padding:5px 14px!important}
+.dsa-actionButton{border-radius:8px!important;height:auto!important;padding:5px 14px!important}
+.dsa-alertNotice{color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l1)}
 .dsa-diff{border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2);margin:8px 0;padding:6px 10px;font-family:var(--ds-font-family-code,monospace);font-size:12px;line-height:1.6;max-height:280px;overflow:auto}
 .dsa-diffHead{color:var(--dsw-alias-label-primary);font-weight:600;padding:2px 0 4px;white-space:pre-line}
 .dsa-diffBody{display:grid}
@@ -3014,21 +3187,19 @@ export function apply(ctx: any): void {
   ctx.effect(() => watchRemoteApprovals(ctx), 'dsh-auto-approval-llm: approval watcher (remote)')
   ctx.effect(() => watchSessionApprovals(ctx), 'dsh-auto-approval-llm: session approval watcher')
   watchSessionModeChanges(ctx)
-  // The Plugins panel keys a bundle's own configuration by package name; the
-  // Settings card slot remains registered for the older promised host lines.
-  ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({
-    name: 'plugins.bundle.config',
-    key: PLUGIN_PACKAGE_NAME,
+  // The Plugins page keys a row's configuration by `<package name>#<row id>`
+  // and hands that entry the Host form of the row's namespace, which is the
+  // only writer of it. The row seat below is the seat of this bundle's
+  // configuration entry: the entry renders the settings body with the form the
+  // row's page hands over. The bundle-level seat is deliberately NOT registered:
+  // it is never handed a form, and its page draws no configuration section at
+  // all when nothing registers there, so the bundle's page carries no second
+  // copy of this form.
+  ctx.slots.inject('plugins.row.config', () => ctx.slots.register({
+    name: 'plugins.row.config',
+    key: ROW_CONFIG_KEY,
     locale: LOCALE_NS,
   }, PluginConfigEntry))
-  ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
-    name: 'settings.plugin.item',
-    id: 'auto-approval-llm-card',
-    key: 'auto-approval-llm',
-    order: 30,
-    label: () => t('plugin.name'),
-    locale: LOCALE_NS,
-  }, SettingsSection))
   ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register({
     name: 'conversation.session.header.utilities',
     id: 'auto-approval-llm-session-panel',

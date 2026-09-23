@@ -36,6 +36,7 @@ import { buildAskReason, buildEditDiffText } from '../lib/auto/editdiff.js'
 import { carrierContext, findSpec, callSpec } from './helpers/carrier-route.mjs'
 import { Config, resolveConfig, sessionModelRoute, buildReviewSnapshot, markFirstAutoSessionNotice, onboardingTimeoutLabel, onboardingNoticeText, extractProbeErrorSummary, extractReviewerKeyLine, installFeedbackRoute, installReviewerCredentialRoute, sessionEventList, currentPreset, trustedUserMessages, questionAnswerMessages, trustedUserIntents, officialRejectionIn } from '../lib/index.js'
 import { categorizeCommand } from '../lib/auto/category.js'
+import { plainConfigValue } from '../lib/auto/decision.js'
 
 /**
  * Slice from a start marker to the end marker that FOLLOWS it.
@@ -2673,18 +2674,18 @@ test('resolveConfig: editDiffPreview resolves exactly (default-off / explicit of
 })
 
 test('Config schema: editDiffPreview defaults to false and rejects non-boolean values', () => {
-  assert.equal(Config({}).editDiffPreview, false)
-  assert.equal(Config({ editDiffPreview: false }).editDiffPreview, false)
-  assert.equal(Config({ editDiffPreview: true }).editDiffPreview, true)
+  assert.equal(plainConfigValue(Config({})).editDiffPreview, false)
+  assert.equal(plainConfigValue(Config({ editDiffPreview: false })).editDiffPreview, false)
+  assert.equal(plainConfigValue(Config({ editDiffPreview: true })).editDiffPreview, true)
   assert.throws(() => Config({ editDiffPreview: 'yes' }))
 })
 
 test('Config schema: categoryPolicy dict / categoryMode / trustedDirs defaults and shapes', () => {
-  assert.deepEqual(Config({}).categoryPolicy, {})
-  assert.equal(Config({}).categoryMode, 'standard')
-  assert.deepEqual(Config({}).trustedDirs, [])
-  assert.equal(Config({ categoryMode: 'aggressive' }).categoryMode, 'aggressive')
-  assert.deepEqual(Config({ categoryPolicy: { fileEdit: 'auto', delete: 'ask' } }).categoryPolicy, { fileEdit: 'auto', delete: 'ask' })
+  assert.deepEqual(plainConfigValue(Config({})).categoryPolicy, {})
+  assert.equal(plainConfigValue(Config({})).categoryMode, 'standard')
+  assert.deepEqual(plainConfigValue(Config({})).trustedDirs, [])
+  assert.equal(plainConfigValue(Config({ categoryMode: 'aggressive' })).categoryMode, 'aggressive')
+  assert.deepEqual(plainConfigValue(Config({ categoryPolicy: { fileEdit: 'auto', delete: 'ask' } })).categoryPolicy, { fileEdit: 'auto', delete: 'ask' })
   assert.throws(() => Config({ categoryMode: 'wild' }))
   assert.throws(() => Config({ categoryPolicy: { fileEdit: 'maybe' } }))
   assert.throws(() => Config({ trustedDirs: 'C:/x' }))
@@ -2700,7 +2701,7 @@ test('resolveConfig: categoryPolicy clamps LOCKED auto AND deny to inherit', () 
 })
 
 test('resolveConfig: privilegeAutoReview default off, unlock lets privilege auto/deny through', () => {
-  assert.equal(Config({}).privilegeAutoReview, false)
+  assert.equal(plainConfigValue(Config({})).privilegeAutoReview, false)
   assert.equal(resolveConfig({ timeoutAction: 'reject' }).privilegeAutoReview, false)
   assert.equal(resolveConfig({ timeoutAction: 'reject', privilegeAutoReview: true }).privilegeAutoReview, true)
   // Locked by default: privilege auto/deny are still dropped.

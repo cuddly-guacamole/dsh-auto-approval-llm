@@ -11,7 +11,7 @@
 | 项 | 要求 |
 |---|---|
 | 权限档 | **Auto 档**（machine value `auto-approval`，host 名 `Auto approval`）= `sandbox: danger-full-access` + `approval: ask`；其他档本插件不介入 |
-| DSH | `0.1.7-alpha.1` 或更高（`auto` 档归上游 `@deepseek-ai/dsh-experimental-auto-review`，本插件只接管 `auto-approval`、两者可同开；旧机器值 `auto` 别名已随下限抬升移除） |
+| DSH | `0.1.7-alpha.1` 或更高（peer 范围 `>=0.1.7-alpha.1 <2`，同 tuple 的 `0.1.7-alpha.2` 亦在内；`auto` 档归上游 `@deepseek-ai/dsh-experimental-auto-review`，本插件只接管 `auto-approval`、两者可同开；旧机器值 `auto` 别名已随下限抬升移除） |
 | Node | `^22.19.0 || >=24.0.0` |
 | 共存 | 本插件是 `auto-approval` 档 `approval/request` 的唯一终结裁决者 —— 同一档位不要再叠第二个审批插件；上游 `@deepseek-ai/dsh-experimental-auto-review`（`auto`，Auto review / EXP）是另一个档位，可同时启用 |
 
@@ -28,7 +28,7 @@ dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 ## 30 秒验证
 
 1. 把会话或预设切到 **Auto 档**：`/permission auto-approval`。
-2. 打开侧边栏 插件 → auto-approval-llm 配置页，确认表单出现（更早宿主线：设置 → 插件 → 自动审批）；默认配置即可工作（`enabled` 默认开）。
+2. 打开侧边栏 插件 → auto-approval-llm，点该行上的「配置 <行名>」打开行配置页，确认设置表单出现（宿主未交出该命名空间的配置表单时，该页只读展示当前生效值）；默认配置即可工作（`enabled` 默认开）。
 3. 让 agent 执行一条只读命令（例如 `ls`）：常规操作走静态放行，审批面板不出现。
 4. 让 agent 执行一条静态规则看不明白的调用（例如含变量拼接的动态命令）：应出现官方审批面板与倒计时，或由 LLM 评审接管。
 
@@ -36,7 +36,7 @@ dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 
 ## 常用改动
 
-- 让评审走指定模型：设置 →「在线评审模型」卡，通道来源选「DSH 模型」或「自定义端点」（协议 / 地址 / 模型 / 密钥），保存后测试连接。
+- 让评审走指定模型：行配置页 →「在线评审模型」卡，通道来源选「DSH 模型」或「自定义端点」（协议 / 地址 / 模型 / 密钥），保存后测试连接。
 - 弹窗频繁：调大「中风险倒计时」，或把「超时动作」改成「拒绝」/「低风险自动同意」。
 - 逐键语义、默认值与 host-only 键：[12 · 配置全景](./12-config)。
 

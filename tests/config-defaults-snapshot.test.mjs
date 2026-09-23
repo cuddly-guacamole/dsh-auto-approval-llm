@@ -13,9 +13,10 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { Config } from '../lib/index.js'
+import { plainConfigValue } from '../lib/auto/decision.js'
 
 test('schema defaults snapshot: changing a default must be a reviewed diff', () => {
-  const defaults = Config({})
+  const defaults = plainConfigValue(Config({}))
   assert.deepEqual(
     { ...defaults },
     {
@@ -104,7 +105,7 @@ test('patch pin consistency: every shipped insert pin equals its schema default'
     blockLines.push(line)
   }
   const block = blockLines.join('\n')
-  const defaults = Config({})
+  const defaults = plainConfigValue(Config({}))
   const pinned = {
     enabled: true,
     timeoutAction: 'reject',

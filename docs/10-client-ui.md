@@ -5,9 +5,10 @@
 
 | slot | key / id | 说明 | 组件 |
 |---|---|---|---|
-| `plugins.bundle.config` | key `@quill507/dsh-auto-approval-llm` | 0.1.6-alpha.2+ 的 Plugins 面板：bundle 页描述与组件行之间内联表单（仅 `view:'page'`）；页自己画标题/面包屑 | PluginConfigEntry → SettingsSection(`chrome:'plain'`) |
-| `settings.plugin.item` | key `auto-approval-llm` | 更早宿主线（rc.2 / 0.1.6-alpha.1）的 Settings 卡片；alpha2 起该槽不再声明，`inject` 等待不触发（无副作用） | SettingsSection |
+| `plugins.row.config` | key `@quill507/dsh-auto-approval-llm#auto-approval-llm` | Plugins 面板里本 bundle 行的配置页（`view:'page'`）：页自己画标题/面包屑；设置表单由宿主交来的该命名空间 row form（`form.state` / `form.mutate`）读写 | PluginConfigEntry → SettingsSection(`chrome:'plain'`) |
 | `conversation.session.header.utilities` | id `…-session-panel` | 会话标题栏控件 | SessionApprovalPanel |
+
+上面两行就是本插件注册的全部座位。两个更早的注册点已退役：`plugins.bundle.config`（bundle 详情页拿不到宿主 form，故不承载配置表单）与 `settings.plugin.item`（该槽在承诺的宿主范围内（`>=0.1.7-alpha.1 <2`）都不存在声明，`inject` 永久等待、无副作用）。
 
 另有：会话标题栏的自动审批控件（分离按钮：左主区显示状态并在有倒计时时提前展开面板，右下箭头打开审批记录浮层）、`auto-icon.ts`（给权限菜单的 Auto 注入盾形图标 + 选择时的风险确认弹窗「我已了解风险」）、`locale.ts`（zh/en）。官方权限选择器自带的风险确认只覆盖宿主内置档；自定义 `auto-approval` 档的风险确认由本插件客户端自研弹窗补。
 
@@ -45,10 +46,10 @@ flowchart TD
 
 `answerOnce`（shared）只把 `outcome ∈ {allowed-once, rejected}` 传上网（POST /feedback + 协议应答 `pending.answer(outcome)`，对已 settle 实例抛错被静默处置），通告文案由宿主生成；`answeredApprovals` 统一以 `sessionId:callId` 为键保证同一审批只答一次。
 
-## 10.2　设置表单解剖（plugins.bundle.config / settings.plugin.item）
+## 10.2　设置表单解剖（plugins.row.config）
 
 ```text
-外层：li.dsa-card（更早宿主线的 Settings 卡，可折叠；任一卡脏 → 头部「未保存」徽标）/ div.dsa-embed（alpha2 Plugins 面板内联表单，无外层折叠头）
+外层：div.dsa-embed（row 配置页内联体，无外层折叠头；页顶在可导入遗留配置时先给提示条）
 ├─ 非法配置红横幅 + 「尝试修复」        ← 检测表镜像 host schema；3 值来源枚举（session/preset/endpoint）
 ├─ 调试横幅（debug=on 时）+「关闭调试」
 ├─ 顶层开关区（3 个即时保存 CapsuleSelect）
@@ -74,8 +75,10 @@ flowchart TD
 
 > 分组标签（只加标签不移动控件）：前四张子卡（计时器与熔断 / 安全规则列表 / 分类开关与信任模式 / 确认制学习）标题带「安全底线」标签（计时器含倒计时秒数——决策窗口属安全项；`settings.group.safetyBase` 键），实用小功能卡、评审模型卡、历史卡与「高级」卡保持现状。归组合约：后续新增设置键默认进安全底线组。
 
-- **保存语义**：每卡只 POST 自己拥有的键（`sliceValueOf`），叠加到「最后保存基线」上 —— 保存 A 卡不会吞掉 B 卡未保存的编辑；顶层开关即时保存（预设行一次提交两个键、其余单键；`expectedRevision` 乐观并发控制）。学习子卡只提交 `LEARNING_KEYS = ['learningEnabled','learningThreshold']` 两键（<span class="lnum">client/index.ts:L"const LEARNING_KEYS"</span>），threshold 保存时钳入 2..10。
-- **host-only 键保护**：16 员名单 `workspaceRoot / dshHome / tempRoots / trustedDirs / trustedDshSubpaths / maintenanceDshPaths / classifierTimeoutMs / classifierMaxOutputTokens / maxArgsChars / notifyUser / reviewerContextFacts / rulesDryRun / breakerAntiHijackMs / reviewMaxRetries / loopDetectionThreshold / autoSwitchPolicyToAsk（已退役的 host-owned 兼容残留）`（<span class="lnum">decision.ts:LHOST_ONLY_KEYS</span>）走 patch/YAML 配置；保存时 `preserveHostKeys` 让存储值**恒胜出**，卡片改不掉它们。**归属不变量**：没有设置卡控件的键必须在此名单内——否则下一次任意卡片保存（整命名空间 replace）会把它从 settings.yaml 物理删除并静默回落默认（<span class="lnum">settings-key-ownership.test.mjs:L"no silent-delete gap"</span>）。
+- **保存语义**：每卡只提交自己拥有的键（`sliceValueOf`），生成相对该命名空间的路径 op（`{op:'set',path:[键],value}` / `{op:'unset',path:[键]}`）交给宿主交来的 row form `mutate(ops, expectedRevision)`——写由宿主落盘，**未被任何 op 命名的键保持已存值**，所以保存 A 卡不会吞掉 B 卡未保存的编辑，也不会动到只读清单里的 host-only 键。顶层开关即时保存（预设行一次提交两个键、其余单键；多键补丁一次 mutation、一次并发校验）。学习子卡只提交 `LEARNING_KEYS = ['learningEnabled','learningThreshold']` 两键（<span class="lnum">client/index.ts:L"const LEARNING_KEYS"</span>），threshold 保存时钳入 2..10。评审卡「恢复默认」对 6 个「非空才提交」键（provider/model/endpoint 成对键）显式发 `unset`：路径 op 的语义是「没提到的键保持已存值」，不显式复位会让上一轮存过的值留在 settings.yaml。
+- **拿不到宿主 form 时只读降级**：宿主未交出可用 form（entry 未 ACTIVE，或该命名空间不在宿主的配置表单集合里）时，页面渲染「不可用」横幅 + 可编辑键的「键名 + 当前生效值」只读清单，**不渲染任何控件**（禁用的控件会显示 schema 默认值，读起来像配置丢了）。写通道与渲染同源：没有 form 就没有可用的保存动作。
+- **遗留配置导入**：row 配置页顶部提示条，**仅当** `~/.dsh/settings.yaml.imported` 的本插件段里存在「旧值 ≠ 当前有效值 ∧ 未被本 entry 显式声明」的可编辑键时出现；只导可编辑键，host-only 键由宿主/环境决定、**不导入**（提示条注明）；**必须点按钮**才写，页面打开本身不写任何键；导入后提示条换成「撤销本次导入」，撤销走同一条路径 op 通道把导入前的值写回。
+- **host-only 键保护**：16 员名单 `workspaceRoot / dshHome / tempRoots / trustedDirs / trustedDshSubpaths / maintenanceDshPaths / classifierTimeoutMs / classifierMaxOutputTokens / maxArgsChars / notifyUser / reviewerContextFacts / rulesDryRun / breakerAntiHijackMs / reviewMaxRetries / loopDetectionThreshold / autoSwitchPolicyToAsk（已退役的 host-owned 兼容残留）`（<span class="lnum">decision.ts:LHOST_ONLY_KEYS</span>）走 patch/YAML 配置：宿主只把 44 个可编辑键标为 volatile，row form 只投影这些键，对其它键的写入直接拒绝，因此卡片改不掉它们、也不会把它们从 settings.yaml 抹掉。**归属不变量**：没有设置卡控件的键必须在此名单内（<span class="lnum">settings-key-ownership.test.mjs:L"no silent-delete gap"</span>）。
 - **密钥永不出现在 settings value**：独立 `/reviewer-credential` 路由；输入框 password + new-password 自动完成；保存后立即清空不回显。
 
 ## 10.3　会话标题栏「自动审批」统计

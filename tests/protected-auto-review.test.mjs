@@ -26,6 +26,7 @@ import { fileURLToPath } from 'node:url'
 import { categoryDirective, categorizeTool, LOCKED_CATEGORIES, HARD_LOCKED_CATEGORIES } from '../lib/auto/category.js'
 import { assessTool } from '../lib/auto/policy.js'
 import { Config } from '../lib/index.js'
+import { plainConfigValue } from '../lib/auto/decision.js'
 
 const roots = { workspace: 'C:/ws', home: 'C:/Users/u', dshHome: 'C:/Users/u/.dsh', tempRoots: [] }
 const artifacts = { has: () => false }
@@ -202,7 +203,7 @@ test('LOCKED_CATEGORIES still lists protected: the unlock is a configured opt-ou
 })
 
 test('the config schema ships the switch off and typed as a boolean', () => {
-  const parsed = Config({})
+  const parsed = plainConfigValue(Config({}))
   assert.equal(parsed.protectedAutoReview, false, 'the default must be fail-closed')
   assert.equal(parsed.privilegeAutoReview, false, 'and it must not change its neighbour')
 })
