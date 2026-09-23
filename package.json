@@ -1,6 +1,6 @@
 {
   "name": "@quill507/dsh-auto-approval-llm",
-  "version": "0.0.35",
+  "version": "0.0.36",
   "description": "LLM-assisted auto approval with timeout fallback for DeepSeek Harness",
   "private": false,
   "publishConfig": {
@@ -56,11 +56,11 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": ">=4.0.1 <5",
-    "@deepseek-ai/dsh-llm": ">=0.1.7-alpha.1 <2",
-    "@deepseek-ai/dsh-tools": ">=0.1.7-alpha.1 <2",
-    "@deepseek-ai/dsh-session": ">=0.1.7-alpha.1 <2",
-    "@deepseek-ai/dsh-permission-presets": ">=0.1.7-alpha.1 <2",
-    "@deepseek-ai/dsh-user-approval": ">=0.1.7-alpha.1 <2",
+    "@deepseek-ai/dsh-llm": ">=0.1.5-rc.2 <2 || >=0.1.7-alpha.2 <2",
+    "@deepseek-ai/dsh-tools": ">=0.1.5-rc.2 <2 || >=0.1.7-alpha.2 <2",
+    "@deepseek-ai/dsh-session": ">=0.1.5-rc.2 <2 || >=0.1.7-alpha.2 <2",
+    "@deepseek-ai/dsh-permission-presets": ">=0.1.5-rc.2 <2 || >=0.1.7-alpha.2 <2",
+    "@deepseek-ai/dsh-user-approval": ">=0.1.5-rc.2 <2 || >=0.1.7-alpha.2 <2",
     "@deepseek-ai/schemastery": "^3.18.0"
   },
   "devDependencies": {
