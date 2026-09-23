@@ -1,7 +1,8 @@
 /**
- * Host-line contract: the peer range promises the 0.1.7-alpha.1 line (modern
- * shape: `catalog` + `registerAuto`). This file pins the promised table, the
- * exact version pinning, the reverse controls that make a wrong-tree acceptance
+ * Host-line contract: the peer range promises the 0.1.7-alpha.1 line (the peer
+ * floor) and the 0.1.7-alpha.2 line, both of the modern shape (`catalog` +
+ * `registerAuto`). This file pins the promised table, the exact version
+ * pinning, the reverse controls that make a wrong-tree acceptance
  * impossible, and the shipped preset composition. The last case drives the
  * locally installed host line through the real permission-presets service, so
  * the harness itself cannot rot into a pure fake.
@@ -31,9 +32,11 @@ const patch = readFileSync(join(ROOT, "cordis.patch.yml"), "utf8")
 const FOREIGN_LINE = { version: "0.1.6-alpha.2", capability: "modern" }
 
 test("the promised line table carries the modern shape only", () => {
-  assert.deepEqual(Object.keys(HOST_LINES).sort(), ["alpha3"])
+  assert.deepEqual(Object.keys(HOST_LINES).sort(), ["alpha3", "alpha4"])
   assert.equal(HOST_LINES.alpha3.version, "0.1.7-alpha.1")
   assert.equal(HOST_LINES.alpha3.capability, "modern")
+  assert.equal(HOST_LINES.alpha4.version, "0.1.7-alpha.2")
+  assert.equal(HOST_LINES.alpha4.capability, "modern")
 })
 
 test("every declared dsh peer is pinned exactly on the promised line", () => {

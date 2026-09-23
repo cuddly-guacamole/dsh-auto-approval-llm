@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Re-runnable entry for the minimum supported host line, the floor of the peer
-// range. Each promised line is installed into a scratch prefix under os.tmpdir()
-// and driven through the shipped migration decision layer against the real
+// Re-runnable entry for the promised host lines, the peer-range floor included.
+// Each line is installed into a scratch prefix under os.tmpdir() and driven
+// through the shipped migration decision layer against the real
 // permission-presets service of that exact line. Every installed dsh-* must
 // equal the requested version and the observed capability must equal the line
 // expectation, so a prefix that resolved the wrong line goes red instead of
@@ -19,6 +19,7 @@ const CR = String.fromCharCode(13)
 /** One row per promised host line. The entry asserts the version exactly. */
 export const HOST_LINES = {
   alpha3: { version: "0.1.7-alpha.1", capability: "modern" },
+  alpha4: { version: "0.1.7-alpha.2", capability: "modern" },
 }
 
 /** The dsh packages this plugin declares as host peers, read from the manifest. */
@@ -81,9 +82,27 @@ export function mustReject(what, check) {
 }
 
 /**
+ * Whether an npm tree node is an optional peer that was simply not installed.
+ * npm renders such a node as an empty object: no `version` and, unlike a real
+ * resolution or installation failure, no `problem` either. The conjunction is
+ * deliberate — a node that carries a `problem` is a genuine failure and must
+ * never be skipped, a node that carries a `version` is a resolved copy that
+ * must still be checked against the line, and a node that is not a plain
+ * dependency object is malformed input rather than npm's own rendering. The
+ * fields are read defensively because the raw JSON is external input.
+ */
+function isUninstalledOptionalPeer(entry) {
+  if (entry === undefined || entry === null || typeof entry !== "object" || Array.isArray(entry)) return false
+  return entry.version === undefined && entry.problem === undefined
+}
+
+/**
  * Every @deepseek-ai/dsh-* version in an npm ls tree. Throws when a copy sits
  * on another line or when npm reports problems, so a nested duplicate cannot
- * hide behind a clean top level (npm ls exits 0 for pure-extraneous trees).
+ * hide behind a clean top level (npm ls exits 0 for pure-extraneous trees). An
+ * uninstalled optional peer contributes no copy to the line, so it is skipped
+ * rather than read as a copy of "undefined"; its own dependencies are still
+ * walked, and everything else keeps the exact-match rule.
  */
 export function assertTreeLine(line, tree) {
   const problems = Array.isArray(tree && tree.problems) ? tree.problems : []
@@ -93,7 +112,7 @@ export function assertTreeLine(line, tree) {
     if (deps === undefined || deps === null) return
     for (const name of Object.keys(deps)) {
       const entry = deps[name]
-      if (name.startsWith("@deepseek-ai/dsh-")) {
+      if (name.startsWith("@deepseek-ai/dsh-") && !isUninstalledOptionalPeer(entry)) {
         const version = entry && entry.version
         if (version !== line.version) throw new Error("host line " + line.version + ": " + name + " resolves to " + version + " somewhere in the tree")
         seen.push(name + "@" + version)
@@ -295,7 +314,7 @@ const isMain = process.argv[1] !== undefined && import.meta.url === pathToFileUR
 if (isMain) {
   const options = parseArgs(process.argv.slice(2))
   if (options.help) {
-    process.stdout.write("usage: node scripts/test-host-lines.mjs [--line alpha3|all] [--keep]" + LF)
+    process.stdout.write("usage: node scripts/test-host-lines.mjs [--line alpha3|alpha4|all] [--keep]" + LF)
   } else {
     for (const key of options.lines) {
       const result = await runLine(key, { keep: options.keep })
