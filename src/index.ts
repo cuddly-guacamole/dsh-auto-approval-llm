@@ -35,7 +35,7 @@ import { sanitizeClassifierArguments, sanitizeClassifierText, sanitizeReviewReas
 import { DIRECT_HUMAN_TOOL, GATED_PRESET, THRESHOLD_DEFAULTS } from './auto/constants.js'
 import { createDshClassifier, createEndpointClassifier } from './auto/dsh-classifier.js'
 import { PLUGIN_MESSAGE_SOURCE } from './auto/message-source.js'
-import { type RaceHumanHandle, type ReviewResult, type StaticRisk, AWAITING_MARKER, EDITABLE_CONFIG_KEYS, HOST_ONLY_KEYS, LOCKED_ASK_MARKER, REVIEW_TIMEOUT_NOTICE, applyBreaker, approvalSource, assembleReviewerSystem, breakerNote, breakerTripped, createKeyedMutex, DENY_CIRCUMVENTION_GUIDANCE, extractToolPath, followResolution, formatDenyFeedback, frameReviewerInput, lowRiskReviewOutcome, parseReview, stripCountdownMarkers, unattendedMustFailClosed, plainConfigValue, raceHumanDecision, reviewSuggestionNote, reviewerAutoAllowBlocked, riskFromAssessment, staticListDecision, type ContextSummary } from './auto/decision.js'
+import { type RaceHumanHandle, type ReviewResult, type StaticRisk, AWAITING_MARKER, EDITABLE_CONFIG_KEYS, HOST_ONLY_KEYS, LOCKED_ASK_MARKER, REVIEW_TIMEOUT_NOTICE, SHIPPED_PINNED_KEYS, applyBreaker, approvalSource, assembleReviewerSystem, breakerNote, breakerTripped, createKeyedMutex, DENY_CIRCUMVENTION_GUIDANCE, extractToolPath, followResolution, formatDenyFeedback, frameReviewerInput, lowRiskReviewOutcome, parseReview, stripCountdownMarkers, unattendedMustFailClosed, plainConfigValue, raceHumanDecision, reviewSuggestionNote, reviewerAutoAllowBlocked, riskFromAssessment, staticListDecision, type ContextSummary } from './auto/decision.js'
 import { LATENCY_SUMMARY_WINDOW, clearLatencySamples, loadLatencySamples, pushLatencySample, summarizeLatency, type LatencySample } from './auto/latency.js'
 import { normalizeLoopThreshold, loopKeyFor, createLoopState, recordLoopCall, type LoopGuardState } from './auto/loop-guard.js'
 import { RECENT_REJECTION_CAP, baselineFromPermissionState, observePermissionChange, permissionChangeFromEvent, recentRejectionPointers, type PermissionState } from './auto/permission-change.js'
@@ -373,6 +373,23 @@ for (const key of EDITABLE_CONFIG_KEYS) {
   const dict = Config.dict as Record<string, any>
   dict[key] = dict[key].extra('volatile', true)
 }
+
+/**
+ * Every schema key at the value the schema itself declares for it: the factory
+ * configuration, which is also what the shipped patch rows restate.
+ *
+ * The import offer reads this to tell a stored operator choice from a
+ * declaration that merely restates the schema: the config plane writes the
+ * effective value of every card-owned key back into the entry config on a save,
+ * so a declared value equal to the default is the plane's echo, while a
+ * declared value that differs is a value somebody chose. Resolving the schema
+ * is the only source for it — a hand-written table of defaults would be a
+ * second one, and would drift.
+ *
+ * Taken after the volatile marking above, and unwrapped, because a marked field
+ * resolves to a `{ get() }` reference rather than to its value.
+ */
+const FACTORY_CONFIG_DEFAULTS: Record<string, unknown> = plainConfigValue(Config()) as unknown as Record<string, unknown>
 
 /** One-time flag: the threshold=1 clamp warning fires once per process. */
 let loopThresholdWarned = false
@@ -2458,15 +2475,23 @@ export function readLegacySettings(path: string, ns: string): Record<string, unk
 
 /**
  * The retired values still worth importing: keys the settings card may write,
- * that the retired document carries, that nothing DECLARED carries, and whose
- * value differs from the effective configuration.
+ * that the retired document carries, that the shipped layer does not pin, and
+ * whose value differs from the effective configuration.
  *
- * Two separate questions, because either one alone is wrong:
+ * Three separate questions, because any one alone is wrong:
  *
+ *   - `pinned` — the keys the shipped patch layer declares for this
+ *     deployment. They are refused outright: the shipped layer states the
+ *     policy this installation runs with, and a stale document must not reload
+ *     a relaxed timeout action or an allowlist the card never showed.
  *   - `declared` — the configuration the entry owns. A card-owned key it names
- *     is the operator's stored value: offering it would put a value the user can
- *     see and edit back behind one click, so such a key is never offered, even
- *     when the retired document disagrees with it.
+ *     at a value of its own is the operator's stored value: offering it would
+ *     put a value the user can see and edit back behind one click. A key it
+ *     names at exactly the value the schema defaults to is not that: the config
+ *     plane writes the effective value of every card-owned key into the entry
+ *     config on a save, so a default-valued declaration is the plane echoing
+ *     the schema, and treating it as a declaration would empty the offer on
+ *     every installation that has saved once.
  *   - `current` — the effective configuration the route serves. A key whose
  *     retired value equals the value already in effect changes nothing when it
  *     is imported; offering it would only pin a schema default into an explicit
@@ -2481,11 +2506,13 @@ export function legacyImportPlan(legacy: Record<string, unknown>, declared: Reco
   const keys: string[] = []
   const value: Record<string, unknown> = {}
   const hostOwned = new Set<string>(HOST_ONLY_KEYS)
+  const pinned = new Set<string>(SHIPPED_PINNED_KEYS)
   for (const key of EDITABLE_CONFIG_KEYS) {
     if (hostOwned.has(key)) continue
+    if (pinned.has(key)) continue
     if (!Object.prototype.hasOwnProperty.call(legacy, key)) continue
     if (legacy[key] === undefined) continue
-    if (Object.prototype.hasOwnProperty.call(declared, key)) continue
+    if (Object.prototype.hasOwnProperty.call(declared, key) && !sameConfigValue(declared[key], FACTORY_CONFIG_DEFAULTS[key])) continue
     // A value comparison has to mean one thing across the document, the schema
     // and the card: same type, same shape, same tree. Two values that agree that
     // way are the same settings value whatever the plane stored as the carrier.
@@ -2528,19 +2555,19 @@ let declaredConfigWarned = false
  * The configuration the live namespace DECLARES: the entry's own config, i.e.
  * the shipped patch layer merged with whatever the profile patch carries.
  *
- * The import offer asks this DECLARATION what it may OFFER, so a key it names is
- * excluded. Whether a value is worth offering is the question
- * `legacyImportPlan` answers against `current`, the effective resolved
+ * The import offer asks this DECLARATION what it may OFFER, so a key it names
+ * at a value of its own is excluded. Whether a value is worth offering is the
+ * question `legacyImportPlan` answers against `current`, the effective resolved
  * configuration: it carries every card-owned key because each has a schema
  * default, so an offer needing a key ABSENT from `current` could never appear.
  * `current` is also what the host's own configuration editor writes.
  *
  * Whether the host exposes the raw patch content or a schema-completed set of
- * every key is the load-bearing unknown: only the raw patch leaves this offer's
- * card-owned keys undeclared, while a completed set would declare them all and
- * nothing would ever be offered. An entry the host does not expose reads as
- * "nothing declared" and offers nothing, never a guess at the whole editable
- * set.
+ * every key does not change the offer, because a declared value equal to the
+ * schema default is read as the plane echoing the schema rather than as a
+ * stored choice (see `legacyImportPlan`). An entry the host does not expose
+ * reads as "nothing declared" and offers nothing, never a guess at the whole
+ * editable set.
  */
 function declaredConfig(ctx: any): Record<string, unknown> | undefined {
   const declared = ctx?.fiber?.entry?.options?.config

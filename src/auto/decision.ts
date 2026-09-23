@@ -370,6 +370,29 @@ export const EDITABLE_CONFIG_KEYS = [
 ]
 
 /**
+ * Card-owned keys the shipped patch layer declares for this deployment
+ * (`cordis.patch.yml`, the entry it inserts). The retired settings document may
+ * never repoint them: the shipped layer is where the deployment states which
+ * policy it runs with, and these are the keys a stale document would widen —
+ * a `timeoutAction` relaxed from the shipped refusal, an `allowlist` replaced —
+ * in one click.
+ *
+ * The list is the card-owned half of the shipped entry's own config block, and
+ * a contract test re-derives it from that file, so adding a key to the shipped
+ * layer without extending this list fails the suite instead of silently
+ * reopening the offer.
+ */
+export const SHIPPED_PINNED_KEYS = [
+  'enabled',
+  'timeoutAction',
+  'allowlist',
+  'denyList',
+  'humanOnlyList',
+  'maxConsecutiveDenials',
+  'maxTotalDenials',
+]
+
+/**
  * Whether the denial breaker is tripped for a session. Either threshold, when
  * enabled (> 0), trips; 0 disables that rail. Pure so the contract is testable.
  */

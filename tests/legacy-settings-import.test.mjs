@@ -11,13 +11,20 @@
  *      whatever it returns into the live namespace;
  *   2. a host-owned key (the operator's paths, the retired no-op switch) must
  *      never reach an op — the plane refuses it, and the operator owns it;
- *   3. the offer is measured against what the current configuration DECLARES,
- *      not against the resolved configuration: every schema field carries a
- *      default, so the resolved configuration names every card-owned key and an
- *      offer keyed on its absence could never appear; and a value is offered
- *      only when it DIFFERS from the effective configuration, because importing
- *      a value that is already in effect changes nothing and only pins a
- *      default into an explicit declaration;
+ *   3. the offer is measured against what the entry's own configuration
+ *      DECLARES, not against the resolved configuration: every schema field
+ *      carries a default, so the resolved configuration names every card-owned
+ *      key and an offer keyed on its absence could never appear. A declaration
+ *      vetoes only when it carries a value of its own: the config plane rewrites
+ *      the entry config on every save with the effective value of every
+ *      card-owned key, so a declaration that restates a schema default is that
+ *      echo and not a stored choice. A value is offered only when it DIFFERS
+ *      from the effective configuration, because importing a value that is
+ *      already in effect changes nothing and only pins a default into an
+ *      explicit declaration; and the keys the shipped patch layer states for
+ *      this deployment are never offered at all, whatever the document stores
+ *      (that half of the predicate lives in tests/c1g-offer-predicate.test.mjs
+ *      next to the drift check on the shipped file);
  *   4. nothing but a click may write: an import that runs on mount, on refresh
  *      or on a route read is a silent settings write.
  *
@@ -35,8 +42,8 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { installSettingsRoute, legacyImportPlan, readLegacySettings, readSettingsSegment } from '../lib/index.js'
-import { EDITABLE_CONFIG_KEYS, HOST_ONLY_KEYS } from '../lib/auto/decision.js'
+import { Config, installSettingsRoute, legacyImportPlan, readLegacySettings, readSettingsSegment } from '../lib/index.js'
+import { EDITABLE_CONFIG_KEYS, HOST_ONLY_KEYS, SHIPPED_PINNED_KEYS, plainConfigValue } from '../lib/auto/decision.js'
 import { buildMutateOps, legacyImportBefore, legacyImportOf, legacyImportWrite, legacyUndoWrite } from '../lib/client/row-config.js'
 import { callSpec, carrierContext, findSpec } from './helpers/carrier-route.mjs'
 
@@ -69,6 +76,7 @@ const LEGACY_TEXT = [
   '  timeoutAction: low-risk-allow',
   '  llmReviewScope: low-or-above',
   '  safetyPrompt: ""',
+  '  debug: false',
   '  allowlist:',
   '    - mcp__playwright__*',
   '    - mcp__playwright',
@@ -81,7 +89,23 @@ const LEGACY_TEXT = [
 ].join('\n')
 
 /** The configuration the namespace declares (its own patch layer). */
-const DECLARED = { rejectGuidance: true, enabled: true }
+const DECLARED = { debug: true }
+
+/** The factory configuration: every schema key at the value the schema declares. */
+const FACTORY = plainConfigValue(Config())
+
+/**
+ * Whether `declared` stores a value of its own for `key`: a declaration at the
+ * schema default is the config plane's echo of the effective value, so only a
+ * value the schema does not default to is a stored choice that vetoes.
+ */
+const declaresOwnValueFor = (declared, key) => Object.prototype.hasOwnProperty.call(declared, key) &&
+  JSON.stringify(declared[key]) !== JSON.stringify(FACTORY[key])
+
+const declaresOwnValue = (key) => declaresOwnValueFor(DECLARED, key)
+
+/** The keys the shipped patch layer states for this deployment. */
+const PINNED = new Set(SHIPPED_PINNED_KEYS)
 
 /** The retired document as the bounded reader sees it. */
 const segment = readSettingsSegment(LEGACY_TEXT, NS)
@@ -99,16 +123,19 @@ const EFFECTIVE = {
   allowlist: [],
   llmReviewScope: 'high',
   lowRiskSeconds: 9,
+  debug: true,
   categoryPolicy: { delete: 'auto' },
 }
 
 /**
  * The values this document would change, derived from the two fixtures alone so
  * the expectation is not a restatement of the implementation: card-owned, not
- * declared, and absent from the effective configuration or different in it.
+ * pinned by the shipped layer, not declared at a value of its own, and absent
+ * from the effective configuration or different in it.
  */
 const CHANGING = Object.keys(segment)
-  .filter((key) => EDITABLE_CONFIG_KEYS.includes(key) && !Object.prototype.hasOwnProperty.call(DECLARED, key))
+  .filter((key) => EDITABLE_CONFIG_KEYS.includes(key) && !PINNED.has(key))
+  .filter((key) => !declaresOwnValue(key))
   .filter((key) => !Object.prototype.hasOwnProperty.call(EFFECTIVE, key) || JSON.stringify(segment[key]) !== JSON.stringify(EFFECTIVE[key]))
 
 /** Brace-balanced body of the first `marker` in `source` (see the client tests). */
@@ -182,18 +209,24 @@ const LOOPBACK = { method: 'GET', headers: { host: 'localhost:3080' } }
 test('a retired card-owned field the declared configuration lacks, and whose value differs, is offered for import', () => {
   const plan = legacyImportPlan(segment, DECLARED, EFFECTIVE)
   assert.ok(plan.keys.includes('categoryPolicy'), 'a stored value the declaration lacks and the configuration does not already carry is offered')
-  assert.ok(plan.keys.includes('allowlist'), 'a stored list the configuration holds at another value is offered')
+  assert.ok(plan.keys.includes('llmReviewScope'), 'a key the configuration holds at another value is offered')
   assert.ok(EDITABLE_CONFIG_KEYS.includes('categoryPolicy'), 'precondition: the fixture key is card-owned')
   assert.deepEqual(plan.value.categoryPolicy, {}, 'an empty mapping is read as the empty object it is')
-  assert.deepEqual(plan.value.allowlist, ['mcp__playwright__*', 'mcp__playwright'], 'a block list of scalars survives the bounded reader')
   assert.equal(plan.value.safetyPrompt, undefined, 'a value the configuration already holds is not carried in the payload')
   assert.ok(!plan.keys.includes('safetyPrompt'), 'a field whose stored value is already in effect is not offered')
-  assert.ok(!plan.keys.includes('rejectGuidance'), 'a key the declared configuration carries is never offered')
-  assert.ok(!plan.keys.includes('safetyPrompt'), 'nor is a key the effective configuration already holds at the stored value')
+  assert.ok(!plan.keys.includes('debug'), 'a key the declared configuration carries at a value of its own is never offered')
+  assert.equal(DECLARED.debug, true, 'precondition: the declared value is the operator\'s own, not the schema default')
+  assert.equal(FACTORY.debug, false, 'precondition: the schema defaults that key to the other value')
+  assert.notDeepEqual(EFFECTIVE.debug, segment.debug, 'precondition: the documents disagree about it, so only the declaration keeps it out')
+  // Every list-valued card-owned key is declared by the shipped patch layer, so
+  // the pin — not the value test — is what keeps the stored allowlist out.
+  assert.ok(PINNED.has('allowlist'), 'precondition: the shipped layer states the allowlist')
+  assert.deepEqual(segment.allowlist, ['mcp__playwright__*', 'mcp__playwright'], 'precondition: a block list of scalars survives the bounded reader')
+  assert.ok(!plan.keys.includes('allowlist'), 'a stored list the shipped layer pins is never offered')
+  assert.equal(plan.value.allowlist, undefined, 'and the payload carries nothing for that field')
   assert.ok(!plan.keys.includes('reviewerReasoning'), 'nor one whose stored value matches it through the reader')
   assert.equal(segment.reviewerReasoning, 'low', 'precondition: the fixture stores the value the schema defaults to')
   assert.ok(!Object.prototype.hasOwnProperty.call(plan.value, 'reviewerReasoning'), 'and the payload carries nothing for that field')
-  assert.ok(plan.keys.includes('llmReviewScope'), 'while a key the configuration holds at another value still is')
 })
 
 test('the offer is exactly the values the effective configuration does not already carry', () => {
@@ -208,12 +241,15 @@ test('the offer is exactly the values the effective configuration does not alrea
   assert.ok(plan.keys.length > 0, 'and the same document does offer against the real configuration')
 })
 
-test('a list is compared by its entries, not by the string that renders it', () => {
+test('a mapping is compared by its entries, and a pinned list never reaches the comparison', () => {
   const carried = legacyImportPlan(segment, DECLARED, { ...EFFECTIVE, allowlist: [...segment.allowlist] })
-  assert.ok(!carried.keys.includes('allowlist'), 'a list with the same entries, in another array, is the same value')
+  assert.ok(!carried.keys.includes('allowlist'), 'a pinned list is not offered, not even when the configuration holds the same entries')
   assert.ok(carried.keys.includes('categoryPolicy'), 'and the check stays per key')
   const emptied = legacyImportPlan(segment, DECLARED, { ...EFFECTIVE, allowlist: [] })
-  assert.ok(emptied.keys.includes('allowlist'), 'a list the configuration holds empty is a different value')
+  assert.ok(!emptied.keys.includes('allowlist'), 'nor when the configuration holds that list empty')
+  // The mapping is the value shape the offer does reach, so the comparison
+  // itself is pinned there: same entries in another object are the same value,
+  // one differing entry is a different one.
   const mapping = legacyImportPlan(segment, DECLARED, { ...EFFECTIVE, categoryPolicy: { edit: 'ask' } })
   assert.ok(mapping.keys.includes('categoryPolicy'), 'a mapping that differs by one entry differs')
   assert.ok(!legacyImportPlan(segment, DECLARED, { ...EFFECTIVE, categoryPolicy: {} }).keys.includes('categoryPolicy'), 'a mapping with the same entries, in another object, is the same value')
@@ -232,26 +268,29 @@ test('no host-owned key ever enters the import plan', () => {
   assert.deepEqual([...plan.keys].sort(), [...CHANGING].sort(), 'exactly the card-owned keys the declaration lacks and the effective configuration does not already carry are offered')
 })
 
-test('a key the declared configuration already carries is not offered, even when the values differ', () => {
-  const declared = { timeoutAction: 'reject', allowlist: ['mcp__other'], rejectGuidance: true }
+test('a key the declared configuration carries at a value of its own is not offered, even when the values differ', () => {
+  const declared = { categoryPolicy: { edit: 'deny' }, debug: true }
   const plan = legacyImportPlan(segment, declared, EFFECTIVE)
-  assert.ok(!plan.keys.includes('timeoutAction'), 'a declared value is the user-visible one and stays')
-  assert.ok(!Object.prototype.hasOwnProperty.call(plan.value, 'timeoutAction'), 'the payload carries no value for it either')
-  assert.equal(segment.timeoutAction, 'low-risk-allow', 'precondition: the documents disagree about this field')
-  assert.notEqual(EFFECTIVE.timeoutAction, segment.timeoutAction, 'precondition: the declared value is the one in effect')
-  assert.ok(!plan.keys.includes('allowlist'), 'a declared list is not offered either, however it compares to the effective one')
-  assert.notDeepEqual(EFFECTIVE.allowlist, declared.allowlist, 'precondition: the declared list differs from the effective one too')
-  assert.ok(plan.keys.includes('categoryPolicy'), 'the check is per key, not per document')
+  assert.ok(!plan.keys.includes('categoryPolicy'), 'a declared value is the user-visible one and stays')
+  assert.ok(!Object.prototype.hasOwnProperty.call(plan.value, 'categoryPolicy'), 'the payload carries no value for it either')
+  assert.deepEqual(segment.categoryPolicy, {}, 'precondition: the document stores an empty mapping')
+  assert.notDeepEqual(EFFECTIVE.categoryPolicy, declared.categoryPolicy, 'precondition: the declared mapping is a value of its own, not the schema default')
+  assert.ok(!plan.keys.includes('debug'), 'a declared switch is not offered either, however it compares to the effective one')
+  assert.notDeepEqual(EFFECTIVE.debug, segment.debug, 'precondition: the declared value differs from the effective one too')
+  assert.equal(plan.value.debug, undefined, 'and the payload carries nothing for it')
+  assert.ok(plan.keys.includes('llmReviewScope'), 'the check is per key, not per document')
 })
 
-test('a configuration that names every default still offers nothing to compare against a declaration', () => {
+test('a declaration that carries a value of its own for every key offers nothing to compare against a declaration', () => {
   // The resolved configuration is a different object from the declaration: this
-  // pins the reason the offer is NOT measured against it. A fixture that names
-  // every card-owned key offers nothing, which is exactly what a route keyed on
-  // the resolved configuration would answer on every real host.
-  const resolved = Object.fromEntries(EDITABLE_CONFIG_KEYS.map((key) => [key, undefined]))
-  assert.deepEqual(legacyImportPlan(segment, resolved, resolved).keys, [], 'every key present in the compared configuration means no offer')
-  assert.ok(legacyImportPlan(segment, DECLARED, EFFECTIVE).keys.length > 0, 'and the very same document does offer against a declaration')
+  // pins the reason the offer is NOT measured against it. A fixture that stores
+  // a value of its own for every card-owned key offers nothing, whatever the
+  // effective configuration names.
+  const ownValues = Object.fromEntries(EDITABLE_CONFIG_KEYS.map((key) => [key, { of: 'its own' }]))
+  assert.deepEqual(legacyImportPlan(segment, ownValues, FACTORY).keys, [], 'every key declared at a value of its own means no offer')
+  const noValues = Object.fromEntries(EDITABLE_CONFIG_KEYS.map((key) => [key, undefined]))
+  assert.deepEqual(legacyImportPlan(segment, noValues, noValues).keys, [], 'a declaration that names a key without a value is not the schema default either')
+  assert.ok(legacyImportPlan(segment, DECLARED, EFFECTIVE).keys.length > 0, 'and the very same document does offer against a declaration of the shipped shape')
 })
 
 test('degenerate documents read as nothing, never as an error', () => {
@@ -302,7 +341,8 @@ test('the read-only route carries the import offer and owns no write path', asyn
   assert.equal(res.status, 200)
   assert.equal(res.body.ok, true)
   assert.ok(Array.isArray(res.body.value.legacyImport.keys) && res.body.value.legacyImport.keys.length > 0, 'the offer reaches the client through the snapshot it already reads')
-  assert.ok(!res.body.value.legacyImport.keys.includes('timeoutAction'), 'a key the declaration carries is not offered')
+  assert.ok(!res.body.value.legacyImport.keys.includes('timeoutAction'), 'a key the shipped layer states is not offered, whatever the declaration carries')
+  assert.ok(PINNED.has('timeoutAction'), 'precondition: the shipped layer really states the timeout action')
   assert.ok(res.body.value.legacyImport.keys.includes('llmReviewScope'), 'a key the snapshot serves at another value is offered')
   assert.ok(res.body.value.legacyImport.keys.includes('categoryPolicy'), 'a key whose stored value differs from the one in effect is offered')
   assert.equal(res.body.value.value.llmReviewScope, 'high', 'precondition: the snapshot really carries that stored value')
@@ -333,9 +373,11 @@ test('the offer is exactly the values the declaration lacks and the snapshot doe
   // The page's form carries the resolved configuration: it names every field the
   // schema declares a default for. An offer measured against THAT object could
   // never appear on a real host, so the route reads the entry's own
-  // configuration instead — the same source the host's config editor writes to.
+  // configuration instead — the same source the host's config editor writes to,
+  // and a declaration that only restates a schema default does not veto there.
   // Whether a field is worth offering is the second question, answered against
-  // the configuration the snapshot serves.
+  // the configuration the snapshot serves, and the shipped layer's own keys are
+  // out of the offer entirely.
   const resolved = { enabled: true, timeoutAction: 'reject', llmReviewScope: 'high', allowlist: [] }
   const declared = { timeoutAction: 'reject' }
   const { ctx, specs } = carrierWithDeclaration(declared)
@@ -343,11 +385,11 @@ test('the offer is exactly the values the declaration lacks and the snapshot doe
   const res = await callSpec(findSpec([...specs.values()], 'settings'), LOOPBACK)
   const offered = res.body.value.legacyImport.keys
   const expected = Object.keys(segment)
-    .filter((key) => EDITABLE_CONFIG_KEYS.includes(key) && !Object.prototype.hasOwnProperty.call(declared, key))
+    .filter((key) => EDITABLE_CONFIG_KEYS.includes(key) && !PINNED.has(key) && !declaresOwnValueFor(declared, key))
     .filter((key) => !Object.prototype.hasOwnProperty.call(resolved, key) || JSON.stringify(segment[key]) !== JSON.stringify(resolved[key]))
   assert.deepEqual([...offered].sort(), expected.sort(), 'the offer follows the declaration and the effective values alone')
   assert.ok(offered.includes('categoryPolicy'), 'a field the resolved configuration names at another value is still offered')
-  assert.ok(!offered.includes('timeoutAction'), 'and a field the declaration carries is not, even though the resolved configuration names it too')
+  assert.ok(!offered.includes('timeoutAction'), 'and a field the shipped layer states is not, even though the resolved configuration names it too')
   assert.ok(offered.includes('llmReviewScope'), 'a field the declaration lacks and the snapshot serves at another value is offered')
   assert.equal(res.body.value.value.llmReviewScope, 'high', 'the snapshot still serves the resolved value the page renders')
 })
