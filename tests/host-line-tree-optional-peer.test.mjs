@@ -12,7 +12,7 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import { HOST_LINES, assertTreeLine } from "../scripts/test-host-lines.mjs"
 
-const line = HOST_LINES.alpha4
+const line = HOST_LINES.rc1
 const PEER = "@deepseek-ai/dsh-agent"
 const WORKSPACE = "@deepseek-ai/dsh-workspace"
 const FOREIGN = "0.1.6-alpha.2"

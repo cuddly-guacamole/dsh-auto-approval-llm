@@ -8,7 +8,7 @@
 
 [![npm](https://img.shields.io/npm/v/@quill507%2Fdsh-auto-approval-llm?style=flat-square&label=npm&labelColor=454a54)](https://www.npmjs.com/package/@quill507/dsh-auto-approval-llm)
 [![downloads](https://img.shields.io/npm/dm/@quill507%2Fdsh-auto-approval-llm?style=flat-square&labelColor=454a54)](https://www.npmjs.com/package/@quill507/dsh-auto-approval-llm)
-![DSH](https://img.shields.io/badge/DSH-0.1.5--rc.2%20%7C%200.1.7--alpha.2-4c6ef5?style=flat-square&labelColor=454a54)
+![DSH](https://img.shields.io/badge/DSH-0.1.7--rc.1-4c6ef5?style=flat-square&labelColor=454a54)
 [![license](https://img.shields.io/badge/license-BSD--3--Clause-d29922?style=flat-square&labelColor=454a54)](https://opensource.org/licenses/BSD-3-Clause)
 [![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
 
@@ -66,9 +66,9 @@ flowchart TD
 
 ## Installation
 
-**Prerequisites**: the session or preset is on the **Auto tier** (machine value `auto-approval` = `danger-full-access` + `approval: ask`; switch with `/permission auto-approval`); DSH `0.1.7-alpha.2`; Node `^22.19.0 || >=24.0.0`.
+**Prerequisites**: the session or preset is on the **Auto tier** (machine value `auto-approval` = `danger-full-access` + `approval: ask`; switch with `/permission auto-approval`); DSH `0.1.7-rc.1`; Node `^22.19.0 || >=24.0.0`.
 
-Compatibility window: the name `auto` is reserved for the upstream `@deepseek-ai/dsh-experimental-auto-review` (Auto review / EXP), while this plugin only defines and gates `auto-approval`, so the two **own different tiers and can be enabled together**. Two host lines are promised: `0.1.7-alpha.2` = full support (peer `>=0.1.5-rc.2 <2 || >=0.1.7-alpha.2 <2`); `0.1.5-rc.2` = **installation compatibility only** — the plugin installs and loads on that line but **does not take over the `auto` tier** (`gatePresetNames()` still returns only `auto-approval`, `isGatedSession("auto")` is false, the same-signature migration is `skipped` with zero audit writes), so it is not used there. The upper bound `<2` **is not a support commitment for the lines in between**. The legacy machine value `auto` alias plus the legacy/unknown capability branches were removed with that floor (the shipped patch defines only `auto-approval`).
+Compatibility window: the name `auto` is reserved for the upstream `@deepseek-ai/dsh-experimental-auto-review` (Auto review / EXP), while this plugin only defines and gates `auto-approval`, so the two **own different tiers and can be enabled together**. One host line is promised: `0.1.7-rc.1` = **full support** (peer `>=0.1.7-rc.1 <2`). Long-term rule: **the promised line follows the host the user actually runs**; a further line is appended only when upstream enters the alpha of a new tuple (with a matching row in `HOST_LINES`). The peer range is an **installation-admission surface** — **untested lines inside it are unsupported**, and the upper bound `<2` is only the range's upper bound. The legacy machine value `auto` alias plus the legacy/unknown capability branches were removed with that floor (the shipped patch defines only `auto-approval`).
 
 ```bash
 dsh plugin --profile web add @quill507/dsh-auto-approval-llm

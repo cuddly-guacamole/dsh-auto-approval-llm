@@ -11,7 +11,7 @@
 | 项 | 要求 |
 |---|---|
 | 权限档 | **Auto 档**（machine value `auto-approval`，host 名 `Auto approval`）= `sandbox: danger-full-access` + `approval: ask`；其他档本插件不介入 |
-| DSH | `0.1.7-alpha.2` 完整支持（peer 范围 `>=0.1.5-rc.2 <2 \|\| >=0.1.7-alpha.2 <2`；区间上界 `<2` **不构成对中间线的支持承诺**。另一条承诺线 `0.1.5-rc.2` **只登记安装兼容**——插件在该线能装能加载，但**不接管 `auto` 档**，故不在该线上使用。`auto` 档归上游 `@deepseek-ai/dsh-experimental-auto-review`，本插件只接管 `auto-approval`、两者可同开；旧机器值 `auto` 别名已随下限抬升移除） |
+| DSH | `0.1.7-rc.1` **完整支持**（peer 范围 `>=0.1.7-rc.1 <2`）——宿主只承诺这一条线：**宿主线跟着用户实际在跑的宿主走**，上游进入新 tuple 的 alpha 时再逐条追加（同步 `HOST_LINES`）。peer 区间是**安装准入面**：**区间内未测的线不受支持**，上界 `<2` 只是范围上界。`auto` 档归上游 `@deepseek-ai/dsh-experimental-auto-review`，本插件只接管 `auto-approval`、两者可同开；旧机器值 `auto` 别名已随下限抬升移除 |
 | Node | `^22.19.0 || >=24.0.0` |
 | 共存 | 本插件是 `auto-approval` 档 `approval/request` 的唯一终结裁决者 —— 同一档位不要再叠第二个审批插件；上游 `@deepseek-ai/dsh-experimental-auto-review`（`auto`，Auto review / EXP）是另一个档位，可同时启用 |
 

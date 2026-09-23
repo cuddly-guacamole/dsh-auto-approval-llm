@@ -1,11 +1,12 @@
 /**
- * Host-line contract: the peer range promises the 0.1.7-alpha.2 line of the
- * modern shape (`catalog` + `registerAuto`), and registers the 0.1.5-rc.2 line
- * as inert — the plugin loads there but takes over no session, so that line
- * must assert exactly that instead of a migration it cannot perform. This file
- * pins the promised table, the exact version pinning, the reverse controls that
- * make a wrong-tree acceptance impossible, and the shipped preset composition.
- * The last case drives the locally installed host line through the real
+ * Host-line contract: exactly one line is promised — the `0.1.7-rc.1` line the
+ * user actually runs, which carries the modern shape (`catalog` +
+ * `registerAuto`) and is driven through the same-signature migration. The peer
+ * range is an installation-admission surface, not a support claim, so the
+ * promise lives here in `HOST_LINES` and nowhere else. This file pins the
+ * promised table, the exact version pinning, the reverse controls that make a
+ * wrong-tree acceptance impossible, and the shipped preset composition. The
+ * last case drives the locally installed host line through the real
  * permission-presets service, so the harness itself cannot rot into a pure fake.
  */
 import test from "node:test"
@@ -13,6 +14,7 @@ import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import {
+  FOREIGN_HOST_LINE,
   GATED_PRESET,
   HOST_LINES,
   ROOT,
@@ -31,20 +33,29 @@ import {
 
 const patch = readFileSync(join(ROOT, "cordis.patch.yml"), "utf8")
 
-/** A host line the manifest no longer promises; every reverse control uses it. */
-const FOREIGN_LINE = { version: "0.1.6-alpha.2", capability: "modern" }
+/**
+ * A host line the promise no longer covers — the retired `0.1.5-rc.2` line,
+ * whose probe reads `unknown` / `unrecognized-shape` (measured on the real
+ * install tree). It is deliberately not a row of `HOST_LINES`; it survives here
+ * as the control for the inert branch of `assertLineOutcome`, so that branch
+ * stays falsifiable after the promise was narrowed to the single line the user
+ * runs. The line the live reverse controls use is `FOREIGN_HOST_LINE`.
+ */
+const INERT_CONTROL_LINE = { version: "0.1.5-rc.2", capability: "unknown" }
 
-test("the promised line table carries the modern shape and the inert line", () => {
-  assert.deepEqual(Object.keys(HOST_LINES).sort(), ["alpha4", "rc2"])
-  assert.equal(HOST_LINES.rc2.version, "0.1.5-rc.2")
-  assert.equal(HOST_LINES.rc2.capability, "unknown")
-  assert.equal(HOST_LINES.alpha4.version, "0.1.7-alpha.2")
-  assert.equal(HOST_LINES.alpha4.capability, "modern")
+test("the promised line table carries exactly the line the user runs", () => {
+  assert.deepEqual(Object.keys(HOST_LINES).sort(), ["rc1"])
+  assert.equal(HOST_LINES.rc1.version, "0.1.7-rc.1")
+  assert.equal(HOST_LINES.rc1.capability, "modern")
 })
 
 test("the foreign line used by the reverse controls is not a registered line", () => {
-  assert.equal(Object.values(HOST_LINES).some(row => row.version === FOREIGN_LINE.version), false)
-  for (const line of Object.values(HOST_LINES)) assert.notEqual(line.version, FOREIGN_LINE.version)
+  assert.equal(Object.values(HOST_LINES).some(row => row.version === FOREIGN_HOST_LINE.version), false)
+  for (const line of Object.values(HOST_LINES)) {
+    assert.notEqual(line.version, FOREIGN_HOST_LINE.version)
+    assert.notEqual(line.capability, FOREIGN_HOST_LINE.capability)
+  }
+  assert.equal(Object.values(HOST_LINES).some(row => row.version === INERT_CONTROL_LINE.version), false)
 })
 
 test("every declared dsh peer is pinned exactly on the promised line", () => {
@@ -61,61 +72,71 @@ test("every declared dsh peer is pinned exactly on the promised line", () => {
 test("a transitively floated dsh package is pinned by an override only", () => {
   const peers = dshPeers()
   const floated = "@deepseek-ai/dsh-agent"
-  const manifest = scratchManifest(HOST_LINES.alpha4, peers, [floated])
+  const manifest = scratchManifest(HOST_LINES.rc1, peers, [floated])
   assert.deepEqual(Object.keys(manifest.dependencies).sort(), peers.slice().sort())
   assert.equal(manifest.dependencies[floated], undefined)
-  assert.equal(manifest.overrides[floated], HOST_LINES.alpha4.version)
-  for (const name of peers) assert.equal(manifest.overrides[name], HOST_LINES.alpha4.version)
+  assert.equal(manifest.overrides[floated], HOST_LINES.rc1.version)
+  for (const name of peers) assert.equal(manifest.overrides[name], HOST_LINES.rc1.version)
 })
 
 test("the installed-tree check rejects a foreign line and an empty tree", () => {
   const good = {
     "@deepseek-ai/cordis": "4.0.3",
-    "@deepseek-ai/dsh-llm": HOST_LINES.alpha4.version,
-    "@deepseek-ai/dsh-session": HOST_LINES.alpha4.version,
+    "@deepseek-ai/dsh-llm": HOST_LINES.rc1.version,
+    "@deepseek-ai/dsh-session": HOST_LINES.rc1.version,
   }
-  assert.deepEqual(assertInstalledLine(HOST_LINES.alpha4, good), [
-    "@deepseek-ai/dsh-llm@" + HOST_LINES.alpha4.version,
-    "@deepseek-ai/dsh-session@" + HOST_LINES.alpha4.version,
+  assert.deepEqual(assertInstalledLine(HOST_LINES.rc1, good), [
+    "@deepseek-ai/dsh-llm@" + HOST_LINES.rc1.version,
+    "@deepseek-ai/dsh-session@" + HOST_LINES.rc1.version,
   ].sort())
-  mustReject("a tree on the dropped line", () => assertInstalledLine(HOST_LINES.alpha4, { "@deepseek-ai/dsh-session": FOREIGN_LINE.version }))
-  mustReject("a tree with no dsh package", () => assertInstalledLine(HOST_LINES.alpha4, { "@deepseek-ai/cordis": "4.0.3" }))
+  // Both lines the promise dropped — the inert one and the previously supported
+  // one — must be refused by the tree check, not merely unlisted.
+  for (const retired of [INERT_CONTROL_LINE.version, FOREIGN_HOST_LINE.version]) {
+    mustReject("a tree on the dropped line " + retired, () => assertInstalledLine(HOST_LINES.rc1, { "@deepseek-ai/dsh-session": retired }))
+  }
+  mustReject("a tree with no dsh package", () => assertInstalledLine(HOST_LINES.rc1, { "@deepseek-ai/cordis": "4.0.3" }))
 })
 
 test("the npm-tree check rejects problems and nested foreign copies", () => {
-  const good = { dependencies: { "@deepseek-ai/dsh-session": { version: HOST_LINES.alpha4.version } } }
-  assert.deepEqual(assertTreeLine(HOST_LINES.alpha4, good), ["@deepseek-ai/dsh-session@" + HOST_LINES.alpha4.version])
+  const good = { dependencies: { "@deepseek-ai/dsh-session": { version: HOST_LINES.rc1.version } } }
+  assert.deepEqual(assertTreeLine(HOST_LINES.rc1, good), ["@deepseek-ai/dsh-session@" + HOST_LINES.rc1.version])
   const nested = {
     dependencies: {
       "@deepseek-ai/dsh-tools": {
-        version: HOST_LINES.alpha4.version,
-        dependencies: { "@deepseek-ai/dsh-session": { version: FOREIGN_LINE.version } },
+        version: HOST_LINES.rc1.version,
+        dependencies: { "@deepseek-ai/dsh-session": { version: FOREIGN_HOST_LINE.version } },
       },
     },
   }
-  mustReject("a nested copy on a foreign line", () => assertTreeLine(HOST_LINES.alpha4, nested))
-  mustReject("an npm problem list", () => assertTreeLine(HOST_LINES.alpha4, { problems: ["extraneous: @deepseek-ai/dsh-llm"], dependencies: good.dependencies }))
-  mustReject("an empty npm tree", () => assertTreeLine(HOST_LINES.alpha4, { dependencies: {} }))
+  mustReject("a nested copy on a foreign line", () => assertTreeLine(HOST_LINES.rc1, nested))
+  mustReject("an npm problem list", () => assertTreeLine(HOST_LINES.rc1, { problems: ["extraneous: @deepseek-ai/dsh-llm"], dependencies: good.dependencies }))
+  mustReject("an empty npm tree", () => assertTreeLine(HOST_LINES.rc1, { dependencies: {} }))
 })
 
 test("the capability check rejects the retired legacy reading", () => {
-  assert.equal(assertCapability(HOST_LINES.alpha4, "modern"), "modern")
-  mustReject("a legacy reading on the promised line", () => assertCapability(HOST_LINES.alpha4, "legacy"))
+  assert.equal(assertCapability(HOST_LINES.rc1, "modern"), "modern")
+  mustReject("a legacy reading on the promised line", () => assertCapability(HOST_LINES.rc1, "legacy"))
   for (const line of Object.values(HOST_LINES)) assert.notEqual(line.capability, "legacy")
+  // `legacy` is the reading the shipped probe never returns (it answers `modern`
+  // or `unknown`), so the rejection above cannot be satisfied by a value some
+  // host would actually produce. The sentinel carries exactly that reading.
+  assert.equal(FOREIGN_HOST_LINE.capability, "legacy")
+  assert.equal(assertCapability(FOREIGN_HOST_LINE, "legacy"), "legacy")
 })
 
 test("a line's capability field is load-bearing in both directions", () => {
-  mustReject("the inert line re-read as modern", () => assertCapability(HOST_LINES.rc2, "modern"))
-  mustReject("the inert line re-read as the retired legacy shape", () => assertCapability(HOST_LINES.rc2, "legacy"))
-  mustReject("the modern line re-read as inert", () => assertCapability(HOST_LINES.alpha4, "unknown"))
+  mustReject("the promised line re-read as inert", () => assertCapability(HOST_LINES.rc1, "unknown"))
+  mustReject("the promised line re-read as the retired legacy shape", () => assertCapability(HOST_LINES.rc1, "legacy"))
+  mustReject("the foreign sentinel read as the promised reading", () => assertCapability(FOREIGN_HOST_LINE, HOST_LINES.rc1.capability))
 })
 
 /**
  * The observations an inert line must produce, mirrored from the live run of
- * `node scripts/test-host-lines.mjs --line rc2`: the probe reads `unknown` /
- * `unrecognized-shape`, the gate name set stays the plugin's own preset, the
- * same-signature session is skipped without a single audit write, `auto` is
- * not gated and the dfa+never session is skipped too.
+ * `node scripts/test-host-lines.mjs --line rc2` on the retired `0.1.5-rc.2`
+ * line: the probe reads `unknown` / `unrecognized-shape`, the gate name set
+ * stays the plugin's own preset, the same-signature session is skipped without
+ * a single audit write, `auto` is not gated and the dfa+never session is
+ * skipped too.
  */
 function inertObservations(line) {
   return {
@@ -134,7 +155,7 @@ function inertObservations(line) {
 }
 
 test("an inert line loads, gates nothing and writes nothing", () => {
-  const line = HOST_LINES.rc2
+  const line = INERT_CONTROL_LINE
   assert.equal(line.capability, "unknown")
   assert.equal(assertLineOutcome(line, inertObservations(line)).outcome, "skipped")
   mustReject("an inert line that migrated", () => assertLineOutcome(line, { ...inertObservations(line), outcome: "migrated" }))
@@ -144,7 +165,8 @@ test("an inert line loads, gates nothing and writes nothing", () => {
   mustReject("an inert line read as the reserved shape", () => assertLineOutcome(line, { ...inertObservations(line), reason: "legacy-but-reserved-shape" }))
   mustReject("an inert line that widened its gate names", () => assertLineOutcome(line, { ...inertObservations(line), gateNames: [GATED_PRESET, "auto"] }))
   mustReject("a line that gates the legacy identity", () => assertLineOutcome(line, { ...inertObservations(line), gatedBefore: true }))
-  mustReject("a modern line reported inert", () => assertLineOutcome(HOST_LINES.alpha4, inertObservations(HOST_LINES.alpha4)))
+  mustReject("an inert line re-read as modern", () => assertLineOutcome(line, { ...inertObservations(line), capability: "modern" }))
+  mustReject("a modern line reported inert", () => assertLineOutcome(HOST_LINES.rc1, inertObservations(HOST_LINES.rc1)))
 })
 
 test("the preset table is read from the shipped composition", () => {
