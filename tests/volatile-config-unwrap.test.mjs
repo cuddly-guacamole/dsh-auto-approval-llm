@@ -82,20 +82,23 @@ test('the unwrap is required: a build without the unwrap line still throws', asy
   // The reverse control needs a build whose `resolveConfig` skips the unwrap.
   // Rather than writing that build anywhere, the compiled module is served from
   // memory with the single unwrap line removed and the rest byte-identical, so
-  // the throw it produces is attributable to that line alone.
+  // the throw it produces is attributable to that line alone. The line lives in
+  // the normalizer module; `lib/index.js` only re-exports the function, so the
+  // patch must target the module that carries the body.
   const libUrl = new URL('../lib/index.js', import.meta.url)
-  const real = readFileSync(libUrl, 'utf8')
+  const normalizeUrl = new URL('../lib/auto/config-normalize.js', import.meta.url)
+  const real = readFileSync(normalizeUrl, 'utf8')
   assert.equal(
     real.split(UNWRAP_STATEMENT).length - 1,
     1,
     `the compiled resolveConfig must carry exactly one \`${UNWRAP_STATEMENT}\``,
   )
   const patched = real.replace(UNWRAP_STATEMENT, '')
-  const patchedUrl = `${libUrl.href}?without-unwrap`
+  const patchedUrl = `${normalizeUrl.href}?without-unwrap`
   const hook = registerHooks({
     resolve(specifier, context, nextResolve) {
       const resolved = nextResolve(specifier, context)
-      return resolved.url === libUrl.href ? { ...resolved, url: patchedUrl } : resolved
+      return resolved.url === normalizeUrl.href ? { ...resolved, url: patchedUrl } : resolved
     },
     load(url, context, nextLoad) {
       if (url === patchedUrl) return { format: 'module', source: patched, shortCircuit: true }
@@ -103,9 +106,12 @@ test('the unwrap is required: a build without the unwrap line still throws', asy
     },
   })
   try {
-    const { Config: PatchedConfig, resolveConfig: patchedResolveConfig } = await import(libUrl.href)
+    // Import the patched module by its own URL: the entry was already loaded by
+    // the static import above, so its re-export binding is linked to the real
+    // normalizer and would never see this patch.
+    const { resolveConfig: patchedResolveConfig } = await import(patchedUrl)
     // The production shape: the resolved schema handed straight to resolveConfig.
-    const resolved = PatchedConfig({})
+    const resolved = Config({})
     assert.ok(isVolatileConfig(resolved.timeoutAction), 'the fixture must carry a reference')
     assert.throws(
       () => patchedResolveConfig(resolved),

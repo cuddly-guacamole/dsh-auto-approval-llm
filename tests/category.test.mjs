@@ -608,6 +608,9 @@ test('realpathCriticalReason: textually-external targets are not its business (s
 
 // ── wiring assertions against the compiled host ───────────────────────
 const HOST_SRC = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
+// The config normalizer is its own module; the entry re-exports `resolveConfig`
+// by name only, so its body is not part of HOST_SRC.
+const NORMALIZE_SRC = readFileSync(new URL('../lib/auto/config-normalize.js', import.meta.url), 'utf8')
 
 test('T63: the category decision function is called once per wiring point (2 total)', () => {
   const occurrences = [...HOST_SRC.matchAll(/categoryDirectiveFor\(/g)]
@@ -914,8 +917,14 @@ test('LP3: exactly the registered learnable sites construct a learnable context'
 test('LP12b: the host schema declares both learning keys with fail-closed defaults', () => {
   assert.ok(HOST_SRC.includes('learningEnabled: z.boolean().default(false)'), 'schema default off')
   assert.ok(HOST_SRC.includes('learningThreshold: z.number().default(THRESHOLD_DEFAULTS.learningThreshold)'), 'schema threshold default')
-  const resolveIdx = HOST_SRC.indexOf('export function resolveConfig')
-  const resolveBlock = HOST_SRC.slice(resolveIdx, HOST_SRC.indexOf('function riskTimedOutAction'))
+  const resolveIdx = NORMALIZE_SRC.indexOf('export function resolveConfig')
+  assert.notEqual(resolveIdx, -1, 'the resolveConfig declaration survives compilation')
+  // Bound the body by the next top-level declaration rather than by one
+  // neighbouring name: that neighbour can move to another module, and a -1
+  // end marker would then silently widen the window to the rest of the file.
+  const afterResolve = NORMALIZE_SRC.slice(resolveIdx + 1)
+  const nextDecl = afterResolve.search(/^(?:export )?(?:async )?function |^const |^let /m)
+  const resolveBlock = afterResolve.slice(0, nextDecl === -1 ? undefined : nextDecl)
   assert.ok(resolveBlock.includes('learningEnabled: raw.learningEnabled === true'), 'non-boolean degrades to off')
   assert.ok(resolveBlock.includes('clampLearningThreshold('), 'threshold clamped at the decision layer')
   assert.ok(HOST_SRC.includes("safetyPrompt: z.string().default('').max(2000)"), 'safetyPrompt is bounded like the rules text (L3)')

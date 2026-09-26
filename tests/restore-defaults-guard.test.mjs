@@ -16,7 +16,7 @@ import { readFileSync } from 'node:fs'
 
 const client = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
 const src = readFileSync(new URL('../src/client/index.ts', import.meta.url), 'utf8')
-const hostSrc = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
+const normalizeSrc = readFileSync(new URL('../src/auto/config-normalize.ts', import.meta.url), 'utf8')
 
 /** One reset handler's source body, up to the closing brace at its own indent. */
 function handlerBody(marker) {
@@ -46,8 +46,8 @@ test('the retired autoSwitchPolicyToAsk is gone from the client and stays host-o
 })
 
 test('the retired host key warns and normalises to false', () => {
-  assert.match(hostSrc, /autoSwitchPolicyToAsk is retired and ignored/, 'the host must explain the retired key')
-  assert.match(hostSrc, /autoSwitchPolicyToAsk: false/, 'the host must normalise the retired key to false')
+  assert.match(normalizeSrc, /autoSwitchPolicyToAsk is retired and ignored/, 'the host must explain the retired key')
+  assert.match(normalizeSrc, /autoSwitchPolicyToAsk: false/, 'the host must normalise the retired key to false')
 })
 
 test('every reset path leaves the control-less keys alone', () => {
