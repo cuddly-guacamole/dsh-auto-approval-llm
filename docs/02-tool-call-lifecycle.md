@@ -22,8 +22,8 @@
   <li><span class="who">⑥ 喂回模型 · <code>tools/post-execute</code> <span class="lnum">index.ts:L"anyCtx.on('tools/post-execute', (exec"（global）</span></span>
     <div class="cap">若这次工具结果 `isError` 且有超时/决策标记（`timeoutFeedback` / `decisionFeedback`），注入 `{kind:'block', feedback}` —— 让模型知道「不是因为命令错，而是被审批挡下（超时 / 规则 / 模型拒绝）」。另有独立一段**结果脱敏**（<span class="lnum">index.ts:L"config.redactResults && isAutoExecution(exec)"</span>）：`redactResults` 开启时，成功结果同样过一遍脱敏器并记审计——喂回模型的文本不夹带秘密。</div></li>
 
-  <li><span class="who">⑦ 通知投递 · agent inbox（<code>agent.inject</code>） <span class="lnum">index.ts:LwatchNotices</span>（watchNotices 内 <span class="lnum">index.ts:L"event?.type === 'step/end'"</span> 的 step/end 分流）</span>
-    <div class="cap">「✅ Model approved」「已学习放行」与 first-use onboarding 通知**不再直写会话日志**：队列在 `tools/result`（L3217-3218）只标记「该工具确实执行了」，`step/end`（L1250）时把已执行的通知交给 `agent.inject`（<span class="lnum">index.ts:LinjectNotice</span>）送入 agent inbox —— driver 在**最近的 step 边界**认领，因此消息**不可能**插进 assistant `tool_calls` 与 `tool/result` 之间（OpenAI 兼容 provider 会拒收整个会话）。未产生结果（拒绝/取消）的通知仅落控制台，不进会话。**权衡**：inject 不唤醒空闲 driver、可能错过已认领的批次、会话销毁时丢弃 pending —— 通知可能延迟到下一次交互甚至丢失；这是「宁可晚/丢，绝不插错位置」的有意取舍（`notifyUser` / `onboardingMessageEnabled` 可关）。</div></li>
+  <li><span class="who">⑦ 通知投递 · agent inbox（<code>agent.inject</code>） <span class="lnum">notices.ts:LwatchNotices</span>（watchNotices 内 <span class="lnum">notices.ts:L"event?.type === 'step/end'"</span> 的 step/end 分流）</span>
+    <div class="cap">「✅ Model approved」「已学习放行」与 first-use onboarding 通知**不再直写会话日志**：队列在 `tools/result`（L3217-3218）只标记「该工具确实执行了」，`step/end`（L1250）时把已执行的通知交给 `agent.inject`（<span class="lnum">notices.ts:LinjectNotice</span>）送入 agent inbox —— driver 在**最近的 step 边界**认领，因此消息**不可能**插进 assistant `tool_calls` 与 `tool/result` 之间（OpenAI 兼容 provider 会拒收整个会话）。未产生结果（拒绝/取消）的通知仅落控制台，不进会话。**权衡**：inject 不唤醒空闲 driver、可能错过已认领的批次、会话销毁时丢弃 pending —— 通知可能延迟到下一次交互甚至丢失；这是「宁可晚/丢，绝不插错位置」的有意取舍（`notifyUser` / `onboardingMessageEnabled` 可关）。</div></li>
 </ol>
 
 ::: tip 注意

@@ -52,14 +52,14 @@ flowchart TD
 delete / protected / privilege / disk 四类在配置面上默认**只能收 `ask`**。保险有三道：
 
 1. **schema 层**：`categoryPolicy` 的 zod 定义只允许 `auto|ask|deny` 三值字典（<span class="lnum">index.ts:L"categoryPolicy: z.dict(z.union(['auto', 'ask', 'deny'] as const), z.string()).default({})"</span>）；
-2. **resolveConfig 层**：未知键 warn+丢弃，LOCKED 类别收到非 ask 值一律钳回丢弃并告警（<span class="lnum">index.ts:LresolveConfig</span>）；
+2. **resolveConfig 层**：未知键 warn+丢弃，LOCKED 类别收到非 ask 值一律钳回丢弃并告警（<span class="lnum">config-normalize.ts:LresolveConfig</span>）；
 3. **决策层常量兜底**：即便有漏网配置进了运行时，`categoryDirective` 对 locked 类别的分支也只会给出 `ask` 或 `inherit`，绝无 auto/deny（<span class="lnum">category.ts:L"if (locked && !privilegeUnlocked && !protectedUnlocked && !provenArtifactDeletion)"</span>）。
 
 **两档锁定分层**：`LOCKED_CATEGORIES`（delete/protected/privilege/disk，<span class="lnum">category.ts:LLOCKED_CATEGORIES</span>）之上还有更硬的 `HARD_LOCKED_CATEGORIES = ['delete','disk']`（<span class="lnum">category.ts:LHARD_LOCKED_CATEGORIES</span>）——后两者**任何按名授权的通道都不得预先放行**：allowlist、pre-execute 镜像、声明规则的 allow、显式配置一律无效，delete/disk 的批准只能来自人工逐次确认（带恒拒倒计时），绝不静默自动允许；protected/privilege 保留显式 operator override（分别由 `protectedAutoReview` / `privilegeAutoReview` 解锁）。理由：delete/disk 的破坏在大规模上不可逆。
 
 **哪一层决定「未配置的 LOCKED 询问」**（如实写明）：`delete` / `disk`（HARD_LOCKED）与档位**解耦**——任何档位下类别层都把未显式配置的询问接管为 `ask`，pre-execute 立即返回并 pin 成恒拒倒计时（`action:'reject'`，评审器不被问到），`timeoutAction` 无法结算它们；`protected` / `privilege` 维持档位依赖：`standard`（默认）下未显式配置时类别层给出 `inherit`，即**类别层不介入**，该询问由正常评审管线（classifier 快径 / LLM 评审 / 倒计时）裁决、超时按 `timeoutAction` 结算；`aggressive` 下同一询问由类别层接管为 `ask`。任一模态下把 `categoryPolicy.<类别>` 显式设为 `ask` 都会得到锁定询问。因此「protected/privilege 一定需要人工」只在 aggressive 档或显式配置时成立，delete/disk 则在任何档位恒拒；`protectedAutoReview` 的解锁与 `HARD_LOCKED` 的按名通道禁令均不受该差异影响（后者覆盖两条平面共四个按名站点：规则 allow 与 allowlist 各两处）。
 
-**例外一：`privilegeAutoReview`（默认关，fail-closed）**。开启后 `privilege` 类别从 LOCKED 名单中剔除（delete / protected / disk 仍锁死）：配置面上 privilege 可设 auto/ask/deny，未配置时走 `inherit`——类别层不再强制转人，命令进入正常评审管线（classifier + LLM 评审 + 倒计时）。三层改动：schema 新键（<span class="lnum">index.ts:L"privilegeAutoReview: z.boolean().default(false)"</span>）、resolveConfig 解锁分支（<span class="lnum">index.ts:L"key === 'privilege' && raw.privilegeAutoReview === true"</span>）、categoryDirective 解锁判定（<span class="lnum">category.ts:L"const privilegeUnlocked = category === 'privilege'"</span>）；client 设置卡「分类开关与信任模式」子卡新增同名开关（locale 键 `settings.category.privilegeAutoReview`），开启后 privilege 行的下拉才出现 自动/拒绝 选项。
+**例外一：`privilegeAutoReview`（默认关，fail-closed）**。开启后 `privilege` 类别从 LOCKED 名单中剔除（delete / protected / disk 仍锁死）：配置面上 privilege 可设 auto/ask/deny，未配置时走 `inherit`——类别层不再强制转人，命令进入正常评审管线（classifier + LLM 评审 + 倒计时）。三层改动：schema 新键（<span class="lnum">index.ts:L"privilegeAutoReview: z.boolean().default(false)"</span>）、resolveConfig 解锁分支（<span class="lnum">config-normalize.ts:L"key === 'privilege' && raw.privilegeAutoReview === true"</span>）、categoryDirective 解锁判定（<span class="lnum">category.ts:L"const privilegeUnlocked = category === 'privilege'"</span>）；client 设置卡「分类开关与信任模式」子卡新增同名开关（locale 键 `settings.category.privilegeAutoReview`），开启后 privilege 行的下拉才出现 自动/拒绝 选项。
 
 **例外二：`protectedAutoReview`（默认关，fail-closed）**。解除 `protected` 的**非凭据**锁定钳制，但**不改变它仍是敏感类别**。先说清开关的实际效果：类别 ask 在 pre-execute 处即返回（`index.ts` 的 `directive === 'ask'` 分支，分类器快径不执行），所以**评审器始终不会被问到**；开启本键只是把原来那条「倒计时恒拒、无人能答」的询问换成**常驻人工询问**（status-less，不再自动拒绝），仍须人工作答。要自动放行必须再把 `categoryPolicy.protected` 显式设为 `auto`；直接 `inherit` 会让策略层的静态放行**无任何评审**地生效，故不采用。**两档的后果要分清（否则会误判成"面板卡住"）**：关（默认）走 LOCKED 分支——`aggressive` 档或显式 `ask` 时倒计时 `action:'reject'`，`highRiskSeconds` 后自动结算为 `timeout-deny`，`timeoutAction` 无法放行，无人盯守不挂起；`standard` 档且未显式配置时该类别本就 `inherit`（见上段），走正常评审管线、超时按 `timeoutAction` 结算。开且未显式配置走 status-less 分支——**不发布倒计时状态、永不自动结算**，人不在就会一直等（面板显示 `⏸️ Awaiting human approval — no auto-countdown.` 正是这一档的标记，不是故障）。默认值为关；standard 档未显式配置的 protected 询问走正常评审管线，恒拒倒计时只出现在 aggressive 档或显式 `ask`。
 
@@ -100,7 +100,7 @@ aggressive 下三个内置类别 `['networkExec','gitPush','publish']`（`AGGRES
 
 ## 17.7　trustedDirs 配置面
 
-- **校验**：仅收绝对路径；凭据树（.ssh/.gnupg/.aws/.azure/.kube）、home、dshHome、critical 路径内的条目 warn+丢弃，余下归一化入库（resolveConfig，<span class="lnum">index.ts:LresolveConfig</span>）。
+- **校验**：仅收绝对路径；凭据树（.ssh/.gnupg/.aws/.azure/.kube）、home、dshHome、critical 路径内的条目 warn+丢弃，余下归一化入库（resolveConfig，<span class="lnum">config-normalize.ts:LresolveConfig</span>）。
 - **host-only**：16 员 host-only 键之一（<span class="lnum">decision.ts:LHOST_ONLY_KEYS</span>）——只能写在 settings.yaml / patch，设置卡保存不会抹掉它，也没有它的控件。
 - **复检扩区**：symlink 守卫把 trustedDirs 并入受信复检区（workspace ∪ 插件区 ∪ trustedDirs，<span class="lnum">symlink.ts:L"const trustedZone: string[] = [...(roots.allowedDshSubpaths ?? []), ...(roots.trustedDirs ?? [])]"</span>）——文本上落进信任目录的目标照样做真实路径逃逸检查（realpath 逃逸硬拒，<span class="lnum">symlink.ts:L"const escape = realpathCriticalReason(textual, normalized, roots, roots.trustedDirs, realWsNormalized)"</span>）。
 

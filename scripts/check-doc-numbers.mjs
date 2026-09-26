@@ -85,8 +85,8 @@ export const DECLARATION_POINTS = [
  * the shape the route table and both landing-page statements describe.
  */
 export function measuredRouteCount(root = ROOT) {
-  const source = readFileSync(join(root, 'src', 'index.ts'), 'utf8')
-  return [...source.matchAll(/^const [A-Z0-9_]*ROUTE = '/gm)].length
+  const source = readFileSync(join(root, 'src', 'auto', 'route-table.ts'), 'utf8')
+  return [...source.matchAll(/^(?:export )?const [A-Z0-9_]*ROUTE = '/gm)].length
 }
 
 /** Static source of truth: how many test files exist and how many cases they declare. */
