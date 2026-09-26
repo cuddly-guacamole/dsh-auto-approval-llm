@@ -145,7 +145,9 @@ test('the diagnostic note is capped, not an unbounded per-id memory', () => {
   // distinct ids, so the guard around the record must be a real bound. There is
   // no runtime seam for the debug switch, so this pins the compiled expression:
   // dropping the cap would leave the Set growing once per distinct id.
-  const compiled = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
+  // The session-mode installer moved to its own module, so the cap is read
+  // where it is written; the entry only re-exports the installer.
+  const compiled = readFileSync(new URL('../lib/auto/route-installers.js', import.meta.url), 'utf8')
   assert.match(
     compiled,
     /unknownSessionLogged\.size < UNKNOWN_SESSION_LOG_CAP/,

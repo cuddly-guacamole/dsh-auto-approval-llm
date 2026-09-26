@@ -149,6 +149,9 @@ test('endpoint classify: a blank endpoint is refused before any network call', a
 // ── L3 wiring anchors against the compiled host ───────────────────────────
 
 const HOST_SRC = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
+// The review snapshot (and with it the frozen reasoning effort and output
+// budget) moved to its own module; the entry keeps the wiring that calls it.
+const REVIEW_SRC = readFileSync(new URL('../lib/auto/review-pipeline.js', import.meta.url), 'utf8')
 
 /**
  * Argument block of every `name(` call in the compiled host, from the call to
@@ -214,8 +217,14 @@ test('host wiring: reasoning effort and output budget reach the LLM calls', () =
   // 2026-09-05: deep-review output budget (reviewerMaxTokens, default 2048)
   // is frozen into the snapshot; a non-default reasoning effort is forwarded
   // to the host prepareCall, and the classifier lane forwards its own effort.
-  assert.ok(HOST_SRC.includes('reviewerMaxTokens'), 'the output budget key is wired')
-  assert.ok(HOST_SRC.includes("snapshot.reasoningEffort"), 'the reviewer snapshot carries the frozen effort')
+  //
+  // The claim is the FREEZE, so the anchor is the snapshot assignment, not the
+  // setting name: `reviewerMaxTokens` is also a schema key in the entry, so a
+  // bare `includes` on the name stayed green while the snapshot stopped
+  // carrying the budget at all. Both transports resolve it into the snapshot.
+  const budget = [...REVIEW_SRC.matchAll(/maxTokens: config\.reviewerMaxTokens \?\? 2_048/g)].length
+  assert.equal(budget, 2, 'both snapshot transports freeze the configured output budget')
+  assert.ok(REVIEW_SRC.includes("snapshot.reasoningEffort"), 'the reviewer snapshot carries the frozen effort')
   // Every classifier construction path forwards the configured effort: the
   // initial construction and the settings rebuild through createDshClassifier,
   // and the endpoint lane through createEndpointClassifier. Only live lines

@@ -21,7 +21,10 @@ import { fileURLToPath } from 'node:url'
 import { ENDPOINT_RESPONSE_MAX_BYTES, createPinnedLookup } from '../lib/auto/endpoint-call.js'
 
 const endpointCall = readFileSync(fileURLToPath(new URL('../src/auto/endpoint-call.ts', import.meta.url)), 'utf8')
-const host = readFileSync(fileURLToPath(new URL('../src/index.ts', import.meta.url)), 'utf8')
+// The probe route moved to the installer module, so the call-site wiring is
+// read where it is written; the entry only re-exports the installers.
+const host = readFileSync(fileURLToPath(new URL('../src/auto/route-installers.ts', import.meta.url)), 'utf8')
+const entry = readFileSync(fileURLToPath(new URL('../src/index.ts', import.meta.url)), 'utf8')
 
 test('the transport pins a non-loopback hostname to the validated address set', () => {
   assert.match(endpointCall, /if \(isIP\(host\.replace\(\/\^\\\[|\\\]\$\/g, ''\)\) === 0\) lookup = createPinnedLookup\(resolved\.addresses\)/)
@@ -31,7 +34,10 @@ test('the transport pins a non-loopback hostname to the validated address set', 
 
 test('no raw fetch remains on the raw-endpoint surface', () => {
   assert.doesNotMatch(endpointCall, /\bfetch\(/, 'the endpoint transport must not fall back to global fetch')
-  assert.doesNotMatch(host, /\bfetch\(/, 'the host must reach endpoints only through the shared transport')
+  // Both halves of the raw-endpoint surface: the probe route (installer
+  // module) and whatever the entry still reaches endpoints with.
+  assert.doesNotMatch(host, /\bfetch\(/, 'the probe route must reach endpoints only through the shared transport')
+  assert.doesNotMatch(entry, /\bfetch\(/, 'the entry must reach endpoints only through the shared transport')
 })
 
 test('the response body is bounded before it is buffered', () => {

@@ -111,11 +111,13 @@ test('settings POST: the write path is retired — 405 with Allow: GET, no store
 })
 
 test('settings route: no write branch survives in the compiled installer', () => {
-  const compiled = readFileSync(fileURLToPath(new URL('../lib/index.js', import.meta.url)), 'utf8')
+  // Both installers moved to their own module; the entry only re-exports them,
+  // so the settings body is read where it is written and bounded by its own
+  // next declaration there.
+  const compiled = readFileSync(fileURLToPath(new URL('../lib/auto/route-installers.js', import.meta.url)), 'utf8')
   const start = compiled.indexOf('function installSettingsRoute')
-  // Bounded by the next installer that stays in the entry: the credential
-  // installer moved to its own module, and a -1 end marker would have widened
-  // this window instead of failing.
+  // Bounded by the next installer in the same module: a -1 end marker would
+  // have widened this window instead of failing.
   const end = compiled.indexOf('function installHistoryRoute')
   assert.ok(start > 0 && end > start, 'the settings installer is locatable in the build')
   const installer = compiled.slice(start, end)

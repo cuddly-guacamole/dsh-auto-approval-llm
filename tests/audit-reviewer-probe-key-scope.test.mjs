@@ -39,11 +39,15 @@ test('unparsable or empty input is a different target', () => {
 })
 
 test('the probe route gates the stored-key fallback on the target match', () => {
-  const lib = readFileSync(fileURLToPath(new URL('../lib/index.js', import.meta.url)), 'utf8')
+  // The probe installer moved to its own module; the entry keeps the call site
+  // that supplies the configured endpoint URL, so both halves are read where
+  // they are written.
+  const lib = readFileSync(fileURLToPath(new URL('../lib/auto/route-installers.js', import.meta.url)), 'utf8')
+  const entry = readFileSync(fileURLToPath(new URL('../lib/index.js', import.meta.url)), 'utf8')
   assert.match(lib, /const storedKeyAllowed = sameEndpointTarget\(baseUrl, endpointUrlFor\(\)\)/)
   // The fallback body (credential service + shared credential file) must only
   // run behind that gate.
   assert.match(lib, /const probeApiKey = apiKey \|\| \(storedKeyAllowed \? await \(async \(\) => \{/)
   // And the configured endpoint URL must be the thing it is compared against.
-  assert.match(lib, /installTestRoute\(anyCtx, llm, \(\) => config\.endpointUrl\)/)
+  assert.match(entry, /installTestRoute\(anyCtx, llm, \(\) => config\.endpointUrl\)/)
 })

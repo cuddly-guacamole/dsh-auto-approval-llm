@@ -1306,7 +1306,9 @@ test('feedback route: a callId the plugin never issued is a 200 no-op, not a wri
   const { status, body } = await callSpec(spec, req)
   assert.equal(status, 200, 'the ACK stays a 200 no-op')
   assert.deepEqual(body, { ok: true })
-  const lib = readFileSync(fileURLToPath(new URL('../lib/index.js', import.meta.url)), 'utf8')
+  // The feedback installer moved to its own module, so the guard is read where
+  // it is written; the entry only re-exports the installer.
+  const lib = readFileSync(fileURLToPath(new URL('../lib/auto/route-installers.js', import.meta.url)), 'utf8')
   // Region-delimited, not a counted window: the guard binding and the write it
   // gates must both live between the binding and the handler's response, so a
   // relocated guard or write fails loudly instead of falling outside a slice.
@@ -3358,11 +3360,14 @@ test('learning-store route: host exposes a trusted read/revoke surface with an a
   // The route table moved out of the entry; the constant is read where it is
   // declared, so a renamed or dropped route still fails here.
   const routeTable = readFileSync(new URL('../lib/auto/route-table.js', import.meta.url), 'utf8')
+  // The installer moved out too, so the route body is read where it is written
+  // while the revoke callback it is handed stays in the entry.
+  const installers = readFileSync(new URL('../lib/auto/route-installers.js', import.meta.url), 'utf8')
   assert.ok(routeTable.includes("LEARNING_STORE_ROUTE = '/api/auto-approval-llm/learning-store'"), 'route constant must exist')
   assert.ok(src.includes('installLearningStoreRoute'), 'route installer must exist')
-  assert.ok(src.includes('learning-store route'), 'route must be registered with the web server')
+  assert.ok(installers.includes('learning-store route'), 'route must be registered with the web server')
   assert.ok(src.includes('revokeLearning'), 'host must consume revokeLearning')
-  assert.ok(src.includes("type: 'learning-revoked'"), 'revoke must leave an audit trail')
+  assert.ok(installers.includes("type: 'learning-revoked'"), 'revoke must leave an audit trail')
   // The revoke must persist, and it must persist through the guarded writer the
   // other learners use. Anchoring the revoke CALL SITE rather than a file-path
   // argument keeps the claim tied to the route instead of to how the store's
@@ -3730,8 +3735,11 @@ test('onboarding injection: only after the AUTO gate, through queueNotice, plugi
   assert.notEqual(queueAt, -1, 'the notice must be queued inside the pre-execute handler')
   assert.ok(markAt > gateAt, 'injection must run only after the AUTO gate')
   assert.ok(queueAt > markAt, 'injection must go through the notice queue')
-  // Channel invariant: the notice never fakes a user message.
-  assert.ok(src.includes('source: PLUGIN_MESSAGE_SOURCE'))
+  // Channel invariant: the notice never fakes a user message. The message
+  // producers no longer share the entry (the reviewer message moved to
+  // src/auto/review-pipeline.ts), so every producer is checked by name.
+  const reviewers = readFileSync(new URL('../lib/auto/review-pipeline.js', import.meta.url), 'utf8')
+  assert.ok(reviewers.includes('source: PLUGIN_MESSAGE_SOURCE'), 'the reviewer message carries the declared source')
   // Flush path is injectNotice (never a bare session append): the flush body
   // must contain the injectNotice call, and both helpers exist module-level
   // (injectNotice is defined before flushNotices uses it). Both live in
@@ -3913,17 +3921,19 @@ test('review wait: configurable per-attempt timeout with clamped default', () =>
   // instead of a hardcoded constant, and the retry loop receives it.
   const src = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
   assert.ok(src.includes('reviewWaitSeconds'), 'setting must exist in the compiled host')
-  // Shape, not the exact clamp expression: extracting the budget into a local
-  // const or reordering the math must stay green, while a hardcoded literal is
-  // still caught independently below. The enclosing function is the slice
-  // because the derivation may legitimately move above the call; the end
-  // marker is the next top-level declaration in the same file (the notice
-  // helpers this region used to end at moved to src/auto/notices.ts).
-  const loop = region(src, 'async function reviewWithLLM(', 'let reviewRevisionSeq')
+  // The retry loop moved to its own module. It is the LAST declaration there, so
+  // the region runs to the end of that file; a renamed anchor still fails loudly
+  // through the guard below, and an over-long slice can only redden the negative
+  // assertion — it can never hide a numeric literal.
+  const reviewers = readFileSync(new URL('../lib/auto/review-pipeline.js', import.meta.url), 'utf8')
+  const loopAt = reviewers.indexOf('export async function reviewWithLLM(')
+  assert.notEqual(loopAt, -1, 'the retry loop must exist in the module that owns the review pipeline')
+  const loop = reviewers.slice(loopAt)
+  assert.ok(loop.includes('retryReviewLoop({'), 'the slice really is the retry loop body')
   assert.match(loop, /attemptTimeoutMs:\s*[^,\n]/, 'the retry loop must pass a computed per-attempt budget')
   assert.ok(!/attemptTimeoutMs:\s*\d/.test(loop), 'the per-attempt budget must never be a numeric literal')
   assert.ok(/config\.reviewWaitSeconds/.test(loop), 'the per-attempt budget must be derived from the configured reviewWaitSeconds setting')
-  assert.ok(src.includes('.reviewWaitSeconds ?? THRESHOLD_DEFAULTS.reviewWaitSeconds'), 'host fallback must not hardcode the wait')
+  assert.ok(reviewers.includes('.reviewWaitSeconds ?? THRESHOLD_DEFAULTS.reviewWaitSeconds'), 'host fallback must not hardcode the wait')
   const cfg = resolveConfig({ timeoutAction: 'reject' })
   assert.equal(cfg.reviewWaitSeconds, 5, 'default wait is 5 seconds')
 })

@@ -250,7 +250,12 @@ test('no key the shipped layer pins is ever offered, whatever the document store
 })
 
 test('the guard is wired into the offer, so a pin that stops being consulted fails here', () => {
-  const source = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+  // The offer predicate moved to the route-installer module, and the factory
+  // defaults it compares against now arrive through the owner setter (the
+  // schema lives with the loader entry, which cannot be imported back without
+  // a cycle). Both halves are pinned: a predicate that stops consulting either
+  // input fails here, and so does an entry that stops handing the defaults over.
+  const source = readFileSync(new URL('../src/auto/route-installers.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
   const planAt = source.indexOf('export function legacyImportPlan(')
   assert.notEqual(planAt, -1, 'the offer predicate is declared')
   // The body of the function ends at the next closing brace that starts a line.
@@ -258,7 +263,12 @@ test('the guard is wired into the offer, so a pin that stops being consulted fai
   assert.notEqual(planEnd, -1, 'the offer predicate has an end')
   const plan = source.slice(planAt, planEnd)
   assert.ok(plan.includes('SHIPPED_PINNED_KEYS'), 'the offer consults the shipped-layer pin')
-  assert.ok(plan.includes('FACTORY_CONFIG_DEFAULTS'), 'and the schema defaults it compares a declaration against')
+  assert.ok(plan.includes('factoryConfigDefaults'), 'and the schema defaults it compares a declaration against')
+  const entry = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+  assert.ok(
+    entry.includes('setFactoryConfigDefaults(FACTORY_CONFIG_DEFAULTS)'),
+    'the entry resolves the factory defaults from the schema and hands them to the offer',
+  )
 })
 
 // ── the other two exclusions ──────────────────────────────────────────────

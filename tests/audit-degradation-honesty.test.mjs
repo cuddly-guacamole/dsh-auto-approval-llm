@@ -26,7 +26,9 @@ import { fileURLToPath } from 'node:url'
 import { installSettingsRoute } from '../lib/index.js'
 import { carrierContext, findSpec, callSpec } from './helpers/carrier-route.mjs'
 
-const host = readFileSync(fileURLToPath(new URL('../src/index.ts', import.meta.url)), 'utf8')
+// The route installers live in their own module now, so the learning-store
+// route body is read where it is written; the entry only re-exports them.
+const host = readFileSync(fileURLToPath(new URL('../src/auto/route-installers.ts', import.meta.url)), 'utf8')
 const client = readFileSync(fileURLToPath(new URL('../src/client/index.ts', import.meta.url)), 'utf8')
 const locale = readFileSync(fileURLToPath(new URL('../src/client/locale.ts', import.meta.url)), 'utf8')
 

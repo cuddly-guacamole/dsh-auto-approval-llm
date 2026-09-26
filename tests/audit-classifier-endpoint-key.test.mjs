@@ -16,6 +16,9 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 const src = readFileSync(fileURLToPath(new URL('../src/index.ts', import.meta.url)), 'utf8')
+// The reviewer lane moved to its own module, so its half-configuration
+// failure is read where it is written now.
+const reviewerSrc = readFileSync(fileURLToPath(new URL('../src/auto/review-pipeline.ts', import.meta.url)), 'utf8')
 
 test('the classifier endpoint lane refuses to run without a resolved key', () => {
   const branch = src.indexOf('endpoint source needs a URL and model for classification')
@@ -33,6 +36,6 @@ test('the classifier endpoint lane refuses to run without a resolved key', () =>
 })
 
 test('the reviewer lane keeps its matching discipline', () => {
-  assert.match(src, /return \{ failure: 'endpoint source needs a resolved API key' \}/)
-  assert.match(src, /debugLog\(\{ ev: 'reviewer-incomplete'/)
+  assert.match(reviewerSrc, /return \{ failure: 'endpoint source needs a resolved API key' \}/)
+  assert.match(reviewerSrc, /debugLog\(\{ ev: 'reviewer-incomplete'/)
 })
