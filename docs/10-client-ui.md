@@ -8,7 +8,7 @@
 | `plugins.row.config` | key `@quill507/dsh-auto-approval-llm#auto-approval-llm` | Plugins 面板里本 bundle 行的配置页（`view:'page'`）：页自己画标题/面包屑；设置表单由宿主交来的该命名空间 row form（`form.state` / `form.mutate`）读写 | PluginConfigEntry → SettingsSection(`chrome:'plain'`) |
 | `conversation.session.header.utilities` | id `…-session-panel` | 会话标题栏控件 | SessionApprovalPanel |
 
-上面两行就是本插件注册的全部座位。两个更早的注册点已退役：`plugins.bundle.config`（bundle 详情页拿不到宿主 form，故不承载配置表单）与 `settings.plugin.item`（该槽在承诺的宿主范围内（`>=0.1.7-rc.1 <2`）都不存在声明，`inject` 永久等待、无副作用）。
+上面两行就是本插件注册的全部座位。两个更早的注册点已退役：`plugins.bundle.config`（bundle 详情页拿不到宿主 form，故不承载配置表单）与 `settings.plugin.item`（该槽在承诺的宿主范围内（`>=0.1.7-rc.2 <2`）都不存在声明，`inject` 永久等待、无副作用）。
 
 另有：会话标题栏的自动审批控件（分离按钮：左主区显示状态并在有倒计时时提前展开面板，右下箭头打开审批记录浮层）、`auto-icon.ts`（给权限菜单的 Auto 注入盾形图标 + 选择时的风险确认弹窗「我已了解风险」）、`locale.ts`（zh/en）。官方权限选择器自带的风险确认只覆盖宿主内置档；自定义 `auto-approval` 档的风险确认由本插件客户端自研弹窗补。
 

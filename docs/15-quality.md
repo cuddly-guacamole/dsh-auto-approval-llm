@@ -51,14 +51,14 @@ node --test "tests/**/*.test.mjs"        # 1874/1874 全绿
 
 :::
 
-::: tip 宿主承诺线（0.1.7-rc.1 完整支持线）
+::: tip 宿主承诺线（0.1.7-rc.2 完整支持线）
 
 ```bash
 npm run test:host-lines                  # 装出承诺线跑一次
-npm run test:host-lines -- --line rc1    # 只跑承诺线（0.1.7-rc.1，modern 形态）
+npm run test:host-lines -- --line rc2    # 只跑承诺线（0.1.7-rc.2，modern 形态）
 ```
 
-`scripts/test-host-lines.mjs` 在 `os.tmpdir()` 前缀里按精确版本装出 peer 承诺的宿主线，再把编译后的判定层驱动到该线真实的 `permission-presets` 服务上：断言每个 `@deepseek-ai/dsh-*` 恰为目标版本、能力探测落该线实际档位（modern = `catalog` + `registerAuto`；该线无这些注册面即 unknown，迁移 fail-closed）、同签名迁移在该线如实结算、`dfa+never` 原样保留；装错线或读错档位即红（含同前缀内的反向对照）。安装前缀只落在 `os.tmpdir()`，不触碰仓库 `node_modules`。该入口需要 npm registry 访问，故列为发版前手工步骤，不并入离线的 `npm run gate`；**新增宿主线时在 `HOST_LINES` 加一行**——宿主线跟着用户实际在跑的宿主走，上游进入新 tuple 的 alpha 时再逐条追加；同一 tuple 内上游发布更高预发布版时，首次安装后把浮高的传递 `dsh-*` 一并写进 `overrides` 二次安装，保证整树落在目标线。承诺表只有一行：`rc1`（`0.1.7-rc.1`），能力为 modern 形态，断言走「同签名迁移在真实包上通过」。`assertLineOutcome` 的 inert 分支（插件在该线能装能加载但不接管 `auto` 档：`gatePresetNames()` 仍只含 `auto-approval`、`isGatedSession("auto")` 为 false、同签名迁移 `skipped` 且零 audit 写入、状态原样保留）仍有齿，由 `tests/host-lines.test.mjs` 用一条已退役线的控制对象覆盖，断言如实反转而非要求接管。install-tree 断言通过：安装树里未安装的 optional peer 在 `npm ls` 里是一个既无 `version` 也无 `problem` 的裸节点，树断言只跳过这一种节点（带 `problem` 的节点仍判失败）。`tests/host-lines.test.mjs` 另有一条不装前缀的用例，直接驱动本机已装的服务。`session` 与 `sessionProjections` 状态机是测试桩；权限服务类与投影注册/`apply` 来自真实包。
+`scripts/test-host-lines.mjs` 在 `os.tmpdir()` 前缀里按精确版本装出 peer 承诺的宿主线，再把编译后的判定层驱动到该线真实的 `permission-presets` 服务上：断言每个 `@deepseek-ai/dsh-*` 恰为目标版本、能力探测落该线实际档位（modern = `catalog` + `registerAuto`；该线无这些注册面即 unknown，迁移 fail-closed）、同签名迁移在该线如实结算、`dfa+never` 原样保留；装错线或读错档位即红（含同前缀内的反向对照）。安装前缀只落在 `os.tmpdir()`，不触碰仓库 `node_modules`。该入口需要 npm registry 访问，故列为发版前手工步骤，不并入离线的 `npm run gate`；**新增宿主线时在 `HOST_LINES` 加一行**——宿主线跟着用户实际在跑的宿主走，上游进入新 tuple 的 alpha 时再逐条追加；同一 tuple 内上游发布更高预发布版时，首次安装后把浮高的传递 `dsh-*` 一并写进 `overrides` 二次安装，保证整树落在目标线。承诺表只有一行：`rc2`（`0.1.7-rc.2`），能力为 modern 形态，断言走「同签名迁移在真实包上通过」。`assertLineOutcome` 的 inert 分支（插件在该线能装能加载但不接管 `auto` 档：`gatePresetNames()` 仍只含 `auto-approval`、`isGatedSession("auto")` 为 false、同签名迁移 `skipped` 且零 audit 写入、状态原样保留）仍有齿，由 `tests/host-lines.test.mjs` 用一条已退役线的控制对象覆盖，断言如实反转而非要求接管。install-tree 断言通过：安装树里未安装的 optional peer 在 `npm ls` 里是一个既无 `version` 也无 `problem` 的裸节点，树断言只跳过这一种节点（带 `problem` 的节点仍判失败）。`tests/host-lines.test.mjs` 另有一条不装前缀的用例，直接驱动本机已装的服务。`session` 与 `sessionProjections` 状态机是测试桩；权限服务类与投影注册/`apply` 来自真实包。
 
 :::
 

@@ -66,9 +66,9 @@ flowchart TD
 
 ## Installation
 
-**Prerequisites**: the session or preset is on the **Auto tier** (machine value `auto-approval` = `danger-full-access` + `approval: ask`; switch with `/permission auto-approval`); DSH `0.1.7-rc.1`; Node `^22.19.0 || >=24.0.0`.
+**Prerequisites**: the session or preset is on the **Auto tier** (machine value `auto-approval` = `danger-full-access` + `approval: ask`; switch with `/permission auto-approval`); DSH `0.1.7-rc.2`; Node `^22.19.0 || >=24.0.0`.
 
-Compatibility window: the name `auto` is reserved for the upstream `@deepseek-ai/dsh-experimental-auto-review` (Auto review / EXP), while this plugin only defines and gates `auto-approval`, so the two **own different tiers and can be enabled together**. One host line is promised: `0.1.7-rc.1` = **full support** (peer `>=0.1.7-rc.1 <2`). Long-term rule: **the promised line follows the host the user actually runs**; a further line is appended only when upstream enters the alpha of a new tuple (with a matching row in `HOST_LINES`). The peer range is an **installation-admission surface** — **untested lines inside it are unsupported**, and the upper bound `<2` is only the range's upper bound. The legacy machine value `auto` alias plus the legacy/unknown capability branches were removed with that floor (the shipped patch defines only `auto-approval`).
+Compatibility window: the name `auto` is reserved for the upstream `@deepseek-ai/dsh-experimental-auto-review` (Auto review / EXP), while this plugin only defines and gates `auto-approval`, so the two **own different tiers and can be enabled together**. One host line is promised: `0.1.7-rc.2` = **full support** (peer `>=0.1.7-rc.2 <2`). Long-term rule: **the promised line follows the host the user actually runs**; a further line is appended only when upstream enters the alpha of a new tuple (with a matching row in `HOST_LINES`). The peer range is an **installation-admission surface** — **untested lines inside it are unsupported**, and the upper bound `<2` is only the range's upper bound. The legacy machine value `auto` alias plus the legacy/unknown capability branches were removed with that floor (the shipped patch defines only `auto-approval`).
 
 ```bash
 dsh plugin --profile web add @quill507/dsh-auto-approval-llm

@@ -34,7 +34,7 @@ const LEGACY_AUTO_PRESET = "auto"
  * is appended only when upstream enters the alpha of a new tuple.
  */
 export const HOST_LINES = {
-  rc1: { version: "0.1.7-rc.1", capability: "modern" },
+  rc2: { version: "0.1.7-rc.2", capability: "modern" },
 }
 
 /**

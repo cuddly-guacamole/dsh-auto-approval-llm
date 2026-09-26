@@ -66,9 +66,9 @@ flowchart TD
 
 ## 安装
 
-**前置**：会话/预设处于 **Auto 档**（machine value `auto-approval` = `danger-full-access` + `approval: ask`，用 `/permission auto-approval` 切换）；DSH `0.1.7-rc.1`；Node `^22.19.0 || >=24.0.0`。
+**前置**：会话/预设处于 **Auto 档**（machine value `auto-approval` = `danger-full-access` + `approval: ask`，用 `/permission auto-approval` 切换）；DSH `0.1.7-rc.2`；Node `^22.19.0 || >=24.0.0`。
 
-兼容窗口：`auto` 是上游 `@deepseek-ai/dsh-experimental-auto-review`（Auto review / EXP）的保留名，本插件只定义/接管 `auto-approval`，两者**分档并存、可同时启用**。宿主承诺**一条线**：`0.1.7-rc.1` = **完整支持**（peer `>=0.1.7-rc.1 <2`）。长期规则：**宿主线跟着用户实际在跑的宿主走**，上游进入新 tuple 的 alpha 时再逐条追加（`HOST_LINES` 同步加行）。peer 区间是**安装准入面**——**区间内未测的线不受支持**，上界 `<2` 只是范围上界。旧机器值 `auto` 别名与 legacy/unknown 能力分支已随下限抬升移除（shipped patch 只定义 `auto-approval`）。
+兼容窗口：`auto` 是上游 `@deepseek-ai/dsh-experimental-auto-review`（Auto review / EXP）的保留名，本插件只定义/接管 `auto-approval`，两者**分档并存、可同时启用**。宿主承诺**一条线**：`0.1.7-rc.2` = **完整支持**（peer `>=0.1.7-rc.2 <2`）。长期规则：**宿主线跟着用户实际在跑的宿主走**，上游进入新 tuple 的 alpha 时再逐条追加（`HOST_LINES` 同步加行）。peer 区间是**安装准入面**——**区间内未测的线不受支持**，上界 `<2` 只是范围上界。旧机器值 `auto` 别名与 legacy/unknown 能力分支已随下限抬升移除（shipped patch 只定义 `auto-approval`）。
 
 ```bash
 dsh plugin --profile web add @quill507/dsh-auto-approval-llm

@@ -1,11 +1,11 @@
 /**
  * Peer-range admission contract. The five `@deepseek-ai/dsh-*` peers promise one
- * host line — `0.1.7-rc.1`, the line the user actually runs — and a single arm
- * `>=0.1.7-rc.1 <2` expresses it without reaching across a tuple: the floor and
+ * host line — `0.1.7-rc.2`, the line the user actually runs — and a single arm
+ * `>=0.1.7-rc.2 <2` expresses it without reaching across a tuple: the floor and
  * the promised line share `0.1.7`, so semver's prerelease rule names the line
- * and every earlier tuple stays refused. Narrowing the floor is what drops
- * `0.1.7-alpha.2` and `0.1.5-rc.2` out of admission; both are pinned false
- * below, so a later relaxation of the range is caught here.
+ * and every earlier tuple stays refused. Raising the floor is what drops
+ * `0.1.7-rc.1`, `0.1.7-alpha.2` and `0.1.5-rc.2` out of admission; all three are
+ * pinned false below, so a later relaxation of the range is caught here.
  *
  * Admission is nevertheless NOT a support claim: `<2` is only the range's upper
  * bound, untested lines inside the range are unsupported, and the support claim
@@ -29,7 +29,7 @@ import { HOST_LINES } from "../scripts/test-host-lines.mjs"
 const ROOT = process.cwd()
 
 /** The admission range promised by the dsh peers. */
-const EXPECTED_RANGE = ">=0.1.7-rc.1 <2"
+const EXPECTED_RANGE = ">=0.1.7-rc.2 <2"
 
 /** Application-level peer that is not a host line and is not part of this contract. */
 const CORDIS_PEER = "@deepseek-ai/cordis"
@@ -48,7 +48,7 @@ const COMPARATOR = /^(>=|<=|>|<|=)?(.*)$/
  * every comparator matches, and a prerelease candidate additionally needs one
  * comparator in the set whose version carries the same major.minor.patch tuple.
  * That extra rule is why the floor has to sit inside the promised tuple — a
- * floor one tuple below would leave `0.1.7-rc.1` named by no comparator, and the
+ * floor one tuple below would leave `0.1.7-rc.2` named by no comparator, and the
  * line would be silently refused at install time.
  */
 function satisfies(version, range) {
@@ -127,12 +127,13 @@ function compare(left, right) {
 
 /**
  * The truth table the single arm must produce, measured against the installed
- * `semver` package. `0.1.7-alpha.2` sitting at false is the point of the
- * narrowing: that line is no longer supported, so it must no longer be
- * installable, and a later widening back across the tuple is caught here.
+ * `semver` package. `0.1.7-rc.1` and `0.1.7-alpha.2` sitting at false is the
+ * point of the raise: neither line is supported any more, so neither may stay
+ * installable, and a later lowering back across the tuple is caught here.
  */
 const TRUTH_TABLE = [
-  ["0.1.7-rc.1", true],
+  ["0.1.7-rc.2", true],
+  ["0.1.7-rc.1", false],
   ["0.1.7", true],
   ["0.2.0", true],
   ["1.9.9", true],
@@ -178,10 +179,10 @@ test("the arm is one bounded comparator set whose floor names the promised line"
   // The floor and the promise are the same host line: a floor that no longer
   // names the row in HOST_LINES would admit a line nobody supports, and a row
   // outside the floor would be refused at install time.
-  assert.deepEqual(Object.keys(HOST_LINES), ["rc1"])
+  assert.deepEqual(Object.keys(HOST_LINES), ["rc2"])
   const floor = EXPECTED_RANGE.split(" ")[0].slice(2)
   for (const [name, range] of dshPeers) assert.equal(range.split(" ")[0].slice(2), floor, `${name} floor drifted`)
-  assert.equal(floor, HOST_LINES.rc1.version)
+  assert.equal(floor, HOST_LINES.rc2.version)
 })
 
 test("the peer block keeps cordis and schemastery outside the dsh contract", () => {
@@ -191,7 +192,7 @@ test("the peer block keeps cordis and schemastery outside the dsh contract", () 
 
 test("the promised line is admitted by every peer", () => {
   for (const [name, range] of dshPeers) {
-    assert.equal(satisfies(HOST_LINES.rc1.version, range), true, `${name} must admit ${HOST_LINES.rc1.version}`)
+    assert.equal(satisfies(HOST_LINES.rc2.version, range), true, `${name} must admit ${HOST_LINES.rc2.version}`)
   }
 })
 
