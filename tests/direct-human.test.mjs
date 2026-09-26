@@ -121,10 +121,13 @@ test('static anchors: absent target args are normalized so a coarse signature is
 
 test('static anchors: high-risk targets are refused before the human ask', () => {
   const host = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
+  // The predicate body lives in src/auto/debug-and-decisions.ts; the entry
+  // keeps the call site and the refusal's history source.
+  const predicate = readFileSync(new URL('../src/auto/debug-and-decisions.ts', import.meta.url), 'utf8')
   assert.match(host, /directHumanTargetRefusal\(\{/, 'the refusal predicate is consulted')
-  assert.match(host, /input\.risk !== 'LOW' && input\.risk !== 'MEDIUM'/, 'HIGH/DENY/unknown targets are refused')
-  assert.match(host, /input\.directive === 'deny'/, 'an explicit deny directive is refused')
-  assert.match(host, /input\.lockedCategory === true/, 'a locked target category is refused')
+  assert.match(predicate, /input\.risk !== 'LOW' && input\.risk !== 'MEDIUM'/, 'HIGH/DENY/unknown targets are refused')
+  assert.match(predicate, /input\.directive === 'deny'/, 'an explicit deny directive is refused')
+  assert.match(predicate, /input\.lockedCategory === true/, 'a locked target category is refused')
   assert.match(host, /direct-human-refused/, 'refusal leaves a distinct history source')
 })
 

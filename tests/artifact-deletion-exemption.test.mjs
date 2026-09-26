@@ -403,7 +403,10 @@ test('the exemption lifts the hard-locked allowlist gates too', () => {
   // they are wiring, not pure functions: both name-based channels must consult
   // the shared locked predicate, and the predicate itself must carry the
   // delete+flag exemption.
+  // The four call sites stay in the entry; the shared predicate moved to
+  // src/auto/debug-and-decisions.ts, so the exemption clause is read there.
   const host = readFileSync(fileURLToPath(new URL('../lib/index.js', import.meta.url)), 'utf8')
+  const predicate = readFileSync(fileURLToPath(new URL('../lib/auto/debug-and-decisions.js', import.meta.url)), 'utf8')
   const gateRegex = /nameChannelLockRefusal\(\{/g
   const gates = [...host.matchAll(gateRegex)]
   assert.equal(gates.length, 4, 'every name-based channel consults the locked predicate (rules + allowlist, both planes)')
@@ -415,7 +418,7 @@ test('the exemption lifts the hard-locked allowlist gates too', () => {
     )
   }
   assert.ok(
-    /if \(input\.category === 'delete' && input\.sessionArtifactDeletion === true\)\s*\n?\s*return undefined/.test(host),
+    /if \(input\.category === 'delete' && input\.sessionArtifactDeletion === true\)\s*\n?\s*return undefined/.test(predicate),
     'the shared predicate must carry the proven-artifact-deletion exemption',
   )
 })

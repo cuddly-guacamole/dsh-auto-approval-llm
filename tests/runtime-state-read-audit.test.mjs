@@ -24,6 +24,7 @@ const roots = { workspace: 'D:/work', home: 'C:/Users/u', dshHome: 'C:/Users/u/.
 const PLUGIN_ZONE = 'C:/Users/u/.dsh/plugins/dsh-auto-approval-llm'
 const SRC = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
 const HOST = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
+const DEBUG_SRC = readFileSync(new URL('../src/auto/debug-and-decisions.ts', import.meta.url), 'utf8')
 
 /**
  * Slice from a start marker to the end marker that FOLLOWS it.
@@ -53,13 +54,23 @@ function region(src, startMarker, endMarker, from = 0) {
  * the anchor, the enclosing append call plus its balanced tail is the region.
  * A renamed event type reddens through the anchor guard instead of returning an
  * empty slice.
+ *
+ * `from` is the position of the append that actually wraps THIS event type,
+ * never the first hit in the file. `appendAuditLine(JSON.stringify({` occurs
+ * many times, and the occurrences in the notice/history/learning modules moved
+ * out of the entry: a bare `indexOf` used to land on the audit-trail helper and
+ * now lands somewhere else entirely, which would keep the region working while
+ * it silently described unrelated code. Searching backwards from the event type
+ * and then asserting containment keeps the region bound to its own record.
  */
 function runtimeStateReadEvent(src) {
   const at = src.indexOf("type: 'runtime-state-read',")
   assert.notEqual(at, -1, "the audit event type 'runtime-state-read' is wired")
   const start = src.lastIndexOf('appendAuditLine(JSON.stringify({', at)
   assert.notEqual(start, -1, 'the durable append wraps the event type')
-  return region(src, 'appendAuditLine(JSON.stringify({', '}))', start)
+  const event = region(src, 'appendAuditLine(JSON.stringify({', '}))', start)
+  assert.ok(event.includes("type: 'runtime-state-read',"), 'the region is the append that wraps this event type')
+  return event
 }
 
 // ── shared basename judgment (src/auto/paths.ts) ──────────────────────────
@@ -138,12 +149,16 @@ test('host: pre-execute emits a durable appendAuditLine for runtime-state reads'
 
 test('host: the durable event is default-on and independent of the debug switch', () => {
   // debugLog gates on `if (!debugOn) return`; the appendAuditLine emission for
-  // runtime-state-read must not live inside that gated function.
-  const debugStart = SRC.indexOf('function debugLog(')
+  // runtime-state-read must not live inside that gated function. debugLog and
+  // the rules reporter both moved to src/auto/debug-and-decisions.ts, so the
+  // debug-gated body is read from the module that now owns it.
+  const debugStart = DEBUG_SRC.indexOf('function debugLog(')
   // The body ends at the next top-level function declaration; a comment
   // marker would vanish under a reformatter or minifier.
-  const debugEnd = SRC.indexOf('function reportRulesParseErrors', debugStart + 1)
-  const debugBody = SRC.slice(debugStart, debugEnd)
+  const debugEnd = DEBUG_SRC.indexOf('function reportRulesParseErrors', debugStart + 1)
+  assert.notEqual(debugStart, -1, 'debugLog must exist in the module that owns the debug trail')
+  assert.notEqual(debugEnd, -1, 'the next top-level declaration must bound the debugLog body')
+  const debugBody = DEBUG_SRC.slice(debugStart, debugEnd)
   assert.ok(debugBody.includes('if (!debugOn) return'), 'precondition: debugLog is debug-gated')
   assert.ok(!debugBody.includes('appendAuditLine'), 'the durable append is not inside the debug-gated function')
   const probe = SRC.slice(SRC.indexOf('const stateReads ='), SRC.indexOf('const fetchAuditTarget ='))
@@ -167,4 +182,32 @@ test('host: the event stays observational (no history/verdict fields)', () => {
   assert.ok(!event.includes("type: 'decision'"), 'the event is not a decision record')
   const probe = SRC.slice(SRC.indexOf('const stateReads ='), SRC.indexOf('const fetchAuditTarget ='))
   assert.ok(!probe.includes('pushHistory'), 'the probe block never writes a history record')
+})
+
+// ── single audit writer across the split ──────────────────────────────────
+// The durable audit append is the one place that rotates past MAX_AUDIT_LINES
+// and that records a history clear as a tombstone rather than an erase. A
+// module that opens or writes a runtime-state file on its own bypasses both,
+// and the bypass is invisible: the write succeeds, the file looks right, and
+// only the rotation/erase guarantees are gone. The split moved the audit
+// emitters into separate modules, so the invariant is pinned over the modules
+// that now emit — not only over the entry they used to share.
+
+test('host: no module outside the audit owner opens or writes a runtime-state file directly', () => {
+  const emitters = ['notices', 'feedback-maps', 'approval-history', 'debug-and-decisions', 'runtime-stores', 'trusted-intent']
+  const direct = /\b(?:open|writeFileSync|appendFileSync|createWriteStream)\s*\(/
+  for (const name of emitters) {
+    const mod = readFileSync(new URL(`../src/auto/${name}.ts`, import.meta.url), 'utf8')
+    assert.doesNotMatch(mod, direct, `${name} must not open or write a runtime-state file itself`)
+    // Any module that emits an audit line reaches the one writer by import:
+    // a locally re-implemented append would skip MAX_AUDIT_LINES rotation and
+    // the history-clear tombstone, and nothing about the written file shows it.
+    if (mod.includes('appendAuditLine(')) {
+      assert.ok(mod.includes("import { appendAuditLine } from './audit.js'"), `${name} emits through the audit owner's writer`)
+    }
+  }
+  // The entry keeps the same rule: it emits through appendAuditLine only.
+  assert.doesNotMatch(SRC, /\b(?:open|createWriteStream)\s*\(/, 'the entry opens no runtime-state file directly')
+  const auditOwner = readFileSync(new URL('../src/auto/audit.ts', import.meta.url), 'utf8')
+  assert.match(auditOwner, /export function appendAuditLine\(/, 'the audit owner still exports the single writer')
 })

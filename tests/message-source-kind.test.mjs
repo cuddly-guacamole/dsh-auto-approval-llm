@@ -25,6 +25,11 @@ test('the declared source is producer-owned', () => {
 
 test('the compiled host carries no retired plugin source', () => {
   const lib = read('lib/index.js')
+  // The three createUserMessage call sites no longer share one file: the
+  // entry keeps the pre-execute one, src/auto/notices.ts owns the other two.
+  // Reading only the entry would turn the count assertion below into a
+  // tautology over a shrinking file.
+  const notices = read('lib/auto/notices.js')
   assert.equal(
     /source:\s*\{\s*kind:\s*["']plugin["']/.test(lib),
     false,
@@ -32,7 +37,7 @@ test('the compiled host carries no retired plugin source', () => {
   )
   assert.equal(/plugin:\s*["']dsh-auto-approval-llm["']/.test(lib), false, 'the retired plugin field is gone')
   assert.equal(
-    [...lib.matchAll(/source:\s*PLUGIN_MESSAGE_SOURCE/g)].length,
+    [...`${lib}\n${notices}`.matchAll(/source:\s*PLUGIN_MESSAGE_SOURCE/g)].length,
     3,
     'every createUserMessage call in the host passes the declared source',
   )

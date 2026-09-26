@@ -2852,7 +2852,8 @@ test('category ask on LOCKED categories: hard-reject countdown, never auto-allow
 // The fix settles exactly one callId per result delivery and keeps the rest
 // queued for their own result or the step/end flush.
 test('notice queue: tools/result settles only its own callId (parallel-safe)', () => {
-  const src = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
+  // The queue and both flush helpers live in src/auto/notices.ts.
+  const src = readFileSync(new URL('../lib/auto/notices.js', import.meta.url), 'utf8')
   assert.ok(src.includes('function flushNotice('), 'a per-call flush helper must exist')
   assert.ok(src.includes('function flushNotices('), 'the full-session flush helper must exist for step/end')
   // The tools/result branch must call the per-call helper, not the full flush.
@@ -3666,10 +3667,10 @@ test('onboarding: a callId carries a notice list — reject-guidance must not ov
   // pre-execute decision may then deny with reject-guidance; one entry per
   // callId let the later queueNotice replace the onboarding and it was never
   // delivered. queueNotice must append, and both flush paths must deliver
-  // every notice of the callId. Structural anchor on the compiled lib (the
-  // queue is module-private): the old single-entry overwrite shape must be
-  // gone, the append shape present.
-  const lib = readFileSync(fileURLToPath(new URL('../lib/index.js', import.meta.url)), 'utf8')
+  // every notice of the callId. Structural anchor on the compiled module that
+  // owns the queue (it is module-private): the old single-entry overwrite
+  // shape must be gone, the append shape present.
+  const lib = readFileSync(fileURLToPath(new URL('../lib/auto/notices.js', import.meta.url)), 'utf8')
   assert.ok(lib.includes('list.push({ text, seen: false, agent })'), 'queueNotice must append to the callId list')
   assert.ok(!lib.includes('byCall.set(callId, { text, seen: false, agent })'), 'the single-entry overwrite form must be gone')
   assert.ok(lib.split('entry.seen = true').length - 1 >= 2, 'seen-marking must cover every entry of the callId (both result paths)')
@@ -3733,10 +3734,12 @@ test('onboarding injection: only after the AUTO gate, through queueNotice, plugi
   assert.ok(src.includes('source: PLUGIN_MESSAGE_SOURCE'))
   // Flush path is injectNotice (never a bare session append): the flush body
   // must contain the injectNotice call, and both helpers exist module-level
-  // (injectNotice is defined before flushNotices uses it).
-  const flushAt = src.indexOf('function flushNotices')
-  const injectDefAt = src.indexOf('function injectNotice')
-  const flush = region(src, 'function flushNotices', 'function watchNotices')
+  // (injectNotice is defined before flushNotices uses it). Both live in
+  // src/auto/notices.ts with the queue and the event wiring they serve.
+  const notices = readFileSync(new URL('../lib/auto/notices.js', import.meta.url), 'utf8')
+  const flushAt = notices.indexOf('function flushNotices')
+  const injectDefAt = notices.indexOf('function injectNotice')
+  const flush = region(notices, 'function flushNotices', 'function watchNotices')
   assert.notEqual(flushAt, -1, 'the full-queue flush helper must exist')
   assert.notEqual(injectDefAt, -1, 'injectNotice must exist module-level')
   assert.ok(injectDefAt < flushAt, 'injectNotice must be defined before the flush body')
@@ -3746,11 +3749,11 @@ test('onboarding injection: only after the AUTO gate, through queueNotice, plugi
   // subscription alone may be filtered for plugin contexts. Parallel tool
   // calls each settle their OWN notice there (per-call flush); the step/end
   // event still drains the whole queue.
-  const resultFlush = region(src, "ctx.on('tools/result'", "ctx.on('session/event'")
+  const resultFlush = region(notices, "ctx.on('tools/result'", "ctx.on('session/event'")
   assert.ok(resultFlush.includes('flushNotice(session, callId)'), 'the tools/result handler must settle its own callId (per-call flush)')
-  const stepEndAt = src.indexOf("event?.type === 'step/end'")
+  const stepEndAt = notices.indexOf("event?.type === 'step/end'")
   assert.notEqual(stepEndAt, -1, 'step/end must remain the full-queue drain point')
-  assert.ok(src.indexOf('flushNotices(session)', stepEndAt) > stepEndAt, 'step/end must call the full flushNotices')
+  assert.ok(notices.indexOf('flushNotices(session)', stepEndAt) > stepEndAt, 'step/end must call the full flushNotices')
 })
 
 // ── first-use onboarding: client locale anchors ───────────────────────────
@@ -3833,8 +3836,8 @@ test('locale: retired UI keys stay deleted from both dicts and the compiled bund
 
 test('onboarding locale: B-section copy exists host-side (i18n exemption)', () => {
   // Host notices deliberately bypass locale.ts (page-compromise fence);
-  // anchor the B-section copy in the compiled host instead.
-  const hostSrc = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
+  // anchor the B-section copy in the compiled notice module instead.
+  const hostSrc = readFileSync(new URL('../lib/auto/notices.js', import.meta.url), 'utf8')
   assert.ok(hostSrc.includes('（自动审批）已生效'))
   assert.ok(hostSrc.includes('(Auto-approval) is active'))
 })
@@ -3913,8 +3916,10 @@ test('review wait: configurable per-attempt timeout with clamped default', () =>
   // Shape, not the exact clamp expression: extracting the budget into a local
   // const or reordering the math must stay green, while a hardcoded literal is
   // still caught independently below. The enclosing function is the slice
-  // because the derivation may legitimately move above the call.
-  const loop = region(src, 'async function reviewWithLLM(', 'function injectNotice(')
+  // because the derivation may legitimately move above the call; the end
+  // marker is the next top-level declaration in the same file (the notice
+  // helpers this region used to end at moved to src/auto/notices.ts).
+  const loop = region(src, 'async function reviewWithLLM(', 'let reviewRevisionSeq')
   assert.match(loop, /attemptTimeoutMs:\s*[^,\n]/, 'the retry loop must pass a computed per-attempt budget')
   assert.ok(!/attemptTimeoutMs:\s*\d/.test(loop), 'the per-attempt budget must never be a numeric literal')
   assert.ok(/config\.reviewWaitSeconds/.test(loop), 'the per-attempt budget must be derived from the configured reviewWaitSeconds setting')
@@ -3952,16 +3957,17 @@ test('onboarding message: english agent notice, disable switch anchored', () => 
   // (English context), is gated by onboardingMessageEnabled (default on), and
   // the en notice text is used for the injection.
   const src = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
+  const notices = readFileSync(new URL('../lib/auto/notices.js', import.meta.url), 'utf8')
   assert.ok(src.includes('onboardingMessageEnabled !== false'), 'injection must honor the switch')
   assert.ok(src.includes("onboardingNoticeText(config.timeoutAction, 'en')"), 'injection must use the English notice')
-  assert.ok(src.includes('(Auto-approval) is active'), 'English body must exist in the compiled host')
+  assert.ok(notices.includes('(Auto-approval) is active'), 'English body must exist in the compiled notice module')
 })
 
 test('auto-mode notice: enter/exit announcements to the agent, switchable', () => {
   // Regression anchor (2026-08-26): switching a session into/out of Auto
   // injects an English agent-context notice via agent.inject (plugin source),
   // gated by the shared onboardingMessageEnabled switch.
-  const src = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
+  const src = readFileSync(new URL('../lib/auto/notices.js', import.meta.url), 'utf8')
   assert.ok(src.includes("event?.type === 'permission/preset'"), 'preset switch must be observed')
   assert.ok(src.includes('(Auto-approval) is now ACTIVE'), 'enter notice must exist in English')
   assert.ok(src.includes('(Auto-approval) is now INACTIVE'), 'exit notice must exist in English')
@@ -4058,16 +4064,20 @@ test('pre-execute fast path: the hard fuse and both classifier verdicts write hi
 // claimed at a step boundary, so no flush timing can misplace it.
 test('approval notices are delivered through the agent inbox, never appended to the log', () => {
   const src = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
+  const notices = readFileSync(new URL('../lib/auto/notices.js', import.meta.url), 'utf8')
+  // The prohibition covers the module that owns delivery as well as the entry:
+  // checking only the entry would go vacuous the moment delivery moves out.
   assert.ok(!/session\.append\(\s*'user\/message'/.test(src), 'no notice may be written straight into the session log')
-  const injectAt = src.indexOf('function injectNotice')
+  assert.ok(!/session\.append\(\s*'user\/message'/.test(notices), 'the notice module must not append to the session log either')
+  const injectAt = notices.indexOf('function injectNotice')
   assert.ok(injectAt !== -1, 'the notice delivery helper must exist')
-  const inject = src.slice(injectAt, injectAt + 900)
+  const inject = notices.slice(injectAt, injectAt + 900)
   assert.ok(inject.includes('agent.inject(createUserMessage'), 'delivery goes through the agent inbox')
   assert.ok(inject.includes("typeof agent.inject !== 'function'"), 'delivery stays best-effort when no agent is reachable')
   // The queue survives for one reason only: a notice about a call that never
   // ran (rejected/cancelled) must not reach the model.
-  assert.ok(src.includes('entry.seen'), 'the settle marker must still gate delivery')
-  assert.ok(src.includes('工具未执行，仅控制台通知'), 'an unsettled notice stays console-only')
+  assert.ok(notices.includes('entry.seen'), 'the settle marker must still gate delivery')
+  assert.ok(notices.includes('工具未执行，仅控制台通知'), 'an unsettled notice stays console-only')
 })
 
 // ── shell 写 DSH_HOME 收口：无 shell 词法可绕过的硬拒 ───────────────────

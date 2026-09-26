@@ -15,11 +15,17 @@ import { fileURLToPath } from 'node:url'
 
 const host = readFileSync(fileURLToPath(new URL('../src/index.ts', import.meta.url)), 'utf8')
 const built = readFileSync(fileURLToPath(new URL('../lib/index.js', import.meta.url)), 'utf8')
+// The composition itself lives in the module that owns guardDenyDecision; the
+// entry keeps the guard registration and its call site.
+const guardModule = readFileSync(fileURLToPath(new URL('../lib/auto/debug-and-decisions.js', import.meta.url)), 'utf8')
 const lifecycle = readFileSync(fileURLToPath(new URL('../docs/02-tool-call-lifecycle.md', import.meta.url)), 'utf8')
 
 test('the guard decision composes hard-deny first, symlink escape second', () => {
-  const hits = built.match(/hardDenyReason\(exec, roots\) \?\? symlinkEscapeReason\(exec, roots, resolveDeepest\)/g) ?? []
-  assert.equal(hits.length, 1, 'the composition expression must exist exactly once in the compiled host')
+  // Exactly once across the whole compiled plugin, not just the entry: the
+  // expression could otherwise be duplicated into the module while the entry
+  // kept a second copy.
+  const hits = `${built}\n${guardModule}`.match(/hardDenyReason\(exec, roots\) \?\? symlinkEscapeReason\(exec, roots, resolveDeepest\)/g) ?? []
+  assert.equal(hits.length, 1, 'the composition expression must exist exactly once in the compiled plugin')
 })
 
 test('the guard is a registered synchronous function, never an event listener', () => {

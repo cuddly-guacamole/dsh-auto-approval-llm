@@ -13,6 +13,9 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
 const host = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
+// The provenance reporter lives in src/auto/trusted-intent.ts; the entry keeps
+// the classifier-boundary call site and the disposal teardown.
+const trustedIntentSrc = readFileSync(new URL('../src/auto/trusted-intent.ts', import.meta.url), 'utf8')
 
 test('the disposal handler drops the session signature', () => {
   const disposeStart = host.indexOf("anyCtx.on('session/disposed'")
@@ -26,7 +29,7 @@ test('the disposal handler drops the session signature', () => {
 })
 
 test('the signature is still keyed by the session authority id', () => {
-  assert.ok(host.includes('trustedIntentReported.set(key, signature)'), 'the map still records the last signature')
+  assert.ok(trustedIntentSrc.includes('trustedIntentReported.set(key, signature)'), 'the map still records the last signature')
   assert.ok(
     host.includes('reportTrustedIntentOrigins(authorityKeyFor(exec), trustedIntents, intentWindow.overflow > 0)'),
     // Third arg added with the window-overflow flag: the assertion's purpose is
@@ -38,5 +41,7 @@ test('the signature is still keyed by the session authority id', () => {
 
 test('the entry is not relocated into a shared cap it does not belong to', () => {
   // The map is per-session state, so disposal — not a global FIFO — owns it.
+  // Both files: the clear could reappear at the writer or at the call site.
+  assert.ok(!trustedIntentSrc.includes('trustedIntentReported.clear()'), 'a global clear would drop live sessions too')
   assert.ok(!host.includes('trustedIntentReported.clear()'), 'a global clear would drop live sessions too')
 })

@@ -108,17 +108,24 @@ function parseErrorArm(host, plane) {
 
 test('host: pre-execute and answerer planes call the same shared reporter', () => {
   const host = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
+  // The reporter itself lives in src/auto/debug-and-decisions.ts; both call
+  // sites stay in the entry's evaluation planes.
+  const reporter = readFileSync(new URL('../src/auto/debug-and-decisions.ts', import.meta.url), 'utf8')
   const pre = host.indexOf("reportRulesParseErrors('pre-execute', declared.errors)")
   const ans = host.indexOf("reportRulesParseErrors('answerer', declared.errors)")
   assert.ok(pre !== -1, 'the pre-execute plane references the shared reporter')
   assert.ok(ans !== -1, 'the answerer plane references the shared reporter')
   assert.ok(pre < ans, 'the pre-execute plane is wired before the answerer plane')
-  assert.match(host, /function reportRulesParseErrors\(plane: 'pre-execute' \| 'answerer'/, 'one reporter function serves both planes')
+  assert.match(reporter, /function reportRulesParseErrors\(plane: 'pre-execute' \| 'answerer'/, 'one reporter function serves both planes')
 })
 
 test('host: the old silent skip and ad-hoc console.error are gone from both planes', () => {
   const host = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
+  const reporter = readFileSync(new URL('../src/auto/debug-and-decisions.ts', import.meta.url), 'utf8')
+  // Both files: the ad-hoc form could reappear at either the call site or the
+  // reporter that now owns the shared loud path.
   assert.ok(!host.includes("console.error('[dsh-auto-approval-llm] rulesText 解析错误"), 'no plane keeps the ad-hoc parse-error console.error')
+  assert.ok(!reporter.includes("console.error('[dsh-auto-approval-llm] rulesText 解析错误"), 'the reporter keeps no ad-hoc parse-error console.error')
   const preArm = parseErrorArm(host, 'pre-execute')
   assert.match(preArm, /reportRulesParseErrors\('pre-execute', declared\.errors\)/, 'pre-execute arms the reporter on parse errors')
   const ansArm = parseErrorArm(host, 'answerer')
@@ -126,16 +133,21 @@ test('host: the old silent skip and ad-hoc console.error are gone from both plan
 })
 
 test('host: repeated identical reports are suppressed per plane (content-keyed, bounded)', () => {
-  const host = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
-  assert.match(host, /const rulesParseReported = new Map<string, string>\(\)/, 'per-plane last-reported state exists')
-  assert.ok(host.includes('rulesParseReported.get(plane) === signature'), 'an identical signature is not re-reported')
-  assert.ok(host.includes('rulesParseReported.set(plane, signature)'), 'a changed signature re-arms the reporter')
-  assert.ok(host.includes("signature = `${plane}:${entries.map((e) => `${e.line}:${e.message}`).join('|')}`"), 'the suppression key embeds the plane and the error tuples')
+  // Per-plane suppression state lives beside the reporter in
+  // src/auto/debug-and-decisions.ts.
+  const reporter = readFileSync(new URL('../src/auto/debug-and-decisions.ts', import.meta.url), 'utf8')
+  assert.match(reporter, /const rulesParseReported = new Map<string, string>\(\)/, 'per-plane last-reported state exists')
+  assert.ok(reporter.includes('rulesParseReported.get(plane) === signature'), 'an identical signature is not re-reported')
+  assert.ok(reporter.includes('rulesParseReported.set(plane, signature)'), 'a changed signature re-arms the reporter')
+  assert.ok(reporter.includes("signature = `${plane}:${entries.map((e) => `${e.line}:${e.message}`).join('|')}`"), 'the suppression key embeds the plane and the error tuples')
 })
 
 test('host: the reporter is self-contained and never disturbs a decision path', () => {
-  const host = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
-  const fn = host.slice(host.indexOf('function reportRulesParseErrors('), host.indexOf('function loadHistory('))
+  // The reporter body is bounded by its own declaration and the next
+  // top-level function in the same module; both live in
+  // src/auto/debug-and-decisions.ts.
+  const reporter = readFileSync(new URL('../src/auto/debug-and-decisions.ts', import.meta.url), 'utf8')
+  const fn = reporter.slice(reporter.indexOf('function reportRulesParseErrors('), reporter.indexOf('function denyOnAuditFailure('))
   assert.match(fn, /try \{/, 'the reporter body runs under try')
   assert.match(fn, /\} catch \{/, 'the reporter swallows its own failures')
   assert.ok(fn.includes("type: 'rules-parse-error'"), 'the audit event uses a dedicated type')

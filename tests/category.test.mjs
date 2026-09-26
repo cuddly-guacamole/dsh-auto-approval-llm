@@ -698,7 +698,12 @@ test('T66: rootsFor reads category mode/trustedDirs from the live config', () =>
 })
 
 test('T76: HistoryRecord declares the optional category fields (declaration output)', () => {
-  const dts = readFileSync(new URL('../lib/types/index.d.ts', import.meta.url), 'utf8')
+  // The interface is declared in src/auto/approval-history.ts and re-exported
+  // by the entry; a re-export carries no declaration body, so the emitted
+  // interface is read from the module that owns it.
+  const entryDts = readFileSync(new URL('../lib/types/index.d.ts', import.meta.url), 'utf8')
+  assert.match(entryDts, /export type \{ HistoryRecord \} from '\.\/auto\/approval-history\.js'/, 'the entry still re-exports the record type')
+  const dts = readFileSync(new URL('../lib/types/auto/approval-history.d.ts', import.meta.url), 'utf8')
   const block = dts.match(/interface HistoryRecord \{[\s\S]*?\n\}/)
   assert.ok(block !== null, 'HistoryRecord interface is emitted')
   assert.ok(/\bcategory\?:/.test(block[0]))
@@ -997,8 +1002,12 @@ test('LP12: the learning layer is byte-inert while disabled', () => {
   const reviewIdx = body.indexOf('reviewWithLLM(')
   assert.ok(guardIdx !== -1, 'the query opens with the switch guard')
   assert.ok(reviewIdx !== -1 && guardIdx < reviewIdx, 'nothing (not even a lookup) runs while the switch is off')
+  // The boot-time store load lives in src/auto/runtime-stores.ts (compiled to
+  // lib/auto/runtime-stores.js); the whole plugin must still load it exactly
+  // once, and never per call.
+  const runtimeStores = readFileSync(new URL('../lib/auto/runtime-stores.js', import.meta.url), 'utf8')
   assert.equal(
-    [...HOST_SRC.matchAll(/loadLearning\(resolveRuntimeReadPath\(LEARNING_FILENAME\)\)/g)].length,
+    [...`${HOST_SRC}\n${runtimeStores}`.matchAll(/loadLearning\(resolveRuntimeReadPath\(LEARNING_FILENAME\)\)/g)].length,
     1,
     'the store loads once per process, module-level',
   )
@@ -1374,7 +1383,9 @@ test('G-relative: the symlink guard resolves the normalized target, never the ra
   // anchor made every non-first workspace look like an escape. The guard may
   // never cache a workspace resolution.
   assert.ok(!guard.includes('realWorkspace'), 'no cached workspace anchor may exist inside the guard')
-  const host = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
+  // The composition that passes the fresh per-call resolver lives in the
+  // module that owns guardDenyDecision; the entry keeps the guard registration.
+  const host = readFileSync(new URL('../lib/auto/debug-and-decisions.js', import.meta.url), 'utf8')
   assert.ok(host.includes('symlinkEscapeReason(exec, roots, resolveDeepest)'), 'the host wires the guard with the fresh per-call resolver')
   assert.ok(!host.includes('let realWorkspace'), 'the host keeps no workspace-realpath cache')
 })

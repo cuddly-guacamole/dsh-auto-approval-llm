@@ -105,6 +105,7 @@ test('withWindowOverflowNote: overflow names the count and that the evidence is 
 })
 
 const host = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
+const trustedIntentSrc = readFileSync(new URL('../src/auto/trusted-intent.ts', import.meta.url), 'utf8')
 
 test('the classifier deny reason carries the window note at the fast-path deny site', () => {
   const preAt = host.indexOf("anyCtx.on('tools/pre-execute'")
@@ -126,8 +127,11 @@ test('the classifier deny reason carries the window note at the fast-path deny s
 })
 
 test('the trusted-intents event carries a quantized overflow flag, not a per-message counter', () => {
-  const fnAt = host.indexOf('function reportTrustedIntentOrigins')
-  const fn = host.slice(fnAt, fnAt + 1600)
+  // The reporter lives in src/auto/trusted-intent.ts; its call site stays at
+  // the classifier boundary in the entry.
+  const fnAt = trustedIntentSrc.indexOf('function reportTrustedIntentOrigins')
+  assert.notEqual(fnAt, -1, 'the provenance reporter must exist')
+  const fn = trustedIntentSrc.slice(fnAt, fnAt + 1600)
   assert.ok(fn.includes('overflowed,'), 'the row records the quantized flag')
   assert.ok(fn.includes("'overflow' : 'in-window'"), 'the dedup signature only flips with the quantized state')
   assert.ok(
