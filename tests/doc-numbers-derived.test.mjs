@@ -100,6 +100,23 @@ test('every derived point names a document it can still match', () => {
   }
 })
 
+/**
+ * The wrong number a reverse control writes into the document: the claim plus
+ * an offset, stepped past whatever the point actually measures.
+ *
+ * A fixed `+7` is not enough on its own. Once the measured count catches up
+ * with the tampered claim the document becomes honest, nothing is reported,
+ * and the control loses its teeth silently — which is exactly what happened
+ * when `src/auto` grew to `claimed + 7` modules. Stepping off the measured
+ * value keeps every control falsifiable as the tree grows.
+ */
+function driftedClaim(point, match, measured) {
+  const expected = point.expect(match, measured)
+  let wrong = point.claimed(match) + 7
+  while (Number.isFinite(expected) && wrong === expected) wrong += 1
+  return wrong
+}
+
 test('every derived point reports its own number when it drifts', () => {
   // One reverse control per point, generated from the point itself: a typo in a
   // pattern, a wrong source binding or a rewrite that edits the wrong digits all
@@ -110,7 +127,7 @@ test('every derived point reports its own number when it drifts', () => {
     const flags = point.pattern.flags.includes('g') ? point.pattern.flags : `${point.pattern.flags}g`
     const match = new RegExp(point.pattern.source, flags).exec(source)
     assert.ok(match !== null, `${point.file} does not contain ${point.description}`)
-    const wrong = point.claimed(match) + 7
+    const wrong = driftedClaim(point, match, measured)
     const tampered = source.slice(0, match.index) + point.rewrite(match, wrong) + source.slice(match.index + match[0].length)
     assert.notEqual(tampered, source, `${point.description} rewrite must change the document`)
     const problems = checkDerived({ [point.file]: tampered }, measured).problems

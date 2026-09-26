@@ -28,6 +28,33 @@ import { isIP } from 'node:net'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { methodOf, registerCarrierFetchRoute } from './auto/carrier-route.js'
+import {
+  approvalHistory,
+  approvalState,
+  autoAnsweredCallIds,
+  configError,
+  decisionFeedback,
+  firstAutoNoticeSeen,
+  followExpiry,
+  learningStore,
+  llmLatency,
+  loopGuardPinned,
+  loopStates,
+  pendingPanelReleases,
+  rejectGuidanceSeen,
+  resolvedCallIds,
+  reviewSessions,
+  REVIEW_STATUS_HOLD_MS,
+  reviewStates,
+  reviewVerdicts,
+  setConfigError,
+  setDebugOn,
+  setLearningStore,
+  timeoutFeedback,
+  trustedIntentReported,
+  debugOn,
+  type ReviewStatus,
+} from './auto/approval-state.js'
 import { ArtifactRegistry } from './auto/artifacts.js'
 import { appendAuditLine, recordAuditClear } from './auto/audit.js'
 import { AGGRESSIVE_BUILTIN, applyCategoryDirective, CATEGORY_KEYS, categoryDirectiveFor, type CategoryKey, HARD_LOCKED_CATEGORIES, LOCKED_CATEGORIES, realpathCriticalReason, sensitiveBasenameAt } from './auto/category.js'
@@ -36,8 +63,8 @@ import { DIRECT_HUMAN_TOOL, GATED_PRESET, THRESHOLD_DEFAULTS } from './auto/cons
 import { createDshClassifier, createEndpointClassifier } from './auto/dsh-classifier.js'
 import { PLUGIN_MESSAGE_SOURCE } from './auto/message-source.js'
 import { type RaceHumanHandle, type ReviewResult, type StaticRisk, AWAITING_MARKER, EDITABLE_CONFIG_KEYS, HOST_ONLY_KEYS, LOCKED_ASK_MARKER, REVIEW_TIMEOUT_NOTICE, SHIPPED_PINNED_KEYS, applyBreaker, approvalSource, assembleReviewerSystem, breakerNote, breakerTripped, buildAskReason, createKeyedMutex, DENY_CIRCUMVENTION_GUIDANCE, extractToolPath, followResolution, formatDenyFeedback, frameReviewerInput, lowRiskReviewOutcome, parseReview, stripCountdownMarkers, unattendedMustFailClosed, plainConfigValue, raceHumanDecision, reviewSuggestionNote, reviewerAutoAllowBlocked, riskFromAssessment, staticListDecision } from './auto/decision.js'
-import { LATENCY_SUMMARY_WINDOW, clearLatencySamples, loadLatencySamples, pushLatencySample, summarizeLatency, type LatencySample } from './auto/latency.js'
-import { loopKeyFor, createLoopState, recordLoopCall, type LoopGuardState } from './auto/loop-guard.js'
+import { LATENCY_SUMMARY_WINDOW, clearLatencySamples, loadLatencySamples, pushLatencySample, summarizeLatency } from './auto/latency.js'
+import { loopKeyFor, createLoopState, recordLoopCall } from './auto/loop-guard.js'
 import { RECENT_REJECTION_CAP, baselineFromPermissionState, observePermissionChange, permissionChangeFromEvent, recentRejectionPointers, type PermissionState } from './auto/permission-change.js'
 import {
   clampLearningThreshold,
@@ -48,7 +75,6 @@ import {
   learningFuseDecision,
   learningKey,
   learnDecision,
-  emptyLearningStore,
   learnGateEligible,
   loadLearning,
   recordConfirm,
@@ -58,7 +84,6 @@ import {
   signatureFor,
   type LearningFileFingerprint,
   type LearningKind,
-  type LearningStore,
 } from './auto/learning.js'
 import { isWithin, normalizePath, resolveRoots, devZoneRootsFor } from './auto/paths.js'
 import { assessTool, hardDenyReason, structuredRuntimeStateReadHits, type Roots } from './auto/policy.js'
@@ -133,6 +158,7 @@ export { currentPreset, riskTimedOutAction, sessionEventList, sessionModelRoute 
 export { autoPermissionAuthority, LEARNABLE_HOOK_SITES } from './auto/gate-decision.js'
 export { atomicWriteFile, clearReviewerKeyFromCredentialFile, clearReviewerKeyInFile, extractReviewerKeyLine } from './auto/route-table.js'
 export { holdWhile, installLlmCatalogRoutes, installReviewerCredentialRoute } from './auto/route-installers.js'
+export { REVIEW_STATUS_HOLD_MS } from './auto/approval-state.js'
 
 export const name = 'dsh-auto-approval-llm'
 // No web-server service is listed here: a carrier that never provides one
@@ -758,7 +784,6 @@ function injectNotice(session: any, agent: any, text: string): void {
 // safe notice queue above (never a bare append). The marker lives only in
 // memory and never touches disk, so a restart may greet the same session
 // again — an accepted semantic (documented in HANDOFF).
-const firstAutoNoticeSeen = new Set<string>()
 
 /** True exactly once per root session key per process lifetime. */
 export function markFirstAutoSessionNotice(sessionKey: string): boolean {
@@ -836,7 +861,6 @@ const REJECT_GUIDANCE_MAX_PER_MINUTE = 5
 // a simple insert-order FIFO (Set iteration follows insertion order), and
 // session/disposed drops a session's prefix wholesale (see apply()).
 const REJECT_GUIDANCE_SEEN_CAP = 4096
-const rejectGuidanceSeen = new Set<string>()
 let rejectGuidanceWindow: number[] = []
 
 export function buildRejectGuidanceText(source: string, category?: string): string {
@@ -1069,14 +1093,12 @@ function watchNotices(ctx: any, getConfig: () => Config, getGateNames: () => rea
 // approval vocabulary has no timeout outcome), but the agent should be able to
 // tell a timeout apart from a deliberate user denial. Record a marker and let
 // `tools/post-execute` inject it into the denied tool result.
-const timeoutFeedback = new Map<string, { text: string; at: number }>()
 
 function recordTimeoutFeedback(callId: string | undefined, text: string): void {
   if (!callId) return
   timeoutFeedback.set(callId, { text, at: Date.now() })
 }
 
-const decisionFeedback = new Map<string, { text: string; at: number }>()
 
 // Loop guard state: per-session streaks of identical auto-allowed calls, plus
 // the one-shot cross-plane pin that routes the escalated ask into the locked
@@ -1084,8 +1106,6 @@ const decisionFeedback = new Map<string, { text: string; at: number }>()
 // or writes the breaker counters — the escalation rides the ordinary ask
 // vocabulary, so no new adjudicated source exists. Streaks whose authority
 // cannot be resolved share the 'unknown' key (bounded by the per-state FIFO).
-const loopStates = new Map<string, LoopGuardState>()
-const loopGuardPinned = new Map<string, { consecutive: number; threshold: number; at: number }>()
 
 function recordDecisionFeedback(callId: string | undefined, text: string): void {
   if (!callId) return
@@ -1158,8 +1178,6 @@ export interface HistoryRecord {
   sessionArtifactDeletion?: boolean
 }
 
-const approvalHistory: HistoryRecord[] = []
-
 /**
  * Test-only redirect for history persistence.
  *
@@ -1221,12 +1239,10 @@ export function parseHistoryLines(lines: string[]): { records: HistoryRecord[]; 
 
 // Gated by the settings「调试」switch (`config.debug`); off by default so the
 // debug trail is only written while diagnosing.
-let debugOn = false
 
 // Latest config-init/update error (illegal persisted value, failing
 // describe/register). Surfaced to the settings card as a red banner so the
 // user can see why the plugin is running on fallback defaults and clear it.
-let configError: string | null = null
 
 // Debug trail for the reviewer/approval timeline (append-only, size-capped).
 // Lets a human inspect whether/when the LLM reviewed, what it said and how
@@ -1453,7 +1469,6 @@ function denyOnAuditFailure(callId: string | undefined): void {
 // so the recent-100 min/avg/max cannot suffer survivor bias. Persisted in
 // llm-latency.jsonl (same append+rotate pattern as history.jsonl); clear
 // history intentionally leaves it alone — telemetry is not an approval record.
-const llmLatency: LatencySample[] = []
 
 // ── confirmation-learning store ───────────────────────────────────────────
 // Loaded once per process like history/latency; every mutation happens under
@@ -1463,7 +1478,6 @@ const llmLatency: LatencySample[] = []
 // The LOAD prefers the canonical state path and falls back to the legacy
 // package-root file, so an install upgrading keeps the entries it already
 // earned; the persister then writes the merged store to the canonical path.
-let learningStore: LearningStore = emptyLearningStore()
 
 // Out-of-process tamper tripwire. The store is overwritten wholesale on the
 // next persist, so a runtime divergence between the in-memory copy and the
@@ -1491,7 +1505,7 @@ function loadRuntimeStores(): void {
   loadHistory()
   llmLatency.length = 0
   llmLatency.push(...loadLatencySamples())
-  learningStore = loadLearning(resolveRuntimeReadPath(LEARNING_FILENAME))
+  setLearningStore(loadLearning(resolveRuntimeReadPath(LEARNING_FILENAME)))
   learningDiskFingerprint = learningFileFingerprint(resolveRuntimeReadPath(LEARNING_FILENAME))
 }
 
@@ -1512,69 +1526,11 @@ const persistLearningGuarded = (): boolean => {
   return written
 }
 
-interface ReviewStatus {
-  risk: 'LOW' | 'MEDIUM' | 'HIGH'
-  phase: 'countdown' | 'follow'
-  action: 'reject' | 'allow'
-  seconds: number
-  note?: string
-  feedback?: string
-  /** Resolution origin, set on follow-phase statuses so the client can skip
-   * re-answering approvals the human already settled. 'abort' labels a
-   * cancelled/aborted ask (no human and no LLM decided) so it is never
-   * misread as a human answer. */
-  source?: 'human' | 'llm' | 'timeout' | 'abort'
-  /**
-   * The category layer's label for this call, when one was derived. Carried on
-   * the status so the ask's own terminal record can name it: the rejected
-   * records written from `askHuman` (timeout-deny, human-deny, llm-deny,
-   * llm-failed) sit in a scope that cannot see `classifyStaticRisk`'s result,
-   * and without the label a refusal cannot be grouped by category — which is
-   * how a whole class of false refusals stayed uncountable. It is the same
-   * closed-set key the decision records already carry, never a path or a
-   * command string.
-   */
-  category?: string
-  /**
-   * Monotonic per-ask revision, allocated at the single publish choke point.
-   * A client that receives a replayed or out-of-order payload compares it
-   * against the revision it already holds and ignores the older one.
-   */
-  revision?: number
-  /**
-   * Host epoch ms the countdown expires. Carried so a client that observes the
-   * ask mid-countdown (page reload, panel held back, late poll) shows the time
-   * that is actually left instead of restarting from the published seconds.
-   */
-  expiresAt?: number
-  /**
-   * Set on the attached asks whose countdown is pinned to reject because a
-   * locked category (or the credential-read floor, or the by-name channel
-   * refusal) forbids every automatic release. It is a structural flag rather
-   * than something derived from the reason text, and the panel needs it:
-   * without it a locked ask is indistinguishable from an ordinary countdown, so
-   * a user who authorized the operation in the conversation waits for an answer
-   * that the design will never give. Only the STATUS carries the fact; the
-   * ask's outcome semantics are unchanged.
-   */
-  lockedAsk?: true
-}
-
-const reviewStates = new Map<string, ReviewStatus>()
-// Session association for the session-scoped discovery route: review states
-// are keyed by callId only, and the client has to find a pending ask before
-// the official panel exists (it is held back for `panelDelayMs`).
-const reviewSessions = new Map<string, string>()
 // Monotonic revision source for published review states.
 let reviewRevisionSeq = 0
-// Held official panels, keyed by callId: the release callback lets the panel
-// appear before the delay elapsed (the client's "show it now" entry).
-const pendingPanelReleases = new Map<string, () => void>()
 
 /** Hard ceiling for the panel hold, independent of what settings carry. */
 const MAX_PANEL_DELAY_MS = 10_000
-/** Longest a review-status long poll may be held open. */
-export const REVIEW_STATUS_HOLD_MS = 20_000
 
 export interface PanelGate {
   /** Resolves when the panel may appear (delay elapsed or released). */
@@ -1620,45 +1576,13 @@ export function createPanelGate(callId: string | undefined, delayMs: number): Pa
 // timer firings after 5 min hidden), so a throttled client still observes the
 // follow instead of falling back to a stale countdown action.
 const FOLLOW_STATE_TTL_MS = 120_000
-const followExpiry = new Map<string, number>()
-
-// Latest reviewer verdict per callId (covers both decisive MEDIUM takeovers
-// and advisory MEDIUM/HIGH opinions). askHuman emits it into history so the
-// LLM's review is always visible, even when it did not take over.
-const reviewVerdicts = new Map<string, ReviewResult>()
 
 // callIds whose approval/request has already been settled by the host (any
 // resolution path). The client's follow ACK (FEEDBACK POST) arrives AFTER
 // askHuman finished, so without this set the ACK would relabel a resolved ask
 // with the timeout notice. Map<callId, timestamp>; swept with the follow
 // sweep; only used to gate feedback text.
-const resolvedCallIds = new Map<string, number>()
 const RESOLVED_TTL_MS = 30_000
-
-// callIds whose resolution was auto-answered by the client: the feedback route
-// records the marker while the ask is live, askHuman consumes it to label the
-// resolution `auto-*` instead of `human-*`, and the TTL sweep drops a marker
-// whose ask never settled. Never a source of truth for the outcome itself.
-const autoAnsweredCallIds = new Map<string, number>()
-
-// ── approval state registry ───────────────────────────────────────────────
-// Every plugin-lifetime callId-keyed approval map, grouped so cleanup can
-// never forget a member: /approval reset clears them all through
-// clearApprovalState(), and the periodic / post-execute sweeps run from one
-// place. The maps stay top-level variables (hot paths read them directly);
-// this registry only owns their lifecycle. pendingNotices is deliberately
-// NOT a member: it is session-keyed and released by its own session/disposed
-// hook, not by the reset or the callId sweeps.
-const approvalState = {
-  reviewStates,
-  reviewSessions,
-  followExpiry,
-  reviewVerdicts,
-  resolvedCallIds,
-  autoAnsweredCallIds,
-  timeoutFeedback,
-  decisionFeedback,
-}
 
 function clearApprovalState(): void {
   for (const map of Object.values(approvalState)) map.clear()
@@ -2755,7 +2679,6 @@ export function trustedUserMessages(authority: any) {
 }
 
 /** Last provenance signature reported per session (the event is deduped). */
-const trustedIntentReported = new Map<string, string>()
 
 /**
  * States whether the deny reason describes a window with no authorization at
@@ -2888,7 +2811,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
           return settings.describe().find((entry: any) => entry.ns === SETTINGS_NS)
         } catch (error) {
           console.error('[dsh-auto-approval-llm] settings.describe failed', error)
-          configError = error instanceof Error ? error.message : String(error)
+          setConfigError(error instanceof Error ? error.message : String(error))
           return undefined
         }
       }
@@ -2897,7 +2820,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       try {
         const row = readSettingsRow()
         config = mergeStoredConfig(row)
-        configError = null
+        setConfigError(null)
         // A re-apply can already see the row; treat it as the loaded state so
         // the deferred read does not mistake a later empty result for a
         // first-read miss and retry over an already loaded config.
@@ -2906,7 +2829,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
         // Illegal persisted value: run on safe defaults and surface the error
         // so the settings card can offer to clear the offending keys.
         console.error('[dsh-auto-approval-llm] persisted config invalid, running defaults', error)
-        configError = error instanceof Error ? error.message : String(error)
+        setConfigError(error instanceof Error ? error.message : String(error))
         config = resolveConfig(rawConfig)
       }
     } else {
@@ -2916,7 +2839,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
     console.error('[dsh-auto-approval-llm] settings init failed, fallback to rawConfig', error)
     config = resolveConfig(rawConfig)
   }
-  debugOn = config.debug
+  setDebugOn(config.debug)
 
   // Reviewer provider/model and classifier knobs are read at construction
   // time, so the classifier must be rebuilt whenever (live) settings change;
@@ -2986,8 +2909,8 @@ export function apply(ctx: Context, rawConfig: Config): void {
       if (row === undefined) return false
       try {
         config = mergeStoredConfig!(row)
-        configError = null
-        debugOn = config.debug
+        setConfigError(null)
+        setDebugOn(config.debug)
         rebuildClassifier()
         storedConfigLoaded = true
         stopRetry()
@@ -2995,7 +2918,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
         return true
       } catch (error) {
         console.error('[dsh-auto-approval-llm] live settings update failed', error)
-        configError = error instanceof Error ? error.message : String(error)
+        setConfigError(error instanceof Error ? error.message : String(error))
         return false
       }
     }
@@ -3006,7 +2929,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
     const scheduleRetry = (): void => {
       if (retryDisposed || storedConfigLoaded || retryTimer !== undefined) return
       if (retryAttempts >= SETTINGS_FIRST_READ_MAX_ATTEMPTS) {
-        configError = SETTINGS_UNAVAILABLE_ERROR
+        setConfigError(SETTINGS_UNAVAILABLE_ERROR)
         return
       }
       const delay = retryAttempts === 0 ? 0 : SETTINGS_FIRST_READ_RETRY_MS

@@ -354,7 +354,7 @@ test('reverse control: without the empty-row guard a later empty describe() down
 })
 
 test('reverse control: without the spent-budget report the failure stays silent', async (t) => {
-  await withVariant('no-budget-report', 'configError = SETTINGS_UNAVAILABLE_ERROR;', 'void 0;', async (variantApply) => {
+  await withVariant('no-budget-report', 'setConfigError(SETTINGS_UNAVAILABLE_ERROR);', 'void 0;', async (variantApply) => {
     let reads = 0
     const host = startHost({ plugin: variantApply, readRow: () => { reads += 1; return [] } })
     t.after(host.dispose)
