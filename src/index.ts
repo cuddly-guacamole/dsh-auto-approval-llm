@@ -87,6 +87,29 @@ import { resolveConfig } from './auto/config-normalize.js'
 import { currentPreset, findToolCallArguments, findToolDescription, resolveModelRoute, riskTimedOutAction, sessionEventList, sessionModelRoute } from './auto/session-introspect.js'
 import { autoPermissionAuthority } from './auto/gate-decision.js'
 import {
+  FEEDBACK_ROUTE,
+  HISTORY_ROUTE,
+  LEARNING_STORE_ROUTE,
+  LLM_LATENCY_ROUTE,
+  REVEAL_ROUTE,
+  REVIEWER_CREDENTIAL_REF,
+  REVIEW_STATUS_ROUTE,
+  SESSION_MODE_ROUTE,
+  SESSION_REVIEW_STATUS_ROUTE,
+  SETTINGS_FIRST_READ_MAX_ATTEMPTS,
+  SETTINGS_FIRST_READ_RETRY_MS,
+  SETTINGS_NS,
+  SETTINGS_ROUTE,
+  SETTINGS_UNAVAILABLE_ERROR,
+  STATS_ROUTE,
+  TEST_ROUTE,
+  TOOL_STATS_ROUTE,
+  atomicWriteFile,
+  reviewerKeyFromCredentialFile,
+} from './auto/route-table.js'
+import { json, readJson, resolveTrustedHosts, setTrustedHosts, trustedHosts } from './auto/http-pipeline.js'
+import { holdWhile, installLlmCatalogRoutes, installReviewerCredentialRoute } from './auto/route-installers.js'
+import {
   classifyForMigration,
   detectHostCapability,
   enforceOwnSpec,
@@ -108,6 +131,8 @@ import {
 export { resolveConfig } from './auto/config-normalize.js'
 export { currentPreset, riskTimedOutAction, sessionEventList, sessionModelRoute } from './auto/session-introspect.js'
 export { autoPermissionAuthority, LEARNABLE_HOOK_SITES } from './auto/gate-decision.js'
+export { atomicWriteFile, clearReviewerKeyFromCredentialFile, clearReviewerKeyInFile, extractReviewerKeyLine } from './auto/route-table.js'
+export { holdWhile, installLlmCatalogRoutes, installReviewerCredentialRoute } from './auto/route-installers.js'
 
 export const name = 'dsh-auto-approval-llm'
 // No web-server service is listed here: a carrier that never provides one
@@ -1176,20 +1201,6 @@ export function historyFilePath(): string {
 // file is removed and the previous content stays untouched — fail-closed:
 // prefer stale data over lost data. Mirrored inline by pushLatencySample in
 // src/auto/latency.ts (kept local there to avoid a cross-module dependency).
-export function atomicWriteFile(file: string, content: string): void {
-  const tmp = `${file}.tmp.${process.pid}`
-  try {
-    writeFileSync(tmp, content)
-    renameSync(tmp, file)
-  } catch (error) {
-    try {
-      if (existsSync(tmp)) unlinkSync(tmp)
-    } catch {
-      // Best-effort cleanup; the original file is unchanged.
-    }
-    throw error
-  }
-}
 
 /** Parse stored history JSONL tolerantly: a line that fails to parse is
  * skipped and counted, never allowed to abort loading the lines after it
@@ -1501,149 +1512,6 @@ const persistLearningGuarded = (): boolean => {
   return written
 }
 
-// ── same-origin feedback route ────────────────────────────────────────────
-// The browser client cannot use `host.call` here (this is a static bundle, not
-// a dynamic Cordis Package). Instead it POSTs the timeout marker to this route
-// immediately before answering the approval, so `tools/post-execute` can tell
-// an automatic timeout apart from a deliberate user rejection.
-const FEEDBACK_ROUTE = '/api/auto-approval-llm/feedback'
-const SETTINGS_ROUTE = '/api/auto-approval-llm/settings'
-const REVIEWER_CREDENTIAL_ROUTE = '/api/auto-approval-llm/reviewer-credential'
-const HISTORY_ROUTE = '/api/auto-approval-llm/history'
-const LLM_LATENCY_ROUTE = '/api/auto-approval-llm/llm-latency'
-const TOOL_STATS_ROUTE = '/api/auto-approval-llm/tool-stats'
-const TEST_ROUTE = '/api/auto-approval-llm/test'
-const SESSION_MODE_ROUTE = '/api/auto-approval-llm/session-mode'
-const REVIEW_STATUS_ROUTE = '/api/auto-approval-llm/review-status'
-const SESSION_REVIEW_STATUS_ROUTE = '/api/auto-approval-llm/session-review-status'
-const REVEAL_ROUTE = '/api/auto-approval-llm/reveal-approval'
-const STATS_ROUTE = '/api/auto-approval-llm/stats'
-// Provider/model catalog feeds the Issue #5 model-source pickers in the
-// settings card. Named llm-models (not /models) so the retired /models route
-// — whose anti-resurrection anchor pins the exact string in the compiled host —
-// stays gone; these are new live consumers for a new UI, not a resurrection.
-const PROVIDERS_ROUTE = '/api/auto-approval-llm/providers'
-const LLM_MODELS_ROUTE = '/api/auto-approval-llm/llm-models'
-const REASONING_EFFORTS_ROUTE = '/api/auto-approval-llm/reasoning-efforts'
-const LEARNING_STORE_ROUTE = '/api/auto-approval-llm/learning-store'
-const SETTINGS_NS = 'auto-approval-llm' as any
-// Budget for the first stored-config read. `settings.describe()` lists only the
-// entries whose fiber is ACTIVE, and this plugin's own fiber reaches ACTIVE only
-// after apply() returns, so the read cannot succeed synchronously; a sibling
-// entry or a config reload can push the transition later still. The first read
-// is retried on a fixed cadence until the row appears, bounded so a host that
-// never projects the row cannot become a poll loop: the first attempt runs on
-// the next tick, the rest every SETTINGS_FIRST_READ_RETRY_MS, and the budget is
-// spent after SETTINGS_FIRST_READ_MAX_ATTEMPTS attempts (worst case ≈ 2s).
-const SETTINGS_FIRST_READ_RETRY_MS = 50
-const SETTINGS_FIRST_READ_MAX_ATTEMPTS = 40
-// Raised when the budget is spent without a readable row: the card surfaces it,
-// so "the settings page shows shipped defaults" is distinguishable from "the
-// stored configuration was read and really is those defaults".
-const SETTINGS_UNAVAILABLE_ERROR =
-  'settings plane unavailable: the host never listed this plugin entry, so the stored configuration could not be read; running on the shipped defaults'
-
-// The online-reviewer API key lives in the DSH credential store (env-var
-// reference name), never in the settings value — the UI only ever sees
-// `configured`, never the secret. Resolved per operation, not cached.
-const REVIEWER_CREDENTIAL_REF = 'DSH_AUTO_APPROVAL_REVIEWER_API_KEY'
-
-/**
- * Parse the `DSH_AUTO_APPROVAL_REVIEWER_API_KEY: <value>` line out of the
- * shared credential file text. Pure so the fallback parsing is contract-tested.
- * Handles the two spellings users actually write: bare `sk-...` and a value
- * wrapped in single/double quotes (`"sk-..."`), stripping the closing quote so
- * a quoted YAML value never ships a trailing quote character as part of the
- * key.
- */
-export function extractReviewerKeyLine(text: string): string | undefined {
-  const match = text.match(new RegExp(`^\\s*${REVIEWER_CREDENTIAL_REF}\\s*:\\s*["']?(sk-[^\\s]+)`, 'm'))
-  if (!match) return undefined
-  return match[1].replace(/["']+$/, '')
-}
-
-/** Best-effort fallback: read the reviewer key from the shared DSH credential
- * file (`~/.dsh/.credentials.yaml`) when the credentials service is not
- * reachable from the plugin scope. Never throws; returns undefined if absent. */
-function reviewerKeyFromCredentialFile(): string | undefined {
-  try {
-    // The credentials file lives under the DSH home; the runtime may or may
-    // not export DSH_HOME, so probe both the env value and homedir()/.dsh.
-    const candidates = [
-      process.env.DSH_HOME ? join(process.env.DSH_HOME, '.credentials.yaml') : '',
-      join(homedir(), '.dsh', '.credentials.yaml'),
-    ]
-    for (const file of candidates) {
-      if (!file) continue
-      try {
-        const text = readFileSync(file, 'utf8')
-        const key = extractReviewerKeyLine(text)
-        if (key !== undefined) return key
-      } catch {
-        // try the next candidate
-      }
-    }
-    return undefined
-  } catch {
-    return undefined
-  }
-}
-
-/** Best-effort removal of the reviewer key line from the shared credential
- * file, mirroring the fallback probe paths. Used by the credential DELETE so
- * "restore defaults" really clears the reviewer key in every source. Never
- * touches any other ref line.
- *
- * Tri-state on purpose: the route must not answer 200 while the key it claims
- * to have cleared is still readable there — `resolveReviewerApiKey` falls back
- * to this file on the next review, so a failed removal means the key stays live
- * and keeps being sent. `absent` (no readable candidate carries the ref) is a
- * success; `failed` (the ref is present and could not be removed) is not. */
-export function clearReviewerKeyFromCredentialFile(): 'cleared' | 'absent' | 'failed' {
-  const candidates = [
-    process.env.DSH_HOME ? join(process.env.DSH_HOME, '.credentials.yaml') : '',
-    join(homedir(), '.dsh', '.credentials.yaml'),
-  ]
-  let failed = false
-  for (const file of candidates) {
-    const result = clearReviewerKeyInFile(file)
-    if (result === 'cleared') return 'cleared'
-    if (result === 'failed') failed = true
-  }
-  return failed ? 'failed' : 'absent'
-}
-
-/**
- * Remove the reviewer ref line from ONE credential file.
- *
- * Tri-state on purpose: the route must not answer 200 while the key it claims
- * to have cleared is still readable there — `resolveReviewerApiKey` falls back
- * to this file on the next review, so a failed removal means the key stays live
- * and keeps being sent. 'absent' (no such line, or an unreadable file) is a
- * success; 'failed' (the line is present and could not be rewritten) is not.
- * Takes the path so the verdict is contract-testable without touching the
- * machine's real credential file.
- */
-export function clearReviewerKeyInFile(file: string): 'cleared' | 'absent' | 'failed' {
-  if (!file) return 'absent'
-  let text: string
-  try {
-    text = readFileSync(file, 'utf8')
-  } catch {
-    return 'absent'
-  }
-  const pattern = new RegExp(`^\\s*${REVIEWER_CREDENTIAL_REF}\\s*:.*$`, 'm')
-  if (!pattern.test(text)) return 'absent'
-  try {
-    // The credentials file is shared across providers; rewrite it through the
-    // atomic path so a crash mid-clear cannot truncate the whole store.
-    atomicWriteFile(file, text.replace(pattern, ''))
-  } catch {
-    return 'failed'
-  }
-  return 'cleared'
-}
-
 interface ReviewStatus {
   risk: 'LOW' | 'MEDIUM' | 'HIGH'
   phase: 'countdown' | 'follow'
@@ -1830,86 +1698,6 @@ function sweepFeedbackMaps(): void {
   sweepFeedback(timeoutFeedback, { ttlMs: 60_000, maxEntries: 256 })
   sweepFeedback(decisionFeedback, { ttlMs: 60_000, maxEntries: 256 })
   sweepFeedback(loopGuardPinned, { ttlMs: 60_000, maxEntries: 256 })
-}
-
-// Trusted Host authorities for web-route fencing (RISK-01/02); resolved once
-// at apply() from webRuntime / --trusted-host / LAN enumeration.
-let trustedHosts: string[] = []
-
-/** JSON response with the plugin's uniform headers; extra headers ride along. */
-function json(status: number, body: unknown, extra: Record<string, string> = {}): Response {
-  const bytes = Buffer.from(JSON.stringify(body))
-  return new Response(bytes, {
-    status,
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8',
-      'Content-Length': String(bytes.length),
-      'Cache-Control': 'no-store',
-      'X-Content-Type-Options': 'nosniff',
-      ...extra,
-    },
-  })
-}
-
-/** Read a buffered JSON body: content-type must be JSON, ≤ maxBytes, non-empty. */
-async function readJson(request: Request, maxBytes = 64 * 1024): Promise<any> {
-  const contentType = request.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase()
-  if (contentType !== 'application/json') throw new TypeError('Content-Type must be application/json')
-  const chunks: Buffer[] = []
-  let bytes = 0
-  if (request.body !== null) {
-    const reader = request.body.getReader()
-    try {
-      for (;;) {
-        const { done, value } = await reader.read()
-        if (done) break
-        if (value === undefined) continue
-        const part = Buffer.from(value)
-        bytes += part.length
-        if (bytes > maxBytes) throw new RangeError(`request body exceeds ${maxBytes} bytes`)
-        chunks.push(part)
-      }
-    } finally {
-      reader.releaseLock()
-    }
-  }
-  if (chunks.length === 0) throw new TypeError('request body is empty')
-  return JSON.parse(Buffer.concat(chunks).toString('utf8'))
-}
-
-// ── web request trust (RISK-01/RISK-02) ────────────────────────────────────
-// Mirrors the official dsh-client-connection `isTrustedApiRequest`: a Host
-// loopback/LAN-whitelist fence against DNS rebinding, plus same-origin
-// enforcement when an Origin header is present. Unlike the old
-// `isSameOriginPost`, the Host authority is validated against a whitelist
-// (loopback ∪ trusted LAN), so `Host: attacker.com` can never pass even when
-// Origin matches it. The settings / reviewer-credential / feedback domains
-// are treated as a privileged plane and restricted to loopback-same-origin
-// only, matching the official PRIVILEGED_METHODS precedent. The feedback
-// route writes approval state keyed by a callId that the review-status
-// protocol carries in the open, so it must not be reachable by a LAN peer
-// holding an arbitrary callId. Clamping it to loopback costs nothing
-// functional: the panel close stays the client's protocol-level respond, and
-// a follow state that is not released early is swept by its own TTL.
-
-/**
- * Resolve the trusted Host authorities from the web runtime service, then the
- * `--trusted-host` argv values. The web runtime already folds the bind-bound LAN
- * literals into its snapshot; when no source is present the plane stays
- * loopback-only (fail-closed) instead of probing a web-server service.
- */
-function resolveTrustedHosts(ctx: any): string[] {
-  const webRuntime = ctx?.get?.('webRuntime') as { trustedHosts?: string[] } | undefined
-  const fromRuntime = webRuntime?.trustedHosts
-  if (Array.isArray(fromRuntime) && fromRuntime.length > 0) return [...fromRuntime]
-  const argvTrusted: string[] = []
-  const args = process.argv
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index]
-    if (arg === '--trusted-host' && args[index + 1] !== undefined) argvTrusted.push(args[index + 1])
-    else if (arg.startsWith('--trusted-host=')) argvTrusted.push(arg.slice('--trusted-host='.length))
-  }
-  return argvTrusted
 }
 
 export function installFeedbackRoute(ctx: any): void {
@@ -2294,82 +2082,6 @@ export function installSettingsRoute(ctx: any, settings: any, baseConfig: Record
   })
 }
 
-export function installReviewerCredentialRoute(ctx: any): void {
-  registerCarrierFetchRoute(ctx, {
-    path: REVIEWER_CREDENTIAL_ROUTE,
-    methods: ['GET', 'POST'],
-    requestBody: 'buffered',
-    label: 'dsh-auto-approval-llm: reviewer credential route',
-  }, async (request: Request): Promise<Response> => {
-      const method = methodOf(request)
-      // Credential plane: loopback-same-origin only (privileged domain).
-      if (!isTrustedFetchRequest(request, [])) {
-        return json(403, { ok: false, error: 'forbidden' })
-      }
-      // Resolve the service per request: the provider mounts asynchronously
-      // after apply(), so a closure captured earlier would stay undefined and
-      // report "unavailable" even when the store is up.
-      const credentials = ctx.get('credentials')
-      try {
-        if (method === 'GET') {
-          if (!credentials) {
-            return json(200, { ok: true, value: { configured: false, source: undefined, writable: false } })
-          }
-          const info = await credentials.describe(REVIEWER_CREDENTIAL_REF)
-          return json(200, {
-            ok: true,
-            value: {
-              configured: info?.configured === true,
-              source: info?.source ?? undefined,
-              writable: info?.writable === true,
-            },
-          })
-        }
-        if (method === 'DELETE') {
-          // DELETEs carry no body, so this branch must run before the JSON
-          // body reader (which requires a JSON content type).
-          // Never report a cleared credential unless the store actually
-          // dropped it: an unset failure (read-only store, backend error)
-          // must surface to the settings card instead of a silent ok:true
-          // that leaves the API key live and still being sent (M3).
-          if (credentials) {
-            const cleared = await credentials.unset(REVIEWER_CREDENTIAL_REF).then(() => true).catch(() => false)
-            if (!cleared) {
-              return json(400, { ok: false, error: 'credential clear failed on the store' })
-            }
-          }
-          // Also drop the shared-file fallback source (the line this plugin
-          // appended earlier): a cleared reviewer key must not resurrect from
-          // the credential file on the next review. The removal is reported
-          // honestly — a 200 here means the key is gone from every source, so a
-          // failure to rewrite the file is a 400 rather than a silent ok the
-          // next review would contradict by sending the key again.
-          const fileClear = clearReviewerKeyFromCredentialFile()
-          if (fileClear === 'failed') {
-            return json(400, { ok: false, error: 'credential clear failed on the shared credential file' })
-          }
-          return json(200, { ok: true })
-        }
-        const body = await readJson(request)
-        if (method !== 'POST') {
-          return json(405, { ok: false, error: 'method-not-allowed' }, { Allow: 'GET, POST' })
-        }
-        if (!credentials) {
-          return json(400, { ok: false, error: 'credential service unavailable' })
-        }
-        const apiKey = typeof body?.apiKey === 'string' ? body.apiKey.trim() : ''
-        if (!apiKey) throw new TypeError('apiKey is required')
-        await credentials.set(REVIEWER_CREDENTIAL_REF, apiKey)
-        return json(200, { ok: true })
-      } catch (error) {
-        return json(400, {
-          ok: false,
-          error: error instanceof Error ? error.message : String(error),
-        })
-      }
-  })
-}
-
 export function installHistoryRoute(ctx: any): void {
   registerCarrierFetchRoute(ctx, {
     path: HISTORY_ROUTE,
@@ -2577,33 +2289,6 @@ export function boundedHoldMs(raw: unknown): number {
  */
 export function holdWhileUnchanged(callId: string, holdMs: number, request: Request): Promise<void> {
   return holdWhile(request, () => reviewStates.get(callId)?.revision, holdMs)
-}
-
-/**
- * Hold a response until `current()` changes or the hold budget elapses. The
- * check runs in-process (no HTTP traffic), the timer is released on client
- * disconnect (the request signal aborts), and the caller answers with the
- * current state either way — a hold timeout is a heartbeat, never a resolution.
- */
-export function holdWhile(request: Request, current: () => unknown, holdMs: number): Promise<void> {
-  const startedAt = Date.now()
-  const initial = current()
-  return new Promise((resolve) => {
-    let done = false
-    let timer: any
-    const finish = () => {
-      if (done) return
-      done = true
-      if (timer !== undefined) clearInterval(timer)
-      request.signal.removeEventListener('abort', finish)
-      resolve()
-    }
-    request.signal.addEventListener('abort', finish, { once: true })
-    timer = setInterval(() => {
-      if (done) return
-      if (current() !== initial || Date.now() - startedAt >= holdMs) finish()
-    }, 200)
-  })
 }
 
 /** The status as the client sees it: remaining time derived from the host clock. */
@@ -2817,107 +2502,6 @@ function installTestRoute(ctx: any, llm: any, endpointUrlFor: () => string = () 
           ok: false,
           error: error instanceof Error ? error.message : String(error),
         })
-      }
-  })
-}
-
-// Provider/model catalog for the Issue #5 model-source pickers. Read-only
-// display metadata (adapter route ids + discovered models), no credentials and
-// no adapter internals cross the wire (dsh-llm already detaches these). Sits
-// on the same loopback-only plane as the settings card that consumes it.
-export function installLlmCatalogRoutes(ctx: any, llm: any): void {
-  registerCarrierFetchRoute(ctx, {
-    path: PROVIDERS_ROUTE,
-    methods: ['GET'],
-    requestBody: 'buffered',
-    label: 'dsh-auto-approval-llm: providers route',
-  }, async (request: Request): Promise<Response> => {
-      const method = methodOf(request)
-      if (!isTrustedFetchRequest(request, [])) {
-        return json(403, { ok: false, error: 'forbidden' })
-      }
-      if (method !== 'GET') {
-        return json(405, { ok: false, error: 'method-not-allowed' }, { Allow: 'GET' })
-      }
-      try {
-        const providers = (llm?.listProviders?.() ?? []).map((p: any) => ({ id: p.id, name: p.name ?? p.id }))
-        return json(200, { ok: true, value: { providers } })
-      } catch (error) {
-        return json(400, {
-          ok: false,
-          error: error instanceof Error ? error.message : String(error),
-        })
-      }
-  })
-  registerCarrierFetchRoute(ctx, {
-    path: LLM_MODELS_ROUTE,
-    methods: ['GET'],
-    requestBody: 'buffered',
-    label: 'dsh-auto-approval-llm: llm-models route',
-  }, async (request: Request): Promise<Response> => {
-      const method = methodOf(request)
-      if (!isTrustedFetchRequest(request, [])) {
-        return json(403, { ok: false, error: 'forbidden' })
-      }
-      if (method !== 'GET') {
-        return json(405, { ok: false, error: 'method-not-allowed' }, { Allow: 'GET' })
-      }
-      const url = new URL(request.url, 'http://x')
-      const provider = url.searchParams.get('provider') ?? ''
-      if (!provider) {
-        return json(400, { ok: false, error: 'provider is required' })
-      }
-      try {
-        const models = await llm.listModels(provider)
-        return json(200, {
-          ok: true,
-          value: { models: models.map((m: any) => ({ provider: m.provider, id: m.id, name: m.name ?? m.id })) },
-        })
-      } catch (error) {
-        // Unregistered provider surfaces as NO_ADAPTER — a 400 with the
-        // adapter's message beats a bare stack in the picker.
-        return json(400, {
-          ok: false,
-          error: error instanceof Error ? error.message : String(error),
-        })
-      }
-  })
-  registerCarrierFetchRoute(ctx, {
-    path: REASONING_EFFORTS_ROUTE,
-    methods: ['GET'],
-    requestBody: 'buffered',
-    label: 'dsh-auto-approval-llm: reasoning-efforts route',
-  }, async (request: Request): Promise<Response> => {
-      const method = methodOf(request)
-      if (!isTrustedFetchRequest(request, [])) {
-        return json(403, { ok: false, error: 'forbidden' })
-      }
-      if (method !== 'GET') {
-        return json(405, { ok: false, error: 'method-not-allowed' }, { Allow: 'GET' })
-      }
-      const url = new URL(request.url, 'http://x')
-      const provider = url.searchParams.get('provider') ?? ''
-      const model = url.searchParams.get('model') ?? ''
-      if (!provider || !model) {
-        return json(400, { ok: false, error: 'provider and model are required' })
-      }
-      try {
-        // Resolve the exact model's metadata from its owning adapter — the
-        // adapter's own declared reasoning efforts drive the picker, so the
-        // plugin never maintains a per-provider effort table.
-        const info = await llm.resolveModelInfo(provider, model)
-        const reasoning = info?.reasoning
-        const efforts = Array.isArray(reasoning?.efforts)
-          ? reasoning.efforts.map((e: any) => ({ id: e.id, name: e.name ?? e.id }))
-          : []
-        return json(200, {
-          ok: true,
-          value: { efforts, defaultEffort: reasoning?.defaultEffort ?? null },
-        })
-      } catch (error) {
-        // Unknown provider/model or an adapter without resolveModel support —
-        // an empty effort list (default-only picker) beats a hard error here.
-        return json(200, { ok: true, value: { efforts: [], defaultEffort: null } })
       }
   })
 }
@@ -4242,7 +3826,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
   })
 
   watchNotices(anyCtx, () => config, () => gateNames)
-  trustedHosts = resolveTrustedHosts(anyCtx)
+  setTrustedHosts(resolveTrustedHosts(anyCtx))
   // Route registration lives on the carrier's Fetch registry: a carrier without
   // it leaves the routes unregistered while the rest of the plugin keeps running,
   // and a carrier that mounts the registry later still gets them on arrival.
@@ -4278,7 +3862,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
   // change while a deployment stays up); the hot paths read the module-level
   // array directly, so only this assignment mutates it.
   const trustedHostRefresh = setInterval(() => {
-    trustedHosts = resolveTrustedHosts(anyCtx)
+    setTrustedHosts(resolveTrustedHosts(anyCtx))
   }, 5 * 60_000)
   ctx.effect(() => () => clearInterval(trustedHostRefresh))
 

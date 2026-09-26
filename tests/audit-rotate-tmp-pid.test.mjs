@@ -21,8 +21,10 @@ test('the audit rotation temp name carries the pid like the sibling rotations', 
 })
 
 test('the sibling rotations keep the pid convention (drift guard)', () => {
-  const host = readFileSync(fileURLToPath(new URL('../src/index.ts', import.meta.url)), 'utf8')
+  // The history rotation's tmp+rename helper lives in the route table module;
+  // the entry re-exports it, so the convention is read where it is written.
+  const routeTable = readFileSync(fileURLToPath(new URL('../src/auto/route-table.ts', import.meta.url)), 'utf8')
   const latency = readFileSync(fileURLToPath(new URL('../src/auto/latency.ts', import.meta.url)), 'utf8')
-  assert.match(host, /tmp\.\$\{process\.pid\}/)
+  assert.match(routeTable, /tmp\.\$\{process\.pid\}/)
   assert.match(latency, /tmp\.\$\{process\.pid\}/)
 })

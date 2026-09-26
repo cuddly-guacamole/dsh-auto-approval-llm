@@ -18,7 +18,9 @@ import { fileURLToPath } from 'node:url'
 import { clearReviewerKeyInFile } from '../lib/index.js'
 
 test('the clear rewrites through the atomic path (source pin — the atomicity gain itself is not observable in a passing run)', () => {
-  const source = readFileSync(fileURLToPath(new URL('../src/index.ts', import.meta.url)), 'utf8')
+  // The clear owner and the tmp+rename helper it calls both live in the route
+  // table module now; the entry only re-exports the function.
+  const source = readFileSync(fileURLToPath(new URL('../src/auto/route-table.ts', import.meta.url)), 'utf8')
   const at = source.indexOf('export function clearReviewerKeyInFile')
   assert.ok(at > 0, 'the clear owner is locatable')
   const nextExport = source.indexOf('\nexport function', at + 1)

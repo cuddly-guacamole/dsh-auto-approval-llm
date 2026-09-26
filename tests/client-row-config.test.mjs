@@ -33,6 +33,9 @@ const CLIENT = read('src/client/index.ts')
 const CONTRACT = read('src/client/row-config.ts')
 const LOCALE = read('src/client/locale.ts')
 const HOST = read('src/index.ts')
+// The settings namespace constant lives in the route table module, so it is
+// read where it is declared rather than from the entry that re-imports it.
+const ROUTE_TABLE = read('src/auto/route-table.ts')
 const PATCH = read('cordis.patch.yml')
 const BUNDLE = read('lib/client.js')
 
@@ -106,7 +109,7 @@ test('the row id, the bundle patch and the settings namespace are one string', (
   // The page resolves the form by `formFor(rowId)` against the namespaces the
   // Host describes, so a row id that differs from the namespace by one
   // character gives EVERY visitor the read-only body instead of the form.
-  const namespace = /const SETTINGS_NS = '([^']+)'/.exec(HOST)?.[1]
+  const namespace = /const SETTINGS_NS = '([^']+)'/.exec(ROUTE_TABLE)?.[1]
   assert.equal(namespace, rowId, 'the Host settings namespace is the row id')
 
   const insertId = /- insert:\s*\n\s*- id: ([A-Za-z0-9._-]+)/.exec(PATCH)?.[1]

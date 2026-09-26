@@ -89,7 +89,9 @@ test('the wrapper keeps the failed verdict of any candidate', () => {
 })
 
 test('the credential route refuses to answer 200 on a failed file removal', () => {
-  const lib = readFileSync(fileURLToPath(new URL('../lib/index.js', import.meta.url)), 'utf8')
+  // The route installer lives in its own module now, so the DELETE branch is
+  // read where it is written; the entry only re-exports the installer.
+  const lib = readFileSync(fileURLToPath(new URL('../lib/auto/route-installers.js', import.meta.url)), 'utf8')
   assert.match(lib, /const fileClear = clearReviewerKeyFromCredentialFile\(\)/)
   assert.match(lib, /if \(fileClear === 'failed'\) \{/)
   assert.match(lib, /credential clear failed on the shared credential file/)

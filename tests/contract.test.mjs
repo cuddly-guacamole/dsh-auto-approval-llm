@@ -3354,7 +3354,10 @@ test('learning-store route: host exposes a trusted read/revoke surface with an a
   // The audit trail mirrors recordAuditClear's discipline (never a silent
   // erase the decision path depends on).
   const src = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
-  assert.ok(src.includes("LEARNING_STORE_ROUTE = '/api/auto-approval-llm/learning-store'"), 'route constant must exist')
+  // The route table moved out of the entry; the constant is read where it is
+  // declared, so a renamed or dropped route still fails here.
+  const routeTable = readFileSync(new URL('../lib/auto/route-table.js', import.meta.url), 'utf8')
+  assert.ok(routeTable.includes("LEARNING_STORE_ROUTE = '/api/auto-approval-llm/learning-store'"), 'route constant must exist')
   assert.ok(src.includes('installLearningStoreRoute'), 'route installer must exist')
   assert.ok(src.includes('learning-store route'), 'route must be registered with the web server')
   assert.ok(src.includes('revokeLearning'), 'host must consume revokeLearning')
@@ -3925,11 +3928,15 @@ test('reviewer credential delete also clears file-fallback key line', () => {
   // card must really clear the reviewer key — credential store via DELETE and
   // the shared-file fallback line this plugin may have appended earlier.
   const src = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
-  assert.ok(src.includes('function clearReviewerKeyFromCredentialFile'), 'file-clear helper must exist')
+  const routeTable = readFileSync(new URL('../lib/auto/route-table.js', import.meta.url), 'utf8')
+  assert.ok(routeTable.includes('function clearReviewerKeyFromCredentialFile'), 'file-clear helper must exist')
   // Containment: the INVOCATION must sit inside the credential route's DELETE
   // branch. A file-level `includes` is also satisfied by the helper's own
   // definition line, so the call could be removed while this stayed green.
-  const route = region(src, 'export function installReviewerCredentialRoute', 'export function installHistoryRoute')
+  // The installer and the helper no longer share a file, so the region is taken
+  // from the installer module and bounded by its next declaration there.
+  const installerSrc = readFileSync(new URL('../lib/auto/route-installers.js', import.meta.url), 'utf8')
+  const route = region(installerSrc, 'export function installReviewerCredentialRoute', 'export function holdWhile')
   const deleteAt = route.indexOf("if (method === 'DELETE') {")
   assert.notEqual(deleteAt, -1, 'the credential route must handle DELETE')
   const deleteBranch = route.slice(deleteAt, route.indexOf('const body = await readJson(request);', deleteAt))
