@@ -968,6 +968,10 @@ test('M1: learned-allow cap increment is a fresh read inside the keyed mutex (20
 test('LP8/LP9: the verification gate never touches the breaker and never leaks samples into prompts', () => {
   const start = HOST_SRC.indexOf('const learnAttempt')
   const end = HOST_SRC.indexOf("anyCtx.on('approval/request'")
+  // Every assertion below is negative, so an empty window would satisfy all of
+  // them; both ends are asserted so a moved anchor fails instead.
+  assert.notEqual(start, -1, 'the learning layer entry point must be present')
+  assert.notEqual(end, -1, 'the approval/request handler must be present')
   const body = HOST_SRC.slice(start, end > start ? end : start + 12000)
   assert.ok(!body.includes('applyBreaker'), 'verification review is breaker-blind')
   assert.ok(!body.includes('denials.set') && !body.includes('totalDenials.set') && !body.includes('denialLog.'), 'no denial counter mutation in the learning layer')
