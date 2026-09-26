@@ -3597,6 +3597,7 @@ export const LEARNABLE_HOOK_SITES: readonly string[] = Object.freeze([
 ])
 
 export function apply(ctx: Context, rawConfig: Config): void {
+  // ── services, capability probe, boot audit ──────────────────────────────
   const anyCtx = ctx as any
   const approval = anyCtx.get('approval')
   // Premise made explicit (F2-03): the host derives a cold session's approval
@@ -3647,6 +3648,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
   // undefined for the whole process life even when the service is up.
   const getCredentials = (): any => anyCtx.get('credentials')
 
+  // ── config load, classifier, settings wiring ────────────────────────────
   let config: Config
   // Reads this plugin's own stored row from the host config plane. The plane
   // projects only the volatile (card-owned) keys and exposes no get(); the
@@ -4194,6 +4196,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
     }
   }
 
+  // ── tools/pre-execute handler ───────────────────────────────────────────
   anyCtx.on('tools/pre-execute', async (exec: any, next: any) => {
     if (!isAutoExecution(exec)) return next()
     // First-use onboarding: the first tool call of an AUTO root session (per
@@ -4594,6 +4597,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
     }
   })
 
+  // ── tools/result observer ───────────────────────────────────────────────
   anyCtx.on('tools/result', (exec: any, result: any) => {
     if (!isAutoExecution(exec)) return
     const promoted = artifacts.settle(exec, result, rootsFor(exec))
@@ -4612,6 +4616,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
   // it leaves the routes unregistered while the rest of the plugin keeps running,
   // and a carrier that mounts the registry later still gets them on arrival.
   // Every installer binds itself inside registerCarrierFetchRoute().
+  // ── route installation, sweep timers ────────────────────────────────────
   installFeedbackRoute(anyCtx)
   installSettingsRoute(anyCtx, settings, plainConfigValue(rawConfig) as unknown as Record<string, unknown>, resolveRoots(process.cwd(), rootOptions).dshHome)
   installReviewerCredentialRoute(anyCtx)
@@ -4646,6 +4651,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
   }, 5 * 60_000)
   ctx.effect(() => () => clearInterval(trustedHostRefresh))
 
+  // ── tools/post-execute handler ──────────────────────────────────────────
   anyCtx.on('tools/post-execute', (exec: any, result: any, next: any) => {
     sweepFeedbackMaps()
     const timeoutEntry = timeoutFeedback.get(exec?.callId)
@@ -4944,6 +4950,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
   // `auditCategory` is a record-only label for asks that deliberately carry no
   // `status` (a status would give them a countdown and automatic resolution,
   // which is a different behaviour). It never influences the verdict.
+  // ── askHuman ────────────────────────────────────────────────────────────
   const askHuman = async (req: any, review: ReviewResult | undefined, next: () => Promise<any>, breaker = false, status?: ReviewStatus, handle?: RaceHumanHandle, llmDecided?: boolean, learnable?: LearnableContext, auditCategory?: string): Promise<any> => {
     // Delegate to the official ApprovalPanel; the client half parses the
     // countdown marker and adds the visible countdown + auto-answer. Breaker
@@ -5326,6 +5333,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
     }
   }
 
+  // ── approval/request terminal answerer ──────────────────────────────────
   anyCtx.on('approval/request', async (req: any, next: () => Promise<any>) => {
     if (!config.enabled) return next()
     if (!permissionPresets) return next()
