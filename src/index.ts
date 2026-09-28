@@ -5,13 +5,13 @@
  *
  * Design (revised after expert review):
  * - Complements dsh-auto-mode: it only claims `approval/request` asks from
- *   sessions whose permission preset is `auto`.
- * - It is registered with `prepend: true`, so it acts as the single terminal
- *   answerer for the asks it handles and never opens a second approval popup.
+ *   sessions whose permission preset is `auto-approval` (legacy `auto` alias).
+ * - It is the terminal answerer for the asks it handles: returning an outcome
+ *   without calling `next()` ends the waterfall, so no second popup is opened.
  * - It runs its own second-model review (arguments recovered from the session
- *   log by callId), then asks the human through `ctx.userQuestions.ask()` with
- *   a bounded countdown. On timeout it applies `timeoutAction`; the default is
- *   fail-closed `reject`.
+ *   log by callId), then asks the human through the local `askHuman` closure
+ *   (`src/index.ts:1961`) with a bounded countdown; on timeout it applies
+ *   `timeoutAction`, default fail-closed `reject`.
  * - The preset gate reads the durable raw permission identity: the plugin's
  *   own `auto-approval` preset, plus the legacy `auto` alias only on hosts
  *   whose capability probe reports the pre-reservation surface.
@@ -1862,7 +1862,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
     }
   }
 
-  // ── approval/request answerer (prepend => terminal for handled asks) ─────
+  // ── approval/request answerer (returns an outcome for handled asks => terminal) ──
   const denials = new Map<string, number>()
   const reviewModes = loadReviewModes()
   const setReviewMode = (sessionKey: string, mode: ReviewMode): void => {

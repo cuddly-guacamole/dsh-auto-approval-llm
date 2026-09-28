@@ -2,7 +2,7 @@
 
 > *The Lone Adjudicator*
 
-这是整个插件的心脏。以下决策顺序与 <span class="lnum">index.ts:L"anyCtx.on('approval/request', async"</span>（answerer 注册体；互斥器/askHuman/learnAttempt 等前置件自节注释 <span class="lnum">index.ts:L"prepend => terminal for handled asks"</span> 起）逐行一致，红色 = 拒绝、蓝色 = 转人工/面板、绿色 = 放行。G0 判据是 durable raw identity（`permissionState().preset`），不是会被 approval override 折叠掉的 `current()`。
+这是整个插件的心脏。以下决策顺序与 <span class="lnum">index.ts:L"anyCtx.on('approval/request', async"</span>（answerer 注册体；互斥器/askHuman/learnAttempt 等前置件自节注释 <span class="lnum">index.ts:L"approval/request answerer (returns an outcome"</span> 起）逐行一致，红色 = 拒绝、蓝色 = 转人工/面板、绿色 = 放行。G0 判据是 durable raw identity（`permissionState().preset`），不是会被 approval override 折叠掉的 `current()`。
 
 ```mermaid
 flowchart TD
