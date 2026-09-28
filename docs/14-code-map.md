@@ -44,7 +44,7 @@ src/
 │    ├─ rules.ts         459  声明式规则解析/求值（host 与浏览器共用）
 │    ├─ runtime-paths.ts 293  运行态文件唯一路径 owner（`<DSH_HOME>/auto-approval-llm/` 规范位置；目录无法创建/拒绝写入时 fail-closed——append 失败返回 undefined，由调用方拒绝裁决，不回退包根、不搬家；open 阶段错误允许同路径重试一次，写后错误不重试）
 │    ├─ runtime-stores.ts 80  启动期持久化存储装载（history / learning / latency），在 apply() 内 setRuntimeStateDir() 之后
-│    ├─ session-introspect.ts 86  只读会话内省与倒计时动作：会话事件/权限服务派生值，无模块态、无文件、无审计副作用
+│    ├─ session-introspect.ts 78  只读会话内省与倒计时动作：会话事件/权限服务派生值，无模块态、无文件、无审计副作用
 │    ├─ shell.ts         3613 bash/pwsh 词法分解 + 整行熔断 + 逐段静态分类（最大单文件）
 │    ├─ symlink.ts       182  符号链接创建与目标校验
 │    ├─ tool-stats.ts    96   工具调用统计收集
@@ -62,7 +62,7 @@ src/
      └─ tool-chips.ts    150  工具芯片
 
 tests/
-├─ contract.test.mjs 349 例 / category.test.mjs / classifier.test.mjs / redact.test.mjs
+├─ contract.test.mjs 347 例 / category.test.mjs / classifier.test.mjs / redact.test.mjs
 ├─ history-robust.test.mjs / audit.test.mjs
 ├─ approvals-protocol.test.mjs 32 例 / contract-devloop.test.mjs / trusted-dsh-subpaths.test.mjs / posix-platform.test.mjs
 ├─ friction-report.test.mjs / audit-query-format.test.mjs / permission-change.test.mjs
@@ -77,7 +77,7 @@ tests/
 ├─ trusted-intent-window.test.mjs（授权证据窗口溢出计数：slot cap/去重/预算交互、拒因 note 两分支、trusted-intents 事件量化 overflowed 标志）/ client-human-gate.test.mjs（浮层人工出手率：与 friction-report 同源名单、空窗口不作零声称、round 边界、中英三键、bundle 装配锚）
 ├─ loop-guard.test.mjs（循环键稳定性/回退、严格连续+fire-and-reset 状态机、FIFO 64、阈值钳制与 resolveConfig 映射）/ loop-guard-wiring.test.mjs（四站点成对锚、allowlist 与 rule-allow 豁免负向切片、跨面标记读位置与 one-shot、pinned 形状先于 learnAttempt、门不写 history 不碰熔断、disposal/sweep 有界、audit-query 渲染）
 ├─ host-lines.test.mjs（宿主下限线：承诺表与精确钉版、装错线/读错档位的反向对照、补丁组合表解析；本机安装线驱动真实 permission-presets 服务）
-└─ 合计 225 个 tests/*.test.mjs（node --test 全绿基线）
+└─ 合计 226 个 tests/*.test.mjs（node --test 全绿基线）
 scripts/
 ├─ build.sh             （DSH 源码仓库布局）tsc 编译 src→lib
 ├─ clean-lib.mjs        构建前清空 lib/（tsc 不删除已删源的旧产物）

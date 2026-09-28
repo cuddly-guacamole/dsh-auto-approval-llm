@@ -3502,7 +3502,7 @@ test('client bundle: settings-card grid bodies keep constrained tracks (control-
   assert.equal(builtTracks, sourceTracks, 'the compiled bundle keeps every constrained track (no body may relax to a fixed width)')
 })
 
-// ── reviewer route availability: explicit pair ∥ baseUrl ∥ session fallback ──
+// ── reviewer route availability: explicit pair ∥ baseUrl ∥ session header ──
 
 test('sessionModelRoute: live request header wins over recorded header events', () => {
   const live = { provider: 'live-provider', model: 'live-model' }
@@ -3513,16 +3513,9 @@ test('sessionModelRoute: live request header wins over recorded header events', 
   assert.deepEqual(sessionModelRoute(session), live)
 })
 
-test('sessionModelRoute: newest request/header event is the fallback when no live header', () => {
-  const session = {
-    snapshotEvents: () => [
-      { type: 'tool/call', data: {} },
-      { type: 'request/header', data: { header: { config: { provider: 'older', model: 'm1' } } } },
-      { type: 'request/header', data: { header: { config: { provider: 'newest', model: 'm2' } } } },
-    ],
-  }
-  assert.deepEqual(sessionModelRoute(session), { provider: 'newest', model: 'm2' })
-})
+// The recorded-header scan that used to back this resolver is gone; the live
+// header fold replaces it. Its own coverage, including the superseded-config
+// case, is in tests/session-model-route.test.mjs.
 
 test('sessionModelRoute: absent/invalid session routes resolve to undefined (fallback source may be empty)', () => {
   assert.equal(sessionModelRoute(undefined), undefined)
@@ -3545,16 +3538,6 @@ test('sessionEventList: rc.1 session (snapshotEvents) normalizes; rc.2 events ge
   // Broken snapshotEvents output must not crash the pipeline.
   assert.deepEqual(sessionEventList({ snapshotEvents: () => undefined }), [])
   assert.deepEqual(sessionEventList({ snapshotEvents: () => 'nope' }), [])
-})
-
-test('sessionModelRoute: rc.1 session without events getter still resolves the fallback header', () => {
-  const session = {
-    snapshotEvents: () => [
-      { type: 'tool/call', data: {} },
-      { type: 'request/header', data: { header: { config: { provider: 'newest', model: 'm2' } } } },
-    ],
-  }
-  assert.deepEqual(sessionModelRoute(session), { provider: 'newest', model: 'm2' })
 })
 
 test('currentPreset: rc.1 current() receives the session object directly', () => {
@@ -3583,7 +3566,11 @@ test('reviewer route gate: the shared availability predicate gates both pipeline
 
 // ── direct-review snapshot completeness: channel transport + key resolution ──
 
-const snapshotSession = { snapshotEvents: () => [{ type: 'request/header', data: { header: { config: { provider: 'sess-provider', model: 'sess-model' } } } }] }
+const SNAPSHOT_HEADER = { provider: 'sess-provider', model: 'sess-model' }
+const snapshotSession = {
+  requestHeader: () => ({ config: SNAPSHOT_HEADER }),
+  snapshotEvents: () => [{ type: 'request/header', data: { header: { config: SNAPSHOT_HEADER } } }],
+}
 const snapshotReq = { callId: 'call-snapshot', toolName: 'bash' }
 const snapshotTools = { schemas: () => [] }
 const snapshotCredentials = (value) => ({ resolve: async () => ({ value }) })

@@ -13,7 +13,14 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { buildReviewSnapshot } from '../lib/index.js'
 
-const snapshotSession = { snapshotEvents: () => [{ type: 'request/header', data: { header: { config: { provider: 'sess-provider', model: 'sess-model' } } } }] }
+// A session stand-in carries both readers a host session exposes: the live
+// header fold the model route reads, and the event log the tool-argument scan
+// reads. The header config and the recorded event carry the same route.
+const SESSION_HEADER = { provider: 'sess-provider', model: 'sess-model' }
+const snapshotSession = {
+  requestHeader: () => ({ config: SESSION_HEADER }),
+  snapshotEvents: () => [{ type: 'request/header', data: { header: { config: SESSION_HEADER } } }],
+}
 const snapshotReq = { callId: 'call-snapshot', toolName: 'bash' }
 const snapshotTools = { schemas: () => [] }
 const snapshotCredentials = (value) => ({ resolve: async () => ({ value }) })

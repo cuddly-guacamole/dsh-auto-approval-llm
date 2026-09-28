@@ -24,7 +24,7 @@ function isModelRouteConfig(cfg: any): cfg is { provider: string; model: string 
 }
 
 // One normalized "all session events" view: rc.1 (0.1.2+) removed the
-// `Session.events` getter in favor of `snapshotEvents()` (commit 27bf1039).
+// `Session.events` getter in favor of `snapshotEvents()` (commit f4dae8a).
 // The rc.2 fallback was dropped; snapshotEvents is the only source.
 export function sessionEventList(session: any): readonly any[] {
   if (session === undefined || session === null) return []
@@ -45,18 +45,10 @@ export function currentPreset(permissionPresets: any, session: any): string | un
 }
 
 // Single resolver for "which provider/model is this session talking through":
-// the live request header first, then the newest recorded header event.
+// the request header the live request will be built from.
 export function sessionModelRoute(session: any): { provider: string; model: string } | undefined {
   const live = session?.requestHeader?.()?.config
-  if (isModelRouteConfig(live)) return { provider: live.provider, model: live.model }
-  const events = sessionEventList(session)
-  for (let i = events.length - 1; i >= 0; i -= 1) {
-    const event = events[i]
-    if (event?.type !== 'request/header') continue
-    const cfg = event.data?.header?.config
-    if (isModelRouteConfig(cfg)) return { provider: cfg.provider, model: cfg.model }
-  }
-  return undefined
+  return isModelRouteConfig(live) ? { provider: live.provider, model: live.model } : undefined
 }
 
 // Agent-level resolution: session route first, then explicit agent options.
