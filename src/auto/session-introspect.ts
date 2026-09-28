@@ -24,8 +24,8 @@ function isModelRouteConfig(cfg: any): cfg is { provider: string; model: string 
 }
 
 // One normalized "all session events" view: rc.1 (0.1.2+) removed the
-// `Session.events` getter in favor of `snapshotEvents()` (commit f4dae8a).
-// The rc.2 fallback was dropped; snapshotEvents is the only source.
+// `Session.events` getter in favor of `snapshotEvents()` (upstream commit
+// 5660f44d29). The rc.2 fallback was dropped; snapshotEvents is the only source.
 export function sessionEventList(session: any): readonly any[] {
   if (session === undefined || session === null) return []
   if (typeof session.snapshotEvents === 'function') {

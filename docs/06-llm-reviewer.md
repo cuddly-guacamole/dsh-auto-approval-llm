@@ -8,7 +8,7 @@
 
 ```mermaid
 flowchart TD
-    A1["reviewerSource = session → 会话模型路由：sessionModelRoute（当前会话 requestHeader 的 provider/model → 最新 recorded request/header 事件） [host]"] -->|无会话路由| A3
+    A1["reviewerSource = session → 会话模型路由：sessionModelRoute（当前会话 requestHeader 的 provider/model） [host]"] -->|无会话路由| A3
     A1 -->|有路由| A4["宿主 ctx.llm 流式评审 [host]"]
     B1["reviewerSource = preset → reviewerProvider+reviewerModel 成对 DSH 模型 [host]"] --> A4
     C1["reviewerSource = endpoint → 共享端点配置 endpointUrl/endpointModel：直接 HTTP 打自有 OpenAI/Anthropic 兼容端点，密钥快照冻结一次、绝不缓存 [raw]"]

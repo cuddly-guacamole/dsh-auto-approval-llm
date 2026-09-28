@@ -3517,7 +3517,7 @@ test('sessionModelRoute: live request header wins over recorded header events', 
 // header fold replaces it. Its own coverage, including the superseded-config
 // case, is in tests/session-model-route.test.mjs.
 
-test('sessionModelRoute: absent/invalid session routes resolve to undefined (fallback source may be empty)', () => {
+test('sessionModelRoute: absent, incomplete or event-only sessions resolve to undefined', () => {
   assert.equal(sessionModelRoute(undefined), undefined)
   assert.equal(sessionModelRoute({}), undefined)
   assert.equal(sessionModelRoute({ requestHeader: () => ({ config: { provider: '', model: '' } }) }), undefined)
