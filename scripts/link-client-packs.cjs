@@ -18,6 +18,19 @@ if (!base) {
   console.error('usage: node scripts/link-client-packs.cjs <packs-dir>   (or set DSA_CLIENT_PACKS)')
   process.exit(1)
 }
-link(path.join(base, 'p1', 'package'), path.join(repo, 'node_modules', '@deepseek-ai', 'dsh-client-ui-primitives'))
-link(path.join(base, 'p2', 'package'), path.join(repo, 'node_modules', '@deepseek-ai', 'dsh-client-ui-slots'))
+const plan = [
+  { from: path.resolve(base, 'p1', 'package'), to: path.join(repo, 'node_modules', '@deepseek-ai', 'dsh-client-ui-primitives') },
+  { from: path.resolve(base, 'p2', 'package'), to: path.join(repo, 'node_modules', '@deepseek-ai', 'dsh-client-ui-slots') },
+]
+
+// Validate every pack before touching any link: a symlink to a directory that
+// is gone is created happily and only fails later, at resolution time.
+const missing = plan.filter(({ from }) => !fs.existsSync(from)).map(({ from }) => from)
+if (missing.length > 0) {
+  console.error(`not found under the packs dir ${base}: ${missing.join(', ')}`)
+  console.error('nothing was linked; unpack the packs (npm pack + extract) or pass the directory that holds p1/ and p2/')
+  process.exit(1)
+}
+
+for (const { from, to } of plan) link(from, to)
 console.log('done')
