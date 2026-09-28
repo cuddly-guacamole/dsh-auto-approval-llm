@@ -10,13 +10,36 @@ import { fileURLToPath } from 'node:url'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 
+/**
+ * The npm invocation used for the pack, derived from the running interpreter.
+ *
+ * The interpreter owns its npm: `npm-cli.js` sits at
+ * `<dirname(process.execPath)>/node_modules/npm/bin/`, and running it through
+ * `process.execPath` needs neither a shell nor a PATH lookup, so the copy that
+ * runs does not depend on PATH order. When that file is absent the invocation
+ * falls back to `npm` from PATH, keeping `shell: true` because on Windows `npm`
+ * is a `.cmd` shim that only a shell can execute.
+ *
+ * The strategy and the resolved path are returned with the argv so a test can
+ * assert which npm ran.
+ */
+function resolveNpm() {
+  const npmCli = join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js')
+  if (existsSync(npmCli)) {
+    return { command: process.execPath, prefixArgs: [npmCli], strategy: 'interpreter', npmCli, shell: false }
+  }
+  return { command: 'npm', prefixArgs: [], strategy: 'path', npmCli: null, shell: process.platform === 'win32' }
+}
+
+const npmRun = resolveNpm()
+
 // Anything npm adds implicitly (README.md, LICENSE, package.json) is listed here
 // as well so the whitelist is the single statement of the shipped surface.
 const SHIPPED_PATTERN =
   /^(lib\/index\.js|lib\/auto\/[^/]+\.js|lib\/client\.js|lib\/types\/.*\.d\.ts|cordis\.patch\.yml|README\.md|README\.en\.md|LICENSE|package\.json)$/
 
 function packManifest() {
-  const res = spawnSync('npm', ['pack', '--dry-run', '--json'], { cwd: root, encoding: 'utf8', shell: true })
+  const res = spawnSync(npmRun.command, [...npmRun.prefixArgs, 'pack', '--dry-run', '--json'], { cwd: root, encoding: 'utf8', shell: npmRun.shell })
   assert.equal(res.status, 0, `npm pack --dry-run failed: ${res.stderr}`)
   const parsed = JSON.parse(res.stdout)
   const entry = Array.isArray(parsed) ? parsed[0] : Object.values(parsed)[0]
@@ -38,6 +61,25 @@ function listFiles(dir, predicate = () => true) {
 }
 
 const manifest = packManifest()
+
+test('the pack runs under an npm resolved from this interpreter', t => {
+  // The PATH form is accepted only when this interpreter ships no npm of its own.
+  assert.ok(['interpreter', 'path'].includes(npmRun.strategy), `unknown npm strategy ${npmRun.strategy}`)
+  t.diagnostic(`npm strategy=${npmRun.strategy} command=${npmRun.command} shell=${npmRun.shell}`)
+  if (npmRun.strategy === 'interpreter') {
+    assert.equal(existsSync(npmRun.npmCli), true, 'the resolved npm-cli.js must exist')
+    const owned = relative(dirname(process.execPath), npmRun.npmCli)
+    assert.equal(owned.startsWith('..'), false, `npm must belong to this interpreter: ${npmRun.npmCli}`)
+    // The interpreter's own layout, not a copy nested under some other package.
+    assert.equal(npmRun.npmCli, join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js'))
+  } else {
+    assert.equal(existsSync(join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js')), false,
+      'the PATH fallback was taken while the interpreter still ships an npm')
+  }
+  // The pack is a real invocation, not a stub: npm reported a non-empty manifest,
+  // so the assertions below are made against real output.
+  assert.ok(manifest.length > 0, 'npm pack --dry-run reported no files')
+})
 
 test('the tarball ships no source maps', () => {
   const maps = manifest.filter(path => path.endsWith('.map'))
