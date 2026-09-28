@@ -1,15 +1,26 @@
 /**
  * Peer-range admission contract. The five `@deepseek-ai/dsh-*` peers promise one
- * host line — `0.1.7-rc.2`, the line the user actually runs — and a single arm
- * `>=0.1.7-rc.2 <2` expresses it without reaching across a tuple: the floor and
- * the promised line share `0.1.7`, so semver's prerelease rule names the line
- * and every earlier tuple stays refused. Raising the floor is what drops
- * `0.1.7-rc.1`, `0.1.7-alpha.2` and `0.1.5-rc.2` out of admission; all three are
- * pinned false below, so a later relaxation of the range is caught here.
+ * host line per tuple — `0.1.7-rc.2` and `0.2.0-rc.1`, the lines the user
+ * actually runs — through a single arm `>=0.1.7-rc.2 <2`, and the two readings
+ * of that arm are not the same, which is the point of this file.
+ *
+ * The host evaluates peers with `semver.satisfies(runtimeVersion, range, { includePrerelease: true })`
+ * (`dsh-app-boot/lib/index.js:300`). Under that reading the one arm admits both
+ * promised lines, because the flag lets a prerelease of *any* tuple satisfy a
+ * floor that carries its own prerelease. Under the plain reading — the rule
+ * implemented by `satisfies()` below, where a prerelease must be named by a
+ * comparator in its own major.minor.patch tuple — the same arm refuses
+ * `0.2.0-rc.1`, because no comparator carries the `0.2.0` tuple. So the arm
+ * spans two tuples because of the flag, not on its own, and the cases below pin
+ * both readings rather than restating one of them.
+ *
+ * Raising the floor is what drops `0.1.7-rc.1`, `0.1.7-alpha.2` and `0.1.5-rc.2`
+ * out of admission; all three are pinned false below, so a later relaxation of
+ * the range is caught here.
  *
  * Admission is nevertheless NOT a support claim: `<2` is only the range's upper
  * bound, untested lines inside the range are unsupported, and the support claim
- * lives in the one row of `HOST_LINES`.
+ * lives in the rows of `HOST_LINES`.
  *
  * This file reads the real `package.json` literal instead of a private copy, so
  * that any edit to the peer range must edit this file too. The satisfaction
@@ -171,18 +182,62 @@ test("the range is one arm; dropping the second arm retired the alpha line", () 
   }
 })
 
-test("the arm is one bounded comparator set whose floor names the promised line", () => {
+test("the arm is one bounded comparator set whose floor names the lowest promised line", () => {
   assert.match(EXPECTED_RANGE, /^>=[^ ]+ <\d+$/)
   for (const [name, range] of dshPeers) {
     assert.match(range, /^>=[^ ]+ <\d+$/, `${name} is not a single bounded arm`)
   }
-  // The floor and the promise are the same host line: a floor that no longer
-  // names the row in HOST_LINES would admit a line nobody supports, and a row
-  // outside the floor would be refused at install time.
-  assert.deepEqual(Object.keys(HOST_LINES), ["rc2"])
+  // The floor is the *lowest* promised line, not every promised line: the
+  // promise now spans two tuples and the floor names one of them. A floor that
+  // rose above a promised line would refuse it at install time; a promised line
+  // below the floor is the same failure seen from the other side.
   const floor = EXPECTED_RANGE.split(" ")[0].slice(2)
   for (const [name, range] of dshPeers) assert.equal(range.split(" ")[0].slice(2), floor, `${name} floor drifted`)
-  assert.equal(floor, HOST_LINES.rc2.version)
+  const promised = Object.values(HOST_LINES).map(line => line.version)
+  assert.equal(floor, promised.slice().sort()[0], "the floor is not the lowest promised line: " + promised.join(", "))
+  for (const version of promised) {
+    assert.ok(compare(parse(version), parse(floor)) >= 0, version + " is promised but sits below the floor " + floor)
+  }
+})
+
+test("the host's flagged reading admits every promised line; the plain one does not", () => {
+  // This is the load-bearing asymmetry, pinned rather than assumed. The host
+  // calls `semver.satisfies(runtimeVersion, range, { includePrerelease: true })`,
+  // so a promised line in a tuple no comparator names is still admitted. The
+  // plain rule — the one implemented above, and the one any consumer that
+  // forgets the flag would apply — refuses it. Should the host ever stop
+  // passing the flag, this case is where that change becomes a red suite
+  // instead of a refused install nobody sees.
+  const require_ = createRequire(join(ROOT, "package.json"))
+  const reference = (() => {
+    try {
+      return require_("semver")
+    } catch {
+      return null
+    }
+  })()
+  const crossTuple = Object.values(HOST_LINES)
+    .map(line => line.version)
+    .filter(version => !satisfies(version, EXPECTED_RANGE))
+  assert.ok(crossTuple.length > 0, "no promised line is refused by the plain reading; the two readings no longer differ")
+  for (const [name, range] of dshPeers) {
+    for (const version of crossTuple) {
+      assert.equal(satisfies(version, range), false, `${name} unexpectedly admits ${version} without the flag`)
+      if (reference === null) continue
+      assert.equal(reference.satisfies(version, range), false, `${name}: semver admits ${version} without the flag`)
+    }
+    // Every promised line, cross-tuple or not, is admitted the way the host
+    // evaluates peers. The same-tuple line needs no flag; the cross-tuple one
+    // needs it, and this is the assertion that says which is which.
+    for (const version of Object.values(HOST_LINES).map(line => line.version)) {
+      if (reference === null) break
+      assert.equal(
+        reference.satisfies(version, range, { includePrerelease: true }),
+        true,
+        `${name} must admit the promised line ${version} under the host's flagged reading`,
+      )
+    }
+  }
 })
 
 test("the peer block keeps cordis and schemastery outside the dsh contract", () => {
@@ -190,9 +245,22 @@ test("the peer block keeps cordis and schemastery outside the dsh contract", () 
   assert.equal(manifest.peerDependencies["@deepseek-ai/schemastery"], "^3.18.0")
 })
 
-test("the promised line is admitted by every peer", () => {
+test("every promised line is admitted by every peer under the host's reading", () => {
+  const require_ = createRequire(join(ROOT, "package.json"))
+  let reference = null
+  try {
+    reference = require_("semver")
+  } catch {
+    return
+  }
   for (const [name, range] of dshPeers) {
-    assert.equal(satisfies(HOST_LINES.rc2.version, range), true, `${name} must admit ${HOST_LINES.rc2.version}`)
+    for (const line of Object.values(HOST_LINES)) {
+      assert.equal(
+        reference.satisfies(line.version, range, { includePrerelease: true }),
+        true,
+        `${name} must admit ${line.version} the way the host evaluates peers`,
+      )
+    }
   }
 })
 

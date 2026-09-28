@@ -30,21 +30,31 @@ const LEGACY_AUTO_PRESET = "auto"
  * while any other reading means the plugin is registered there as inert — the
  * entry then asserts that nothing is gated and nothing is written.
  *
- * Exactly one line is promised: the host the user actually runs. A further line
- * is appended only when upstream enters the alpha of a new tuple.
+ * Exactly one line per tuple is promised: the host the user actually runs. A
+ * further line is appended row by row when upstream enters the alpha of a new
+ * tuple, so a promise can span two tuples at once.
+ *
+ * The key names the line family, not the ordinal. `rc2` is the `0.1.7` line and
+ * `line020` is the `0.2.0` line, because a next ordinal inside the `0.2.0`
+ * tuple would collide with a future `0.2.0-rc.2` row. The tuple is the part
+ * worth carrying in the key; the ordinal already lives in `version`.
+ *
+ * Both rows are measured `modern` readings, taken by driving the real service
+ * of that exact version rather than by reading its source.
  */
 export const HOST_LINES = {
   rc2: { version: "0.1.7-rc.2", capability: "modern" },
+  line020: { version: "0.2.0-rc.1", capability: "modern" },
 }
 
 /**
  * A counterfactual line the live reverse controls assert against. It is
  * deliberately NOT a row of `HOST_LINES`: it promises nothing and is never
  * installed. It carries the two readings a promised line can never carry — a
- * version off the line and the retired `legacy` capability — so asserting it
- * against a tree that does sit on the promised line must throw. Keeping it
- * outside the table is what lets the reverse controls stay live while the
- * promise stays a single line.
+ * version off every promised line and the retired `legacy` capability — so
+ * asserting it against a tree that does sit on a promised line must throw.
+ * Keeping it outside the table is what lets the reverse controls stay live
+ * while the promise spans more than one line.
  */
 export const FOREIGN_HOST_LINE = { version: "0.1.7-alpha.2", capability: "legacy" }
 
@@ -374,6 +384,14 @@ export async function runLine(key, options = {}) {
       presetTable: presetTableFromPatch(readFileSync(join(ROOT, "cordis.patch.yml"), "utf8")),
     })
     mustReject("the foreign capability", () => assertCapability(other, observed.capability))
+    // The two controls above cover a wrong line and a wrong capability. These
+    // cover the third way a run can certify itself wrongly: a line whose gate
+    // widened, or a session left on a preset the plugin does not own. Both are
+    // asserted against the observations this very run produced, so they are live
+    // for every promised line rather than for one of them.
+    mustReject("a widened gate name set", () => assertLineOutcome(line, { ...observed, gateNames: [GATED_PRESET, LEGACY_AUTO_PRESET] }))
+    mustReject("a migrated session left on the legacy preset", () => assertLineOutcome(line, { ...observed, state: { ...observed.state, preset: LEGACY_AUTO_PRESET } }))
+    mustReject("a migration that reported no work", () => assertLineOutcome(line, { ...observed, outcome: "skipped" }))
     return Object.assign({ key, version: line.version, packages: packages.length }, observed)
   } finally {
     if (options.keep === true) process.stdout.write("kept " + app + LF)

@@ -76,7 +76,8 @@ tests/
 ├─ perf-settings-rules-parse.test.mjs / perf-poll-backoff.test.mjs / perf-scan-throttle.test.mjs （客户端开销：单次解析、轮询退避、扫描节流）
 ├─ trusted-intent-window.test.mjs（授权证据窗口溢出计数：slot cap/去重/预算交互、拒因 note 两分支、trusted-intents 事件量化 overflowed 标志）/ client-human-gate.test.mjs（浮层人工出手率：与 friction-report 同源名单、空窗口不作零声称、round 边界、中英三键、bundle 装配锚）
 ├─ loop-guard.test.mjs（循环键稳定性/回退、严格连续+fire-and-reset 状态机、FIFO 64、阈值钳制与 resolveConfig 映射）/ loop-guard-wiring.test.mjs（四站点成对锚、allowlist 与 rule-allow 豁免负向切片、跨面标记读位置与 one-shot、pinned 形状先于 learnAttempt、门不写 history 不碰熔断、disposal/sweep 有界、audit-query 渲染）
-├─ host-lines.test.mjs（宿主下限线：承诺表与精确钉版、装错线/读错档位的反向对照、补丁组合表解析；本机安装线驱动真实 permission-presets 服务）
+├─ host-lines.test.mjs（宿主承诺线：承诺表逐 tuple 一行 + 键名即线族、精确钉版、装错线/读错档位/门禁放宽的反向对照、补丁组合表解析；本机安装线驱动真实 permission-presets 服务，装的不是承诺线即判红）
+├─ host-surface-coverage.mjs（契约面读数规则：具名不可评估行 + 评估行数下限 + 两个控制项未跑即失败）+ host-surface-coverage-collapse.test.mjs（塌缩读数、反向控制、下限独立生效、装配锚）
 └─ 合计 227 个 tests/*.test.mjs（node --test 全绿基线）
 scripts/
 ├─ build.sh             （DSH 源码仓库布局）tsc 编译 src→lib
@@ -89,7 +90,7 @@ scripts/
 ├─ friction-report.mjs  摩擦报告 CLI（面板介入率 / 倒计时结算率 / 翻案交叉表 / 评审通道落定率 / 无人值守窗口判据 + 退出码）
 ├─ mock-reviewer.mjs    本地 mock 评审器（127.0.0.1:18777，确定性 ALLOW/MEDIUM）
 ├─ link-dsh-deps.cjs    把 node_modules/@deepseek-ai/* 重链到已安装 dsh 的同名包（构建期类型与运行期解析同源）
-├─ test-host-lines.mjs   宿主承诺线可复跑入口（os.tmpdir 前缀按线装出真实 dsh-* 全家：唯一承诺线 0.1.7-rc.2（modern 形态，驱动能力探测与同签名迁移）；`HOST_LINES` 每次只列用户实际在跑的宿主）
+├─ test-host-lines.mjs   宿主承诺线可复跑入口（os.tmpdir 前缀按线装出真实 dsh-* 全家：承诺线每个 tuple 一条 = 0.1.7-rc.2 / 0.2.0-rc.1（均实测 modern 形态，驱动能力探测与同签名迁移，键名写 tuple、序数留在 version）；`HOST_LINES` 每次只列用户实际在跑的宿主）
 └─ link-client-packs.cjs  把 client 构建期包（primitives/slots）链到 npm pack 解包目录
 verify-*.mjs            3 个运行时验证脚本（载波组合栅栏；settings/端到端需 --url/--cookie-file 会话）
 ```
