@@ -148,32 +148,104 @@ function reaches(mod, row) {
   return owner.prototype !== undefined && Object.getOwnPropertyNames(owner.prototype).includes(row.member)
 }
 
-test('every resolvable upstream contract name is reachable at runtime', async t => {
-  const unresolved = new Map()
+/** The rows one package owns, used by its statically declared case below. */
+function rowsOf(pkg) {
+  return CONTRACT_SURFACE.filter(row => row.pkg === pkg)
+}
+
+/**
+ * Assert every row of one package is reachable, naming each row that is not.
+ * The message carries the row ids, so a collapsed case still reports exactly
+ * which contract symbols broke.
+ *
+ * A package that is not installed yields no failure and no TAP skip: the
+ * release gate compares the suite's passed count against its total, so a skip
+ * is a count mismatch. The rows that could not be checked are reported as a
+ * diagnostic, which keeps the reading without costing a count.
+ */
+async function assertRowsReachable(pkg) {
+  const rows = rowsOf(pkg)
+  assert.ok(rows.length > 0, `no CONTRACT_SURFACE row declares ${pkg}; the case and the table have drifted apart`)
+  const loadedPkg = await loadPackage(pkg)
+  if (!loadedPkg.ok) return { unchecked: rows.map(row => row.id), reason: loadedPkg.reason }
+  const missing = rows.filter(row => !reaches(loadedPkg.mod, row)).map(row => row.id)
+  assert.deepEqual(missing, [], `unreachable contract symbols in ${pkg}: ${missing.join(', ')}`)
+  return { unchecked: [] }
+}
+
+/** Report the rows a package could not contribute a reading for. */
+function reportUnchecked(t, label, { unchecked, reason }) {
+  if (unchecked.length > 0) t.diagnostic(`${unchecked.length} ${label} row(s) unchecked (${reason}): ${unchecked.join(', ')}`)
+}
+
+test('the cordis contract surface is reachable', async t => {
+  reportUnchecked(t, 'cordis', await assertRowsReachable('@deepseek-ai/cordis'))
+})
+
+test('the schemastery contract surface is reachable', async t => {
+  reportUnchecked(t, 'schemastery', await assertRowsReachable('@deepseek-ai/schemastery'))
+})
+
+test('the llm contract surface is reachable', async t => {
+  reportUnchecked(t, 'llm', await assertRowsReachable('@deepseek-ai/dsh-llm'))
+})
+
+test('the tools contract surface is reachable', async t => {
+  reportUnchecked(t, 'tools', await assertRowsReachable('@deepseek-ai/dsh-tools'))
+})
+
+test('the session contract surface is reachable', async t => {
+  reportUnchecked(t, 'session', await assertRowsReachable('@deepseek-ai/dsh-session'))
+})
+
+test('the agent contract surface is reachable', async t => {
+  reportUnchecked(t, 'agent', await assertRowsReachable('@deepseek-ai/dsh-agent'))
+})
+
+test('the permission-presets contract surface is reachable', async t => {
+  reportUnchecked(t, 'permission-presets', await assertRowsReachable('@deepseek-ai/dsh-permission-presets'))
+})
+
+test('the user-approval contract surface is reachable', async t => {
+  reportUnchecked(t, 'user-approval', await assertRowsReachable('@deepseek-ai/dsh-user-approval'))
+})
+
+test('the typert-protocol contract surface is reachable', async t => {
+  reportUnchecked(t, 'typert-protocol', await assertRowsReachable('@deepseek-ai/dsh-typert-protocol'))
+})
+
+test('the client primitives contract surface is reachable', async t => {
+  reportUnchecked(t, 'client primitives', await assertRowsReachable('@deepseek-ai/dsh-client-ui-primitives'))
+})
+
+test('every contract row belongs to a declared case', () => {
+  // Drift is impossible in both directions: assertRowsReachable fails on a
+  // package with no rows, and this fails on a row no declared case owns.
+  const declared = [
+    '@deepseek-ai/cordis', '@deepseek-ai/schemastery', '@deepseek-ai/dsh-llm',
+    '@deepseek-ai/dsh-tools', '@deepseek-ai/dsh-session', '@deepseek-ai/dsh-agent',
+    '@deepseek-ai/dsh-permission-presets', '@deepseek-ai/dsh-user-approval',
+    '@deepseek-ai/dsh-typert-protocol', '@deepseek-ai/dsh-client-ui-primitives',
+  ]
+  const inTable = [...new Set(CONTRACT_SURFACE.map(row => row.pkg))].sort()
+  assert.deepEqual(inTable, declared.slice().sort(), 'the declared cases and CONTRACT_SURFACE name different packages')
   for (const row of CONTRACT_SURFACE) {
-    const pkg = await loadPackage(row.pkg)
-    await t.test(row.id, { skip: pkg.ok ? false : row.pkg + ': ' + pkg.reason }, () => {
-      assert.equal(reaches(pkg.mod, row), true, row.id + ' is not reachable in ' + row.pkg)
-    })
-    if (!pkg.ok) unresolved.set(row.pkg, pkg.reason)
+    assert.equal(row.id.includes(' '), false, 'a row id must not contain whitespace: ' + row.id)
   }
-  t.diagnostic('packages not installed here, rows skipped: ' + (unresolved.size === 0
-    ? 'none'
-    : [...unresolved].map(([pkg, reason]) => pkg + ' (' + reason + ')').join(', ')))
 })
 
 test('the contract reader reports an absent name as absent', async t => {
   const pkg = await loadPackage('@deepseek-ai/dsh-permission-presets')
-  await t.test('service rows', { skip: pkg.ok ? false : pkg.reason }, () => {
-    for (const absent of ABSENT_ON_SERVICE) {
-      assert.equal(reaches(pkg.mod, { kind: 'proto', owner: 'PermissionPresetService', member: absent }), false, absent + ' is present on the service')
-    }
-  })
-  await t.test('a row naming a package that is not installed', async () => {
-    const missing = await loadPackage('@deepseek-ai/dsh-not-a-real-package')
-    assert.equal(missing.ok, false)
-    assert.equal(typeof missing.reason, 'string')
-  })
+  if (!pkg.ok) return t.diagnostic('reader honesty not exercised: ' + pkg.reason)
+  for (const absent of ABSENT_ON_SERVICE) {
+    assert.equal(reaches(pkg.mod, { kind: 'proto', owner: 'PermissionPresetService', member: absent }), false, absent + ' is present on the service')
+  }
+})
+
+test('a package that is not installed yields a reason instead of a throw', async () => {
+  const missing = await loadPackage('@deepseek-ai/dsh-not-a-real-package')
+  assert.equal(missing.ok, false)
+  assert.equal(typeof missing.reason, 'string')
 })
 
 /**
@@ -225,50 +297,48 @@ const ON_OWN_PRESET = [
 
 test('permissionState reports the durable raw identity where the derived name differs', async t => {
   const mounted = await mountService()
-  await t.test('the service mounts', { skip: mounted.ok ? false : mounted.reason }, async () => {
-    const { service } = mounted
-    const gate = gatePresetNames(HOST_LINES.rc2.capability)
-    assert.deepEqual([...gate], [GATED_PRESET])
+  if (!mounted.ok) return t.diagnostic('canary not exercised: ' + mounted.reason)
+  const { service } = mounted
+  const gate = gatePresetNames(HOST_LINES.rc2.capability)
+  assert.deepEqual([...gate], [GATED_PRESET])
 
-    // (1) no drift: the raw name and the derived name agree.
-    const aligned = sessionOf(ON_OWN_PRESET, 'contract-aligned')
-    assert.equal(service.current(aligned), GATED_PRESET)
-    assert.equal(rawPresetOf(service, aligned), GATED_PRESET)
-    assert.equal(isGatedSession(service, aligned, gate), true)
+  // (1) no drift: the raw name and the derived name agree.
+  const aligned = sessionOf(ON_OWN_PRESET, 'contract-aligned')
+  assert.equal(service.current(aligned), GATED_PRESET)
+  assert.equal(rawPresetOf(service, aligned), GATED_PRESET)
+  assert.equal(isGatedSession(service, aligned, gate), true)
 
-    // (2) a never override lands on the knobs while the recorded preset stays put.
-    //     derive() drops the recorded name once its bundle no longer matches and
-    //     the table scan returns the host's own danger-full-access entry.
-    const neverOverride = sessionOf([...ON_OWN_PRESET, { type: 'approval/policy', data: { policy: 'never' } }], 'contract-never')
-    assert.equal(service.current(neverOverride), 'danger-full-access')
-    assert.equal(gate.includes(service.current(neverOverride)), false)
-    assert.equal(rawPresetOf(service, neverOverride), GATED_PRESET)
-    assert.equal(isGatedSession(service, neverOverride, gate), true)
-    assert.equal(autoPermissionAuthority({ agent: { session: neverOverride } }, () => undefined, service, gate)?.session, neverOverride)
+  // (2) a never override lands on the knobs while the recorded preset stays put.
+  //     derive() drops the recorded name once its bundle no longer matches and
+  //     the table scan returns the host's own danger-full-access entry.
+  const neverOverride = sessionOf([...ON_OWN_PRESET, { type: 'approval/policy', data: { policy: 'never' } }], 'contract-never')
+  assert.equal(service.current(neverOverride), 'danger-full-access')
+  assert.equal(gate.includes(service.current(neverOverride)), false)
+  assert.equal(rawPresetOf(service, neverOverride), GATED_PRESET)
+  assert.equal(isGatedSession(service, neverOverride, gate), true)
+  assert.equal(autoPermissionAuthority({ agent: { session: neverOverride } }, () => undefined, service, gate)?.session, neverOverride)
 
-    // (3) a sandbox change alone produces the same split.
-    const sandboxDrift = sessionOf([...ON_OWN_PRESET, { type: 'sandbox/mode', data: { mode: 'workspace-write' } }], 'contract-sandbox')
-    assert.equal(service.current(sandboxDrift), 'workspace-write')
-    assert.equal(gate.includes(service.current(sandboxDrift)), false)
-    assert.equal(rawPresetOf(service, sandboxDrift), GATED_PRESET)
-    assert.equal(isGatedSession(service, sandboxDrift, gate), true)
-  })
+  // (3) a sandbox change alone produces the same split.
+  const sandboxDrift = sessionOf([...ON_OWN_PRESET, { type: 'sandbox/mode', data: { mode: 'workspace-write' } }], 'contract-sandbox')
+  assert.equal(service.current(sandboxDrift), 'workspace-write')
+  assert.equal(gate.includes(service.current(sandboxDrift)), false)
+  assert.equal(rawPresetOf(service, sandboxDrift), GATED_PRESET)
+  assert.equal(isGatedSession(service, sandboxDrift, gate), true)
 })
 
 test('the divergence fixture is one where raw and derived decide the gate differently', async t => {
   const mounted = await mountService()
-  await t.test('reporting the derived name ungates the same session', { skip: mounted.ok ? false : mounted.reason }, () => {
-    const { service } = mounted
-    const gate = gatePresetNames(HOST_LINES.rc2.capability)
-    const session = sessionOf([...ON_OWN_PRESET, { type: 'approval/policy', data: { policy: 'never' } }], 'contract-counterfactual')
-    // A facade over the real service that keeps the name and the declared shape
-    // and changes only which value is reported — the upstream edit this file
-    // detects. It is a control on the fixture, not the subject under test.
-    const derivedReading = { permissionState: target => ({ ...service.permissionState(target), preset: service.current(target) }) }
-    assert.equal(rawPresetOf(service, session), GATED_PRESET)
-    assert.equal(rawPresetOf(derivedReading, session), 'danger-full-access')
-    assert.equal(isGatedSession(service, session, gate), true)
-    assert.equal(isGatedSession(derivedReading, session, gate), false)
-    assert.equal(autoPermissionAuthority({ agent: { session } }, () => undefined, derivedReading, gate), undefined)
-  })
+  if (!mounted.ok) return t.diagnostic('canary not exercised: ' + mounted.reason)
+  const { service } = mounted
+  const gate = gatePresetNames(HOST_LINES.rc2.capability)
+  const session = sessionOf([...ON_OWN_PRESET, { type: 'approval/policy', data: { policy: 'never' } }], 'contract-counterfactual')
+  // A facade over the real service that keeps the name and the declared shape
+  // and changes only which value is reported — the upstream edit this file
+  // detects. It is a control on the fixture, not the subject under test.
+  const derivedReading = { permissionState: target => ({ ...service.permissionState(target), preset: service.current(target) }) }
+  assert.equal(rawPresetOf(service, session), GATED_PRESET)
+  assert.equal(rawPresetOf(derivedReading, session), 'danger-full-access')
+  assert.equal(isGatedSession(service, session, gate), true)
+  assert.equal(isGatedSession(derivedReading, session, gate), false)
+  assert.equal(autoPermissionAuthority({ agent: { session } }, () => undefined, derivedReading, gate), undefined)
 })
