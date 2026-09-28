@@ -12,6 +12,15 @@
  * the name is reachable at runtime (a named export, a class static, or an own
  * prototype member) through the same ESM entry the host would mount.
  *
+ * Every unevaluable row is reported, and a reading that collapsed is a failure
+ * rather than a diagnostic: a TAP diagnostic is a comment, so a package that
+ * cannot be loaded used to cost this file nothing while taking its own rows and
+ * every row that imports it out of the reading. The ten package entries are one
+ * import graph, so losing one package cost 42 of the 50 rows and the file still
+ * reported every case passed. `tests/host-surface-coverage.mjs` owns the reading
+ * rule; the last case here applies it to a reading this file re-derives for
+ * itself, so it does not depend on the order the declared cases above ran in.
+ *
  * The second half is the semantic canary the name probe cannot express.
  * `PermissionPresetService.permissionState()` is declared `private` upstream and
  * the plugin reaches it through an `any`-typed capability probe, so a rename or
@@ -32,6 +41,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { GATED_PRESET, HOST_LINES, packageEntry, presetTableFromPatch } from '../scripts/test-host-lines.mjs'
+import { assertCoverage, KNOWN_UNCHECKABLE } from './host-surface-coverage.mjs'
 import { gatePresetNames, isGatedSession, rawPresetOf } from '../lib/auto/preset-migration.js'
 import { autoPermissionAuthority } from '../lib/auto/gate-decision.js'
 
@@ -115,6 +125,18 @@ const CONTRACT_SURFACE = [
  * every name as present would satisfy every row above as well.
  */
 const ABSENT_ON_SERVICE = ['pendingInteractions', 'thisMemberDoesNotExist']
+
+/**
+ * One declared case per package the table names, in the order the cases are
+ * declared below. Hoisted so the coverage case at the end of this file reads the
+ * same list the declared cases assert against, rather than a second copy of it.
+ */
+const DECLARED_PACKAGES = [
+  '@deepseek-ai/cordis', '@deepseek-ai/schemastery', '@deepseek-ai/dsh-llm',
+  '@deepseek-ai/dsh-tools', '@deepseek-ai/dsh-session', '@deepseek-ai/dsh-agent',
+  '@deepseek-ai/dsh-permission-presets', '@deepseek-ai/dsh-user-approval',
+  '@deepseek-ai/dsh-typert-protocol', '@deepseek-ai/dsh-client-ui-primitives',
+]
 
 /** Load one installed package entry. Returns the reason instead of throwing. */
 const loaded = new Map()
@@ -221,14 +243,8 @@ test('the client primitives contract surface is reachable', async t => {
 test('every contract row belongs to a declared case', () => {
   // Drift is impossible in both directions: assertRowsReachable fails on a
   // package with no rows, and this fails on a row no declared case owns.
-  const declared = [
-    '@deepseek-ai/cordis', '@deepseek-ai/schemastery', '@deepseek-ai/dsh-llm',
-    '@deepseek-ai/dsh-tools', '@deepseek-ai/dsh-session', '@deepseek-ai/dsh-agent',
-    '@deepseek-ai/dsh-permission-presets', '@deepseek-ai/dsh-user-approval',
-    '@deepseek-ai/dsh-typert-protocol', '@deepseek-ai/dsh-client-ui-primitives',
-  ]
   const inTable = [...new Set(CONTRACT_SURFACE.map(row => row.pkg))].sort()
-  assert.deepEqual(inTable, declared.slice().sort(), 'the declared cases and CONTRACT_SURFACE name different packages')
+  assert.deepEqual(inTable, DECLARED_PACKAGES.slice().sort(), 'the declared cases and CONTRACT_SURFACE name different packages')
   for (const row of CONTRACT_SURFACE) {
     assert.equal(row.id.includes(' '), false, 'a row id must not contain whitespace: ' + row.id)
   }
@@ -341,4 +357,52 @@ test('the divergence fixture is one where raw and derived decide the gate differ
   assert.equal(isGatedSession(service, session, gate), true)
   assert.equal(isGatedSession(derivedReading, session, gate), false)
   assert.equal(autoPermissionAuthority({ agent: { session } }, () => undefined, derivedReading, gate), undefined)
+})
+
+/**
+ * Whether the raw-identity canary is load-bearing right now, read from a fresh
+ * mount rather than from a flag the two canary cases set. A canary that did not
+ * run reports the same reading as a canary that ran and agreed, so the coverage
+ * case asks the service directly: the raw side must be the gated name and the
+ * derived side must have folded away from it.
+ */
+async function rawIdentityCanary() {
+  const mounted = await mountService()
+  if (!mounted.ok) return { exercised: false, reason: mounted.reason }
+  const service = mounted.service
+  const session = sessionOf([...ON_OWN_PRESET, { type: 'approval/policy', data: { policy: 'never' } }], 'contract-coverage')
+  const raw = rawPresetOf(service, session)
+  const derived = service.current(session)
+  if (raw !== GATED_PRESET) return { exercised: false, reason: 'the raw reading is ' + raw + ', not the gated name ' + GATED_PRESET }
+  if (raw === derived) return { exercised: false, reason: 'the drift fixture no longer diverges: raw and derived both read ' + raw }
+  return { exercised: true, reason: '' }
+}
+
+/** Whether the reader's own negative control ran, which is what makes it falsifiable. */
+async function readerControl() {
+  const pkg = await loadPackage('@deepseek-ai/dsh-permission-presets')
+  return pkg.ok ? { exercised: true, reason: '' } : { exercised: false, reason: pkg.reason }
+}
+
+test('the contract surface was read, not merely attempted', async t => {
+  // The reading is re-derived here rather than collected from the cases above:
+  // a coverage gate that reads another test's leftovers depends on the order
+  // those tests happen to run in, and a detector that can be reordered into
+  // uselessness is not a detector.
+  const unchecked = []
+  for (const pkg of DECLARED_PACKAGES) {
+    const result = await assertRowsReachable(pkg)
+    for (const id of result.unchecked) unchecked.push({ id, reason: result.reason })
+  }
+  for (const row of unchecked) {
+    const known = KNOWN_UNCHECKABLE.rows.includes(row.id)
+    t.diagnostic((known ? 'declared unevaluable: ' : 'unchecked: ') + row.id + ' — ' + row.reason)
+  }
+  const verdict = assertCoverage({
+    rowIds: CONTRACT_SURFACE.map(row => row.id),
+    unchecked,
+    canary: await rawIdentityCanary(),
+    reader: await readerControl(),
+  })
+  t.diagnostic('evaluated ' + verdict.evaluated + ' of ' + verdict.declared + ' contract rows (floor ' + verdict.floor + ')')
 })
