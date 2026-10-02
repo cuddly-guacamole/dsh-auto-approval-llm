@@ -315,7 +315,7 @@ test('permissionState reports the durable raw identity where the derived name di
   const mounted = await mountService()
   if (!mounted.ok) return t.diagnostic('canary not exercised: ' + mounted.reason)
   const { service } = mounted
-  const gate = gatePresetNames(HOST_LINES.rc2.capability)
+  const gate = gatePresetNames(HOST_LINES.line020.capability)
   assert.deepEqual([...gate], [GATED_PRESET])
 
   // (1) no drift: the raw name and the derived name agree.
@@ -346,7 +346,7 @@ test('the divergence fixture is one where raw and derived decide the gate differ
   const mounted = await mountService()
   if (!mounted.ok) return t.diagnostic('canary not exercised: ' + mounted.reason)
   const { service } = mounted
-  const gate = gatePresetNames(HOST_LINES.rc2.capability)
+  const gate = gatePresetNames(HOST_LINES.line020.capability)
   const session = sessionOf([...ON_OWN_PRESET, { type: 'approval/policy', data: { policy: 'never' } }], 'contract-counterfactual')
   // A facade over the real service that keeps the name and the declared shape
   // and changes only which value is reported — the upstream edit this file

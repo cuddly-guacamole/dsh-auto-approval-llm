@@ -66,11 +66,11 @@ flowchart TD
 
 ## 安装
 
-**前置**：会话/预设处于 **Auto 档**（machine value `auto-approval` = `danger-full-access` + `approval: ask`，用 `/permission auto-approval` 切换）；DSH `0.1.7-rc.2` 或 `0.2.0-rc.1`；Node `^22.19.0 || >=24.0.0`。
+**前置**：会话/预设处于 **Auto 档**（machine value `auto-approval` = `danger-full-access` + `approval: ask`，用 `/permission auto-approval` 切换）；DSH `0.2.0-rc.2`；Node `^22.19.0 || >=24.0.0`。
 
-兼容窗口：`auto` 是上游 `@deepseek-ai/dsh-experimental-auto-review`（Auto review / EXP）的保留名，本插件只定义/接管 `auto-approval`，两者**分档并存、可同时启用**。宿主承诺**每个 tuple 一条线**：`0.1.7-rc.2` 与 `0.2.0-rc.1` 均为**完整支持**（peer 区间 `>=0.1.7-rc.2 <2`）。长期规则：**宿主线跟着用户实际在跑的宿主走**，上游进入新 tuple 的 alpha 时再逐条追加（`HOST_LINES` 同步加行）。peer 区间是**安装准入面**——**区间内未测的线不受支持**，上界 `<2` 只是范围上界；该区间同时覆盖两条承诺线，是因为宿主用 `semver.satisfies(版本, 区间, { includePrerelease: true })` 判 peer（`dsh-app-boot/lib/index.js:300`），预发布版本因此在门禁里放行，不另加第二个比较子。旧机器值 `auto` 别名与 legacy/unknown 能力分支已随下限抬升移除（shipped patch 只定义 `auto-approval`）。
+兼容窗口：`auto` 是上游 `@deepseek-ai/dsh-experimental-auto-review`（Auto review / EXP）的保留名，本插件只定义/接管 `auto-approval`，两者**分档并存、可同时启用**。宿主承诺**每个 tuple 一条线**：`0.2.0-rc.2` 为**完整支持**（peer 区间 `>=0.2.0-rc.2 <2`）。长期规则：**宿主线跟着用户实际在跑的宿主走**，上游进入新 tuple 的 alpha 时再逐条追加（`HOST_LINES` 同步加行）。peer 区间是**安装准入面**——**区间内未测的线不受支持**，上界 `<2` 只是范围上界；该区间的下界就是承诺线本身，与它同 tuple，因此单臂即可表达承诺面，不另加第二个比较子。`0.1.7-rc.2` 已退出承诺面，随区间抬升一并被拒装。旧机器值 `auto` 别名与 legacy/unknown 能力分支已随下限抬升移除（shipped patch 只定义 `auto-approval`）。
 
-上游提示：`0.2.0-rc.1` 未发布破坏性变更清单、未发弃用通知、其 `AGENTS.md` 与 `0.1.7-rc.2` 是同一个 git blob（`37cfd8d2…`），即「未稳定、消费者需自行跟进」的立场未变。社区同时报告该次升级后 13 个第三方插件中有 6 个报错徽标、无维护者回复。上述与本插件的契约面结论不冲突：本插件只测自己实际使用的 50 个符号（48/50 不变、0 删除/改名/移位，唯一新增是 `dsh-session` 的 `ToolCallRecovery`），而非一个插件可能触及的全部面；且本插件的探针能发现符号的**消失或改名**，发现不了符号**含义**的改变。
+上游提示：`0.2.0-rc.1` 起未发布破坏性变更清单、未发弃用通知、其 `AGENTS.md` 与 `0.1.7-rc.2` 是同一个 git blob（`37cfd8d2…`），即「未稳定、消费者需自行跟进」的立场未变。社区同时报告该次升级后 13 个第三方插件中有 6 个报错徽标、无维护者回复。上述与本插件的契约面结论不冲突：本插件只测自己实际使用的 50 个符号（48/50 不变、0 删除/改名/移位，唯一新增是 `dsh-session` 的 `ToolCallRecovery`），而非一个插件可能触及的全部面；且本插件的探针能发现符号的**消失或改名**，发现不了符号**含义**的改变。
 
 ```bash
 dsh plugin --profile web add @quill507/dsh-auto-approval-llm

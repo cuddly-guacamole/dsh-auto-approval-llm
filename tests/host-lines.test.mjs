@@ -1,14 +1,14 @@
 /**
- * Host-line contract: the promised lines are the `0.1.7-rc.2` line and the
- * `0.2.0-rc.1` line the user actually runs, each carrying the modern shape
- * (`catalog` + `registerAuto`) and driven through the same-signature migration.
- * One line per tuple, appended when upstream enters a new tuple's alpha. The
- * peer range is an installation-admission surface, not a support claim, so the
- * promise lives here in `HOST_LINES` and nowhere else. This file pins the
- * promised table, the exact version pinning, the reverse controls that make a
- * wrong-tree acceptance impossible, and the shipped preset composition. The last
- * case drives the locally installed host line through the real
- * permission-presets service, so the harness itself cannot rot into a pure fake.
+ * Host-line contract: exactly one line is promised — the `0.2.0-rc.2` line the
+ * user actually runs, which carries the modern shape (`catalog` +
+ * `registerAuto`) and is driven through the same-signature migration. One line
+ * per tuple, appended when upstream enters a new tuple's alpha. The peer range
+ * is an installation-admission surface, not a support claim, so the promise
+ * lives here in `HOST_LINES` and nowhere else. This file pins the promised
+ * table, the exact version pinning, the reverse controls that make a wrong-tree
+ * acceptance impossible, and the shipped preset composition. The last case
+ * drives the locally installed host line through the real permission-presets
+ * service, so the harness itself cannot rot into a pure fake.
  */
 import test from "node:test"
 import assert from "node:assert/strict"
@@ -45,13 +45,11 @@ const patch = readFileSync(join(ROOT, "cordis.patch.yml"), "utf8")
 const INERT_CONTROL_LINE = { version: "0.1.5-rc.2", capability: "unknown" }
 
 /** The key each promised tuple is addressed by, so a drift between them is a failure. */
-const KEY_OF_TUPLE = { "0.1.7": "rc2", "0.2.0": "line020" }
+const KEY_OF_TUPLE = { "0.2.0": "line020" }
 
-test("the promised line table carries the lines the user runs", () => {
-  assert.deepEqual(Object.keys(HOST_LINES).sort(), ["line020", "rc2"])
-  assert.equal(HOST_LINES.rc2.version, "0.1.7-rc.2")
-  assert.equal(HOST_LINES.rc2.capability, "modern")
-  assert.equal(HOST_LINES.line020.version, "0.2.0-rc.1")
+test("the promised line table carries the line the user runs", () => {
+  assert.deepEqual(Object.keys(HOST_LINES).sort(), ["line020"])
+  assert.equal(HOST_LINES.line020.version, "0.2.0-rc.2")
   assert.equal(HOST_LINES.line020.capability, "modern")
 })
 
@@ -114,7 +112,7 @@ test("the installed-tree check rejects a foreign line and an empty tree", () => 
       "@deepseek-ai/dsh-session@" + line.version,
     ].sort())
     // Every line the promise does not cover — the inert one, the foreign
-    // sentinel, and every other promised line — must be refused by the tree
+    // sentinel, and any other promised line — must be refused by the tree
     // check, not merely unlisted: a tree on a different promised line is still
     // the wrong tree for the line under test.
     const notThis = [INERT_CONTROL_LINE.version, FOREIGN_HOST_LINE.version]
@@ -127,7 +125,7 @@ test("the installed-tree check rejects a foreign line and an empty tree", () => 
 })
 
 test("the npm-tree check rejects problems and nested foreign copies", () => {
-  const line = HOST_LINES.rc2
+  const line = HOST_LINES.line020
   const good = { dependencies: { "@deepseek-ai/dsh-session": { version: line.version } } }
   assert.deepEqual(assertTreeLine(line, good), ["@deepseek-ai/dsh-session@" + line.version])
   const nested = {
@@ -151,8 +149,8 @@ test("the npm-tree check rejects problems and nested foreign copies", () => {
 })
 
 test("the capability check rejects the retired legacy reading", () => {
-  assert.equal(assertCapability(HOST_LINES.rc2, "modern"), "modern")
-  mustReject("a legacy reading on the promised line", () => assertCapability(HOST_LINES.rc2, "legacy"))
+  assert.equal(assertCapability(HOST_LINES.line020, "modern"), "modern")
+  mustReject("a legacy reading on the promised line", () => assertCapability(HOST_LINES.line020, "legacy"))
   for (const line of Object.values(HOST_LINES)) assert.notEqual(line.capability, "legacy")
   // `legacy` is the reading the shipped probe never returns (it answers `modern`
   // or `unknown`), so the rejection above cannot be satisfied by a value some
@@ -167,8 +165,12 @@ test("a line's capability field is load-bearing in both directions", () => {
     mustReject(line.version + " re-read as the retired legacy shape", () => assertCapability(line, "legacy"))
     mustReject(line.version + " re-read as a capability nobody returns", () => assertCapability(line, "modern-typo"))
   }
-  mustReject("the foreign sentinel read as the promised reading", () => assertCapability(FOREIGN_HOST_LINE, HOST_LINES.rc2.capability))
-  mustReject("the foreign sentinel read as the other promised reading", () => assertCapability(FOREIGN_HOST_LINE, HOST_LINES.line020.capability))
+  // The promise is a single line, so there is no second promised reading left
+  // for the sentinel to be refused against; the loop above already walked every
+  // promised line, and a table whose capability drifted onto the sentinel's
+  // `legacy` reading — which would make the control below pass vacuously — is
+  // refused by the `assert.notEqual` in the "not a registered line" case.
+  mustReject("the foreign sentinel read as the promised reading", () => assertCapability(FOREIGN_HOST_LINE, HOST_LINES.line020.capability))
 })
 
 /**

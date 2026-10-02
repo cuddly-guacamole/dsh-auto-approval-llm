@@ -7,7 +7,7 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, globSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 
 // Isolate reviewer-key fallback from the host machine's credential file:
@@ -1502,18 +1502,34 @@ test('extractReviewerKeyLine: quoted and bare credential-file values parse witho
 // Every target declared in "exports" must exist on disk after the standard
 // build (tsc emit + tsdown). Guards against dangling "types" pointers if the
 // declaration output (lib/types) or the client bundle entry ever moves.
+// A target may be a subpath pattern ("./locale/*.json"), which names no single
+// path; for those the claim is the weaker one that still has teeth — the
+// pattern matches at least one real file — so a pattern whose directory moved
+// or was renamed stays red instead of passing on the strength of its shape.
+const exportTargetExists = (repoRoot, target) => {
+  if (!target.includes('*')) return existsSync(resolve(repoRoot, target))
+  return globSync(target.replace(/^\.\//, ''), { cwd: repoRoot }).length > 0
+}
+
 test('exports: every declared default/types target exists after build', () => {
   const repoRoot = resolve(fileURLToPath(import.meta.url), '..', '..')
   const pkg = JSON.parse(readFileSync(resolve(repoRoot, 'package.json'), 'utf8'))
   assert.ok(pkg.exports && typeof pkg.exports === 'object')
+  // The pattern branch carries its own controls, so it cannot rot into a
+  // blanket pass for anything containing a `*`: a pattern that matches a real
+  // file is present, a pattern that matches nothing is not, and a literal that
+  // moved is not either.
+  assert.equal(exportTargetExists(repoRoot, './locale/*.json'), true)
+  assert.equal(exportTargetExists(repoRoot, './locale/*.nope'), false)
+  assert.equal(exportTargetExists(repoRoot, './locale/moved.json'), false)
   for (const [key, entry] of Object.entries(pkg.exports)) {
     if (typeof entry === 'string') {
-      assert.ok(existsSync(resolve(repoRoot, entry)), `${key} → ${entry}`)
+      assert.ok(exportTargetExists(repoRoot, entry), `${key} → ${entry}`)
       continue
     }
     for (const condition of ['default', 'types']) {
       const target = entry[condition]
-      if (target) assert.ok(existsSync(resolve(repoRoot, target)), `${key} ${condition} → ${target}`)
+      if (target) assert.ok(exportTargetExists(repoRoot, target), `${key} ${condition} → ${target}`)
     }
   }
 })

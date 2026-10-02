@@ -34,17 +34,16 @@ const LEGACY_AUTO_PRESET = "auto"
  * further line is appended row by row when upstream enters the alpha of a new
  * tuple, so a promise can span two tuples at once.
  *
- * The key names the line family, not the ordinal. `rc2` is the `0.1.7` line and
- * `line020` is the `0.2.0` line, because a next ordinal inside the `0.2.0`
- * tuple would collide with a future `0.2.0-rc.2` row. The tuple is the part
- * worth carrying in the key; the ordinal already lives in `version`.
+ * The key names the tuple, not the ordinal. `line020` is the `0.2.0` line and
+ * stays that key for every ordinal inside the tuple, because a next ordinal
+ * would collide with the row that already exists. The tuple is the part worth
+ * carrying in the key; the ordinal already lives in `version`.
  *
- * Both rows are measured `modern` readings, taken by driving the real service
- * of that exact version rather than by reading its source.
+ * The row is a measured `modern` reading, taken by driving the real service of
+ * that exact version rather than by reading its source.
  */
 export const HOST_LINES = {
-  rc2: { version: "0.1.7-rc.2", capability: "modern" },
-  line020: { version: "0.2.0-rc.1", capability: "modern" },
+  line020: { version: "0.2.0-rc.2", capability: "modern" },
 }
 
 /**
@@ -53,8 +52,8 @@ export const HOST_LINES = {
  * installed. It carries the two readings a promised line can never carry — a
  * version off every promised line and the retired `legacy` capability — so
  * asserting it against a tree that does sit on a promised line must throw.
- * Keeping it outside the table is what lets the reverse controls stay live
- * while the promise spans more than one line.
+ * It is the only non-inert reading the reverse controls have, so the controls
+ * stay live while the promise is a single line.
  */
 export const FOREIGN_HOST_LINE = { version: "0.1.7-alpha.2", capability: "legacy" }
 
