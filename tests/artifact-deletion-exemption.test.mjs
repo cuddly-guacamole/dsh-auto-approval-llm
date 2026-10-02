@@ -270,21 +270,25 @@ test('the host pass-through is anchored: the assessment plannedCreates reach pla
   )
 })
 
-test('known interaction: a directory changer in the line costs the exemption', () => {
+test('known interaction: a directory changer carries the base across && only', () => {
   // Measured behaviour, pinned so it is a documented limitation rather than a
-  // surprise. Directory changers are deliberately kept out of the static fast
-  // paths (the analyzer cannot follow the resulting cwd), so a line containing
-  // one never reaches the all-allow merge and the segment-level exemption is
-  // discarded with it:
+  // surprise. A directory changer writes and reads nothing, so on its own it is
+  // not a risk — what it does is move the base the rest of the line is judged
+  // from, and across `&&` reaching the next segment proves the `cd` succeeded.
+  // The exemption is then decided against a target resolved from that base,
+  // which is strictly MORE precise than before rather than more permissive:
   //
   //   rm own.txt                  -> allow (exempted)
   //   rm own.txt && echo done     -> allow (exempted)
-  //   cd <dir> && rm own.txt      -> ask   (not exempted)
+  //   cd <ws> && rm own.txt       -> allow (exempted — target IS the artifact)
+  //   cd <ws>/sub && rm own.txt   -> ask   (target is NOT the artifact)
   //
-  // Fail-closed, and arguably right: under a changer a relative target's meaning
-  // is uncertain, so withholding a provenance-based allow is conservative. It is
-  // still worth pinning, because `cd dir && rm file` is a common idiom and the
-  // ask lands on the locked delete countdown, which no reviewer can answer.
+  // Across `;` / `|` / `&` reaching the next segment proves nothing — the `cd`
+  // may have failed — so the changer keeps the unrecognized verdict and the line
+  // still asks. That is what keeps the exemption sound: allowing the changer
+  // there while leaving the base where it was would resolve `cd /elsewhere; rm
+  // own.txt` inside the workspace and claim the exemption for a path the line
+  // never touches.
   const registry = sessionArtifact('C:/ws/scratch.txt')
   assert.equal(assessShell('rm scratch.txt', 'bash', roots, registry, owner).decision, 'allow')
 
@@ -294,7 +298,20 @@ test('known interaction: a directory changer in the line costs the exemption', (
 
   for (const command of ['cd C:/ws && rm scratch.txt', 'cd C:/ws && rm scratch.txt && echo done']) {
     const verdict = assessShell(command, 'bash', roots, registry, owner)
-    assert.equal(verdict.decision, 'ask', `${command}: the changer routes the line to classification`)
+    assert.equal(verdict.decision, 'allow', `${command}: the carried base resolves to the artifact`)
+    assert.equal(verdict.sessionArtifactDeletion, true, `${command}: the exemption still applies`)
+  }
+
+  // The base moves, so the exemption is decided against the resolved target
+  // rather than the workspace — a subdirectory no longer inherits the artifact.
+  const intoSubdir = assessShell('cd C:/ws/sub && rm scratch.txt', 'bash', roots, registry, owner)
+  assert.equal(intoSubdir.decision, 'ask', 'a moved base resolves the deletion elsewhere')
+  assert.notEqual(intoSubdir.sessionArtifactDeletion, true, 'no exemption for a path the line does not touch')
+
+  for (const separator of [';', '|', '&']) {
+    const command = `cd C:/elsewhere ${separator} rm scratch.txt`
+    const verdict = assessShell(command, 'bash', roots, registry, owner)
+    assert.equal(verdict.decision, 'ask', `${command}: across ${separator} the changer proves nothing`)
     assert.notEqual(verdict.sessionArtifactDeletion, true, `${command}: no exemption may be claimed`)
     assert.match(String(verdict.reason), /independent classification/, 'the reason names the changer as the cause')
   }

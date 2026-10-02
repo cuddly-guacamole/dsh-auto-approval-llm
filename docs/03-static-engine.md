@@ -10,7 +10,7 @@ host 编排在 `src/index.ts`，真正「长脑子」的静态规则引擎在 `s
 | `constants.ts` <span class="lnum">constants.ts#</span> | 141 | 数值阈值默认值**唯一事实源**：5/8/10s、3/20、4000、8s/1024，及学习族（阈值 3/TTL 30d/100 条/会话放行帽 50）；同时承载设置卡「默认放行工具」显示目录（显示镜像，非放行面） |
 | `risk-tokens.ts` <span class="lnum">risk-tokens.ts#</span> | 24 | HIGH 风险正则（NAME/REASON），供分类器与 policy 共用，防漂移 |
 | `paths.ts` <span class="lnum">paths.ts#</span> | 462 | 路径规范化（Windows 命名空间/NT 别名折叠、~ 展开、win32 小写）、受保护/关键路径判定、运行态文件名单 |
-| `shell.ts` <span class="lnum">shell.ts#</span> | 3613 | Bash/PowerShell 词法分解（sticky 正则状态机）＋ 整行熔断 ＋ 逐段静态分类 |
+| `shell.ts` <span class="lnum">shell.ts#</span> | 3712 | Bash/PowerShell 词法分解（sticky 正则状态机）＋ 整行熔断 ＋ 逐段静态分类 |
 | `policy.ts` <span class="lnum">policy.ts#</span> | 655 | 每次工具调用的确定性第一遍分类 `assessTool`（推断型、保留类型检查） |
 | `rules.ts` <span class="lnum">rules.ts#</span> | 459 | Claude-Code 风格声明规则解析/求值（纯函数，host 与浏览器共用） |
 | `classifier.ts` <span class="lnum">classifier.ts#</span> | 100 | 预分类提示词、参数脱敏、严格响应解析 |
@@ -98,6 +98,7 @@ flowchart TD
 ```
 
 - 只读名单刻意**不含** `cd`（会改变后续段 cwd 解析基准）。
+- **目录切换段不计效果，但按 `&&` 携带解析基准**（`effectiveCwdAfter`，<span class="lnum">shell.ts:LeffectiveCwdAfter</span>）：切换器（`cd`/`set-location`/`sl`）不读写任何东西，因此**只有它一个命令**的段判为无效果，判定基准交给后续段据此结算。基准只在 `&&` 上移动——进入下一段即证明该 `cd` 成功；跨 `;`/`|`/`&` 证明不了（`cd /nodir; printf x > package.json` 的 `cd` 失败、写入仍落在工作区），故切换器在那里保留「未识别」裁决，整行仍走分类。四类不可读的情形（动态、glob、无目标、拼写族不匹配）一律不移动基准。**识别不等于开口**：目标是凭据树、家目录中未开放的路径、DSH_HOME 或关键树时该段仍判 `ask`；带重定向的段（`cd x > out.txt` 是写）同样保留原裁决。附带副作用：删除的会话工件豁免改为按**携带后的基准**结算目标，`cd <ws> && rm own.txt` 仍命中而 `cd <ws>/sub && rm own.txt` 不再继承。残留假设是被 alias 遮蔽的 `cd`——静态平面看不见别名，此条件写在 `effectiveCwdAfter` 自身的契约里（<span class="lnum">cd-prefix-static-decision.test.mjs:L"alias-shadowing residual assumption"</span>）。
 - **时钟写是终裁**：`date` 的 `-s`/`--set` 家族（含 `--s`/`--se` 缩写、`-s2020-01-01` 融合、`-us…` 簇、`date --set=` 取值形态，组内行内由 opaque 目标 owner 回收）判**硬拒**，不再只是脱离只读快径。理由：改系统时钟既非会话任务、也无法被会话恢复——它会重定所有记录的时间线并可能使凭据/会话失效；留在 `ask` 层意味着「分类器判对」+「运维未开 timeoutAction=allow」两个前提同时成立才安全，而实测中 `date --se=2020-01-01` 被分类器读成「malformed read-only invocation」并自动放行、真的改动了机器时钟。只读拼写（`date`、`-u`、`+%s`、`-d @0`、`-r f`、`-I…`、`--iso-8601=…`）维持静态放行。
 - `routineInlineProbe`：`python -c` 只放行 import/print 字面量，`node -e` 只放行 require/console.log(process.version) —— 内联代码只认可「绝对安全」形态。
 - 危险 token 提取：`sensitiveMarker`（.ssh/.env/密钥关键词）、`dshHomeExfil`（4 组模式抓 DSH_HOME 外传）、`dynamicHomeTarget`（$HOME 动态目标）→ 全部绕过静态判定。

@@ -2189,6 +2189,53 @@ function effectiveCwdAfter(segment, shell, roots) {
     return resolved;
 }
 /**
+ * Whether a directory changer's resolved target may be read as a routine base.
+ *
+ * `effectiveCwdAfter` answers "can this changer be read"; this answers "may the
+ * path it selects be trusted as the base the rest of the line is judged from".
+ * The two are separate questions, and only the second one is a fence: a
+ * recognized changer into a credential tree or DSH_HOME must keep asking, so
+ * recognition never becomes an opening just because the spelling is readable.
+ *
+ * The home test is scoped rather than absolute. On a normal install the
+ * workspace and the plugin zone both live under the home root, so a bare
+ * `isWithin(roots.home, …)` would refuse `cd src`; only a home path outside
+ * every zone the operator opened is refused. DSH_HOME is refused outright,
+ * ahead of that test, because an allowed write subpath there is an opening for
+ * writes and not a statement that the tree is a routine place to stand.
+ */
+function isTrustedChangerBase(path, roots) {
+    if (sensitiveBasenameAt(path, roots))
+        return false;
+    if (isCriticalPath(path, roots))
+        return false;
+    if (roots.dshHome !== undefined && isWithin(normalizePath(roots.dshHome, roots.workspace, roots.home), path))
+        return false;
+    if (!isWithin(roots.home, path))
+        return true;
+    if (isWithin(roots.workspace, path))
+        return true;
+    const opened = [...(roots.trustedDirs ?? []), ...(roots.allowedDshSubpaths ?? [])];
+    return opened.some(root => isWithin(normalizePath(root, roots.workspace, roots.home), path));
+}
+/**
+ * The no-effect verdict for a segment whose only command is a directory changer.
+ *
+ * A changer writes nothing and reads nothing, so on its own it is not a risk —
+ * what it does is move the base for the rest of the line. Returning undefined
+ * keeps the existing per-segment verdict, which is what happens for a segment
+ * this is not for: a changer with no readable target, a target that is not a
+ * trusted base, and a segment that carries a redirection (`cd x > out.txt`
+ * writes, so it is more than a changer).
+ */
+function directoryChangerDecision(segment, roots, base) {
+    if (segment.writeTargets.length > 0)
+        return undefined;
+    if (!isTrustedChangerBase(base, roots))
+        return undefined;
+    return allowed(`directory changer carries no effect of its own; the rest of the line is judged from the directory it selects`);
+}
+/**
  * A token that makes the command (or its nested action) run in another
  * directory: env -C / git -C / make -C / --chdir / --directory shift the whole
  * command, while GNU find's -execdir / -okdir run the action in each matched
@@ -3478,14 +3525,66 @@ export function assessShell(source, shell, roots, artifacts, owner) {
             ? manualReview(`${shell} destructive command cannot be read statically: ${decomposition.reason}`)
             : semanticReview(`${shell} command requires independent classification because it cannot be read statically: ${decomposition.reason}`);
     }
-    // The assess plane never advances a changer base, so it applies the same
-    // per-line rule as the hard-deny plane: only a single, literally readable
-    // command may carry the opening; every other line takes the strict fuse.
+    // The assess plane advances a changer base exactly as the hard-deny plane
+    // does — across `&&` only — so it keeps the same per-line rule for the
+    // development-zone opening: only a single, literally readable command may
+    // carry the opening; every other line takes the strict fuse. A carried base
+    // moves `workspace` for the fuses and never the opening.
     const openingTrusted = roots.zoneFuseTrusted !== false
         && decomposition.segments.length === 1
         && zoneOpeningTrusted(decomposition.segments[0]);
-    const assessRoots = openingTrusted ? roots : { ...roots, zoneFuseTrusted: false };
-    const assessments = decomposition.segments.map(segment => assessSegment(segment, shell, assessRoots, artifacts, owner));
+    // `any[]` on purpose, not laziness: `decomposition` comes from this
+    // `@ts-nocheck` module, so the `.map()` this loop replaces yielded `any[]`
+    // and `assessShell`'s return type stayed assignable to the policy plane's
+    // `ToolAssessment`. Letting the evolving array infer a real union surfaces
+    // the helpers' widened `decision: string` and breaks that assignment. The
+    // element types are the module's business; this loop only sequences them.
+    const assessments: any[] = [];
+    let changerBase;
+    for (let index = 0; index < decomposition.segments.length; index += 1) {
+        const segment = decomposition.segments[index];
+        // Reaching a later segment in an `&&` chain proves the changer before it
+        // succeeded, so the shell really is standing there. Across `;`/`|`/`&`
+        // it proves nothing — `cd /nodir; printf x > package.json` fails its
+        // `cd` and still writes into the workspace — so the base must not move.
+        if (segment.precededBy !== '' && segment.precededBy !== '&&')
+            changerBase = undefined;
+        const segmentRoots = {
+            ...(changerBase !== undefined ? { ...roots, workspace: changerBase } : roots),
+            zoneFuseTrusted: openingTrusted,
+        };
+        // One read of the changer per segment. `undefined` means either "not a
+        // changer" or "a changer whose target cannot be read statically" (a
+        // dynamic, globbed or missing target, or a spelling-family mismatch) —
+        // both keep the existing per-segment verdict.
+        const next = effectiveCwdAfter(segment, shell, segmentRoots);
+        // The base moves on every recognized changer, exactly as the hard-deny
+        // plane does, and is cleared at the top of the next iteration when the
+        // separator was not `&&`. This must happen BEFORE the no-effect verdict
+        // short-circuits: the segment after a changer is the one that reads it.
+        if (next !== undefined)
+            changerBase = next;
+        // The no-effect verdict is gated on the base actually moving, so it looks
+        // at the segment that FOLLOWS rather than the one before. A changer whose
+        // successor is reached by `;`/`|`/`&` may still have moved the shell, and
+        // a no-effect allow there would judge the remainder against a base the
+        // shell may not be at: `cd /elsewhere; rm scratch.txt` would then resolve
+        // the deletion inside the workspace and claim the session-artifact
+        // exemption for a path the line never touches. Keeping the unrecognized
+        // verdict there routes the whole line to classification, as it does today.
+        // A changer with no successor stands alone: it moves no base, so it is a
+        // no-effect line of its own.
+        const successor = decomposition.segments[index + 1]?.precededBy;
+        const carries = successor === undefined || successor === '&&';
+        const changerVerdict = next === undefined || !carries
+            ? undefined
+            : directoryChangerDecision(segment, segmentRoots, next);
+        if (changerVerdict !== undefined) {
+            assessments.push(changerVerdict);
+            continue;
+        }
+        assessments.push(assessSegment(segment, shell, segmentRoots, artifacts, owner));
+    }
     // A segment-level hard deny (e.g. the nested-execution DSH_HOME write
     // fuse) must propagate to the whole line, not degrade into a classifier
     // ask via the generic merge below.

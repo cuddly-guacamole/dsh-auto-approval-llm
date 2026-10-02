@@ -45,7 +45,7 @@ src/
 │    ├─ runtime-paths.ts 293  运行态文件唯一路径 owner（`<DSH_HOME>/auto-approval-llm/` 规范位置；目录无法创建/拒绝写入时 fail-closed——append 失败返回 undefined，由调用方拒绝裁决，不回退包根、不搬家；open 阶段错误允许同路径重试一次，写后错误不重试）
 │    ├─ runtime-stores.ts 80  启动期持久化存储装载（history / learning / latency），在 apply() 内 setRuntimeStateDir() 之后
 │    ├─ session-introspect.ts 78  只读会话内省与倒计时动作：会话事件/权限服务派生值，无模块态、无文件、无审计副作用
-│    ├─ shell.ts         3613 bash/pwsh 词法分解 + 整行熔断 + 逐段静态分类（最大单文件）
+│    ├─ shell.ts         3712 bash/pwsh 词法分解 + 整行熔断 + 逐段静态分类（最大单文件）
 │    ├─ symlink.ts       182  符号链接创建与目标校验
 │    ├─ tool-stats.ts    96   工具调用统计收集
 │    ├─ trust.ts         307  web 路由信任平面（loopback/LAN 边界、Host 伪造防护、在线端点 URL 校验）
@@ -78,7 +78,7 @@ tests/
 ├─ loop-guard.test.mjs（循环键稳定性/回退、严格连续+fire-and-reset 状态机、FIFO 64、阈值钳制与 resolveConfig 映射）/ loop-guard-wiring.test.mjs（四站点成对锚、allowlist 与 rule-allow 豁免负向切片、跨面标记读位置与 one-shot、pinned 形状先于 learnAttempt、门不写 history 不碰熔断、disposal/sweep 有界、audit-query 渲染）
 ├─ host-lines.test.mjs（宿主承诺线：承诺表逐 tuple 一行 + 键名即线族、精确钉版、装错线/读错档位/门禁放宽的反向对照、补丁组合表解析；本机安装线驱动真实 permission-presets 服务，装的不是承诺线即判红）
 ├─ host-surface-coverage.mjs（契约面读数规则：具名不可评估行 + 评估行数下限 + 两个控制项未跑即失败）+ host-surface-coverage-collapse.test.mjs（塌缩读数、反向控制、下限独立生效、装配锚）
-└─ 合计 228 个 tests/*.test.mjs（node --test 全绿基线）
+└─ 合计 229 个 tests/*.test.mjs（node --test 全绿基线）
 scripts/
 ├─ build.sh             （DSH 源码仓库布局）tsc 编译 src→lib
 ├─ clean-lib.mjs        构建前清空 lib/（tsc 不删除已删源的旧产物）
