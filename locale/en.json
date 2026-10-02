@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Auto Approval",
+    "description": "LLM-assisted auto approval with timeout fallback for DeepSeek Harness"
+  }
+}
