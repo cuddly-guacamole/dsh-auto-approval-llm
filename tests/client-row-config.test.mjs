@@ -217,7 +217,7 @@ test('a key the config plane does not project never reaches a write', () => {
   // Precondition, so the filter is load-bearing: the payload really does carry
   // host-derived keys today.
   const valueOf = block(CLIENT, 'function valueOf(')
-  for (const key of ['trustedDirs', 'breakerAntiHijackMs']) {
+  for (const key of ['breakerAntiHijackMs', 'reviewMaxRetries']) {
     assert.ok(valueOf.includes(key), `valueOf emits the host-derived ${key}`)
     assert.ok(HOST_ONLY_KEYS.includes(key), `${key} is host-owned`)
     assert.ok(!EDITABLE_CONFIG_KEYS.includes(key), `${key} is not the form's to write`)

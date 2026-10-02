@@ -1,7 +1,7 @@
 # 12 · 配置全景
 > *58 keys, one source of truth*
 
-58 键分两类：**43 个可编辑键**被宿主标为 volatile，由 row 配置页的宿主 form 读写；**15 个 host-only 键**只由 patch / `settings.yaml` 配置，在设置页只读展示、不可提交（清单见文末「host-only 键保护」）。
+58 键分两类：**44 个可编辑键**被宿主标为 volatile，由 row 配置页的宿主 form 读写；**14 个 host-only 键**只由 patch / `settings.yaml` 配置，在设置页只读展示、不可提交（清单见文末「host-only 键保护」）。
 
 ## 全部配置键（src/index.ts Config schema Z.object 原文）
 
@@ -57,7 +57,7 @@
 | `learningThreshold` | 3 | 触发学习放行所需的人工确认次数；保存时钳入 [2,10]（clampLearningThreshold），越界值由 resolveConfig 发 warn（<span class="lnum">config-normalize.ts:L"clamping learningThreshold"</span>） |
 | `directHumanEnabled` | false | 直接人工通道：agent 可调用 `dsa_request_user` 把后续操作路由给人工而非 LLM 分类器；默认关=零行为差异。工具仅在开启时于启动注册（工具集不可热换——开启需重启），审批通道读取实时，关掉立即停用已注册工具 |
 | `slashCommandsEnabled` | false | 命令面板注册 `/approval-mode` `/approval-reset` `/approval-reset-all`（评审模式查看/设置 + 熔断重置）。默认关=零命令表面积。命令集不可热换——仅在开启时于启动注册（开启需重启）；每个 handler 读取该开关实时，运行中关掉立即停用已注册命令 |
-| `<span class="badgeok">host-only ×15</span>` | — | workspaceRoot / dshHome / tempRoots / **trustedDirs** / **trustedDshSubpaths** / maintenanceDshPaths / classifierTimeoutMs(8s,100-60000) / classifierMaxOutputTokens(1024,64-4096) / maxArgsChars / notifyUser / **rulesDryRun** / **breakerAntiHijackMs** / **reviewMaxRetries** / **loopDetectionThreshold** / **autoSwitchPolicyToAsk**（<span class="lnum">decision.ts:LHOST_ONLY_KEYS</span>；宿主只把 43 个可编辑键标为 volatile，非 volatile 键不进 row form、写入被直接拒，卡片保存不会抹掉）。**归属不变量**：没有设置卡控件的键必须在此名单内（<span class="lnum">settings-key-ownership.test.mjs:L"no silent-delete gap"</span>）。`reviewerContextFacts` / `editDiffPreview` 两键已退役：host-only 名单与 schema 均不再含它们，settings.yaml 里的残留值被静默忽略（见「容易误解的七件事」第 3 件） |
+| `<span class="badgeok">host-only ×14</span>` | — | workspaceRoot / dshHome / tempRoots / **trustedDshSubpaths** / maintenanceDshPaths / classifierTimeoutMs(8s,100-60000) / classifierMaxOutputTokens(1024,64-4096) / maxArgsChars / notifyUser / **rulesDryRun** / **breakerAntiHijackMs** / **reviewMaxRetries** / **loopDetectionThreshold** / **autoSwitchPolicyToAsk**（<span class="lnum">decision.ts:LHOST_ONLY_KEYS</span>；宿主只把 44 个可编辑键标为 volatile，非 volatile 键不进 row form、写入被直接拒，卡片保存不会抹掉）。**归属不变量**：没有设置卡控件的键必须在此名单内（<span class="lnum">settings-key-ownership.test.mjs:L"no silent-delete gap"</span>）。`reviewerContextFacts` / `editDiffPreview` 两键已退役：host-only 名单与 schema 均不再含它们，settings.yaml 里的残留值被静默忽略（见「容易误解的七件事」第 3 件） |
 
 ## 三处设计亮点
 

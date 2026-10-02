@@ -295,7 +295,6 @@ export const HOST_ONLY_KEYS = [
   'workspaceRoot',
   'dshHome',
   'tempRoots',
-  'trustedDirs',
   'trustedDshSubpaths',
   'maintenanceDshPaths',
   'classifierTimeoutMs',
@@ -365,6 +364,7 @@ export const EDITABLE_CONFIG_KEYS = [
   'protectedAutoReview',
   'learningEnabled',
   'learningThreshold',
+  'trustedDirs',
 ]
 
 /**

@@ -444,7 +444,7 @@ test('a batch with nothing to offer reads as no batch', () => {
 test('the op builder is the last gate: no payload can name a field the plane does not own', () => {
   // Whatever an upstream layer hands over — a route answer, a future key the two
   // tables disagree about — the object that becomes ops is projected here.
-  const ops = buildMutateOps({ value: { debug: false, trustedDirs: ['C:/x'], notAConfigKey: 1 } })
+  const ops = buildMutateOps({ value: { debug: false, tempRoots: ['C:/x'], notAConfigKey: 1 } })
   assert.deepEqual(ops.map((op) => op.path[0]), ['debug'], 'only a card-owned field becomes a set op')
   assert.deepEqual(
     buildMutateOps({ unset: [...HOST_ONLY_KEYS, 'notAConfigKey', 'debug'] }).map((op) => op.path[0]),
@@ -452,7 +452,7 @@ test('the op builder is the last gate: no payload can name a field the plane doe
     'an unset is projected by the same rule',
   )
   assert.ok(EDITABLE_CONFIG_KEYS.includes('debug'), 'precondition: the surviving key is card-owned')
-  assert.ok(!EDITABLE_CONFIG_KEYS.includes('trustedDirs'), 'precondition: the dropped key is host-owned')
+  assert.ok(!EDITABLE_CONFIG_KEYS.includes('tempRoots'), 'precondition: the dropped key is host-owned')
 })
 
 // ── silence ───────────────────────────────────────────────────────────────

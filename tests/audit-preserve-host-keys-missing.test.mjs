@@ -4,10 +4,10 @@
  *
  * The protection only replaced keys already present in `current`: while the
  * settings namespace was still empty (before the first card save), a crafted
- * POST could plant `workspaceRoot` / `trustedDirs` / `dshHome` into
- * settings.yaml and repoint the roots — exactly what the owner comment says
- * must not happen. Empty-current submissions are the normal first-save state,
- * not an edge case.
+ * POST could plant `workspaceRoot` / `tempRoots` / `trustedDshSubpaths` /
+ * `dshHome` into settings.yaml and repoint the roots — exactly what the owner
+ * comment says must not happen. Empty-current submissions are the normal
+ * first-save state, not an edge case.
  *
  * Run: node --test tests/audit-preserve-host-keys-missing.test.mjs
  */
@@ -20,10 +20,10 @@ test('an empty stored namespace cannot gain a host-only key through POST', () =>
     enabled: true,
     workspaceRoot: 'C:/evil',
     dshHome: 'C:/evil/.dsh',
-    trustedDirs: ['C:/evil'],
+    trustedDshSubpaths: ['C:/evil/.dsh/skills'],
     tempRoots: ['C:/evil'],
   })
-  for (const key of ['workspaceRoot', 'dshHome', 'trustedDirs', 'tempRoots']) {
+  for (const key of ['workspaceRoot', 'dshHome', 'trustedDshSubpaths', 'tempRoots']) {
     assert.equal(key in out, false, `${key} must be stripped when nothing is stored`)
   }
   assert.equal(out.enabled, true, 'card keys survive untouched')
@@ -44,8 +44,8 @@ test('every HOST_ONLY member is covered by the strip, not just the root keys', (
 })
 
 test('the stored-value-wins contract keeps its shape (control, unchanged)', () => {
-  const out = preserveHostKeys({ workspaceRoot: 'C:/ws', trustedDirs: ['D:/t'] }, { enabled: true })
+  const out = preserveHostKeys({ workspaceRoot: 'C:/ws', tempRoots: ['D:/t'] }, { enabled: true })
   assert.equal(out.workspaceRoot, 'C:/ws')
-  assert.deepEqual(out.trustedDirs, ['D:/t'])
+  assert.deepEqual(out.tempRoots, ['D:/t'])
   assert.equal(out.enabled, true)
 })

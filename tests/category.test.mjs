@@ -21,7 +21,7 @@ import { LEARNABLE_HOOK_SITES } from '../lib/index.js'
 import { isWithin, normalizePath, runtimeStateTargetInZone } from '../lib/auto/paths.js'
 import { assessShell, hardDenyShellReason, runtimeStateReadHits } from '../lib/auto/shell.js'
 import { assessTool } from '../lib/auto/policy.js'
-import { riskFromAssessment, HOST_ONLY_KEYS } from '../lib/auto/decision.js'
+import { riskFromAssessment, HOST_ONLY_KEYS, EDITABLE_CONFIG_KEYS } from '../lib/auto/decision.js'
 
 const roots = { workspace: 'C:/ws', home: 'C:/Users/u', dshHome: 'C:/Users/u/.dsh', tempRoots: [] }
 const aggressive = { ...roots, mode: 'aggressive' }
@@ -730,8 +730,9 @@ test('L3: directive wiring end-to-end via categoryDirectiveFor on real execution
 })
 
 // ── C9/C10 · host-only ownership + client tables ───────────────────────────
-test('T70: trustedDirs is host-only; categoryPolicy/categoryMode are not', () => {
-  assert.ok(HOST_ONLY_KEYS.includes('trustedDirs'))
+test('T70: trustedDirs is card-owned; categoryPolicy/categoryMode are neither host-only', () => {
+  assert.ok(!HOST_ONLY_KEYS.includes('trustedDirs'))
+  assert.ok(EDITABLE_CONFIG_KEYS.includes('trustedDirs'))
   assert.ok(!HOST_ONLY_KEYS.includes('categoryPolicy'))
   assert.ok(!HOST_ONLY_KEYS.includes('categoryMode'))
 })

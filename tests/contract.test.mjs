@@ -278,15 +278,15 @@ test('preserveHostKeys: a submitted host-only value never overrides the stored o
   assert.equal(out.workspaceRoot, 'old')
 })
 
-test('preserveHostKeys: trustedDirs is host-only and survives a card save that omits it', () => {
-  const out = preserveHostKeys({ trustedDirs: ['D:/t'], workspaceRoot: 'C:/ws' }, { enabled: true })
-  assert.deepEqual(out.trustedDirs, ['D:/t'])
+test('preserveHostKeys: a host-only array value survives a card save that omits it', () => {
+  const out = preserveHostKeys({ tempRoots: ['D:/t'], workspaceRoot: 'C:/ws' }, { enabled: true })
+  assert.deepEqual(out.tempRoots, ['D:/t'])
   assert.equal(out.workspaceRoot, 'C:/ws')
 })
 
-test('preserveHostKeys: a submitted trustedDirs never overrides the stored one', () => {
-  const out = preserveHostKeys({ trustedDirs: ['old'] }, { trustedDirs: ['evil'], enabled: true })
-  assert.deepEqual(out.trustedDirs, ['old'])
+test('preserveHostKeys: a submitted host-only array never overrides the stored one', () => {
+  const out = preserveHostKeys({ tempRoots: ['old'] }, { tempRoots: ['evil'], enabled: true })
+  assert.deepEqual(out.tempRoots, ['old'])
 })
 
 test('normalizeTimeoutAction: legacy/pending values collapse to reject, allow stays', () => {

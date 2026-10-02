@@ -250,7 +250,7 @@ interface Draft {
   categoryMode: 'standard' | 'aggressive'
   privilegeAutoReview: 'on' | 'off'
   protectedAutoReview: 'on' | 'off'
-  trustedDirs: string[]
+  trustedDirs: string
   learningEnabled: 'on' | 'off'
   learningThreshold: string
 }
@@ -303,7 +303,7 @@ function draftOf(value: any): Draft {
     categoryMode: value?.categoryMode === 'aggressive' ? 'aggressive' : 'standard',
     privilegeAutoReview: value?.privilegeAutoReview === true ? 'on' : 'off',
     protectedAutoReview: value?.protectedAutoReview === true ? 'on' : 'off',
-    trustedDirs: Array.isArray(value?.trustedDirs) ? [...value.trustedDirs] : [],
+    trustedDirs: (value?.trustedDirs ?? []).join('\n'),
     learningEnabled: value?.learningEnabled === true ? 'on' : 'off',
     learningThreshold: String(value?.learningThreshold ?? THRESHOLD_DEFAULTS.learningThreshold),
   }
@@ -348,7 +348,7 @@ function valueOf(draft: Draft): any {
     categoryMode: draft.categoryMode,
     privilegeAutoReview: draft.privilegeAutoReview === 'on',
     protectedAutoReview: draft.protectedAutoReview === 'on',
-    trustedDirs: draft.trustedDirs,
+    trustedDirs: list(draft.trustedDirs),
     learningEnabled: draft.learningEnabled === 'on',
     learningThreshold: Math.max(2, Math.min(10, intOr(draft.learningThreshold, THRESHOLD_DEFAULTS.learningThreshold))),
   }
@@ -1105,6 +1105,7 @@ function SettingsSection({ chrome = 'card', form }: { chrome?: 'card' | 'plain';
     || draft.categoryMode !== baseDraft.categoryMode
     || draft.privilegeAutoReview !== baseDraft.privilegeAutoReview
     || draft.protectedAutoReview !== baseDraft.protectedAutoReview
+    || draft.trustedDirs !== baseDraft.trustedDirs
   const learningDirty = cardDirty(LEARNING_KEYS)
   const utilityDirty = cardDirty(UTILITY_KEYS)
   const invalidKeys = findInvalidConfigKeys(snapshot.value)
@@ -2145,6 +2146,12 @@ function SettingsSection({ chrome = 'card', form }: { chrome?: 'card' | 'plain';
       options: categoryModeOptions(),
       onChange: (v: string) => update({ categoryMode: v as 'standard' | 'aggressive' }),
     }), t('settings.category.modeHint')),
+    field(t('settings.category.trustedDirs'), React.createElement('textarea', {
+      value: draft.trustedDirs,
+      onChange: (e: any) => update({ trustedDirs: e.target.value }),
+      rows: 4,
+      className: 'dsa-textarea',
+    }), t('settings.category.trustedDirsHint')),
     row(t('settings.category.privilegeAutoReview'), React.createElement(CapsuleSelect, {
       value: draft.privilegeAutoReview,
       options: onOffOptions(),
@@ -2192,7 +2199,7 @@ function SettingsSection({ chrome = 'card', form }: { chrome?: 'card' | 'plain';
       size: 'sm',
       disabled: saving || !snapshot.writable,
       onClick: () => {
-        setDraft({ ...draft, categoryPolicy: baseDraft.categoryPolicy ?? {}, categoryMode: baseDraft.categoryMode ?? 'standard', privilegeAutoReview: baseDraft.privilegeAutoReview ?? 'off', protectedAutoReview: baseDraft.protectedAutoReview ?? 'off' })
+        setDraft({ ...draft, categoryPolicy: baseDraft.categoryPolicy ?? {}, categoryMode: baseDraft.categoryMode ?? 'standard', privilegeAutoReview: baseDraft.privilegeAutoReview ?? 'off', protectedAutoReview: baseDraft.protectedAutoReview ?? 'off', trustedDirs: baseDraft.trustedDirs ?? '' })
         setCardStatus({ id: 'category', kind: 'ok', text: '' })
       },
     }, t('settings.discard')),
@@ -2200,7 +2207,7 @@ function SettingsSection({ chrome = 'card', form }: { chrome?: 'card' | 'plain';
       variant: 'primary',
       size: 'sm',
       disabled: saving || !snapshot.writable || !categoryDirty,
-      onClick: () => saveCard(['categoryPolicy', 'categoryMode', 'privilegeAutoReview', 'protectedAutoReview'], 'category'),
+      onClick: () => saveCard(['categoryPolicy', 'categoryMode', 'privilegeAutoReview', 'protectedAutoReview', 'trustedDirs'], 'category'),
     }, saving ? t('settings.saving') : t('settings.save')),
   )
 

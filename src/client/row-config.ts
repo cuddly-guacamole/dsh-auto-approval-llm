@@ -84,12 +84,12 @@ const HOST_OWNED = new Set<string>(HOST_ONLY_KEYS)
  * Path ops for one write, restricted to the keys the Host config plane accepts.
  *
  * The plane projects only fields under a volatile ancestor and refuses a write
- * to any other key, so a host-derived value such as `trustedDirs` is dropped
- * here rather than failing the whole save: the page shows those keys read-only
- * and never submits them. The host-owned keys are dropped by name as well as by
- * the card's own list, so a payload that carries one anyway — a dirty answer
- * from the route, a future key the two lists disagree about — still cannot reach
- * the plane and cannot reach the operator's configuration.
+ * to any other key, so a host-derived value such as `breakerAntiHijackMs` is
+ * dropped here rather than failing the whole save: the page shows those keys
+ * read-only and never submits them. The host-owned keys are dropped by name as
+ * well as by the card's own list, so a payload that carries one anyway — a
+ * dirty answer from the route, a future key the two lists disagree about —
+ * still cannot reach the plane and cannot reach the operator's configuration.
  *
  * A field whose value is `undefined` is dropped too — an op serialized without
  * its value clears the field on the Host, so an unset stays something the caller
