@@ -1,9 +1,10 @@
 /**
- * Host-line contract: exactly one line is promised — the `0.2.0-rc.2` line the
- * user actually runs, which carries the modern shape (`catalog` +
- * `registerAuto`) and is driven through the same-signature migration. One line
- * per tuple, appended when upstream enters a new tuple's alpha. The peer range
- * is an installation-admission surface, not a support claim, so the promise
+ * Host-line contract: one line per tuple is promised — `0.2.0-rc.2` and
+ * `0.2.1-alpha.1`, the lines the user actually runs. Both carry the modern shape
+ * (`catalog` + `registerAuto`), measured on each line's real service rather than
+ * read from its source, and both are driven through the same-signature migration.
+ * One line per tuple, appended when upstream enters a new tuple's alpha. The peer
+ * range is an installation-admission surface, not a support claim, so the promise
  * lives here in `HOST_LINES` and nowhere else. This file pins the promised
  * table, the exact version pinning, the reverse controls that make a wrong-tree
  * acceptance impossible, and the shipped preset composition. The last case
@@ -45,12 +46,14 @@ const patch = readFileSync(join(ROOT, "cordis.patch.yml"), "utf8")
 const INERT_CONTROL_LINE = { version: "0.1.5-rc.2", capability: "unknown" }
 
 /** The key each promised tuple is addressed by, so a drift between them is a failure. */
-const KEY_OF_TUPLE = { "0.2.0": "line020" }
+const KEY_OF_TUPLE = { "0.2.0": "line020", "0.2.1": "line021" }
 
-test("the promised line table carries the line the user runs", () => {
-  assert.deepEqual(Object.keys(HOST_LINES).sort(), ["line020"])
+test("the promised line table carries the lines the user runs", () => {
+  assert.deepEqual(Object.keys(HOST_LINES).sort(), ["line020", "line021"])
   assert.equal(HOST_LINES.line020.version, "0.2.0-rc.2")
   assert.equal(HOST_LINES.line020.capability, "modern")
+  assert.equal(HOST_LINES.line021.version, "0.2.1-alpha.1")
+  assert.equal(HOST_LINES.line021.capability, "modern")
 })
 
 test("the promise spans one line per tuple, and every key names its own tuple", () => {
@@ -165,11 +168,12 @@ test("a line's capability field is load-bearing in both directions", () => {
     mustReject(line.version + " re-read as the retired legacy shape", () => assertCapability(line, "legacy"))
     mustReject(line.version + " re-read as a capability nobody returns", () => assertCapability(line, "modern-typo"))
   }
-  // The promise is a single line, so there is no second promised reading left
-  // for the sentinel to be refused against; the loop above already walked every
-  // promised line, and a table whose capability drifted onto the sentinel's
-  // `legacy` reading — which would make the control below pass vacuously — is
-  // refused by the `assert.notEqual` in the "not a registered line" case.
+  // The promise spans two lines but only one *reading*: both rows read `modern`,
+  // so there is no second distinct promised reading for the sentinel to be
+  // refused against, and the loop above already walked every promised line. A
+  // table whose capability drifted onto the sentinel's `legacy` reading — which
+  // would make the control below pass vacuously — is refused by the
+  // `assert.notEqual` in the "not a registered line" case.
   mustReject("the foreign sentinel read as the promised reading", () => assertCapability(FOREIGN_HOST_LINE, HOST_LINES.line020.capability))
 })
 

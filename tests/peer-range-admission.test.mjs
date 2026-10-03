@@ -1,21 +1,22 @@
 /**
  * Peer-range admission contract. The five `@deepseek-ai/dsh-*` peers promise one
- * host line per tuple — `0.2.0-rc.2`, the line the user actually runs — through
- * a single arm `>=0.2.0-rc.2 <2`.
+ * host line per tuple — `0.2.0-rc.2` and `0.2.1-alpha.1`, the lines the user
+ * actually runs — through two arms `>=0.2.0-rc.2 <2 || >=0.2.1-alpha.1 <2`.
  *
  * The host evaluates peers with `semver.satisfies(runtimeVersion, range, { includePrerelease: true })`
- * (`dsh-app-boot/lib/index.js:300`). The arm used to sit one tuple below the
- * promised line, so the flag was load-bearing: the plain reading — the rule
- * implemented by `satisfies()` below, where a prerelease must be named by a
- * comparator in its own major.minor.patch tuple — refused a promised line whose
- * tuple no comparator carried. The floor is now the promised line itself, which
- * shares its tuple, so both readings admit it and the flag carries nothing for
- * this package. That is asserted here rather than assumed, so widening the arm
- * back across a tuple without re-reading this case is caught.
+ * (`dsh-app-boot/lib/index.js:300`). The plain reading — the rule implemented by
+ * `satisfies()` below, where a prerelease must be named by a comparator in its
+ * own major.minor.patch tuple — is what decides the shape of the arms. A single
+ * arm floored at `0.2.0-rc.2` admits that line under both readings, but refuses
+ * `0.2.1-alpha.1` under the plain one, because no comparator carried the `0.2.1`
+ * tuple. The promise therefore spans two tuples, and one arm per promised tuple
+ * is the minimum that admits every promised line on its own rather than on the
+ * flag alone. The flag stays pinned for each line as well, so a host that
+ * stopped passing it is a red suite rather than a refused install nobody sees.
  *
- * Raising the floor to the promised line is what drops `0.1.7-rc.2`,
- * `0.1.7-rc.1`, `0.1.7-alpha.2` and `0.1.5-rc.2` out of admission; all four are
- * pinned false below, so a later relaxation of the range is caught here.
+ * Raising the floor dropped `0.1.7-rc.2`, `0.1.7-rc.1`, `0.1.7-alpha.2` and
+ * `0.1.5-rc.2` out of admission; all four are pinned false below, so a later
+ * relaxation of the range is caught here.
  *
  * Admission is nevertheless NOT a support claim: `<2` is only the range's upper
  * bound, untested lines inside the range are unsupported, and the support claim
@@ -38,8 +39,8 @@ import { HOST_LINES } from "../scripts/test-host-lines.mjs"
 
 const ROOT = process.cwd()
 
-/** The admission range promised by the dsh peers. */
-const EXPECTED_RANGE = ">=0.2.0-rc.2 <2"
+/** The admission range promised by the dsh peers: one bounded arm per promised tuple. */
+const EXPECTED_RANGE = ">=0.2.0-rc.2 <2 || >=0.2.1-alpha.1 <2"
 
 /** Application-level peer that is not a host line and is not part of this contract. */
 const CORDIS_PEER = "@deepseek-ai/cordis"
@@ -136,14 +137,16 @@ function compare(left, right) {
 }
 
 /**
- * The truth table the single arm must produce, measured against the installed
- * `semver` package. `0.1.7-rc.2` — the line the promise used to span alongside
- * `0.2.0` — sitting at false is the point of the raise: it is not promised any
- * more, so it must not stay installable, and a later lowering back across the
- * tuple is caught here.
+ * The truth table the arms must produce, measured against the installed
+ * `semver` package. Both promised lines sit at true — each is named by the arm
+ * carrying its own tuple, so the plain reading admits it without the flag.
+ * `0.1.7-rc.2` — a line the promise used to span — sitting at false is the point
+ * of the raised floor: it is not promised any more, so it must not stay
+ * installable, and a later lowering back across the tuple is caught here.
  */
 const TRUTH_TABLE = [
   ["0.2.0-rc.2", true],
+  ["0.2.1-alpha.1", true],
   ["0.1.7-rc.2", false],
   ["0.1.7-rc.1", false],
   ["0.1.7", false],
@@ -157,7 +160,7 @@ const TRUTH_TABLE = [
   ["0.1.5-rc.2", false],
 ]
 
-test("the five dsh peers carry the promised single-arm admission range", () => {
+test("the five dsh peers carry the promised admission range", () => {
   assert.equal(dshPeers.length, 5)
   assert.deepEqual(
     dshPeers.map(([name]) => name).sort(),
@@ -174,45 +177,56 @@ test("the five dsh peers carry the promised single-arm admission range", () => {
   }
 })
 
-test("the range is one arm; dropping the second arm retired the lines below the floor", () => {
-  assert.equal(EXPECTED_RANGE.split("||").length, 1)
+test("the range is one bounded arm per promised tuple, and still refuses the lines below the floor", () => {
+  // One arm per promised tuple, and no more: the promise spans two tuples, so
+  // two arms is the count that states it. A third arm would admit a tuple the
+  // promise does not name, which is a claim this file exists to keep out.
+  const arms = EXPECTED_RANGE.split("||")
+  const promisedTuples = new Set(Object.values(HOST_LINES).map(line => line.version.split("-")[0]))
+  assert.equal(arms.length, promisedTuples.size, "the range does not carry one arm per promised tuple")
   for (const [name, range] of dshPeers) {
-    assert.equal(range.split("||").length, 1, `${name} grew a second arm`)
-    // `0.1.7-rc.2` left the promise with this range: the floor rose onto the
-    // promised `0.2.0` line, so the line it used to sit below is now refused.
+    assert.equal(range.split("||").length, arms.length, `${name} disagrees with the promised arm count`)
+    // `0.1.7-rc.2` left the promise when the floor rose onto the `0.2.0` tuple,
+    // so the line it used to sit below is refused by every arm.
     assert.equal(satisfies("0.1.7-rc.2", range), false, `${name} must refuse the dropped 0.1.7 line`)
     assert.equal(satisfies("0.1.7-alpha.2", range), false, `${name} must refuse the retired alpha line`)
     assert.equal(satisfies("0.1.5-rc.2", range), false, `${name} must refuse the retired rc line`)
   }
 })
 
-test("the arm is one bounded comparator set whose floor names the lowest promised line", () => {
-  assert.match(EXPECTED_RANGE, /^>=[^ ]+ <\d+$/)
-  for (const [name, range] of dshPeers) {
-    assert.match(range, /^>=[^ ]+ <\d+$/, `${name} is not a single bounded arm`)
-  }
-  // The floor is the *lowest* promised line, not every promised line. It is the
-  // only one here, so the two coincide — but the rule is what is pinned: a
-  // floor that rose above a promised line would refuse it at install time; a
-  // promised line below the floor is the same failure seen from the other side.
-  const floor = EXPECTED_RANGE.split(" ")[0].slice(2)
-  for (const [name, range] of dshPeers) assert.equal(range.split(" ")[0].slice(2), floor, `${name} floor drifted`)
+test("every arm is a bounded comparator set floored on a promised line", () => {
   const promised = Object.values(HOST_LINES).map(line => line.version)
-  assert.equal(floor, promised.slice().sort()[0], "the floor is not the lowest promised line: " + promised.join(", "))
-  for (const version of promised) {
-    assert.ok(compare(parse(version), parse(floor)) >= 0, version + " is promised but sits below the floor " + floor)
+  const floors = []
+  for (const arm of EXPECTED_RANGE.split("||")) {
+    assert.match(arm.trim(), /^>=[^ ]+ <\d+$/, "an arm is not a single bounded comparator set")
+    floors.push(arm.trim().split(" ")[0].slice(2))
+  }
+  // Each floor names a promised line, and the promised lines are covered once
+  // each: a floor that rose above a promised line would refuse it at install
+  // time, and a duplicate floor would leave a promised tuple unnamed.
+  assert.deepEqual(floors.slice().sort(), promised.slice().sort(), "the arms and the promised lines disagree")
+  for (const [name, range] of dshPeers) {
+    assert.deepEqual(range.split("||").map(arm => arm.trim().split(" ")[0].slice(2)).sort(), floors.slice().sort(), `${name} floors drifted`)
+    // Each promised line is admitted by the arm floored on that very line. This
+    // is the property the whole range shape exists for, and it is checked
+    // against the arm alone rather than against the joined range, so a line
+    // riding in on some other arm cannot satisfy it.
+    for (const version of promised) {
+      const ownArm = range.split("||").map(arm => arm.trim()).filter(arm => arm.split(" ")[0].slice(2) === version)
+      assert.equal(ownArm.length, 1, `${name}: ${version} has no arm of its own to be admitted by`)
+      assert.equal(satisfies(version, ownArm[0]), true, `${name}: the arm floored on ${version} must admit it`)
+    }
   }
 })
 
-test("the floor is the promised line, so the plain reading admits it without the flag", () => {
+test("the plain reading admits every promised line without the flag", () => {
   // The host calls `semver.satisfies(runtimeVersion, range, { includePrerelease: true })`.
-  // The promise used to sit a tuple above the floor, which made that flag
-  // load-bearing: the plain rule — the one implemented above, and the one any
-  // consumer that forgets the flag would apply — refused the promised line. The
-  // floor is now the promised line itself, so it shares the floor's tuple and
-  // the plain rule admits it too. Asserted rather than assumed: a future line
-  // appended in a higher tuple makes `plainOnly` non-empty and turns this case
-  // red until the arm is widened to name that tuple or the fact is re-stated.
+  // The plain rule — the one implemented above, and the one any consumer that
+  // forgets the flag would apply — must admit the promise on its own: each
+  // promised line is named by the arm carrying its own tuple, so no line depends
+  // on the flag. Asserted rather than assumed, because collapsing the promise
+  // back onto one tuple without widening the range would leave the newer line
+  // admitted by the flag alone, and that must turn this case red.
   const require_ = createRequire(join(ROOT, "package.json"))
   const reference = (() => {
     try {
@@ -277,7 +291,7 @@ test("every promised line is admitted by every peer under the host's reading", (
   }
 })
 
-test("the single arm admits the promised line and the releases above it", () => {
+test("the arms admit the promised lines and the releases above them", () => {
   for (const [name, range] of dshPeers) {
     for (const [version, expected] of TRUTH_TABLE) {
       assert.equal(satisfies(version, range), expected, `${name} must ${expected ? "admit" : "refuse"} ${version}`)

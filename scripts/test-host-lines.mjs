@@ -36,14 +36,18 @@ const LEGACY_AUTO_PRESET = "auto"
  *
  * The key names the tuple, not the ordinal. `line020` is the `0.2.0` line and
  * stays that key for every ordinal inside the tuple, because a next ordinal
- * would collide with the row that already exists. The tuple is the part worth
- * carrying in the key; the ordinal already lives in `version`.
+ * would collide with the row that already exists; `line021` names `0.2.1` the
+ * same way. The tuple is the part worth carrying in the key; the ordinal
+ * already lives in `version`.
  *
  * The row is a measured `modern` reading, taken by driving the real service of
- * that exact version rather than by reading its source.
+ * that exact version rather than by reading its source. `line021` was measured
+ * on the installed `0.2.1-alpha.1` tree: the probe read `modern` with reason
+ * `catalog+registerAuto` and the gate names stayed the plugin's own preset.
  */
 export const HOST_LINES = {
   line020: { version: "0.2.0-rc.2", capability: "modern" },
+  line021: { version: "0.2.1-alpha.1", capability: "modern" },
 }
 
 /**
