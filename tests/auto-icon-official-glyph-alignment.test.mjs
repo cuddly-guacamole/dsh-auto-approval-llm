@@ -3,6 +3,18 @@
 // asserted as hard containment rather than as a string match, because the
 // failure this guards is geometric — official 16-unit geometry pushed into a
 // 14-unit canvas clips the shield tip at y=14.5779.
+//
+// Where the pinned constant comes from, and what it does NOT do:
+//   - OFFICIAL_SHIELD is a frozen snapshot of the host bundle
+//     dist/assets/index-DjTxlw_T.js, the asset the installed
+//     @deepseek-ai/dsh-web-frontend shipped at the time this batch ran
+//     (2026-10-03). The offset below is a CHARACTER offset, not a byte
+//     offset: that file is not pure ASCII, and the two differ by 6 at this
+//     point (char 406447 = byte 406453). Slicing by byte would land elsewhere.
+//   - This suite deliberately does NOT read the host bundle. It has to run on
+//     any machine, and a test coupled to dist turns a host upgrade from a
+//     silent staleness into a spurious red. When the host upgrades, re-verify
+//     the constant by hand and update this snapshot deliberately.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
@@ -15,8 +27,9 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const iconBundle = readFileSync(join(root, 'lib/client/auto-icon.js'), 'utf8')
 const indexBundle = readFileSync(join(root, 'lib/client/index.js'), 'utf8')
 
-// The official dsh-web-frontend access-mode shield outline, byte 406447 of
-// dist/assets/index-DjTxlw_T.js. Regular weight (stroke-width 1).
+// The official dsh-web-frontend access-mode shield outline, taken verbatim from
+// dist/assets/index-DjTxlw_T.js at CHARACTER offset 406447 (byte offset 406453 —
+// that file is not pure ASCII). Regular weight (stroke-width 1).
 const OFFICIAL_SHIELD = 'M6.59624 2.14853C7.50155 1.80917 8.49914 1.80919 9.40444 2.14859L13.9245 3.84317V7.11961C13.9245 11.6089 10.5565 13.5975 8.00035 14.5779C5.44423 13.5975 2.07544 11.6089 2.07544 7.11961V3.84317L6.59624 2.14853Z'
 
 // ── path geometry: exact bbox for the M/L/H/V/C/Z subset these glyphs use ──
@@ -123,7 +136,9 @@ test('official glyph: the shield outline is the official access-mode outline, ve
 
 test('official glyph: the stroke weight is the host regular weight of 1', () => {
   assert.ok(iconBundle.includes('stroke-width="1"'), 'the menu glyph path is stroked at 1')
-  assert.ok(/strokeWidth:\s*1\b/.test(indexBundle), 'the session chip path is stroked at 1')
+  // `1\b` would also match "1.31831", because a dot is a word boundary: the
+  // weight has to be rejected before a dot, a digit or a letter follows it.
+  assert.ok(/strokeWidth:\s*1(?![.\w])/.test(indexBundle), 'the session chip path is stroked at 1')
   // The retired stroke weight and both retired outline fragments: a second
   // copy of any of them is a geometry drift waiting to happen.
   const offenders = [

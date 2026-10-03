@@ -4,6 +4,14 @@
 // cropped 1.0498u off the long arm's tip; the cross, authored for 14 units, was
 // the one glyph that survived intact. Both now sit on the 16-unit canvas the
 // shield chip already uses, at one perceived size.
+//
+// Scope of this file: every number below is measured from the compiled
+// `lib/client/index.js` in this checkout — the path literals, the viewBox the
+// renderer gets, and the two bboxes. Nothing here reads the host dist, so a
+// host upgrade cannot turn this red; the glyph outlines are restatements of
+// literals already in the source, and their provenance is recorded in
+// .agents/construction/auto-icon-官方对齐-施工方案-v1.0.md rather than pinned to
+// a bundle that will move. Re-verify by hand if the outlines are ever changed.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
