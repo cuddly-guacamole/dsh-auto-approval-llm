@@ -57,7 +57,8 @@ export const HOST_LINES = {
  * version off every promised line and the retired `legacy` capability — so
  * asserting it against a tree that does sit on a promised line must throw.
  * It is the only non-inert reading the reverse controls have, so the controls
- * stay live while the promise is a single line.
+ * stay live whatever the promise spans: no promised row carries the `legacy`
+ * reading, so the sentinel is refused against every one of them.
  */
 export const FOREIGN_HOST_LINE = { version: "0.1.7-alpha.2", capability: "legacy" }
 

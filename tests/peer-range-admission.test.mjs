@@ -178,9 +178,12 @@ test("the five dsh peers carry the promised admission range", () => {
 })
 
 test("the range is one bounded arm per promised tuple, and still refuses the lines below the floor", () => {
-  // One arm per promised tuple, and no more: the promise spans two tuples, so
-  // two arms is the count that states it. A third arm would admit a tuple the
-  // promise does not name, which is a claim this file exists to keep out.
+  // One arm per promised tuple, and no more. What a third arm would do is add a
+  // second, redundant way to admit the promise — the range already admits every
+  // release below its `<2` bound, and under the host's flagged reading every
+  // prerelease above the floor besides — so the arm count is not a claim about
+  // what gets installed. It is the bookkeeping that keeps one named arm per
+  // promised tuple, which is what makes each line admissible on its own.
   const arms = EXPECTED_RANGE.split("||")
   const promisedTuples = new Set(Object.values(HOST_LINES).map(line => line.version.split("-")[0]))
   assert.equal(arms.length, promisedTuples.size, "the range does not carry one arm per promised tuple")
@@ -194,27 +197,39 @@ test("the range is one bounded arm per promised tuple, and still refuses the lin
   }
 })
 
-test("every arm is a bounded comparator set floored on a promised line", () => {
+test("every arm is a bounded comparator set floored on a promised tuple", () => {
   const promised = Object.values(HOST_LINES).map(line => line.version)
+  // The floor of an arm is compared against the promised **tuple**, not the
+  // exact version: moving to the next ordinal inside a tuple is the documented
+  // maintenance step, and it changes `version` alone — pinning the range to the
+  // exact line would turn that routine step into a red suite even though the
+  // range still admits the new ordinal. Admission of each promised line by its
+  // own arm is asserted separately below, which is where the exact floor matters.
+  const promisedTuples = promised.map(version => version.split("-")[0])
   const floors = []
   for (const arm of EXPECTED_RANGE.split("||")) {
     assert.match(arm.trim(), /^>=[^ ]+ <\d+$/, "an arm is not a single bounded comparator set")
     floors.push(arm.trim().split(" ")[0].slice(2))
   }
-  // Each floor names a promised line, and the promised lines are covered once
-  // each: a floor that rose above a promised line would refuse it at install
-  // time, and a duplicate floor would leave a promised tuple unnamed.
-  assert.deepEqual(floors.slice().sort(), promised.slice().sort(), "the arms and the promised lines disagree")
+  // Each arm floors on a promised tuple, and each promised tuple is floored once:
+  // an arm on a tuple the promise does not name is a claim this file keeps out,
+  // and a duplicate arm would leave a promised tuple unnamed.
+  const floorTuples = floors.map(floor => floor.split("-")[0])
+  assert.deepEqual(floorTuples.slice().sort(), promisedTuples.slice().sort(), "the arms and the promised tuples disagree")
   for (const [name, range] of dshPeers) {
-    assert.deepEqual(range.split("||").map(arm => arm.trim().split(" ")[0].slice(2)).sort(), floors.slice().sort(), `${name} floors drifted`)
-    // Each promised line is admitted by the arm floored on that very line. This
-    // is the property the whole range shape exists for, and it is checked
-    // against the arm alone rather than against the joined range, so a line
-    // riding in on some other arm cannot satisfy it.
+    assert.deepEqual(range.split("||").map(arm => arm.trim().split(" ")[0].slice(2).split("-")[0]).sort(), floorTuples.slice().sort(), `${name} arm tuples drifted`)
+    // Each promised line is admitted by the arm floored on its own tuple. The
+    // arm is matched by tuple rather than by exact version for the reason above,
+    // and the floor still has to sit at or below the line it admits — a floor
+    // floated above the promised line refuses it, which the plain-reading case
+    // would also catch but this states the cause directly.
     for (const version of promised) {
-      const ownArm = range.split("||").map(arm => arm.trim()).filter(arm => arm.split(" ")[0].slice(2) === version)
-      assert.equal(ownArm.length, 1, `${name}: ${version} has no arm of its own to be admitted by`)
-      assert.equal(satisfies(version, ownArm[0]), true, `${name}: the arm floored on ${version} must admit it`)
+      const tuple = version.split("-")[0]
+      const ownArms = range.split("||").map(arm => arm.trim()).filter(arm => arm.split(" ")[0].slice(2).split("-")[0] === tuple)
+      assert.equal(ownArms.length, 1, `${name}: the ${tuple} tuple has no arm of its own to be admitted by`)
+      const floor = ownArms[0].split(" ")[0].slice(2)
+      assert.ok(compare(parse(version), parse(floor)) >= 0, `${name}: the arm floored at ${floor} sits above the promised line ${version}`)
+      assert.equal(satisfies(version, ownArms[0]), true, `${name}: the arm floored on the ${tuple} tuple must admit ${version}`)
     }
   }
 })

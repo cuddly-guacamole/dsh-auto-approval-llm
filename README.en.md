@@ -8,7 +8,7 @@
 
 [![npm](https://img.shields.io/npm/v/@quill507%2Fdsh-auto-approval-llm?style=flat-square&label=npm&labelColor=454a54)](https://www.npmjs.com/package/@quill507/dsh-auto-approval-llm)
 [![downloads](https://img.shields.io/npm/dm/@quill507%2Fdsh-auto-approval-llm?style=flat-square&labelColor=454a54)](https://www.npmjs.com/package/@quill507/dsh-auto-approval-llm)
-![DSH](https://img.shields.io/badge/DSH-0.1.7--rc.2%20%7C%200.2.0--rc.1-4c6ef5?style=flat-square&labelColor=454a54)
+![DSH](https://img.shields.io/badge/DSH-0.2.0--rc.2%20%7C%200.2.1--alpha.1-4c6ef5?style=flat-square&labelColor=454a54)
 [![license](https://img.shields.io/badge/license-BSD--3--Clause-d29922?style=flat-square&labelColor=454a54)](https://opensource.org/licenses/BSD-3-Clause)
 [![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
 
