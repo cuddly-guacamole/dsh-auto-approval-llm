@@ -51,11 +51,11 @@ src/
 │    ├─ trust.ts         307  web 路由信任平面（loopback/LAN 边界、Host 伪造防护、在线端点 URL 校验）
 │    └─ trusted-intent.ts 260  受信用户意图窗口：哪些用户消息与 ask_user_question 作答构成当前调用的授权证据
 └─ client/
-     ├─ index.ts         React 客户端主体 3085 行（设置卡 8 子卡/面板增强/应答 watcher 装配/浮动按钮/CSS）
+     ├─ index.ts         React 客户端主体 3093 行（设置卡 8 子卡/面板增强/应答 watcher 装配/浮动按钮/CSS）
      ├─ approvals/       应答模块（0.0.12 起；0.0.16 起单协议——remote 源适配 + shared 协议无关核心；rc.2 legacy/feature 已删）
      │    ├─ remote.ts       231
      │    └─ shared.ts       607
-     ├─ auto-icon.ts     权限菜单图标 + Auto 风险确认弹窗 657 行
+     ├─ auto-icon.ts     权限菜单图标 + Auto 风险确认弹窗 672 行
      ├─ locale.ts        zh/en 双语 576 行
      ├─ human-gate.ts    浮层「人工出手率」派生（HUMAN_SOURCES 与 scripts/friction-report 同源）
      ├─ host-keys.ts     49  仅配置文件可配键的只读渲染行（`HOST_ONLY_KEYS` 单一 owner → 键名 + 生效值；纯函数，无 React 依赖）
@@ -78,7 +78,7 @@ tests/
 ├─ loop-guard.test.mjs（循环键稳定性/回退、严格连续+fire-and-reset 状态机、FIFO 64、阈值钳制与 resolveConfig 映射）/ loop-guard-wiring.test.mjs（四站点成对锚、allowlist 与 rule-allow 豁免负向切片、跨面标记读位置与 one-shot、pinned 形状先于 learnAttempt、门不写 history 不碰熔断、disposal/sweep 有界、audit-query 渲染）
 ├─ host-lines.test.mjs（宿主承诺线：承诺表逐 tuple 一行 + 键名即线族、精确钉版、装错线/读错档位/门禁放宽的反向对照、补丁组合表解析；本机安装线驱动真实 permission-presets 服务，装的不是承诺线即判红）
 ├─ host-surface-coverage.mjs（契约面读数规则：具名不可评估行 + 评估行数下限 + 两个控制项未跑即失败）+ host-surface-coverage-collapse.test.mjs（塌缩读数、反向控制、下限独立生效、装配锚）
-└─ 合计 229 个 tests/*.test.mjs（node --test 全绿基线）
+└─ 合计 232 个 tests/*.test.mjs（node --test 全绿基线）
 scripts/
 ├─ build.sh             （DSH 源码仓库布局）tsc 编译 src→lib
 ├─ clean-lib.mjs        构建前清空 lib/（tsc 不删除已删源的旧产物）
