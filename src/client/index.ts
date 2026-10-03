@@ -2799,8 +2799,8 @@ function SessionApprovalPanel(props: any) {
   const compactIcon = settled
     ? React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 14 14', fill: 'none', xmlns: 'http://www.w3.org/2000/svg' },
         React.createElement('path', { d: statusState.kind === 'allowed' ? CHECK_PATH : CLOSE_PATH, fill: 'currentColor' }))
-    : React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 16 16', fill: 'none', xmlns: 'http://www.w3.org/2000/svg' },
-        React.createElement('path', { d: SHIELD_PATH, stroke: 'currentColor', strokeWidth: 1.31831, strokeLinejoin: 'round' }),
+    : React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 16 16', fill: 'none', xmlns: 'http://www.w3.org/2000/svg' },
+        React.createElement('path', { d: SHIELD_PATH, stroke: 'currentColor', strokeWidth: 1, strokeLinejoin: 'round' }),
         React.createElement('path', { d: BOLT_PATH, fill: 'currentColor' }))
   // The left side asks the host to open a held-back panel right away; that is
   // only meaningful while a countdown runs (it is when the panel is held).

@@ -28,10 +28,17 @@ export const PERMISSION_LABEL_SETS = {
     auto: ['Auto approval', '自动审批'],
     fullAccess: ['Full access', '完全权限'],
 };
-// Shield outline + bolt, drawn 1:1 like the official 16px permission glyphs
-// (stroke currentColor / fill currentColor, aria-hidden wrapper).
-export const SHIELD_PATH = 'M8.20554 0.899994L14.7901 3.36857V7.01026C14.7901 12 11.0466 14.2103 8.20554 15.3C5.36446 14.2103 1.62012 12 1.62012 7.01026V3.36857L8.20554 0.899994Z';
-export const BOLT_PATH = 'M8.75 3.65 5.95 8.2h2.08l-.78 4.15 2.82-4.9H8.12l.63-3.8Z';
+// Shield outline + bolt on a 16-unit canvas rendered into a 14px box, matching
+// the official access-mode item glyph (stroke currentColor / fill currentColor,
+// aria-hidden wrapper).
+//   - SHIELD_PATH is the official dsh-web-frontend access-mode shield outline,
+//     taken verbatim at its regular weight (stroke-width 1). Its lower edge
+//     reaches y=14.5779, so a 14-unit viewBox would clip the tip: the viewBox
+//     stays 0 0 16 16 while the box is 14px.
+//   - BOLT_PATH keeps the ported bolt silhouette, rescaled to the official
+//     inner-symbol baseline (height and ink area of the in-shield glyphs).
+export const SHIELD_PATH = 'M6.59624 2.14853C7.50155 1.80917 8.49914 1.80919 9.40444 2.14859L13.9245 3.84317V7.11961C13.9245 11.6089 10.5565 13.5975 8.00035 14.5779C5.44423 13.5975 2.07544 11.6089 2.07544 7.11961V3.84317L6.59624 2.14853Z';
+export const BOLT_PATH = 'M8.692 5.152 6.074 8.231 8.019 8.231 7.289 11.039 9.926 7.724 8.103 7.724Z';
 // The host-supplied name of the plugin-owned `auto-approval` preset
 // (cordis.patch.yml); zh renders 自动审批 through autoName().
 const CONFIGURED_AUTO_NAME = 'Auto approval';
@@ -44,15 +51,11 @@ function iconStyles() {
 .dsa-autoIcon {
   display: inline-flex;
   flex: none;
-  width: 16px;
-  height: 16px;
-  align-items: center;
-  justify-content: center;
-  color: var(--dsw-alias-label-tertiary, currentColor);
-}
-.dsa-autoIconTrigger {
   width: 14px;
   height: 14px;
+  align-items: center;
+  justify-content: center;
+  color: var(--dsw-alias-menu-icon, currentColor);
 }
 [${DIALOG_ATTRIBUTE}] {
   position: fixed;
@@ -364,11 +367,11 @@ function directText(element) {
     return parts.join(' ');
 }
 /** Build the plugin-owned Auto glyph span (official-style icon element). */
-function createAutoGlyph(document, size) {
+function createAutoGlyph(document) {
     const span = document.createElement('span');
-    span.className = 'dsa-autoIcon' + (size === 'trigger' ? ' dsa-autoIconTrigger' : '');
+    span.className = 'dsa-autoIcon';
     span.setAttribute('aria-hidden', 'true');
-    span.innerHTML = `<svg width="${size}" height="${size}" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="${SHIELD_PATH}" stroke="currentColor" stroke-width="1.31831" stroke-linejoin="round"/><path d="${BOLT_PATH}" fill="currentColor"/></svg>`;
+    span.innerHTML = `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="${SHIELD_PATH}" stroke="currentColor" stroke-width="1" stroke-linejoin="round"/><path d="${BOLT_PATH}" fill="currentColor"/></svg>`;
     return span;
 }
 /**
@@ -379,7 +382,7 @@ function createAutoGlyph(document, size) {
  */
 function decorateSurface(document, container, label, kind) {
     if (kind !== 'option' && container.querySelector('.dsa-autoIcon') === null) {
-        const glyph = createAutoGlyph(document, kind === 'trigger' ? 14 : 16);
+        const glyph = createAutoGlyph(document);
         // Mirror official ordering: glyph first, then the label element.
         container.insertBefore(glyph, container.firstChild);
     }
