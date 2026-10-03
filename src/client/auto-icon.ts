@@ -301,6 +301,23 @@ export function isPermissionMenu(menu) {
     const labels = new Set(Array.from(menu.querySelectorAll('button[role="menuitem"]'), normalizedText));
     return Object.values(PERMISSION_LABEL_SETS).every(variants => variants.some(label => labels.has(label)));
 }
+/**
+ * Whether the official UI draws a preset glyph on this menu's rows.
+ *
+ * Structural read, never class names: the official item glyph lives in a
+ * per-row `<span>` wrapper, while the selected row's tick is a bare `<svg>`
+ * that is a direct child of the button. The settings dropdown is label-only
+ * and owns such a tick, so counting any `<svg>` made it look like a glyph
+ * menu and injected a lone icon into a text-only list.
+ *
+ * The auto rows never answer the question about themselves — otherwise a glyph
+ * left on one of them by an earlier pass would keep the gate open.
+ */
+export function menuDrawsPresetGlyphs(menuItems) {
+    const autoNames = PERMISSION_LABEL_SETS.auto;
+    return menuItems.some(item => !autoNames.includes(normalizedText(item))
+        && Array.from(item.children ?? []).some(child => child.tagName === 'SPAN' && child.querySelector('svg') !== null));
+}
 function isAutoMenuItem(element) {
     if (element.matches('button[role="menuitem"]') && PERMISSION_LABEL_SETS.auto.includes(normalizedText(element))) {
         const menu = element.closest('[role="menu"]');
@@ -416,14 +433,9 @@ export function decorateAutoPermissionIcons(document) {
         // preset row; the settings "权限" selector dropdown is label-only.
         // Join the Auto glyph only where the official UI draws glyphs and keep
         // the label-only surface as plain text (localization still applies).
-        let drawsGlyphs = false;
-        for (const other of menu.querySelectorAll('button[role="menuitem"]')) {
-            if (!autoNames.includes(normalizedText(other)) && other.querySelector('svg') !== null) {
-                drawsGlyphs = true;
-                break;
-            }
-        }
-        for (const item of menu.querySelectorAll('button[role="menuitem"]')) {
+        const items = Array.from(menu.querySelectorAll('button[role="menuitem"]'));
+        const drawsGlyphs = menuDrawsPresetGlyphs(items);
+        for (const item of items) {
             if (!autoNames.includes(normalizedText(item)))
                 continue;
             // Label span = a text-carrying span without an embedded glyph/check.
