@@ -30,24 +30,40 @@ const LEGACY_AUTO_PRESET = "auto"
  * while any other reading means the plugin is registered there as inert — the
  * entry then asserts that nothing is gated and nothing is written.
  *
- * Exactly one line per tuple is promised: the host the user actually runs. A
- * further line is appended row by row when upstream enters the alpha of a new
- * tuple, so a promise can span two tuples at once.
+ * A tuple may promise several lines. The promise used to be exactly one line
+ * per tuple, which made the key and the tuple interchangeable; that is no
+ * longer so, and the key convention below is what keeps a row addressable when
+ * two rows share a tuple.
  *
- * The key names the tuple, not the ordinal. `line020` is the `0.2.0` line and
- * stays that key for every ordinal inside the tuple, because a next ordinal
- * would collide with the row that already exists; `line021` names `0.2.1` the
- * same way. The tuple is the part worth carrying in the key; the ordinal
- * already lives in `version`.
+ * The key begins with the line prefix of its own tuple — `line020` for `0.2.0`,
+ * `line021` for `0.2.1` — and carries an ordinal suffix when a tuple promises
+ * more than one line, so `line021alpha3` and `line021alpha4` are the two rows
+ * of the `0.2.1` tuple. The prefix is what a reader greps for; the suffix is
+ * what keeps two rows of one tuple from colliding in the table and on the
+ * `--line` command line. The exact version still lives in `version`, which is
+ * what the probe installs and asserts.
  *
- * The row is a measured `modern` reading, taken by driving the real service of
- * that exact version rather than by reading its source. `line021` was measured
- * on the installed `0.2.1-alpha.1` tree: the probe read `modern` with reason
+ * Every row is a measured `modern` reading, taken by driving the real service
+ * of that exact version rather than by reading its source. `line021alpha3` and
+ * `line021alpha4` were each measured on a scratch prefix installed from the
+ * registry at that exact version: both probes read `modern` with reason
  * `catalog+registerAuto` and the gate names stayed the plugin's own preset.
  */
 export const HOST_LINES = {
   line020: { version: "0.2.0-rc.2", capability: "modern" },
-  line021: { version: "0.2.1-alpha.1", capability: "modern" },
+  line021alpha3: { version: "0.2.1-alpha.3", capability: "modern" },
+  line021alpha4: { version: "0.2.1-alpha.4", capability: "modern" },
+}
+
+/**
+ * The line prefix a promised tuple is addressed by, derived from the tuple
+ * itself rather than kept as a table: `0.2.0` gives `line020`, `0.2.1` gives
+ * `line021`. Deriving it means the prefix cannot drift away from the tuple it
+ * names, and a key that does not begin with its own tuple's prefix is refused
+ * by the contract test instead of being unaddressable from the CLI.
+ */
+export function linePrefixOf(tuple) {
+  return "line" + tuple.split(".").join("")
 }
 
 /**

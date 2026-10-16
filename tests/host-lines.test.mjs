@@ -1,15 +1,17 @@
 /**
- * Host-line contract: one line per tuple is promised — `0.2.0-rc.2` and
- * `0.2.1-alpha.1`, the lines the user actually runs. Both carry the modern shape
- * (`catalog` + `registerAuto`), measured on each line's real service rather than
- * read from its source, and both are driven through the same-signature migration.
- * One line per tuple, appended when upstream enters a new tuple's alpha. The peer
- * range is an installation-admission surface, not a support claim, so the promise
- * lives here in `HOST_LINES` and nowhere else. This file pins the promised
- * table, the exact version pinning, the reverse controls that make a wrong-tree
- * acceptance impossible, and the shipped preset composition. The last case
- * drives the locally installed host line through the real permission-presets
- * service, so the harness itself cannot rot into a pure fake.
+ * Host-line contract: one arm per tuple is promised, and a tuple may promise
+ * several lines — `0.2.0-rc.2`, and the `0.2.1` lines `0.2.1-alpha.3` and
+ * `0.2.1-alpha.4`, the lines the user actually runs. Every row carries the
+ * modern shape (`catalog` + `registerAuto`), measured on each line's real
+ * service rather than read from its source, and every row is driven through the
+ * same-signature migration. A line is appended when the user's host moves, and
+ * a new tuple additionally adds an arm to the peer range. The peer range is an
+ * installation-admission surface, not a support claim, so the promise lives
+ * here in `HOST_LINES` and nowhere else. This file pins the promised table, the
+ * exact version pinning, the reverse controls that make a wrong-tree acceptance
+ * impossible, and the shipped preset composition. The last case drives the
+ * locally installed host line through the real permission-presets service, so
+ * the harness itself cannot rot into a pure fake.
  */
 import test from "node:test"
 import assert from "node:assert/strict"
@@ -26,6 +28,7 @@ import {
   assertTreeLine,
   dshPeers,
   installedVersions,
+  linePrefixOf,
   mustReject,
   packageEntry,
   presetTableFromPatch,
@@ -45,30 +48,57 @@ const patch = readFileSync(join(ROOT, "cordis.patch.yml"), "utf8")
  */
 const INERT_CONTROL_LINE = { version: "0.1.5-rc.2", capability: "unknown" }
 
-/** The key each promised tuple is addressed by, so a drift between them is a failure. */
-const KEY_OF_TUPLE = { "0.2.0": "line020", "0.2.1": "line021" }
+/**
+ * The key prefix each promised tuple is addressed by. A tuple may promise more
+ * than one line, so the prefix alone no longer identifies a row; it identifies
+ * the tuple, and the ordinal suffix completes the key.
+ */
+const PREFIX_OF_TUPLE = { "0.2.0": "line020", "0.2.1": "line021" }
 
 test("the promised line table carries the lines the user runs", () => {
-  assert.deepEqual(Object.keys(HOST_LINES).sort(), ["line020", "line021"])
+  assert.deepEqual(Object.keys(HOST_LINES).sort(), ["line020", "line021alpha3", "line021alpha4"])
   assert.equal(HOST_LINES.line020.version, "0.2.0-rc.2")
   assert.equal(HOST_LINES.line020.capability, "modern")
-  assert.equal(HOST_LINES.line021.version, "0.2.1-alpha.1")
-  assert.equal(HOST_LINES.line021.capability, "modern")
+  assert.equal(HOST_LINES.line021alpha3.version, "0.2.1-alpha.3")
+  assert.equal(HOST_LINES.line021alpha3.capability, "modern")
+  assert.equal(HOST_LINES.line021alpha4.version, "0.2.1-alpha.4")
+  assert.equal(HOST_LINES.line021alpha4.capability, "modern")
 })
 
-test("the promise spans one line per tuple, and every key names its own tuple", () => {
-  // The key convention is the line family, so the next ordinal inside a tuple
-  // cannot collide with a row that already exists: the tuple is what keeps the
-  // table addressable, and `version` already carries the ordinal. A row in a
-  // tuple with no key of its own would be unaddressable from the CLI, so the
-  // mapping below is closed rather than a lookup that silently misses.
+test("the promise spans one arm per tuple, and every key names its own tuple", () => {
+  // A tuple may promise several lines, so uniqueness is asserted on the
+  // *versions* rather than on the tuples. Two rows carrying one version would be
+  // a redundant row that the CLI can address twice and the per-line controls
+  // would read as two lines; the key set itself needs no such check, because
+  // object keys are duplicate-free by construction and a literal that repeated a
+  // key would simply lose a row to the exact-set assertion below.
   const tuples = Object.values(HOST_LINES).map(line => line.version.split("-")[0])
-  assert.equal(new Set(tuples).size, tuples.length, "a tuple is promised on more than one line")
+  const versions = Object.values(HOST_LINES).map(line => line.version)
+  const keys = Object.keys(HOST_LINES)
+  assert.equal(new Set(versions).size, versions.length, "two promised rows carry the same version")
   for (const [key, line] of Object.entries(HOST_LINES)) {
     const tuple = line.version.split("-")[0]
-    assert.equal(KEY_OF_TUPLE[tuple], key, "the key " + key + " does not name the tuple of " + line.version)
+    assert.equal(PREFIX_OF_TUPLE[tuple], linePrefixOf(tuple), "the prefix table disagrees with the derived prefix for " + tuple)
+    assert.ok(
+      key.startsWith(linePrefixOf(tuple)),
+      "the key " + key + " does not begin with the prefix of " + tuple + " (" + linePrefixOf(tuple) + ")",
+    )
   }
-  assert.deepEqual(Object.keys(HOST_LINES).sort(), Object.values(KEY_OF_TUPLE).sort(), "the table and the key convention disagree")
+  // Every promised tuple is named by at least one key, and the set of promised
+  // tuples is exactly the set the prefix table knows: a key whose prefix names
+  // no promised tuple would be unaddressable, and a promised tuple with no key
+  // would be unreachable from the CLI.
+  for (const tuple of new Set(tuples)) {
+    assert.ok(
+      keys.some(key => key.startsWith(linePrefixOf(tuple))),
+      "the promised tuple " + tuple + " has no key of its own",
+    )
+  }
+  assert.deepEqual(
+    [...new Set(tuples)].sort(),
+    Object.keys(PREFIX_OF_TUPLE).sort(),
+    "the promised tuples and the prefix table disagree",
+  )
 })
 
 test("the foreign line used by the reverse controls is not a registered line", () => {

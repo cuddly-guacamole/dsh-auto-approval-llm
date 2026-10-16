@@ -1,6 +1,6 @@
 # 15 · 质量保障体系
 
-> *1951 tests · runtime proofs*
+> *1952 tests · runtime proofs*
 
 ## 15.1　契约测试覆盖地图（按主题归纳）
 
@@ -27,7 +27,7 @@
 | 授权证据窗口与人工出手率 | trusted-intent-window.test.mjs：4 条证据窗口的溢出计数（slot cap 后重复候选=去重不计、独有候选=溢出计、inbox 先入、逐文本截断与预算的交互、经超长问题答案触达预算的真实路径、被拒文本重复出现计双）、拒因 note 的零/非零两分支与措辞纪律（无 retry/approve 字面、无 dangling 值）、deny 落点结构锚、trusted-intents 事件量化 `overflowed` 标志进去重签名、audit-query 对该字段的渲染与缺字段静默 / client-human-gate.test.mjs：人工来源名单与 `scripts/friction-report.mjs` **运行时 import 逐项相等**、空窗口判 vacuous 不作零声称、缺 source/非字符串 source 只进分母、round 边界、中英三键齐备且文案带窗口限定、bundle 装配锚（派生调用 + 三个浮层状态键） |
 | 循环防护 | loop-guard.test.mjs：循环键稳定（对象键序无关、工具名入键、缺参数回退工具级键）、严格连续状态机（`a→a→b→a` 永不触发、count===threshold 恰触发一次、fire-and-reset 人工放行不买豁免）、有界 64（最近最少更新者先淘汰：重触的键存活、被淘汰的是次旧键）、阈值钳制（1→2 带 warned、非数值=关、floor 在钳制前）/ loop-guard-wiring.test.mjs：**恰四个**自动放行站点被门控（src+编译产物双计）、allowlist 与 rule-allow 通道负向切片零命中、跨面标记读位于 deny 终局之后且先于 static allow、one-shot 读即删、pinned 形状恰三处且先于 `learnAttempt`（无 takeover handle、无 learnable、reject 钉死）、门函数体无 pushHistory/无熔断、disposal 与 sweep 有界、audit-query 渲染 `consecutive`/`threshold` |
 
-232 个测试文件，合计 **1951 例**（node --test 全绿基线）。
+232 个测试文件，合计 **1952 例**（node --test 全绿基线）。
 
 ## 15.2　验收命令与运行时证据
 
@@ -46,26 +46,27 @@ npm run gate   # 清构建产物 → 类型 → 构建 → 全量测试 → 数�
 ```bash
 node_modules/.bin/tsc -p tsconfig.json   # 类型（policy/shell/paths 不再 @ts-nocheck）
 node_modules/.bin/tsdown                  # 客户端 bundle
-node --test "tests/**/*.test.mjs"        # 1951/1951 全绿
+node --test "tests/**/*.test.mjs"        # 1952/1952 全绿
 ```
 
 :::
 
-::: tip 宿主承诺线（每个 tuple 一条：0.2.0-rc.2、0.2.1-alpha.1，均完整支持）
+::: tip 宿主承诺线（每个 tuple 一臂：0.2.0-rc.2、0.2.1-alpha.3、0.2.1-alpha.4，均完整支持）
 
 ```bash
 npm run test:host-lines                      # 装出全部承诺线跑一次
 npm run test:host-lines -- --line line020    # 只跑 0.2.0-rc.2（modern 形态）
-npm run test:host-lines -- --line line021    # 只跑 0.2.1-alpha.1（modern 形态）
+npm run test:host-lines -- --line line021alpha3  # 只跑 0.2.1-alpha.3（modern 形态）
+npm run test:host-lines -- --line line021alpha4  # 只跑 0.2.1-alpha.4（modern 形态）
 ```
 
-`scripts/test-host-lines.mjs` 在 `os.tmpdir()` 前缀里按精确版本装出 peer 承诺的宿主线，再把编译后的判定层驱动到该线真实的 `permission-presets` 服务上：断言每个 `@deepseek-ai/dsh-*` 恰为目标版本、能力探测落该线实际档位（modern = `catalog` + `registerAuto`；该线无这些注册面即 unknown，迁移 fail-closed）、同签名迁移在该线如实结算、`dfa+never` 原样保留；装错线或读错档位即红（含同前缀内的反向对照）。安装前缀只落在 `os.tmpdir()`，不触碰仓库 `node_modules`。该入口需要 npm registry 访问，故列为发版前手工步骤，不并入离线的 `npm run gate`；**新增宿主线时**：`HOST_LINES` 加一行**且**五条 peer 区间**加一臂**（新 tuple 才需要——同一 tuple 内换下一个预发布版只改 `version`，键名、区间、lock 都不动），并同步 `package-lock.json` 的 `packages[""]` peer 镜像——宿主线跟着用户实际在跑的宿主走，上游进入新 tuple 的 alpha 时再逐条追加；同一 tuple 内上游发布更高预发布版时，首次安装后把浮高的传递 `dsh-*` 一并写进 `overrides` 二次安装，保证整树落在目标线。
-
-承诺表两行，**每个 tuple 一条**：`line020`（`0.2.0-rc.2`）与 `line021`（`0.2.1-alpha.1`），能力均为**实测** modern 形态（由 `detectHostCapability` 驱动该线真实服务读出 `catalog+registerAuto`，非从源码推断），断言走「同签名迁移在真实包上通过」。`line021` 的读数取自本机已装树（`dsh-permission-presets@0.2.1-alpha.1`），由 `tests/host-lines.test.mjs` 末条用例直接驱动，不是照源码推断。**键名约定 = tuple**：键写 tuple（`line020` / `line021`），序数留在 `version` 里——所以同一 tuple 内换成下一个预发布版不改键名，`0.2.0-rc.2` 正是沿用 `line020` 而非新起一个键。该约定由 `tests/host-lines.test.mjs` 钉住：键必须命名该 `version` 所属的 tuple，且一个 tuple 不得被承诺在多条线上。每条线的反向对照都跑三组：装错线、读错档位、**门禁名字被放宽或迁移后落回 `auto` 档**（后两组由 `runLine` 对本次实跑观测值断言，装在线上就生效）。
+`scripts/test-host-lines.mjs` 在 `os.tmpdir()` 前缀里按精确版本装出 peer 承诺的宿主线，再把编译后的判定层驱动到该线真实的 `permission-presets` 服务上：断言每个 `@deepseek-ai/dsh-*` 恰为目标版本、能力探测落该线实际档位（modern = `catalog` + `registerAuto`；该线无这些注册面即 unknown，迁移 fail-closed）、同签名迁移在该线如实结算、`dfa+never` 原样保留；装错线或读错档位即红（含同前缀内的反向对照）。安装前缀只落在 `os.tmpdir()`，不触碰仓库 `node_modules`。该入口需要 npm registry 访问，故列为发版前手工步骤，不并入离线的 `npm run gate`；**新增宿主线时**：`HOST_LINES` 加一行，键以该 tuple 前缀起头、同 tuple 多行时带序数后缀；**只有新 tuple 才给五条 peer 区间加一臂**（同一 tuple 内换序数只改 `version` 与键后缀，区间与 lock 都不动），并同步 `package-lock.json` 的 `packages[""]` peer 镜像——宿主线跟着用户实际在跑的宿主走，上游进入新 tuple 的 alpha 时再逐条追加；同一 tuple 内上游发布更高预发布版时，首次安装后把浮高的传递 `dsh-*` 一并写进 `overrides` 二次安装，保证整树落在目标线。
 
 `assertLineOutcome` 的 inert 分支（插件在该线能装能加载但不接管 `auto` 档：`gatePresetNames()` 仍只含 `auto-approval`、`isGatedSession("auto")` 为 false、同签名迁移 `skipped` 且零 audit 写入、状态原样保留）仍有齿，由 `tests/host-lines.test.mjs` 用一条已退役线的控制对象覆盖，断言如实反转而非要求接管。install-tree 断言通过：安装树里未安装的 optional peer 在 `npm ls` 里是一个既无 `version` 也无 `problem` 的裸节点，树断言只跳过这一种节点（带 `problem` 的节点仍判失败）。`tests/host-lines.test.mjs` 另有一条不装前缀的用例，直接驱动本机已装的服务——本机装的线若不在承诺表里，该用例判红，这正是它该做的。`session` 与 `sessionProjections` 状态机是测试桩；权限服务类与投影注册/`apply` 来自真实包。
 
-**peer 区间按承诺的 tuple 分臂**：承诺线跨 `0.2.0` 与 `0.2.1` 两个 tuple，故区间写成 `>=0.2.0-rc.2 <2 || >=0.2.1-alpha.1 <2`——**每个承诺 tuple 一臂**，每条承诺线由承载它自己 tuple 的那一臂放行。这样宿主门禁的读法（`semver.satisfies(v, range, { includePrerelease: true })`）与朴素读法（`semver.satisfies(v, range)`）**给出同一个结果**，`includePrerelease` 标志对本包的承诺仍不承重。实测依据：若只保留单臂 `>=0.2.0-rc.2 <2`，`0.2.1-alpha.1` 在朴素读法下为 `false`（没有任何比较子携带 `0.2.1` tuple），全靠标志才被放行——那正是本仓要避免的「靠门禁实现细节承重」。`tests/peer-range-admission.test.mjs` 把这条事实断言下来：臂数必须等于承诺 tuple 数（多一臂等于承认一个未承诺的 tuple）、每条承诺线在朴素读法下都必须被放行。命名 `0.2.1` 这个 tuple 必然连带放行该 tuple 的全部预发布（`0.2.1-alpha.2` / `-rc.1` …）——semver 无法只放行其中一个序数，这是规则的必然结果而非误放宽；这些线属**准入面**、**不受支持**（承诺只认 `HOST_LINES` 那两行）。实测新旧区间准入差集恰为 `0.2.1` 预发布类，`0.2.0-rc.1` 及以下、`2.0.0`、`3.0.0` 全部维持拒装。区间仍是**安装准入面**，`HOST_LINES` 才是承诺面。
+承诺表三行：`line020`（`0.2.0-rc.2`）、`line021alpha3`（`0.2.1-alpha.3`）与 `line021alpha4`（`0.2.1-alpha.4`），能力均为**实测** modern 形态（由 `detectHostCapability` 驱动该线真实服务读出 `catalog+registerAuto`，非从源码推断；两条 `0.2.1` 线的读数各取自按该精确版本从 registry 现装的临时前缀），断言走「同签名迁移在真实包上通过」。**键名约定 = tuple 前缀 + 序数后缀**：键以该 `version` 所属 tuple 的前缀起头（`line020` / `line021`，由 `linePrefixOf()` 从 tuple 派生），**同一 tuple 承诺多行时带序数后缀**（`line021alpha3` / `line021alpha4`）——`0.2.0` tuple 只承诺一行，故沿用 `line020` 而非新起一个键。该约定由 `tests/host-lines.test.mjs` 钉住：键必须以其 `version` 所属 tuple 的前缀起头、版本不得重复（两行同一版本 = 冗余行）、且每个承诺 tuple 至少有一个键。**注意约定已从「一个 tuple 只能承诺一行」放宽为「一个 tuple 只占一臂、可承诺多行」**——前者曾是断言（`new Set(tuples).size === tuples.length`），在承诺面出现同一 tuple 的两行后失效；真正保护 peer 区间的是**臂数 = 承诺 tuple 数**，见下段。每条线的反向对照都跑三组：装错线、读错档位、**门禁名字被放宽或迁移后落回 `auto` 档**（后两组由 `runLine` 对本次实跑观测值断言，装在线上就生效）。
+
+**peer 区间按承诺的 tuple 分臂**：承诺线跨 `0.2.0` 与 `0.2.1` 两个 tuple，故区间写成 `>=0.2.0-rc.2 <2 || >=0.2.1-alpha.3 <2`——**每个承诺 tuple 一臂**（同一 tuple 的多条承诺线共用该臂），每条承诺线由承载它自己 tuple 的那一臂放行。这样宿主门禁的读法（`semver.satisfies(v, range, { includePrerelease: true })`）与朴素读法（`semver.satisfies(v, range)`）**给出同一个结果**，`includePrerelease` 标志对本包的承诺仍不承重。实测依据：若只保留单臂 `>=0.2.0-rc.2 <2`，`0.2.1-alpha.1` 在朴素读法下为 `false`（没有任何比较子携带 `0.2.1` tuple），全靠标志才被放行——那正是本仓要避免的「靠门禁实现细节承重」。`tests/peer-range-admission.test.mjs` 把这条事实断言下来：臂数必须等于承诺 tuple 数（多一臂等于承认一个未承诺的 tuple）、每条承诺线在朴素读法下都必须被放行。命名 `0.2.1` 这个 tuple 必然连带放行该 tuple 的全部预发布（`0.2.1-alpha.2` / `-rc.1` …）——semver 无法只放行其中一个序数，这是规则的必然结果而非误放宽；这些线属**准入面**、**不受支持**（承诺只认 `HOST_LINES` 那三行）。**抬臂下界的作用面**：把下界抬到 `alpha.3` 让 `alpha.1`/`alpha.2` 退出承诺面与朴素读法，但**带标志读法下第一臂 `>=0.2.0-rc.2 <2` 仍放行它们**（实测皆 `true`），即宿主门禁不因此拒装；要连带标志读法拒装须给第一臂加上界，代价是臂不再是 `>=X <2` 形态、并牺牲「承诺线不靠标志放行」，故不做。实测新旧区间准入差集恰为 `0.2.1` 预发布类，`0.2.0-rc.1` 及以下、`2.0.0`、`3.0.0` 全部维持拒装。区间仍是**安装准入面**，`HOST_LINES` 才是承诺面。
 
 :::
 
