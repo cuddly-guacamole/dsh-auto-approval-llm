@@ -186,11 +186,20 @@ test('client bundle: history card has a separate clear-timings action left of cl
 })
 
 test('client bundle: the protocol vocabulary carries all four values end to end', () => {
-  // Four sync points in the client bundle must know the two new protocols:
-  // the draft type, the read whitelist (draftOf), the save whitelist (valueOf)
-  // and the enum mirror table. A miss in any one of them is silent — the read
-  // side shows the wrong protocol, the save side drops it, and the enum table
-  // stops rejecting a value the schema refuses.
+  // The client bundle must know all four protocols at every sync point that can
+  // silently drop one: the shared vocabulary constant, the enum mirror derived
+  // from it, the read-back normalization (draftOf), the write-back whitelist
+  // (valueOf), and the dropdown options and labels. A miss at any one of them is
+  // silent — the read side shows the wrong protocol, the save side drops it, and
+  // the enum table stops rejecting a value the schema refuses.
+  //
+  // The read-back and write-back sites are asserted as compiled EXPRESSIONS, not
+  // by the mere presence of `value?.endpointProtocol`: a two-value literal
+  // narrowing either whitelist leaves that substring present and binds nothing,
+  // which is the exact drift this pair exists to catch.
+  //
+  // The Draft interface field is a type-level annotation that tsc erases from
+  // the bundle, so it is not assertable from compiled output.
   // The enum table is DERIVED from the one vocabulary constant (the bundle
   // emits the spread, not a hand-copied literal array), so the two assertions
   // below are the pair that matters: the constant carries all four values, and
@@ -208,6 +217,22 @@ test('client bundle: the protocol vocabulary carries all four values end to end'
   assert.ok(
     client.slice(at, at + 60).includes('...ENDPOINT_PROTOCOLS'),
     'the enum mirror must be derived from the shared vocabulary, not a hand-copied list',
+  )
+  // Sync point 8: the read-back normalization, asserted as the compiled call.
+  assert.ok(
+    client.includes('endpointProtocol: normalizeEndpointProtocol(value?.endpointProtocol)'),
+    'draftOf must normalize endpointProtocol through the shared four-value vocabulary',
+  )
+  // The read-back delegates to this normalizer, so pin its body too: a
+  // two-value literal here would leave the call site above intact.
+  assert.ok(
+    client.includes('return ENDPOINT_PROTOCOLS.includes(value) ? value : "openai"'),
+    'the normalizer must test membership in the shared vocabulary, not a literal pair',
+  )
+  // Sync point 9: the write-back whitelist membership test.
+  assert.ok(
+    client.includes('if (ENDPOINT_PROTOCOLS.includes(draft.endpointProtocol)) value.endpointProtocol'),
+    'valueOf must gate endpointProtocol on the shared vocabulary, not a literal pair',
   )
   // The two new labels are wired to the dropdown.
   assert.ok(client.includes('option.protocol.responses'), 'the responses label is referenced')
