@@ -53,7 +53,7 @@ import { ArtifactRegistry } from './auto/artifacts.js'
 import { appendAuditLine } from './auto/audit.js'
 import { AGGRESSIVE_BUILTIN, applyCategoryDirective, categoryDirectiveFor, type CategoryKey, LOCKED_CATEGORIES } from './auto/category.js'
 import { sanitizeClassifierArguments, sanitizeClassifierText, sanitizeReviewReason } from './auto/classifier.js'
-import { DIRECT_HUMAN_TOOL, GATED_PRESET, THRESHOLD_DEFAULTS } from './auto/constants.js'
+import { DIRECT_HUMAN_TOOL, ENDPOINT_PROTOCOLS, GATED_PRESET, THRESHOLD_DEFAULTS, type EndpointProtocol } from './auto/constants.js'
 import { createDshClassifier, createEndpointClassifier } from './auto/dsh-classifier.js'
 import {
   type RaceHumanHandle,
@@ -262,12 +262,12 @@ export interface Config {
   tempRoots?: string[]
   classifierTimeoutMs?: number
   classifierMaxOutputTokens?: number
-  /** Fast-decision lane model source: session / preset (host DSH model) / endpoint (custom, retained but no longer maintained). */
+  /** Fast-decision lane model source: session / preset (host DSH model) / endpoint (shared custom endpoint). */
   classifierSource: 'session' | 'preset' | 'endpoint'
   /** Fast-decision preset pair; honored only while classifierSource==='preset'. */
   classifierProvider: string
   classifierModel: string
-  /** Deep-review lane model source: session / preset / endpoint (custom, retained but no longer maintained). */
+  /** Deep-review lane model source: session / preset / endpoint (shared custom endpoint). */
   reviewerSource: 'session' | 'preset' | 'endpoint'
   /** Deep-review preset provider (name revived from the retired pair era). */
   reviewerProvider: string
@@ -287,7 +287,7 @@ export interface Config {
   /** Shared custom-endpoint config (lane-agnostic; both lanes' endpoint source references it). */
   endpointUrl: string
   endpointModel: string
-  endpointProtocol: 'openai' | 'anthropic'
+  endpointProtocol: EndpointProtocol
   /** Extra LLM review attempts after the first (0 = single-shot, 1 = default). */
   reviewMaxRetries?: number
   /** Loop guard: the Nth identical auto-allowed call in a row turns into a pinned ask (0 = off). */
@@ -409,7 +409,11 @@ export const Config: z<Config> = z.object({
   // reference the same endpointUrl/endpointModel + the shared API key.
   endpointUrl: z.string().default(''),
   endpointModel: z.string().default(''),
-  endpointProtocol: z.union(['openai', 'anthropic'] as const).default('openai'),
+  // Four known protocols. The union and the TypeScript type above MUST change
+  // in the same edit: @deepseek-ai/schemastery THROWS on an unknown union value
+  // instead of falling back to the default, so a value the schema has not
+  // learned fails the whole config validation (measured).
+  endpointProtocol: z.union([...ENDPOINT_PROTOCOLS] as const).default('openai'),
   // Extra LLM review attempts after the first (0 = off, matching the old
   // single-shot behavior). Calibrated against measured review latency (p95 ≈
   // 3.06s): the rolling budget keeps 1 retry affordable on every risk path.

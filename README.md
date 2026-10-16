@@ -133,7 +133,7 @@ dsh plugin --profile web add @quill507/dsh-auto-approval-llm
 | `rulesText` | '' | 声明式规则（支持 `[agent:…]` / `[workspace:…]`） |
 | `allowlist` / `denyList` / `humanOnlyList` | [] | 工具名精确匹配名单 |
 | `classifierSource` / `reviewerSource` | `session` | 两通道模型来源：session / preset / endpoint |
-| `endpointUrl` / `endpointModel` / `endpointProtocol` | '' / '' / `openai` | 共享自定义端点 |
+| `endpointUrl` / `endpointModel` / `endpointProtocol` | '' / '' / `openai` | 共享自定义端点；协议四值：openai · anthropic · responses · systemone（systemone 仅服务快速判断通道） |
 | `categoryPolicy` / `categoryMode` / `trustedDirs` | `{}` / `standard` / [] | 分类三态、位置模式与信任目录 |
 | `privilegeAutoReview` / `protectedAutoReview` | false | 分别解锁 privilege / protected（差别见 docs/17） |
 | `learningEnabled` / `learningThreshold` | false / 3 | 确认制学习开关与阈值（2–10） |

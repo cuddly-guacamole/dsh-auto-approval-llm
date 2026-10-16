@@ -133,3 +133,31 @@ test('patch pin consistency: every shipped insert pin equals its schema default'
     assert.deepEqual(parsed, expected, `pin ${key} must equal the pinned table value`)
   }
 })
+
+test('endpointProtocol: the default is unchanged and all four known values validate', () => {
+  // This batch adds NO config keys and changes NO default. The protocol union
+  // gained two values, so the count surface (58 keys) and the default ('openai')
+  // must both stay exactly where they were; only the accepted vocabulary moved.
+  const defaults = plainConfigValue(Config({}))
+  assert.equal(defaults.endpointProtocol, 'openai', 'the default protocol is still openai')
+  assert.equal(Object.keys(defaults).length, 58, 'no config key was added or removed')
+
+  for (const protocol of ['openai', 'anthropic', 'responses', 'systemone']) {
+    assert.equal(
+      plainConfigValue(Config({ endpointProtocol: protocol })).endpointProtocol,
+      protocol,
+      `${protocol} must survive schema validation`,
+    )
+  }
+})
+
+test('endpointProtocol: an unknown value is refused by the schema, not silently defaulted', () => {
+  // Measured: @deepseek-ai/schemastery THROWS on an unknown union value instead
+  // of falling back to the default. That is why the zod union and the
+  // TypeScript union have to change in the same edit — a value the schema has
+  // not learned fails the whole config validation rather than degrading.
+  assert.throws(
+    () => plainConfigValue(Config({ endpointProtocol: 'no-such-protocol' })),
+    /endpointProtocol/,
+  )
+})

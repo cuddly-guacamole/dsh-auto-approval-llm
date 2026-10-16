@@ -11,6 +11,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { normalizeLane, resolveTransport, normalizeSharedEndpoint } from '../lib/auto/model-channel.js'
+import { ENDPOINT_PROTOCOLS, normalizeEndpointProtocol } from '../lib/auto/constants.js'
 
 const sess = { provider: 'sess-provider', model: 'sess-model' }
 const endpoint = { url: 'https://api.example.com/v1', model: 'ep-model', protocol: 'openai' }
@@ -107,4 +108,29 @@ test('resolveTransport: anthropic endpoint protocol is honored', () => {
   const lane = normalizeLane({ source: 'endpoint' })
   const t = resolveTransport('endpoint', lane, { url: 'https://x', model: 'm', protocol: 'anthropic' }, sess)
   assert.deepEqual(t, { transport: 'raw', baseUrl: 'https://x', model: 'm', protocol: 'anthropic' })
+})
+
+test('all four known protocols survive normalization unchanged', () => {
+  // Four values, one vocabulary. 'responses' and 'systemone' are the two the
+  // earlier two-value normalizer silently coerced to 'openai', which made the
+  // operator's choice a no-op (and would have sent a chat-shaped request to
+  // the systemone route).
+  for (const protocol of ENDPOINT_PROTOCOLS) {
+    assert.equal(normalizeEndpointProtocol(protocol), protocol, `${protocol} passes through`)
+    assert.equal(normalizeSharedEndpoint({ protocol }).protocol, protocol)
+    const lane = normalizeLane({ source: 'endpoint' })
+    const resolved = resolveTransport('endpoint', lane, { url: 'https://x', model: 'm', protocol }, sess)
+    assert.deepEqual(resolved, { transport: 'raw', baseUrl: 'https://x', model: 'm', protocol })
+  }
+  assert.deepEqual([...ENDPOINT_PROTOCOLS], ['openai', 'anthropic', 'responses', 'systemone'])
+})
+
+test('a genuinely unknown protocol still falls back to openai', () => {
+  // The fallback is for values the schema never learned (a hand-edited
+  // settings.yaml, a value from a newer version), not for the known four.
+  for (const unknown of ['', 'chat', 'OPENAI', 'Responses', 'systemOne', null, undefined, 7, {}, ['openai']]) {
+    assert.equal(normalizeEndpointProtocol(unknown), 'openai', `${JSON.stringify(unknown)} falls back`)
+    assert.equal(normalizeSharedEndpoint({ protocol: unknown }).protocol, 'openai')
+  }
+  assert.equal(normalizeSharedEndpoint({}).protocol, 'openai', 'an absent protocol keeps the schema default')
 })

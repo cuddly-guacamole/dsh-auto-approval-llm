@@ -39,7 +39,8 @@ import {
 import { GATED_PRESET } from './constants.js'
 import { debugLog, sameEndpointTarget } from './debug-and-decisions.js'
 import { EDITABLE_CONFIG_KEYS, HOST_ONLY_KEYS, SHIPPED_PINNED_KEYS } from './decision.js'
-import { createPinnedLookup, requestEndpointText } from './endpoint-call.js'
+import { normalizeEndpointProtocol, type EndpointProtocol } from './constants.js'
+import { createPinnedLookup, endpointAuthHeader, endpointRequestPath, requestEndpointText } from './endpoint-call.js'
 import { recordTimeoutFeedback } from './feedback-maps.js'
 import { json, readJson, trustedHosts } from './http-pipeline.js'
 import { LATENCY_SUMMARY_WINDOW, clearLatencySamples, summarizeLatency } from './latency.js'
@@ -970,6 +971,46 @@ export function installRevealRoute(ctx: any): void {
   })
 }
 
+/**
+ * The probe body for one protocol, and the path it goes to.
+ *
+ * This is the SECOND independent request-construction site (the formal channel
+ * is postEndpoint in endpoint-call.ts). Both read the path from the shared
+ * endpointRequestPath and the auth header from endpointAuthHeader, so a drift
+ * between them cannot go unnoticed: a drift here surfaces as a FALSE
+ * test-connection failure, the one outcome an operator cannot tell apart from a
+ * real outage.
+ *
+ * The probe never parses a body (it reads the status only), so each protocol
+ * needs the cheapest body its route ACCEPTS: a 1-token chat for
+ * openai/anthropic, a single-word input for responses, and a minimal systemone
+ * question set. systemone is the one that matters — its choice criteria must be
+ * a record and its score criteria an array, and mixing the two up is the
+ * measured 422 whose message reads like an outage.
+ */
+function probeBodyFor(protocol: EndpointProtocol, model: string): string {
+  if (protocol === 'anthropic') {
+    return JSON.stringify({ model, max_tokens: 1, messages: [{ role: 'user', content: 'ping' }] })
+  }
+  if (protocol === 'responses') {
+    return JSON.stringify({ model, input: [{ role: 'user', content: 'ping' }], max_output_tokens: 16 })
+  }
+  if (protocol === 'systemone') {
+    return JSON.stringify({
+      state: 'ping',
+      model,
+      questions: {
+        ping: {
+          type: 'choice',
+          instructions: 'Is this a health check?',
+          criteria: { yes: 'a health check', no: 'not a health check' },
+        },
+      },
+    })
+  }
+  return JSON.stringify({ model, messages: [{ role: 'user', content: 'ping' }], max_tokens: 1 })
+}
+
 export function installTestRoute(ctx: any, llm: any, endpointUrlFor: () => string = () => ''): void {
   registerCarrierFetchRoute(ctx, {
     path: TEST_ROUTE,
@@ -1002,7 +1043,7 @@ export function installTestRoute(ctx: any, llm: any, endpointUrlFor: () => strin
         // from the request body, so the target is still muzzled to https or
         // loopback — an http probe of an arbitrary intranet host stays closed.
         if (body?.online) {
-          const protocol = body.protocol === 'anthropic' ? 'anthropic' : 'openai'
+          const protocol = normalizeEndpointProtocol(body.protocol)
           const validated = validateReviewerBaseUrl(body.baseUrl ?? '')
           if (!validated.ok) throw new TypeError(validated.reason)
           const baseUrl = validated.baseUrl
@@ -1050,17 +1091,13 @@ export function installTestRoute(ctx: any, llm: any, endpointUrlFor: () => strin
             if (isIP(probeUrl.hostname.replace(/^\[|\]$/g, '')) === 0) probeLookup = createPinnedLookup(resolved.addresses)
           }
           const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-          if (probeApiKey) {
-            if (protocol === 'anthropic') headers['x-api-key'] = probeApiKey
-            else headers.Authorization = `Bearer ${probeApiKey}`
-          }
+          if (probeApiKey) Object.assign(headers, endpointAuthHeader(protocol, probeApiKey))
           const controller = new AbortController()
           const timer = setTimeout(() => controller.abort(), 8_000)
           try {
-            const probePath = protocol === 'anthropic' ? '/messages' : '/chat/completions'
-            const probeBody = protocol === 'anthropic'
-              ? JSON.stringify({ model, max_tokens: 1, messages: [{ role: 'user', content: 'ping' }] })
-              : JSON.stringify({ model, messages: [{ role: 'user', content: 'ping' }], max_tokens: 1 })
+            // Second request-construction site; see probeBodyFor.
+            const probePath = endpointRequestPath(protocol)
+            const probeBody = probeBodyFor(protocol, model)
             const probe = await requestEndpointText(new URL(`${baseUrl}${probePath}`), {
               headers,
               body: probeBody,

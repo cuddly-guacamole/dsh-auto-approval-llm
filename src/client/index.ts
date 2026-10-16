@@ -1,7 +1,7 @@
 import React from 'react'
 import { Button, Input } from '@deepseek-ai/dsh-client-ui-primitives'
 import { normalizeTimeoutAction, hasBreakerNote, hasLockedAskNote, AWAITING_MARKER, LOCKED_ASK_MARKER, REVIEWER_SYSTEM, assembleReviewerSystem, EDITABLE_CONFIG_KEYS, HOST_ONLY_KEYS } from '../auto/decision.js'
-import { THRESHOLD_DEFAULTS, DEFAULT_ALLOW_TOOL_GROUPS } from '../auto/constants.js'
+import { THRESHOLD_DEFAULTS, DEFAULT_ALLOW_TOOL_GROUPS, ENDPOINT_PROTOCOLS, normalizeEndpointProtocol, type EndpointProtocol } from '../auto/constants.js'
 import { formatHostKeyValue, hostOnlyRows } from './host-keys.js'
 import { buildMutateOps, legacyImportBefore, legacyImportOf, legacyImportWrite, legacyUndoWrite, ROW_CONFIG_KEY, usableForm, type ConfigWrite, type LegacyImport, type RowConfigForm } from './row-config.js'
 import { parseRulesText } from '../auto/rules.js'
@@ -227,7 +227,7 @@ interface Draft {
   classifierReasoning: string
   endpointUrl: string
   endpointModel: string
-  endpointProtocol: 'openai' | 'anthropic'
+  endpointProtocol: EndpointProtocol
   allowlist: string
   denyList: string
   humanOnlyList: string
@@ -278,7 +278,7 @@ function draftOf(value: any): Draft {
     reviewerProvider: value?.reviewerProvider ?? '',
     endpointUrl: value?.endpointUrl ?? '',
     endpointModel: value?.endpointModel ?? '',
-    endpointProtocol: ['openai', 'anthropic'].includes(value?.endpointProtocol) ? value.endpointProtocol : 'openai',
+    endpointProtocol: normalizeEndpointProtocol(value?.endpointProtocol),
     allowlist: (value?.allowlist ?? []).join('\n'),
     denyList: (value?.denyList ?? []).join('\n'),
     humanOnlyList: (value?.humanOnlyList ?? []).join('\n'),
@@ -369,7 +369,9 @@ function valueOf(draft: Draft): any {
   value.classifierReasoning = REASONING_VALUES.includes(draft.classifierReasoning) ? draft.classifierReasoning : ''
   if (draft.endpointUrl.trim()) value.endpointUrl = draft.endpointUrl.trim()
   if (draft.endpointModel.trim()) value.endpointModel = draft.endpointModel.trim()
-  if (draft.endpointProtocol === 'openai' || draft.endpointProtocol === 'anthropic') value.endpointProtocol = draft.endpointProtocol
+  // Every known protocol is written back; an unknown draft value is dropped so
+  // it is never saved (the schema union would throw on it).
+  if ((ENDPOINT_PROTOCOLS as readonly string[]).includes(draft.endpointProtocol)) value.endpointProtocol = draft.endpointProtocol
   return value
 }
 
@@ -426,7 +428,7 @@ const INVALID_CONFIG_ENUMS: Record<string, string[]> = {
   llmTakeoverScope: ['low', 'medium-or-below', 'high-or-below'],
   defaultReviewMode: ['manual', 'smart', 'unattended'],
   showSessionPanel: ['on', 'auto', 'off'],
-  endpointProtocol: ['openai', 'anthropic'],
+  endpointProtocol: [...ENDPOINT_PROTOCOLS],
   categoryMode: ['standard', 'aggressive'],
   classifierSource: ['session', 'preset', 'endpoint'],
   reviewerSource: ['session', 'preset', 'endpoint'],
@@ -521,6 +523,8 @@ function protocolOptions(): CapsuleOption[] {
   return [
     { value: 'openai', label: t('option.protocol.openai') },
     { value: 'anthropic', label: t('option.protocol.anthropic') },
+    { value: 'responses', label: t('option.protocol.responses') },
+    { value: 'systemone', label: t('option.protocol.systemone') },
   ]
 }
 
@@ -1988,13 +1992,12 @@ function SettingsSection({ chrome = 'card', form }: { chrome?: 'card' | 'plain';
       ? React.createElement('div', { style: { borderTop: '1px solid var(--dsw-alias-border-l1, rgba(128,128,128,.25))', paddingTop: 10 } },
     React.createElement('div', { className: 'dsa-titleRow' },
       React.createElement('span', { className: 'dsa-title' }, t('settings.reviewer.endpointTitle')),
-      React.createElement('span', { className: 'dsa-titleBadge', style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } }, t('settings.reviewer.endpointLegacy')),
     ),
     React.createElement('p', { className: 'dsa-hint', style: { margin: '4px 0 8px' } }, t('settings.reviewer.endpointHint')),
     row(t('settings.reviewer.protocol'), React.createElement(CapsuleSelect, {
       value: draft.endpointProtocol,
       options: protocolOptions(),
-      onChange: (v: string) => update({ endpointProtocol: v as 'openai' | 'anthropic' }),
+      onChange: (v: string) => update({ endpointProtocol: v as EndpointProtocol }),
     })),
     row(t('settings.reviewer.baseUrl'), React.createElement(Input, {
       value: draft.endpointUrl,

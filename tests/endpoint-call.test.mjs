@@ -17,7 +17,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import {
-  callEndpointText, createPinnedLookup, extractEndpointText, requestEndpointText,
+  callEndpointJson, callEndpointText, createPinnedLookup, endpointAuthHeader,
+  endpointRequestPath, extractEndpointText, requestEndpointText,
 } from '../lib/auto/endpoint-call.js'
 
 /** Local endpoint: records every request and answers with the canned reply. */
@@ -165,7 +166,7 @@ test('the transport really uses the pinned lookup for the connection', async (t)
   assert.equal(server.requests.length, 1, 'the pinned address is what got connected')
 })
 
-test('extractEndpointText: handles both protocol response shapes', () => {
+test('extractEndpointText: handles both legacy protocol response shapes', () => {
   assert.equal(extractEndpointText('openai', { choices: [{ message: { content: 'a' } }] }), 'a')
   assert.equal(extractEndpointText('openai', { choices: [] }), '')
   assert.equal(
@@ -173,4 +174,114 @@ test('extractEndpointText: handles both protocol response shapes', () => {
     'x',
   )
   assert.equal(extractEndpointText('anthropic', { content: 'not-array' }), '')
+})
+
+test('responses: posts instructions+input, carries a bearer key, joins output_text blocks', async (t) => {
+  const server = await startServer(json({
+    output: [
+      { type: 'reasoning', content: [{ type: 'reasoning_text', text: 'IGNORED' }] },
+      { type: 'message', content: [{ type: 'output_text', text: 'one ' }, { type: 'output_text', text: 'two' }] },
+    ],
+  }))
+  t.after(() => server.close())
+  const result = await callEndpointText({
+    baseUrl: server.base, model: 'resp-model', protocol: 'responses',
+    apiKey: 'sk-test', system: 'sys', messages: ['hi'], maxTokens: 512,
+  })
+  assert.deepEqual(result, { ok: true, text: 'one two' }, 'reasoning blocks never contribute to the answer')
+  const request = server.requests[0]
+  assert.equal(request.url, '/responses')
+  assert.equal(request.headers.authorization, 'Bearer sk-test')
+  assert.equal(request.headers['x-api-key'], undefined, 'responses uses the bearer header, not the anthropic one')
+  const body = JSON.parse(request.body)
+  assert.equal(body.instructions, 'sys', 'the system prompt rides the instructions field')
+  assert.deepEqual(body.input, [{ role: 'user', content: 'hi' }])
+  assert.equal(body.max_output_tokens, 512, 'the output budget is max_output_tokens, not max_tokens')
+  assert.equal(body.max_tokens, undefined)
+  assert.equal(body.messages, undefined)
+})
+
+test('responses: reasoning effort is forwarded as reasoning:{effort}, never reasoning_effort', async (t) => {
+  // The /responses route IGNORES reasoning_effort; it honours reasoning.effort.
+  // Forwarding the chat-shaped field would silently drop the operator's choice.
+  const server = await startServer(json({ output: [] }))
+  t.after(() => server.close())
+  await callEndpointText({ baseUrl: server.base, model: 'm', protocol: 'responses', messages: ['x'], reasoningEffort: 'low' })
+  const body = JSON.parse(server.requests[0].body)
+  assert.deepEqual(body.reasoning, { effort: 'low' })
+  assert.equal(body.reasoning_effort, undefined)
+  await callEndpointText({ baseUrl: server.base, model: 'm', protocol: 'responses', messages: ['x'], reasoningEffort: '' })
+  const absent = JSON.parse(server.requests[1].body)
+  assert.equal(absent.reasoning, undefined, 'an empty effort sends no reasoning field at all')
+})
+
+test('responses: a body without an output array yields empty text, never a throw', async (t) => {
+  const server = await startServer(json({}))
+  t.after(() => server.close())
+  const result = await callEndpointText({ baseUrl: server.base, model: 'm', protocol: 'responses', messages: ['x'] })
+  assert.deepEqual(result, { ok: true, text: '' })
+})
+
+test('systemone: posts state+model+questions and is NOT routed through the text exit', async (t) => {
+  const server = await startServer(json({ model: 'typesafe/jev', answers: { ping: { type: 'noul', noul: 0.29 } } }))
+  t.after(() => server.close())
+  // callEndpointText is the TEXT exit. systemone has no text form, so it must
+  // refuse rather than flatten a well-formed typed reply into ''.
+  await assert.rejects(
+    callEndpointText({
+      baseUrl: server.base, model: 'jev-1.13-free', protocol: 'systemone',
+      apiKey: 'sk-test', messages: [], systemone: { state: 'tool_call', questions: { ping: { type: 'noul' } } },
+    }),
+    /typed answers object/,
+    'a well-formed systemone reply must not be flattened into empty text',
+  )
+  const request = server.requests[0]
+  assert.equal(request.url, '/systemone')
+  assert.equal(request.headers.authorization, 'Bearer sk-test')
+  const body = JSON.parse(request.body)
+  assert.equal(body.state, 'tool_call')
+  assert.equal(body.model, 'jev-1.13-free')
+  assert.deepEqual(body.questions, { ping: { type: 'noul' } })
+  assert.equal(body.messages, undefined, 'systemone is not a conversation')
+  assert.equal(body.max_tokens, undefined, 'systemone takes no token budget')
+  assert.equal(body.max_output_tokens, undefined)
+})
+
+test('systemone: callEndpointJson returns the parsed answers object', async (t) => {
+  const server = await startServer(json({ answers: { ping: { type: 'noul', noul: 0.29 } } }))
+  t.after(() => server.close())
+  const result = await callEndpointJson({
+    baseUrl: server.base, model: 'm', protocol: 'systemone', messages: [],
+    systemone: { state: 's', questions: { ping: { type: 'noul' } } },
+  })
+  assert.equal(result.ok, true)
+  assert.equal(result.json.answers.ping.noul, 0.29)
+})
+
+test('systemone: a missing question bundle is refused before any request is sent', async (t) => {
+  const server = await startServer(json({ answers: {} }))
+  t.after(() => server.close())
+  await assert.rejects(
+    callEndpointText({ baseUrl: server.base, model: 'm', protocol: 'systemone', messages: [] }),
+    /needs a systemone/,
+  )
+  assert.equal(server.requests.length, 0, 'a misconfigured systemone call never reaches the network')
+})
+
+test('extractEndpointText: systemone is not a text protocol', () => {
+  assert.throws(
+    () => extractEndpointText('systemone', { answers: { q: { type: 'noul', noul: 0.1 } } }),
+    /typed answers object/,
+  )
+})
+
+test('endpointRequestPath / endpointAuthHeader: one vocabulary for every protocol', () => {
+  assert.equal(endpointRequestPath('openai'), '/chat/completions')
+  assert.equal(endpointRequestPath('anthropic'), '/messages')
+  assert.equal(endpointRequestPath('responses'), '/responses')
+  assert.equal(endpointRequestPath('systemone'), '/systemone')
+  assert.deepEqual(endpointAuthHeader('openai', 'k'), { Authorization: 'Bearer k' })
+  assert.deepEqual(endpointAuthHeader('anthropic', 'k'), { 'x-api-key': 'k' })
+  assert.deepEqual(endpointAuthHeader('responses', 'k'), { Authorization: 'Bearer k' })
+  assert.deepEqual(endpointAuthHeader('systemone', 'k'), { Authorization: 'Bearer k' })
 })

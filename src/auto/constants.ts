@@ -94,6 +94,42 @@ export const DEFAULT_ALLOW_TOOL_GROUPS: ReadonlyArray<{ label: string; tools: re
   },
 ]
 
+/**
+ * The endpoint protocols the shared custom-endpoint config accepts. Four known
+ * values; a genuinely unknown value still falls back to 'openai' at every
+ * normalization point (see model-channel.ts), so this union is the vocabulary,
+ * not the validation.
+ */
+export const ENDPOINT_PROTOCOLS = ['openai', 'anthropic', 'responses', 'systemone'] as const
+export type EndpointProtocol = (typeof ENDPOINT_PROTOCOLS)[number]
+
+/**
+ * 'systemone' answers a typed `answers` object, never assistant text, so it
+ * serves the fast-judgment lane only. The deep-review lane refuses it loudly.
+ */
+export const SYSTEMONE_FAST_LANE_ONLY =
+  'the systemone protocol serves the fast-judgment lane only; the deep-review lane needs a chat-shaped protocol (openai / anthropic / responses)'
+
+/** Narrow an arbitrary value to a known protocol; unknown input keeps 'openai'. */
+export function normalizeEndpointProtocol(value: unknown): EndpointProtocol {
+  return (ENDPOINT_PROTOCOLS as readonly unknown[]).includes(value) ? (value as EndpointProtocol) : 'openai'
+}
+
+/**
+ * systemone decision thresholds. Constants, NOT config keys: this keeps the
+ * 58/43 config-count surface untouched, so they are not tunable from the
+ * settings card. Calibrated shape (v2 report candidate 1): the danger set is
+ * evaluated only under the choice category's whitelist, and the action order is
+ * deny > ask > pass — the reverse of the official cookbook's, matching this
+ * plugin's fail-closed orientation.
+ */
+export const SYSTEMONE_THRESHOLDS = {
+  /** At or above this a danger factor asks for review. */
+  review: 0.3,
+  /** At or above this a danger factor denies outright. */
+  action: 0.6,
+} as const
+
 /** Flat, de-duplicated tool names of every {@link DEFAULT_ALLOW_TOOL_GROUPS}. */
 export const DEFAULT_ALLOW_TOOLS: readonly string[] = [
   ...new Set(DEFAULT_ALLOW_TOOL_GROUPS.flatMap((g) => [...g.tools])),

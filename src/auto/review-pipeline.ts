@@ -8,7 +8,7 @@
  */
 import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { Config } from '../index.js'
-import { THRESHOLD_DEFAULTS } from './constants.js'
+import { SYSTEMONE_FAST_LANE_ONLY, THRESHOLD_DEFAULTS, type EndpointProtocol } from './constants.js'
 import { debugLog } from './debug-and-decisions.js'
 import { assembleReviewerSystem, extractToolPath, frameReviewerInput, parseReview, type ReviewResult } from './decision.js'
 import { callEndpointText } from './endpoint-call.js'
@@ -46,7 +46,7 @@ interface ReviewSnapshot {
   baseUrl?: string
   /** Reviewer model fixed at snapshot time (raw attempts re-read it otherwise). */
   model?: string
-  protocol?: 'openai' | 'anthropic'
+  protocol?: EndpointProtocol
   apiKey?: string
   /** Output budget + reasoning effort, frozen with the rest so a settings
    * change mid-review cannot steer retry N>1 to a different budget/effort. */
@@ -164,6 +164,14 @@ export async function buildReviewSnapshot(
     return { failure: transport.reason }
   }
   if (transport.transport === 'raw') {
+    // systemone answers a typed `answers` object, never assistant text. A
+    // deep review sent over it would either 422 (which reads like an outage) or
+    // come back with nothing to parse, so refuse it here with a message that
+    // names the restriction instead of sending a chat-shaped request into a
+    // protocol that has no chat shape.
+    if (transport.protocol === 'systemone') {
+      return { failure: SYSTEMONE_FAST_LANE_ONLY }
+    }
     const validated = validateReviewerBaseUrl(transport.baseUrl)
     if (!validated.ok) {
       console.warn(`[dsh-auto-approval-llm] ${validated.reason}`)

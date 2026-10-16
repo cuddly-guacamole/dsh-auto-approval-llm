@@ -133,7 +133,7 @@ The table below lists the common keys only; **every key, its full semantics and 
 | `rulesText` | '' | Declarative rules (`[agent:…]` / `[workspace:…]` prefixes) |
 | `allowlist` / `denyList` / `humanOnlyList` | [] | Exact tool-name lists |
 | `classifierSource` / `reviewerSource` | `session` | Model source per channel: session / preset / endpoint |
-| `endpointUrl` / `endpointModel` / `endpointProtocol` | '' / '' / `openai` | Shared custom endpoint |
+| `endpointUrl` / `endpointModel` / `endpointProtocol` | '' / '' / `openai` | Shared custom endpoint; four protocols: openai · anthropic · responses · systemone (systemone serves the fast-judgment lane only) |
 | `categoryPolicy` / `categoryMode` / `trustedDirs` | `{}` / `standard` / [] | Category tri-states, location mode and trusted directories |
 | `privilegeAutoReview` / `protectedAutoReview` | false | Unlock privilege / protected respectively (differences in docs/17) |
 | `learningEnabled` / `learningThreshold` | false / 3 | Confirmation-based learning switch and threshold (2–10) |

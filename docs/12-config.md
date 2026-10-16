@@ -19,7 +19,7 @@
 | `reviewerProvider / reviewerModel` | '' | preset 档成对必填 |
 | `reviewerReasoning` | '' | 深度评审通道推理强度（语义同 classifierReasoning） |
 | `reviewerMaxTokens` | 2048 | 深度评审输出上限（256–16384） |
-| `endpointUrl / endpointModel / endpointProtocol` | ''/''/openai | 共享自定义端点（两通道 endpoint 源共用）；openai · anthropic |
+| `endpointUrl / endpointModel / endpointProtocol` | ''/''/openai | 共享自定义端点（两通道 endpoint 源共用）；协议四值 openai · anthropic · responses · systemone。`systemone` 的响应是类型化 `answers` 对象而非文本，因此**只服务快速判断通道**；深度评审通道选到它时显式报错，不发 chat 形状的请求 |
 | `timeoutAction` | reject | reject · allow · low-risk-allow |
 | `llmReviewScope` | low-or-above | 哪些档送审 |
 | `llmTakeoverScope` | medium-or-below | 哪些档可接管（取值 `low` / `medium-or-below` / `high-or-below`；schema 接受 `high-or-below` 但行为与 `medium-or-below` 等同——**reviewer takeover 车道**从不把 HIGH 的控制权交给 LLM，选它不会带来 HIGH 自动化）。注意预分类器快径（pre-execute 的 classifier 车道）不受此键约束：它按策略判定与 trusted 显式授权放行，与 reviewer takeover 是两条独立车道；本键只描述后者 |

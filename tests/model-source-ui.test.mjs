@@ -85,7 +85,10 @@ test('client bundle: the invalid-config mirror tables know the new keys and 3-va
 })
 
 test('client bundle: the source-switch UI copy is wired (no retired key regression)', () => {
-  for (const key of ['settings.reviewer.source.classifier', 'settings.reviewer.source.reviewer', 'settings.reviewer.source.provider', 'settings.reviewer.source.model', 'option.modelSource.session', 'option.modelSource.preset', 'option.modelSource.endpoint', 'settings.reviewer.endpointLegacy']) {
+  // settings.reviewer.endpointLegacy is deliberately absent: the "no longer
+  // maintained" wording was removed from the UI, the locale and the source
+  // comments, so a key that resurfaced here would be a regression.
+  for (const key of ['settings.reviewer.source.classifier', 'settings.reviewer.source.reviewer', 'settings.reviewer.source.provider', 'settings.reviewer.source.model', 'option.modelSource.session', 'option.modelSource.preset', 'option.modelSource.endpoint']) {
     assert.ok(client.includes(key), `locale key ${key} is referenced by the UI`)
   }
   // The retired provider-dropdown family must stay gone. The bundle writes its
@@ -180,4 +183,50 @@ test('client bundle: history card has a separate clear-timings action left of cl
   assert.ok(client.includes('settings.history.clearLatency'), 'the clear-timings button label key is referenced')
   assert.ok(client.includes('clearHistory'), 'the clear-history handler stays bundled')
   assert.ok(client.includes('hasLatency'), 'the timings-present guard is bundled')
+})
+
+test('client bundle: the protocol vocabulary carries all four values end to end', () => {
+  // Four sync points in the client bundle must know the two new protocols:
+  // the draft type, the read whitelist (draftOf), the save whitelist (valueOf)
+  // and the enum mirror table. A miss in any one of them is silent — the read
+  // side shows the wrong protocol, the save side drops it, and the enum table
+  // stops rejecting a value the schema refuses.
+  // The enum table is DERIVED from the one vocabulary constant (the bundle
+  // emits the spread, not a hand-copied literal array), so the two assertions
+  // below are the pair that matters: the constant carries all four values, and
+  // the enum entry is wired to it. A hand-written copy here would be the drift
+  // this pins against.
+  const constAt = client.indexOf('const ENDPOINT_PROTOCOLS = [')
+  assert.ok(constAt !== -1, 'the shared protocol vocabulary is bundled')
+  const vocabulary = client.slice(constAt, constAt + 200)
+  for (const protocol of ['"openai"', '"anthropic"', '"responses"', '"systemone"']) {
+    assert.ok(vocabulary.includes(protocol), `the protocol vocabulary must carry ${protocol}`)
+  }
+  const enumsAt = client.indexOf('INVALID_CONFIG_ENUMS')
+  const at = client.indexOf('endpointProtocol: [', enumsAt)
+  assert.ok(at !== -1, 'the endpointProtocol enum entry is present')
+  assert.ok(
+    client.slice(at, at + 60).includes('...ENDPOINT_PROTOCOLS'),
+    'the enum mirror must be derived from the shared vocabulary, not a hand-copied list',
+  )
+  // The two new labels are wired to the dropdown.
+  assert.ok(client.includes('option.protocol.responses'), 'the responses label is referenced')
+  assert.ok(client.includes('option.protocol.systemone'), 'the systemone label is referenced')
+  // The dropdown offers one entry per known protocol (the options array).
+  const optionsAt = client.indexOf('function protocolOptions')
+  assert.ok(optionsAt !== -1, 'protocolOptions is present')
+  const options = client.slice(optionsAt, optionsAt + 900)
+  for (const protocol of ['openai', 'anthropic', 'responses', 'systemone']) {
+    assert.ok(options.includes(`value: "${protocol}"`), `the dropdown must offer ${protocol}`)
+    assert.ok(options.includes(`option.protocol.${protocol}`), `${protocol} must have its own label`)
+  }
+})
+
+test('client bundle: the "no longer maintained" wording is gone for good', () => {
+  // The wording was removed from the UI, both locales and the source comments.
+  // The bundle must not carry the badge element or the locale key either.
+  assert.ok(!client.includes('endpointLegacy'), 'the retired locale key must not resurface in the bundle')
+  assert.ok(!client.includes('不再维护'), 'the Chinese wording must not resurface')
+  assert.ok(!client.includes('no longer maintained'), 'the English wording must not resurface')
+  assert.ok(!client.includes('dsa-titleBadge'), 'the badge element that carried the wording is gone')
 })

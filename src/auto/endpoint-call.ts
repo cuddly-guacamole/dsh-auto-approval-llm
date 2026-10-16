@@ -1,9 +1,9 @@
 /**
- * Shared raw-endpoint text call for the "endpoint" model source (and the
- * endpoint test probe). One implementation owns the protocol routing
- * (OpenAI chat/completions vs Anthropic messages), the SSRF/redirect fence and
- * the response-text extraction, so the reviewer, the classifier and the test
- * probe cannot drift apart on trust checks (security ruling: a
+ * Shared raw-endpoint call for the "endpoint" model source (and the endpoint
+ * test probe). One implementation owns the protocol routing (OpenAI
+ * chat/completions, Anthropic messages, Responses, System One), the
+ * SSRF/redirect fence and the response reading, so the reviewer, the classifier
+ * and the test probe cannot drift apart on trust checks (security ruling: a
  * "shared fetch" that only shares the body builder but not the fence would be
  * a vulnerability).
  *
@@ -23,17 +23,26 @@
 import { request as httpRequest } from 'node:http'
 import { request as httpsRequest } from 'node:https'
 import { isIP } from 'node:net'
+import type { EndpointProtocol } from './constants.js'
 import { isLoopbackHostname, resolvePublicReviewerTarget, validateReviewerBaseUrl } from './trust.js'
 
 export interface EndpointCallInput {
   baseUrl: string
   model: string
-  protocol: 'openai' | 'anthropic'
+  protocol: EndpointProtocol
   apiKey?: string
   /** system prompt (openai: system message; anthropic: system field). */
   system?: string
   /** User message(s) text. */
   messages: string[]
+  /**
+   * systemone only: the typed question bundle. That protocol answers an
+   * `answers` object keyed by question id, never assistant text, so the caller
+   * supplies the questions verbatim and reads the parsed JSON back through
+   * {@link callEndpointJson}. Required for that protocol — a systemone call
+   * without it is a programming error, not a request to send.
+   */
+  systemone?: { state: string; questions: Record<string, unknown> }
   maxTokens?: number
   /** Reasoning-effort control forwarded verbatim to OpenAI-compatible bodies
    * (`reasoning_effort`) when set. ''/absent = no field (provider default).
@@ -45,6 +54,16 @@ export interface EndpointCallInput {
 
 export type EndpointCallResult =
   | { ok: true; text: string }
+  | { ok: false; status?: number; message: string; retryAfterMs?: number }
+
+/**
+ * One endpoint call that returns the PARSED body instead of extracted text.
+ * The systemone protocol needs this: its answer is a typed `answers` object
+ * with no text form, and flattening it through extractEndpointText would erase
+ * the very fields the classifier's fail-closed contract validates.
+ */
+export type EndpointJsonResult =
+  | { ok: true; json: any }
   | { ok: false; status?: number; message: string; retryAfterMs?: number }
 
 /**
@@ -63,13 +82,58 @@ function retryAfterMs(value: string | null | undefined): number | undefined {
   return undefined
 }
 
-/** Extract the text from a protocol response body (openai/anthropic shapes). */
-export function extractEndpointText(protocol: 'openai' | 'anthropic', json: any): string {
+/**
+ * The request path for one protocol. Shared with the settings-card probe so the
+ * two request-construction sites cannot disagree about where a protocol lives.
+ */
+export function endpointRequestPath(protocol: EndpointProtocol): string {
+  if (protocol === 'anthropic') return '/messages'
+  if (protocol === 'responses') return '/responses'
+  if (protocol === 'systemone') return '/systemone'
+  return '/chat/completions'
+}
+
+/**
+ * The auth header for one protocol. Shared with the settings-card probe (same
+ * reason as {@link endpointRequestPath}); an absent key attaches no header at
+ * all, which is the caller's decision, not this helper's.
+ */
+export function endpointAuthHeader(protocol: EndpointProtocol, apiKey: string): Record<string, string> {
+  return protocol === 'anthropic' ? { 'x-api-key': apiKey } : { Authorization: `Bearer ${apiKey}` }
+}
+
+/**
+ * Extract the assistant text from a protocol response body.
+ *
+ * 'responses' joins the `output[].content[].text` blocks whose
+ * `content[].type === 'output_text'`; a `reasoning`-type block carries no
+ * answer and is skipped.
+ *
+ * 'systemone' is deliberately NOT an exit here: it answers a typed `answers`
+ * object, so reading it as text would turn a well-formed reply into empty text
+ * and let a consumer treat "no answer" as "no objection". It throws instead;
+ * that protocol is read through {@link callEndpointJson}.
+ */
+export function extractEndpointText(protocol: EndpointProtocol, json: any): string {
+  if (protocol === 'systemone') {
+    throw new TypeError(
+      'the systemone protocol answers a typed answers object, never assistant text; read it through callEndpointJson',
+    )
+  }
   if (protocol === 'anthropic') {
     const content = json?.content
     return Array.isArray(content)
       ? content.map((block: any) => (block?.type === 'text' ? block.text ?? '' : '')).join('')
       : ''
+  }
+  if (protocol === 'responses') {
+    const output = json?.output
+    if (!Array.isArray(output)) return ''
+    return output
+      .flatMap((item: any) => (Array.isArray(item?.content) ? item.content : []))
+      .filter((block: any) => block?.type === 'output_text')
+      .map((block: any) => block.text ?? '')
+      .join('')
   }
   return json?.choices?.[0]?.message?.content ?? ''
 }
@@ -188,6 +252,29 @@ export function requestEndpointText(
  * status so each consumer can map to its own error vocabulary.
  */
 export async function callEndpointText(input: EndpointCallInput): Promise<EndpointCallResult> {
+  const response = await postEndpoint(input)
+  if (!response.ok) return response
+  return { ok: true, text: extractEndpointText(input.protocol, response.json) }
+}
+
+/**
+ * POST one exchange and return the parsed body. Same transport, fence, headers
+ * and status mapping as {@link callEndpointText}; only the response reading
+ * differs. 'systemone' is the protocol that needs it.
+ */
+export async function callEndpointJson(input: EndpointCallInput): Promise<EndpointJsonResult> {
+  return postEndpoint(input)
+}
+
+type EndpointPostResult = { ok: true; json: any } | { ok: false; status?: number; message: string; retryAfterMs?: number }
+
+/**
+ * The single request-construction site for the formal channel: validate the
+ * target, pin the connection, build the path/headers/body for the protocol,
+ * enforce the byte ceiling and map a non-2xx to the caller's own vocabulary.
+ * Every protocol branch lives here so the four of them cannot drift.
+ */
+async function postEndpoint(input: EndpointCallInput): Promise<EndpointPostResult> {
   const validated = validateReviewerBaseUrl(input.baseUrl)
   if (!validated.ok) throw new TypeError(validated.reason)
   if (validated.baseUrl === '') {
@@ -208,30 +295,15 @@ export async function callEndpointText(input: EndpointCallInput): Promise<Endpoi
     if (isIP(host.replace(/^\[|\]$/g, '')) === 0) lookup = createPinnedLookup(resolved.addresses)
   }
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  if (input.apiKey) {
-    if (input.protocol === 'anthropic') headers['x-api-key'] = input.apiKey
-    else headers.Authorization = `Bearer ${input.apiKey}`
-  }
+  if (input.apiKey) Object.assign(headers, endpointAuthHeader(input.protocol, input.apiKey))
   const maxTokens = input.maxTokens ?? 256
   const openaiMessages: any[] = []
   if (input.protocol === 'openai') {
     if (input.system) openaiMessages.push({ role: 'system', content: input.system })
     for (const text of input.messages) openaiMessages.push({ role: 'user', content: text })
   }
-  const path = input.protocol === 'anthropic' ? '/messages' : '/chat/completions'
-  const body = input.protocol === 'anthropic'
-    ? JSON.stringify({
-      model: input.model || undefined,
-      max_tokens: maxTokens,
-      ...(input.system ? { system: input.system } : {}),
-      messages: input.messages.map((text) => ({ role: 'user', content: text })),
-    })
-    : JSON.stringify({
-      model: input.model || undefined,
-      max_tokens: maxTokens,
-      messages: openaiMessages,
-      ...(input.reasoningEffort && input.reasoningEffort !== '' ? { reasoning_effort: input.reasoningEffort } : {}),
-    })
+  const path = endpointRequestPath(input.protocol)
+  const body = buildEndpointBody(input, maxTokens, openaiMessages)
   headers['Content-Length'] = String(Buffer.byteLength(body))
   const target = new URL(`${baseUrl}${path}`)
   const response = await requestEndpointText(target, {
@@ -252,5 +324,55 @@ export async function callEndpointText(input: EndpointCallInput): Promise<Endpoi
     }
   }
   const json: any = JSON.parse(response.body)
-  return { ok: true, text: extractEndpointText(input.protocol, json) }
+  return { ok: true, json }
+}
+
+/**
+ * The per-protocol request body. Four shapes, measured against the local
+ * gateway:
+ *  - openai    — `messages[]` + `max_tokens`, `reasoning_effort` when set;
+ *  - anthropic — `system` + `messages[]` + `max_tokens`;
+ *  - responses — `instructions` (the system prompt) + `input[]` +
+ *    `max_output_tokens`. That route IGNORES `reasoning_effort`; it honours
+ *    `reasoning: { effort }`, which is what this branch forwards.
+ *  - systemone — `state` + `model` + `questions{}`. It is not a conversation:
+ *    no system prompt, no messages, no token budget. Sending a chat shape here
+ *    is the 422-with-a-misleading-"Endpoint is unavailable" mistake.
+ */
+function buildEndpointBody(input: EndpointCallInput, maxTokens: number, openaiMessages: any[]): string {
+  if (input.protocol === 'anthropic') {
+    return JSON.stringify({
+      model: input.model || undefined,
+      max_tokens: maxTokens,
+      ...(input.system ? { system: input.system } : {}),
+      messages: input.messages.map((text) => ({ role: 'user', content: text })),
+    })
+  }
+  if (input.protocol === 'responses') {
+    return JSON.stringify({
+      model: input.model || undefined,
+      instructions: input.system ?? '',
+      input: input.messages.map((text) => ({ role: 'user', content: text })),
+      max_output_tokens: maxTokens,
+      ...(input.reasoningEffort && input.reasoningEffort !== ''
+        ? { reasoning: { effort: input.reasoningEffort } }
+        : {}),
+    })
+  }
+  if (input.protocol === 'systemone') {
+    if (input.systemone === undefined) {
+      throw new TypeError('the systemone protocol needs a systemone { state, questions } payload')
+    }
+    return JSON.stringify({
+      state: input.systemone.state,
+      model: input.model || undefined,
+      questions: input.systemone.questions,
+    })
+  }
+  return JSON.stringify({
+    model: input.model || undefined,
+    max_tokens: maxTokens,
+    messages: openaiMessages,
+    ...(input.reasoningEffort && input.reasoningEffort !== '' ? { reasoning_effort: input.reasoningEffort } : {}),
+  })
 }

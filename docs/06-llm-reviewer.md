@@ -42,6 +42,8 @@ flowchart TD
 | `内容类键（content/body/payload/data/text/old_string/new_string/description/justification）` | → `[redacted-{key}:{len}-chars]`（防 bulk 泄进 token 预算） |
 | `结构` | 递归深度 ≤3；数组 ≤25；对象键 ≤50；文本 ≤1000 字符 |
 
+本表的范围是**凭据形状**的材料（密钥、令牌、连接串，以及承载它们的键名）。通用个人数据类别**不在脱敏范围内**：美国社会安全号（SSN）、护照号、IBAN、生日、MAC 地址、序列号、家目录用户名、`user@host`、公网 IP、云存储桶地址一律原样保留。原因是这条通道**单向**——脱敏后的值没有还原路径，而这些模式在源码与日志上误报率高，一旦误判就会永久抹掉评审器赖以裁决的信息，直接劣化放行/拒绝判定。
+
 ## 6.3　系统提示词（在线/会话共用 REVIEWER_SYSTEM，可拼 safetyPrompt）
 
 ```text

@@ -6,6 +6,8 @@ import { randomUUID } from 'node:crypto';
 import { classifierSystemPrompt, parseClassifierDecision } from './classifier.js';
 import { PLUGIN_MESSAGE_SOURCE } from './message-source.js';
 import { callEndpointText } from './endpoint-call.js';
+import { normalizeEndpointProtocol } from './constants.js';
+import { classifyWithSystemone } from './systemone-classifier.js';
 function classifierPayload(input) {
     return JSON.stringify({
         toolName: input.toolName,
@@ -120,10 +122,27 @@ export function createEndpointClassifier(config) {
             }
             const timeout = AbortSignal.timeout(config.timeoutMs ?? 8_000);
             const combined = AbortSignal.any([signal, timeout]);
+            const protocol = normalizeEndpointProtocol(endpoint?.protocol);
+            // systemone is a different lane, not a different transport: it
+            // answers a typed answers object that this module's mapper turns
+            // into the SAME {decision, reason} contract parseClassifierDecision
+            // enforces. The chat-shaped call below cannot read it (there is no
+            // text), so the two protocols branch here rather than sharing a call.
+            if (protocol === 'systemone') {
+                return parseClassifierDecision(await classifyWithSystemone({
+                    baseUrl: url,
+                    model,
+                    protocol,
+                    apiKey: endpoint?.apiKey,
+                    input,
+                    signal: combined,
+                    maxOutputTokens: config.maxOutputTokens ?? 1_024,
+                }));
+            }
             const result = await callEndpointText({
                 baseUrl: url,
                 model,
-                protocol: endpoint?.protocol === 'anthropic' ? 'anthropic' : 'openai',
+                protocol,
                 apiKey: endpoint?.apiKey,
                 system: classifierSystemPrompt(input.mode === 'aggressive' && input.aggressiveAuto === true && input.riskTier !== 'HIGH' ? 'aggressive' : 'standard'),
                 messages: [classifierPayload(input)],

@@ -6,8 +6,8 @@
  * One semantic, three sources (llm-channel-unify):
  *   session  — follow the current session's provider/model route
  *   preset   — use a provider/model the DSH host has registered (host LLM)
- *   endpoint — use a custom OpenAI/Anthropic-compatible endpoint (raw fetch;
- *              the shared endpoint config is lane-agnostic by design)
+ *   endpoint — use a custom endpoint speaking one of the four known protocols
+ *              (raw fetch; the shared endpoint config is lane-agnostic)
  *
  * Half-configuration discipline (user ruling): an explicit preset
  * or endpoint choice that is misconfigured fails LOUDLY at the consumer —
@@ -15,6 +15,8 @@
  * a specific model; a silent fallback would hide the misconfiguration). Only a
  * `session` source carrying leftover garbage values is silently cleaned.
  */
+import { normalizeEndpointProtocol, type EndpointProtocol } from './constants.js'
+
 export type ModelSource = 'session' | 'preset' | 'endpoint'
 
 export interface LaneChannel {
@@ -32,12 +34,12 @@ export interface NormalizedLane extends LaneChannel {
 export interface SharedEndpoint {
   url: string
   model: string
-  protocol: 'openai' | 'anthropic'
+  protocol: EndpointProtocol
 }
 
 export type Transport =
   | { transport: 'host'; provider: string; model: string }
-  | { transport: 'raw'; baseUrl: string; model: string; protocol: 'openai' | 'anthropic' }
+  | { transport: 'raw'; baseUrl: string; model: string; protocol: EndpointProtocol }
   | { transport: 'none'; reason: string }
 
 const nonEmpty = (v: string): boolean => String(v ?? '').trim().length > 0
@@ -103,17 +105,22 @@ export function resolveTransport(
       transport: 'raw',
       baseUrl: endpoint.url.trim(),
       model: endpoint.model.trim(),
-      protocol: endpoint.protocol === 'anthropic' ? 'anthropic' : 'openai',
+      protocol: normalizeEndpointProtocol(endpoint.protocol),
     }
   }
   return { transport: 'none', reason: 'endpoint source needs a URL and model' }
 }
 
-/** Shared endpoint normalization: session-like cleaning of empty protocol. */
+/**
+ * Shared endpoint normalization: trims the pair and narrows the protocol to one
+ * of the four known values. A known value passes through untouched (including
+ * 'responses' and 'systemone'); a genuinely unknown value keeps the historical
+ * 'openai' fallback rather than inventing a fifth protocol.
+ */
 export function normalizeSharedEndpoint(raw: Partial<SharedEndpoint>): SharedEndpoint {
   return {
     url: String(raw.url ?? '').trim(),
     model: String(raw.model ?? '').trim(),
-    protocol: raw.protocol === 'anthropic' ? 'anthropic' : 'openai',
+    protocol: normalizeEndpointProtocol(raw.protocol),
   }
 }

@@ -154,3 +154,69 @@ test('review snapshot: anthropic endpoint protocol flows into the snapshot', asy
   assert.equal(snap.transport, 'raw')
   assert.equal(snap.protocol, 'anthropic')
 })
+
+test('review snapshot: systemone is refused loudly, never sent as a chat-shaped request', async () => {
+  // systemone answers a typed `answers` object, never assistant text. The deep
+  // review lane reads text, so selecting systemone there must fail with a
+  // message that names the restriction — not send a chat-shaped request and
+  // settle on empty text (which a caller could read as "no objection").
+  const snap = await runSnapshot('sk-test', {
+    reviewerSource: 'endpoint',
+    endpointUrl: 'http://127.0.0.1:18777',
+    endpointModel: 'jev-1.13-free',
+    endpointProtocol: 'systemone',
+  })
+  assert.equal('transport' in snap, false, 'no transport is resolved for a refused protocol')
+  assert.match(snap.failure, /systemone/)
+  assert.match(snap.failure, /fast-judgment lane/)
+  assert.match(snap.failure, /deep-review lane/)
+})
+
+test('review snapshot: responses is a chat-shaped protocol and is NOT refused', async () => {
+  // The refusal must be specific to systemone: responses carries text, so the
+  // deep-review lane uses it normally.
+  const snap = await runSnapshot('sk-test', {
+    reviewerSource: 'endpoint',
+    endpointUrl: 'http://127.0.0.1:18777',
+    endpointModel: 'gpt-x',
+    endpointProtocol: 'responses',
+  })
+  assert.equal(snap.transport, 'raw')
+  assert.equal(snap.protocol, 'responses')
+})
+
+test('review: a systemone deep review never sends a request to the endpoint', async () => {
+  // The refusal must happen at snapshot time, BEFORE any request: the design's
+  // requirement is "fail loudly ... rather than sending a chat-shaped request
+  // and returning empty text". A local server counts the requests it receives.
+  const { createServer } = await import('node:http')
+  // The review loop lives in its own module (the entry wires it), so the test
+  // drives it where it is written.
+  const { reviewWithLLM } = await import('../lib/auto/review-pipeline.js')
+  let received = 0
+  const server = createServer((req, res) => {
+    received += 1
+    req.resume()
+    req.on('end', () => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end('{}') })
+  })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  try {
+    const base = `http://127.0.0.1:${server.address().port}`
+    const config = snapshotConfig({
+      reviewerSource: 'endpoint',
+      endpointUrl: base,
+      endpointModel: 'jev-1.13-free',
+      endpointProtocol: 'systemone',
+    })
+    const outcome = await reviewWithLLM(
+      snapshotCredentials('sk-test'), { stream: () => { throw new Error('the host LLM must not be used') } },
+      snapshotTools, snapshotSession, { ...snapshotReq, signal: new AbortController().signal }, config,
+      5_000, {}, { maxRetries: 0, budgetMs: 5_000, asyncPath: false },
+    )
+    assert.equal(outcome.review.decision, 'ESCALATE', 'the review escalates instead of settling')
+    assert.match(outcome.review.failure, /fast-judgment lane/)
+    assert.equal(received, 0, 'not one request may reach the endpoint')
+  } finally {
+    await new Promise((resolve) => server.close(resolve))
+  }
+})
