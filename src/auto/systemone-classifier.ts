@@ -254,10 +254,18 @@ export function mapSystemoneAnswers(json: any): { decision: 'allow' | 'ask' | 'd
 
   const { review, action } = SYSTEMONE_THRESHOLDS
   let strongestAsk: { factor: SystemoneDangerFactor; value: number } | undefined
+  // The highest factor the category whitelist actually EVALUATES. The pass
+  // reason quotes this, never the global maximum: a factor the whitelist
+  // excluded did not take part in the decision, so a number read off it would
+  // not satisfy the relation the sentence prints.
+  let highestEvaluated: { factor: SystemoneDangerFactor; value: number } | undefined
   for (const factor of SYSTEMONE_DANGER_FACTORS) {
     const value = probabilities.get(factor)!
     // Shape 2: the factor is only evaluated under its whitelist categories.
     if (!SYSTEMONE_FACTOR_WHITELIST[factor].includes(category)) continue
+    if (highestEvaluated === undefined || value > highestEvaluated.value) {
+      highestEvaluated = { factor, value }
+    }
     if (value >= action) {
       // deny > ask > pass: the first factor at the action threshold decides.
       return {
@@ -276,10 +284,15 @@ export function mapSystemoneAnswers(json: any): { decision: 'allow' | 'ask' | 'd
       reason: `systemone ask: ${strongestAsk.factor}=${fixed(strongestAsk.value)} >= review ${fixed(review)} (category ${category})`,
     }
   }
-  const highest = [...probabilities.entries()].reduce((best, entry) => (entry[1] > best[1] ? entry : best))
+  // Every evaluated factor is below review here, so the pass reason is true by
+  // construction. A category whose whitelist evaluates nothing says so
+  // instead of quoting a number no threshold was applied to.
   return {
     decision: 'allow',
-    reason: `systemone pass: category ${category}, highest danger ${highest[0]}=${fixed(highest[1])} below review ${fixed(review)}`,
+    reason:
+      highestEvaluated === undefined
+        ? `systemone pass: category ${category}, the whitelist evaluates no danger factor`
+        : `systemone pass: category ${category}, highest evaluated danger ${highestEvaluated.factor}=${fixed(highestEvaluated.value)} below review ${fixed(review)}`,
   }
 }
 

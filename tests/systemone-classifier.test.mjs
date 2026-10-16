@@ -145,6 +145,64 @@ test('mapping: a safe reading passes, and only a danger factor may deny', () => 
   assert.deepEqual(mapSystemoneAnswers({ answers: safeAnswers() }).decision, 'allow')
 })
 
+test('mapping: the pass reason states a relation that actually holds', () => {
+  // The reason lands in the audit line and the history row (llmReason), so it
+  // must be true of the decision it describes. Before this contract the pass
+  // branch printed the GLOBAL maximum across all four factors even when the
+  // category whitelist had excluded it, producing "highest danger
+  // irreversibly_destroys_data=0.99 below review 0.30": a sentence asserting a
+  // value is below a threshold it is three times above.
+  const { review } = SYSTEMONE_THRESHOLDS
+  const allHigh = (category) => {
+    const answers = {}
+    for (const factor of SYSTEMONE_DANGER_FACTORS) answers[factor] = { type: 'noul', noul: 0.99 }
+    answers.category = { type: 'choice', choice: category }
+    return { answers }
+  }
+
+  // A category whose whitelist excludes every danger factor cannot quote any
+  // danger value as being below review.
+  for (const category of ['read_only', 'build_or_test', 'remote_publish']) {
+    const evaluated = SYSTEMONE_DANGER_FACTORS.filter((f) => SYSTEMONE_FACTOR_WHITELIST[f].includes(category))
+    assert.equal(evaluated.length, 0, `${category} is expected to whitelist no danger factor`)
+    const decision = mapSystemoneAnswers(allHigh(category))
+    assert.equal(decision.decision, 'allow')
+    assert.ok(
+      !/\d+\.\d\d/.test(decision.reason),
+      `${category}: the reason must not quote an unevaluated danger value: ${decision.reason}`,
+    )
+    assert.ok(
+      !/highest (evaluated )?danger/.test(decision.reason),
+      `${category}: the reason must not claim an evaluated danger factor: ${decision.reason}`,
+    )
+    assert.match(decision.reason, /no danger factor/, `${category}: the reason must say the whitelist evaluates none`)
+  }
+
+  // For a category that DOES evaluate factors, the quoted value must really be
+  // below review, and it must be the highest one that was evaluated.
+  for (const category of ['file_write', 'version_control', 'network_fetch', 'install_deps']) {
+    const evaluated = SYSTEMONE_DANGER_FACTORS.filter((f) => SYSTEMONE_FACTOR_WHITELIST[f].includes(category))
+    assert.ok(evaluated.length > 0, `${category} evaluates at least one factor`)
+    const answers = {}
+    for (const factor of SYSTEMONE_DANGER_FACTORS) answers[factor] = { type: 'noul', noul: 0.99 }
+    // The evaluated factors are safely low; the EXCLUDED ones stay at 0.99, so a
+    // reason quoting the global maximum would name an excluded factor.
+    for (const factor of evaluated) answers[factor] = { type: 'noul', noul: 0.05 }
+
+    const decision = mapSystemoneAnswers({ answers: { ...answers, category: { type: 'choice', choice: category } } })
+    assert.equal(decision.decision, 'allow')
+    const quoted = decision.reason.match(/highest evaluated danger ([a-z_]+)=([0-9.]+)/)
+    assert.ok(quoted, `${category}: the reason must name an evaluated factor: ${decision.reason}`)
+    const [, factor, value] = quoted
+    assert.ok(evaluated.includes(factor), `${category}: the quoted factor ${factor} must have been evaluated`)
+    assert.ok(Number(value) < review, `${category}: the quoted value ${value} must be below review ${review}`)
+    assert.ok(
+      !decision.reason.includes('irreversibly_destroys_data=0.99'),
+      `${category}: an excluded high factor must not appear as if it had been evaluated`,
+    )
+  }
+})
+
 test('mapping: review <= value < action asks, action <= value denies', () => {
   const { review, action } = SYSTEMONE_THRESHOLDS
   assert.equal(mapSystemoneAnswers({ answers: answersWith('irreversibly_destroys_data', review, 'delete') }).decision, 'ask')
