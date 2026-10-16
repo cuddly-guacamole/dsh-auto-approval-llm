@@ -298,6 +298,37 @@ test('fail-closed: an out-of-[0,1] danger value throws and never allows', () => 
   }
 })
 
+test('fail-closed: a danger entry that does not declare type "noul" throws and never allows', () => {
+  // The type discriminant names the question an entry answers. An entry that
+  // declares a different type (or none) while still carrying a low `noul` field
+  // is the "best-effort field read" the module forbids: reading the number off it
+  // would let a reply of the wrong SHAPE decide, and with a low value that means
+  // allow. A low noul below review is exactly the reaching-allow case.
+  const wrongType = [
+    ['choice with a deniable choice', { type: 'choice', choice: 'delete', noul: 0.01 }],
+    ['score', { type: 'score', score: 3, noul: 0.01 }],
+    ['a type the question set never emits', { type: 'boolean', noul: 0.01 }],
+    ['no type at all', { noul: 0.01 }],
+  ]
+  for (const [label, entry] of wrongType) {
+    for (const factor of SYSTEMONE_DANGER_FACTORS) {
+      const answers = safeAnswers({ [factor]: entry })
+      assert.throws(
+        () => mapSystemoneAnswers({ answers }),
+        /does not declare type "noul"/,
+        `${factor} carrying ${label} must throw`,
+      )
+      assertNeverAllows({ answers }, `${factor} carrying ${label}`)
+    }
+  }
+
+  // Discriminating control: the SAME low noul with the correct discriminant
+  // resolves allow, so the assertions above cannot pass vacuously — the wrong
+  // type is the only difference between allow and the throw.
+  const correct = safeAnswers({ irreversibly_destroys_data: { type: 'noul', noul: 0.01 } })
+  assert.equal(mapSystemoneAnswers({ answers: correct }).decision, 'allow')
+})
+
 test('fail-closed: an unknown choice category throws and never allows', () => {
   const bad = ['no_such_category', '', 'READ_ONLY', null, 7, { read_only: true }]
   for (const choice of bad) {

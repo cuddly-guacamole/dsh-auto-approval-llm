@@ -47,7 +47,7 @@ src/
 │    ├─ session-introspect.ts 78  只读会话内省与倒计时动作：会话事件/权限服务派生值，无模块态、无文件、无审计副作用
 │    ├─ shell.ts         3712 bash/pwsh 词法分解 + 整行熔断 + 逐段静态分类（最大单文件）
 │    ├─ symlink.ts       182  符号链接创建与目标校验
-│    ├─ systemone-classifier.ts 310  systemone 协议 → 快速判断：11 问打包、形状 2 类别白名单、0.30/0.60 阈值；六类畸形响应一律抛错（fail-closed，由调用方 catch 收敛为 ask）
+│    ├─ systemone-classifier.ts 316  systemone 协议 → 快速判断：11 问打包、形状 2 类别白名单、0.30/0.60 阈值；六类畸形响应一律抛错（fail-closed，由调用方 catch 收敛为 ask）
 │    ├─ tool-stats.ts    96   工具调用统计收集
 │    ├─ trust.ts         307  web 路由信任平面（loopback/LAN 边界、Host 伪造防护、在线端点 URL 校验）
 │    └─ trusted-intent.ts 260  受信用户意图窗口：哪些用户消息与 ask_user_question 作答构成当前调用的授权证据

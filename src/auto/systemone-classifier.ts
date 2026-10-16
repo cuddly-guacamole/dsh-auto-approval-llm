@@ -186,14 +186,20 @@ export function systemoneQuestions(): Record<string, unknown> {
 }
 
 /**
- * Read one danger factor's probability. FAIL-CLOSED: a missing entry, a
- * non-numeric or non-finite value, or a value outside [0,1] throws. There is no
- * default and no clamping.
+ * Read one danger factor's probability. FAIL-CLOSED: a missing entry, an entry
+ * that does not declare the noul question type, a non-numeric or non-finite
+ * value, or a value outside [0,1] throws. There is no default and no clamping.
  */
 function dangerProbability(answers: Record<string, any>, factor: SystemoneDangerFactor): number {
   const entry = answers[factor]
   if (entry === null || typeof entry !== 'object') {
     throw new Error(`systemone answer "${factor}" is missing or not an object`)
+  }
+  // The `type` discriminant names the question this entry answers. Reading a
+  // `noul` field off an entry that declares some other type is the best-effort
+  // field read this module forbids: a wrong-typed entry must not decide.
+  if (entry.type !== 'noul') {
+    throw new Error(`systemone answer "${factor}" does not declare type "noul"`)
   }
   const value = entry.noul
   if (typeof value !== 'number' || !Number.isFinite(value)) {
