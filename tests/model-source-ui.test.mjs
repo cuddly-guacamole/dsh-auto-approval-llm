@@ -229,10 +229,14 @@ test('client bundle: the protocol vocabulary carries all four values end to end'
     client.includes('return ENDPOINT_PROTOCOLS.includes(value) ? value : "openai"'),
     'the normalizer must test membership in the shared vocabulary, not a literal pair',
   )
-  // Sync point 9: the write-back whitelist membership test.
+  // Sync point 9: the write-back whitelist membership test. The assertion
+  // spans the WHOLE statement, assignment included: a needle that stops after
+  // `value.endpointProtocol` is a true prefix of the compiled assignment, so
+  // `= 'openai'` in place of `= draft.endpointProtocol` satisfies it and the
+  // save side would silently write one protocol for all four.
   assert.ok(
-    client.includes('if (ENDPOINT_PROTOCOLS.includes(draft.endpointProtocol)) value.endpointProtocol'),
-    'valueOf must gate endpointProtocol on the shared vocabulary, not a literal pair',
+    client.includes('if (ENDPOINT_PROTOCOLS.includes(draft.endpointProtocol)) value.endpointProtocol = draft.endpointProtocol'),
+    'valueOf must gate endpointProtocol on the shared vocabulary AND write the draft value back, not a literal pair and not a fixed protocol',
   )
   // The two new labels are wired to the dropdown.
   assert.ok(client.includes('option.protocol.responses'), 'the responses label is referenced')
