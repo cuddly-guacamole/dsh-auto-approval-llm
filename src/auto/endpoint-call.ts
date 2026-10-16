@@ -31,7 +31,7 @@ export interface EndpointCallInput {
   model: string
   protocol: EndpointProtocol
   apiKey?: string
-  /** system prompt (openai: system message; anthropic: system field). */
+  /** system prompt (openai: system message; anthropic: system field; responses: instructions; systemone: none). */
   system?: string
   /** User message(s) text. */
   messages: string[]

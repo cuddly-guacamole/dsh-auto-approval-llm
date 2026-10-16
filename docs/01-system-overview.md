@@ -28,7 +28,7 @@
 **🔌 DSH 内核 + LLM**
 
 - 提供 `tools`/`approval`/`permissionPresets`/`settings` 等服务
-- 评审可走**会话模型**（`ctx.llm.stream`）或**在线端点**（OpenAI/Anthropic 兼容）
+- 评审可走**会话模型**（`ctx.llm.stream`）或**在线端点**（OpenAI / Anthropic / Responses 兼容）
 - 官方 ApprovalPanel 是唯一的人工交互面
 
 ## 数据太平面（规范位置 `<DSH_HOME>/auto-approval-llm/`）

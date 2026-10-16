@@ -788,7 +788,7 @@ export function buildAskReason(baseReason: unknown, extra: string): string {
 
 // ── reviewer system assembly ─────────────────────────────────────────────────
 // The reviewer system prompt is one frozen block so every transport (online
-// route / session route, OpenAI / Anthropic) sees byte-identical instructions:
+// route / session route, OpenAI / Anthropic / Responses) sees byte-identical instructions:
 // the JSON output contract, the reasoning-blind input rule, and the
 // authorization-evidence rule. `assembleReviewerSystem` appends the user's
 // safety prompt and their declared rules; both are user-authored data, so

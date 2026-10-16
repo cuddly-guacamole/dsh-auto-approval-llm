@@ -15,7 +15,7 @@
 | `/feedback` | POST | 客户端上报 outcome（auto:true）+ approval 完成 ACK | <span class="badgeerr">特权 [ ] 仅回环</span> |
 | `/settings` | GET | 配置快照 {value,revision,writable,applies,configError}（**只读**；非 GET → 405 + `Allow: GET` + `{"ok":false,"error":"method-not-allowed"}`） | <span class="badgeerr">特权 [ ] 仅回环</span> |
 | `/reviewer-credential` | GET/POST | 端点密钥 {configured,writable}，永不回显 value | <span class="badgeerr">特权 [ ] 仅回环</span> |
-| `/test` | POST | 在线端点连通性探针（https 外网放行 + 公网地址强制 + fake-ip 豁免，8s 超时 max_tokens:1，非 2xx 带回错误摘要；仅当探针目标与已配置端点同址时才回退已存密钥）；模型库校验 modelFound | <span class="badgeerr">特权 [ ] 仅回环</span> |
+| `/test` | POST | 在线端点连通性探针（https 外网放行 + 公网地址强制 + fake-ip 豁免，8s 超时，请求体按协议取最廉价形状（openai/anthropic max_tokens:1、responses max_output_tokens:16、systemone 无 token 键），非 2xx 带回错误摘要；仅当探针目标与已配置端点同址时才回退已存密钥）；模型库校验 modelFound | <span class="badgeerr">特权 [ ] 仅回环</span> |
 | `/providers` | GET | provider 目录 {id,name}（模型来源 picker 下拉） | <span class="badgeerr">特权 [ ] 仅回环</span> |
 | `/llm-models` | GET | `?provider=` 列某 provider 的模型 {provider,id,name} | <span class="badgeerr">特权 [ ] 仅回环</span> |
 | `/reasoning-efforts` | GET | `?provider=&model=` 列该模型的 reasoning efforts + defaultEffort（无 resolveModel 支持返回空列表） | <span class="badgeerr">特权 [ ] 仅回环</span> |
