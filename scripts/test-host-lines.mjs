@@ -37,22 +37,22 @@ const LEGACY_AUTO_PRESET = "auto"
  *
  * The key begins with the line prefix of its own tuple — `line020` for `0.2.0`,
  * `line021` for `0.2.1` — and carries an ordinal suffix when a tuple promises
- * more than one line, so `line021alpha3` and `line021alpha4` are the two rows
+ * more than one line, so `line021alpha4` and `line021alpha5` are the two rows
  * of the `0.2.1` tuple. The prefix is what a reader greps for; the suffix is
  * what keeps two rows of one tuple from colliding in the table and on the
  * `--line` command line. The exact version still lives in `version`, which is
  * what the probe installs and asserts.
  *
  * Every row is a measured `modern` reading, taken by driving the real service
- * of that exact version rather than by reading its source. `line021alpha3` and
- * `line021alpha4` were each measured on a scratch prefix installed from the
+ * of that exact version rather than by reading its source. `line021alpha4` and
+ * `line021alpha5` were each measured on a scratch prefix installed from the
  * registry at that exact version: both probes read `modern` with reason
  * `catalog+registerAuto` and the gate names stayed the plugin's own preset.
  */
 export const HOST_LINES = {
   line020: { version: "0.2.0-rc.2", capability: "modern" },
-  line021alpha3: { version: "0.2.1-alpha.3", capability: "modern" },
   line021alpha4: { version: "0.2.1-alpha.4", capability: "modern" },
+  line021alpha5: { version: "0.2.1-alpha.5", capability: "modern" },
 }
 
 /**

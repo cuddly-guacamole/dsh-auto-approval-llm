@@ -77,7 +77,7 @@ tests/
 ├─ perf-settings-rules-parse.test.mjs / perf-poll-backoff.test.mjs / perf-scan-throttle.test.mjs （客户端开销：单次解析、轮询退避、扫描节流）
 ├─ trusted-intent-window.test.mjs（授权证据窗口溢出计数：slot cap/去重/预算交互、拒因 note 两分支、trusted-intents 事件量化 overflowed 标志）/ client-human-gate.test.mjs（浮层人工出手率：与 friction-report 同源名单、空窗口不作零声称、round 边界、中英三键、bundle 装配锚）
 ├─ loop-guard.test.mjs（循环键稳定性/回退、严格连续+fire-and-reset 状态机、FIFO 64、阈值钳制与 resolveConfig 映射）/ loop-guard-wiring.test.mjs（四站点成对锚、allowlist 与 rule-allow 豁免负向切片、跨面标记读位置与 one-shot、pinned 形状先于 learnAttempt、门不写 history 不碰熔断、disposal/sweep 有界、audit-query 渲染）
-├─ host-lines.test.mjs（宿主承诺线：承诺表逐 tuple 一行 + 键名即线族、精确钉版、装错线/读错档位/门禁放宽的反向对照、补丁组合表解析；本机安装线驱动真实 permission-presets 服务，装的不是承诺线即判红）
+├─ host-lines.test.mjs（宿主承诺线：承诺表一臂线（同一 tuple 可多行）+ 键名即线族、精确钉版、装错线/读错档位/门禁放宽的反向对照、补丁组合表解析；本机安装线驱动真实 permission-presets 服务，装的不是承诺线即判红）
 ├─ host-surface-coverage.mjs（契约面读数规则：具名不可评估行 + 评估行数下限 + 两个控制项未跑即失败）+ host-surface-coverage-collapse.test.mjs（塌缩读数、反向控制、下限独立生效、装配锚）
 └─ 合计 235 个 tests/*.test.mjs（node --test 全绿基线）
 scripts/
@@ -91,7 +91,7 @@ scripts/
 ├─ friction-report.mjs  摩擦报告 CLI（面板介入率 / 倒计时结算率 / 翻案交叉表 / 评审通道落定率 / 无人值守窗口判据 + 退出码）
 ├─ mock-reviewer.mjs    本地 mock 评审器（127.0.0.1:18777，确定性 ALLOW/MEDIUM）
 ├─ link-dsh-deps.cjs    把 node_modules/@deepseek-ai/* 重链到已安装 dsh 的同名包（构建期类型与运行期解析同源）
-├─ test-host-lines.mjs   宿主承诺线可复跑入口（os.tmpdir 前缀按线装出真实 dsh-* 全家：承诺线每个 tuple 一臂 = 0.2.0-rc.2 / 0.2.1-alpha.3 / 0.2.1-alpha.4（均实测 modern 形态，驱动能力探测与同签名迁移；键名以 tuple 前缀起头，同 tuple 多行时带序数后缀）；`HOST_LINES` 每次只列用户实际在跑的宿主）
+├─ test-host-lines.mjs   宿主承诺线可复跑入口（os.tmpdir 前缀按线装出真实 dsh-* 全家：承诺线每个 tuple 一臂 = 0.2.0-rc.2 / 0.2.1-alpha.4 / 0.2.1-alpha.5（均实测 modern 形态，驱动能力探测与同签名迁移；键名以 tuple 前缀起头，同 tuple 多行时带序数后缀）；`HOST_LINES` 每次只列用户实际在跑的宿主）
 └─ link-client-packs.cjs  把 client 构建期包（primitives/slots）链到 npm pack 解包目录
 verify-*.mjs            3 个运行时验证脚本（载波组合栅栏；settings/端到端需 --url/--cookie-file 会话）
 ```
@@ -104,7 +104,7 @@ verify-*.mjs            3 个运行时验证脚本（载波组合栅栏；settin
 
 **bundle 层（patch.yml）**：权限预设 `auto-approval` = `danger-full-access` + `approval: ask`（host 名 `Auto approval`；**禁飙到 never**，自有档 effective-never 由插件运行时归一回 ask）。宿主 `>= 0.1.6` 的 shipped patch 不得静态定义 `auto` preset（该名归上游 auto-review 运行期 `registerAuto` 注册，静态配置即 boot 失败）；本插件只定义/接管 `auto-approval`，与上游的 `auto` 档可同时启用。bundle 不再覆盖安全行为开关（`autoSwitchPolicyToAsk` 已退役并保留为 host-owned no-op）；`humanOnlyList` 保持代码默认空。
 
-**exports**：`.`（lib/index.js + types）、`./client`（lib/client.js + types contact）、`./package.json`、`./locale/*.json`（子路径通配，契约测试对通配断言"至少匹配到一个真实文件"）；peerDeps 覆盖 cordis ≥4.0.1<5、dsh-llm / dsh-tools / dsh-session / dsh-permission-presets / dsh-user-approval `>=0.2.0-rc.2 <2 || >=0.2.1-alpha.3 <2`、schemastery ^3.18.0 —— 承诺**每个 tuple 一臂线**：`0.2.0-rc.2`、`0.2.1-alpha.3` 与 `0.2.1-alpha.4` 均完整支持；宿主线跟着用户实际在跑的宿主走，上游进入新 tuple 的 alpha 时再逐条追加。peer 区间是**安装准入面**：区间内未测的线不受支持，上界 `<2` 只是范围上界；区间**按承诺 tuple 分臂**，每条承诺线由承载它自己 tuple 的那一臂放行，不依赖门禁的 `includePrerelease` 标志；`auto` 旧机器值别名与 legacy/unknown 能力分支已随下限抬升移除。`src/auto/preset-migration.ts` 承载多信号宿主能力探测（modern / unknown，未识别即 fail-closed）、raw identity gate、同签名懒迁移与自有档 spec enforcement。
+**exports**：`.`（lib/index.js + types）、`./client`（lib/client.js + types contact）、`./package.json`、`./locale/*.json`（子路径通配，契约测试对通配断言"至少匹配到一个真实文件"）；peerDeps 覆盖 cordis ≥4.0.1<5、dsh-llm / dsh-tools / dsh-session / dsh-permission-presets / dsh-user-approval `>=0.2.0-rc.2 <2 || >=0.2.1-alpha.4 <2`、schemastery ^3.18.0 —— 承诺**每个 tuple 一臂线**：`0.2.0-rc.2`、`0.2.1-alpha.4` 与 `0.2.1-alpha.5` 均完整支持；宿主线跟着用户实际在跑的宿主走，上游进入新 tuple 的 alpha 时再逐条追加。peer 区间是**安装准入面**：区间内未测的线不受支持，上界 `<2` 只是范围上界；区间**按承诺 tuple 分臂**，每条承诺线由承载它自己 tuple 的那一臂放行，不依赖门禁的 `includePrerelease` 标志；`auto` 旧机器值别名与 legacy/unknown 能力分支已随下限抬升移除。`src/auto/preset-migration.ts` 承载多信号宿主能力探测（modern / unknown，未识别即 fail-closed）、raw identity gate、同签名懒迁移与自有档 spec enforcement。
 > 行为化支架新增登记（191 files / 1747 cases 时点）：`tests/helpers/host-ctx.mjs`（基础设施，非用例）+ `tests/h2-artifact-provenance-behavior.test.mjs` + `tests/h9-loop-guard-behavior.test.mjs` + `tests/m1-feedback-timeout-routing.test.mjs`。
 > 载波原生化新增登记：`tests/helpers/carrier-route.mjs`（Fetch 注册表驱动夹具，基础设施非用例）+ `tests/trusted-fetch-request.test.mjs`（Fetch 信任判定契约；原 `isTrustedRequest` 的权威侧用例迁入此文件）。
 > 运行时验证脚本修正登记：`tests/verify-auth-cases.test.mjs`（以本地假 carrier 模型钉 `scripts/verify-auth.mjs` 的组合栅栏期望：无会话回环 401 / 伪造 403 / 会话回环 200）。

@@ -1,7 +1,7 @@
 /**
  * Host-line contract: one arm per tuple is promised, and a tuple may promise
- * several lines — `0.2.0-rc.2`, and the `0.2.1` lines `0.2.1-alpha.3` and
- * `0.2.1-alpha.4`, the lines the user actually runs. Every row carries the
+ * several lines — `0.2.0-rc.2`, and the `0.2.1` lines `0.2.1-alpha.4` and
+ * `0.2.1-alpha.5`, the lines the user actually runs. Every row carries the
  * modern shape (`catalog` + `registerAuto`), measured on each line's real
  * service rather than read from its source, and every row is driven through the
  * same-signature migration. A line is appended when the user's host moves, and
@@ -56,13 +56,13 @@ const INERT_CONTROL_LINE = { version: "0.1.5-rc.2", capability: "unknown" }
 const PREFIX_OF_TUPLE = { "0.2.0": "line020", "0.2.1": "line021" }
 
 test("the promised line table carries the lines the user runs", () => {
-  assert.deepEqual(Object.keys(HOST_LINES).sort(), ["line020", "line021alpha3", "line021alpha4"])
+  assert.deepEqual(Object.keys(HOST_LINES).sort(), ["line020", "line021alpha4", "line021alpha5"])
   assert.equal(HOST_LINES.line020.version, "0.2.0-rc.2")
   assert.equal(HOST_LINES.line020.capability, "modern")
-  assert.equal(HOST_LINES.line021alpha3.version, "0.2.1-alpha.3")
-  assert.equal(HOST_LINES.line021alpha3.capability, "modern")
   assert.equal(HOST_LINES.line021alpha4.version, "0.2.1-alpha.4")
   assert.equal(HOST_LINES.line021alpha4.capability, "modern")
+  assert.equal(HOST_LINES.line021alpha5.version, "0.2.1-alpha.5")
+  assert.equal(HOST_LINES.line021alpha5.capability, "modern")
 })
 
 test("the promise spans one arm per tuple, and every key names its own tuple", () => {

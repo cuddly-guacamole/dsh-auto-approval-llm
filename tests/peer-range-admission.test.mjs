@@ -1,8 +1,8 @@
 /**
  * Peer-range admission contract. The five `@deepseek-ai/dsh-*` peers promise
  * one range arm per tuple — `0.2.0-rc.2`, plus the `0.2.1` lines
- * `0.2.1-alpha.3` and `0.2.1-alpha.4`, the lines the user actually runs —
- * through two arms `>=0.2.0-rc.2 <2 || >=0.2.1-alpha.3 <2`. A tuple may promise
+ * `0.2.1-alpha.4` and `0.2.1-alpha.5`, the lines the user actually runs —
+ * through two arms `>=0.2.0-rc.2 <2 || >=0.2.1-alpha.4 <2`. A tuple may promise
  * several lines; it still carries exactly one arm.
  *
  * The host evaluates peers with `semver.satisfies(runtimeVersion, range, { includePrerelease: true })`
@@ -10,22 +10,22 @@
  * the rule implemented by `satisfies()` below, where a prerelease must be named
  * by a comparator in its own major.minor.patch tuple — is what decides the shape
  * of the arms. A single arm floored at `0.2.0-rc.2` admits that line under both
- * readings, but refuses `0.2.1-alpha.3` under the plain one, because no comparator
+ * readings, but refuses `0.2.1-alpha.4` under the plain one, because no comparator
  * carried the `0.2.1` tuple. The promise therefore spans two tuples, and one arm
  * per promised tuple is the minimum that admits every promised line on its own
  * rather than on the flag alone. The flag stays pinned for each line as well, so
  * a host that stopped passing it is a red suite rather than a refused install
  * nobody sees.
  *
- * Raising the `0.2.1` floor to `alpha.3` removes `alpha.1` and `alpha.2` from
- * the promise, and removes them from the plain reading outright. It does NOT
- * remove them from the host's flagged reading: the first arm spans `<2`, so
- * under the flag it still admits every prerelease in the `0.2.1` tuple,
- * `alpha.1` and `alpha.2` included. Refusing those two under the flag would
+ * Raising the `0.2.1` floor to `alpha.4` removes `alpha.1`, `alpha.2` and
+ * `alpha.3` from the promise, and removes them from the plain reading outright.
+ * It does NOT remove them from the host's flagged reading: the first arm spans
+ * `<2`, so under the flag it still admits every prerelease in the `0.2.1` tuple,
+ * the three retired ordinals included. Refusing them under the flag would
  * mean bounding the first arm above (`<0.2.1-alpha.1`), which the project
  * rejected: it would trade the "a promised line is admitted without the flag"
  * property for a single-ordinal exclusion semver cannot express cleanly. So
- * `alpha.1` / `alpha.2` are unpromised and unsupported, and their admission
+ * the retired ordinals are unpromised and unsupported, and their admission
  * under the flag is stated here rather than papered over.
  *
  * Raising the floor dropped `0.1.7-rc.2`, `0.1.7-rc.1`, `0.1.7-alpha.2` and
@@ -54,7 +54,7 @@ import { HOST_LINES } from "../scripts/test-host-lines.mjs"
 const ROOT = process.cwd()
 
 /** The admission range promised by the dsh peers: one bounded arm per promised tuple. */
-const EXPECTED_RANGE = ">=0.2.0-rc.2 <2 || >=0.2.1-alpha.3 <2"
+const EXPECTED_RANGE = ">=0.2.0-rc.2 <2 || >=0.2.1-alpha.4 <2"
 
 /** Application-level peer that is not a host line and is not part of this contract. */
 const CORDIS_PEER = "@deepseek-ai/cordis"
@@ -154,17 +154,18 @@ function compare(left, right) {
  * The truth table the arms must produce, measured against the installed
  * `semver` package under the plain reading. Both promised tuples sit at true —
  * each line is named by the arm carrying its own tuple, so the plain reading
- * admits it without the flag. `0.2.1-alpha.1` and `0.2.1-alpha.2` sitting at
- * false is the point of the raised floor: they left the promise, so the plain
- * reading no longer names them. `0.1.7-rc.2` — a line the promise used to span —
+ * admits it without the flag. `0.2.1-alpha.1`, `0.2.1-alpha.2` and
+ * `0.2.1-alpha.3` sitting at false is the point of the raised floor: they left
+ * the promise, so the plain reading no longer names them. `0.1.7-rc.2` — a line the promise used to span —
  * sitting at false is the point of the earlier raised floor: it is not promised
  * any more, so it must not stay installable, and a later lowering back across
  * the tuple is caught here.
  */
 const TRUTH_TABLE = [
   ["0.2.0-rc.2", true],
-  ["0.2.1-alpha.3", true],
+  ["0.2.1-alpha.3", false],
   ["0.2.1-alpha.4", true],
+  ["0.2.1-alpha.5", true],
   ["0.2.1-alpha.1", false],
   ["0.2.1-alpha.2", false],
   ["0.1.7-rc.2", false],
@@ -313,7 +314,7 @@ test("the peer block keeps cordis and schemastery outside the dsh contract", () 
 })
 
 test("the retired 0.2.1 ordinals are refused by the plain reading but still admitted under the flag", () => {
-  // The two ordinals that left the promise when the arm floor rose to `alpha.3`.
+  // The ordinals that left the promise when the arm floor rose to `alpha.4`.
   // Pinning both readings is the point: the plain reading refuses them (so no
   // comparator names them any more), while the host's flagged reading still
   // admits them through the first arm `>=0.2.0-rc.2 <2`, which spans `<2`.
@@ -321,7 +322,7 @@ test("the retired 0.2.1 ordinals are refused by the plain reading but still admi
   // refuses them at install time; asserting only the second would hide that they
   // are no longer named by any comparator. Both halves are load-bearing, and the
   // gap between them is documented rather than papered over.
-  const retired = ["0.2.1-alpha.1", "0.2.1-alpha.2"]
+  const retired = ["0.2.1-alpha.1", "0.2.1-alpha.2", "0.2.1-alpha.3"]
   const require_ = createRequire(join(ROOT, "package.json"))
   let reference = null
   try {
