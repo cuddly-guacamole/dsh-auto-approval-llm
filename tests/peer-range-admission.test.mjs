@@ -42,17 +42,45 @@
  * check below is a local implementation of the ordinary semver rule (each
  * comparator set must match, and a prerelease candidate must be named by a
  * comparator whose version carries the same major.minor.patch tuple); it is
- * cross-checked against the installed `semver` package when one is resolvable,
- * so the hand-rolled path cannot drift away from the real resolution rule.
+ * cross-checked against the installed `semver` package on every run, so the
+ * hand-rolled path cannot drift away from the real resolution rule.
+ *
+ * `semver` is a declared devDependency, and the flagged reading cannot be
+ * checked without it, so a run that cannot resolve it fails instead of
+ * skipping: a skipped assertion is indistinguishable from a passing one, and
+ * this file's whole point is the difference between the two readings.
  */
 import test from "node:test"
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import { join } from "node:path"
-import { HOST_LINES } from "../scripts/test-host-lines.mjs"
+import { HOST_LINES, RETIRED_HOST_LINES } from "../scripts/test-host-lines.mjs"
 
 const ROOT = process.cwd()
+
+/**
+ * The real `semver` package, resolved from the repository and required.
+ *
+ * The host's flagged reading (`includePrerelease: true`) is the half of this
+ * contract that the hand-rolled `satisfies()` above cannot express, so every
+ * assertion about it needs this package. A missing package must therefore fail
+ * the run loudly rather than skip the assertion: a skipped assertion passes,
+ * and a passing suite that never checked the flagged reading is exactly the
+ * regression this resolver exists to make impossible. `semver` is declared in
+ * `devDependencies`, so any `npm ci` in this repository provides it.
+ */
+const requireFromRoot = createRequire(join(ROOT, "package.json"))
+function referenceSemver() {
+  try {
+    return requireFromRoot("semver")
+  } catch (error) {
+    assert.fail(
+      "semver must be resolvable from the repository: the host's flagged reading cannot be checked without it ("
+        + (error && error.message ? error.message : String(error)) + ")",
+    )
+  }
+}
 
 /** The admission range promised by the dsh peers: one bounded arm on the one promised tuple. */
 const EXPECTED_RANGE = ">=0.2.1-rc.2 <2"
@@ -279,14 +307,7 @@ test("the plain reading admits every promised line without the flag", () => {
   // floored a tuple below the promise (as the retired `>=0.2.0-rc.2` arm was)
   // would leave the promised line admitted by the flag alone, and that must turn
   // this case red.
-  const require_ = createRequire(join(ROOT, "package.json"))
-  const reference = (() => {
-    try {
-      return require_("semver")
-    } catch {
-      return null
-    }
-  })()
+  const reference = referenceSemver()
   const promised = Object.values(HOST_LINES).map(line => line.version)
   const plainOnly = promised.filter(version => !satisfies(version, EXPECTED_RANGE))
   assert.deepEqual(
@@ -297,7 +318,6 @@ test("the plain reading admits every promised line without the flag", () => {
   for (const [name, range] of dshPeers) {
     for (const version of promised) {
       assert.equal(satisfies(version, range), true, `${name} must admit ${version} without the flag`)
-      if (reference === null) continue
       assert.equal(reference.satisfies(version, range), true, `${name}: semver admits ${version} without the flag`)
       // The host's own reading stays pinned for every promised line, so a host
       // that stopped passing the flag is a red suite rather than a refused
@@ -312,7 +332,6 @@ test("the plain reading admits every promised line without the flag", () => {
   // The flag is real, not decorative: a prerelease in a tuple no comparator
   // names is admitted only because the host passes it. Nothing is promised in
   // that tuple today, so this is a property of the range, not a support claim.
-  if (reference === null) return
   for (const [name, range] of dshPeers) {
     assert.equal(reference.satisfies("0.3.0-alpha.1", range, { includePrerelease: true }), true, `${name} must admit a higher-tuple prerelease under the flagged reading`)
     assert.equal(satisfies("0.3.0-alpha.1", range), false, `${name} must refuse a higher-tuple prerelease under the plain reading`)
@@ -324,9 +343,14 @@ test("the peer block keeps cordis and schemastery outside the dsh contract", () 
   assert.equal(manifest.peerDependencies["@deepseek-ai/schemastery"], "^3.18.0")
 })
 
-test("the retired 0.2.1 ordinals are refused by both readings, not merely by the plain one", () => {
-  // The ordinals that left the promise when it was narrowed to `0.2.1-rc.2`.
-  // This case is the reverse of what it asserted under the two-arm range: there
+test("every retired line is refused by both readings, not merely by the plain one", () => {
+  // Every line the promise ever carried and no longer does — the whole retired
+  // set, not just the `0.2.1` ordinals. `0.2.1-rc.1` and `0.2.0-rc.2` belong here
+  // for the same reason the alphas do: under the retired two-arm range the
+  // flagged reading still admitted them, so they are the lines a widened arm
+  // would silently re-admit.
+  //
+  // This case is the reverse of what it asserted under that two-arm range: there
   // the plain reading refused them while the host's flagged reading still
   // admitted them through the first arm `>=0.2.0-rc.2 <2`, which spanned `<2`.
   // The single arm floored at `0.2.1-rc.2` refuses them under both readings —
@@ -336,19 +360,16 @@ test("the retired 0.2.1 ordinals are refused by both readings, not merely by the
   // only the plain half would let a later arm re-admit them under the flag
   // without this suite noticing, and asserting only the flagged half would hide
   // that they are refused at install time rather than merely unsupported.
-  const retired = ["0.2.1-alpha.1", "0.2.1-alpha.2", "0.2.1-alpha.3", "0.2.1-alpha.4", "0.2.1-alpha.5"]
-  const require_ = createRequire(join(ROOT, "package.json"))
-  let reference = null
-  try {
-    reference = require_("semver")
-  } catch {
-    reference = null
-  }
+  //
+  // Both readings are pinned for every retired line, and the set itself is
+  // pinned by `tests/host-lines.test.mjs`, so a line cannot drop out of this loop
+  // by dropping out of the list.
+  const retired = RETIRED_HOST_LINES
+  const reference = referenceSemver()
   for (const version of retired) {
     assert.equal(satisfies(version, EXPECTED_RANGE), false, `${version} must stay out of the plain reading`)
     for (const [name, range] of dshPeers) {
       assert.equal(satisfies(version, range), false, `${name} must refuse ${version} under the plain reading`)
-      if (reference === null) continue
       assert.equal(reference.satisfies(version, range), false, `${name}: semver must refuse ${version} under the plain reading`)
       assert.equal(
         reference.satisfies(version, range, { includePrerelease: true }),
@@ -361,7 +382,6 @@ test("the retired 0.2.1 ordinals are refused by both readings, not merely by the
   // `0.2.1-rc.2`, above every retired ordinal, and `<2` cannot pull a candidate
   // back above a floor it fails. Pinned on the arm itself so the cause is stated
   // rather than inferred from the whole range.
-  if (reference === null) return
   const onlyArm = EXPECTED_RANGE.trim()
   for (const version of retired) {
     assert.equal(
@@ -373,13 +393,7 @@ test("the retired 0.2.1 ordinals are refused by both readings, not merely by the
 })
 
 test("every promised line is admitted by every peer under the host's reading", () => {
-  const require_ = createRequire(join(ROOT, "package.json"))
-  let reference = null
-  try {
-    reference = require_("semver")
-  } catch {
-    return
-  }
+  const reference = referenceSemver()
   for (const [name, range] of dshPeers) {
     for (const line of Object.values(HOST_LINES)) {
       assert.equal(
@@ -392,9 +406,28 @@ test("every promised line is admitted by every peer under the host's reading", (
 })
 
 test("the arms admit the promised lines and the releases above them", () => {
+  // Both readings are pinned for every row. The plain half runs through the
+  // hand-rolled `satisfies()`; the flagged half needs the real package, because
+  // the flag's effect (a prerelease admitted without a comparator naming its
+  // tuple) is the one rule the hand-rolled path deliberately does not model.
+  //
+  // Pinning only the plain half would leave the rows whose two readings differ —
+  // `0.3.0-alpha.1` and `1.9.9-alpha.1` — checked on one side only, and a floor
+  // moved to `>=0.2.1-rc.1 <2` would then re-admit `0.2.1-rc.1` under the flag
+  // while this case stayed green.
+  const reference = referenceSemver()
   for (const [name, range] of dshPeers) {
     for (const [version, expected] of TRUTH_TABLE) {
       assert.equal(satisfies(version, range), expected, `${name} must ${expected ? "admit" : "refuse"} ${version}`)
+      // A row is either promised or retired, so the flagged reading agrees with
+      // the plain one for every row except the two higher-tuple prereleases,
+      // which are admitted by the flag alone and are pinned separately below.
+      const flaggedByFlagOnly = version === "0.3.0-alpha.1" || version === "1.9.9-alpha.1"
+      assert.equal(
+        reference.satisfies(version, range, { includePrerelease: true }),
+        flaggedByFlagOnly ? true : expected,
+        `${name} must ${flaggedByFlagOnly || expected ? "admit" : "refuse"} ${version} under the host's flagged reading`,
+      )
     }
     assert.equal(satisfies("0.1.7-alpha.2", range), false, `${name} must not admit the retired alpha line`)
   }
@@ -423,13 +456,7 @@ test("the range admits untested middle lines; admission is not support", () => {
 })
 
 test("the local satisfaction check agrees with the installed semver package", () => {
-  const require_ = createRequire(join(ROOT, "package.json"))
-  let reference = null
-  try {
-    reference = require_("semver")
-  } catch {
-    return
-  }
+  const reference = referenceSemver()
   const versions = [
     ...TRUTH_TABLE.map(([version]) => version),
     "0.1.7-rc.0",

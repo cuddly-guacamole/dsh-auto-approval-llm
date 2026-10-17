@@ -70,6 +70,7 @@
     "@types/react": "^18.3.0",
     "react": "^18.2.0",
     "tsdown": "^0.22.14",
+    "semver": "^7.8.5",
     "typescript": "^5.9.0",
     "vitepress": "^1.6.4",
     "vitepress-plugin-mermaid": "^2.0.17",

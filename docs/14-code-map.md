@@ -79,7 +79,7 @@ tests/
 ├─ loop-guard.test.mjs（循环键稳定性/回退、严格连续+fire-and-reset 状态机、FIFO 64、阈值钳制与 resolveConfig 映射）/ loop-guard-wiring.test.mjs（四站点成对锚、allowlist 与 rule-allow 豁免负向切片、跨面标记读位置与 one-shot、pinned 形状先于 learnAttempt、门不写 history 不碰熔断、disposal/sweep 有界、audit-query 渲染）
 ├─ host-lines.test.mjs（宿主承诺线：承诺表单行、键名即线族（同一 tuple 多行时才带序数后缀）+ 精确钉版、装错线/读错档位/门禁放宽的反向对照、补丁组合表解析；本机安装线驱动真实 permission-presets 服务，装的不是承诺线即判红）
 ├─ host-surface-coverage.mjs（契约面读数规则：具名不可评估行 + 评估行数下限 + 两个控制项未跑即失败）+ host-surface-coverage-collapse.test.mjs（塌缩读数、反向控制、下限独立生效、装配锚）
-└─ 合计 235 个 tests/*.test.mjs（node --test 全绿基线）
+└─ 合计 236 个 tests/*.test.mjs（node --test 全绿基线）
 scripts/
 ├─ build.sh             （DSH 源码仓库布局）tsc 编译 src→lib
 ├─ clean-lib.mjs        构建前清空 lib/（tsc 不删除已删源的旧产物）

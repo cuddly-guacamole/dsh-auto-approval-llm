@@ -23,6 +23,7 @@ import {
   FOREIGN_HOST_LINE,
   GATED_PRESET,
   HOST_LINES,
+  RETIRED_HOST_LINES,
   ROOT,
   assertCapability,
   assertInstalledLine,
@@ -51,14 +52,42 @@ const patch = readFileSync(join(ROOT, "cordis.patch.yml"), "utf8")
 const INERT_CONTROL_LINE = { version: "0.1.5-rc.2", capability: "unknown" }
 
 /**
- * Lines the promise used to cover and no longer does — the retired `0.2.0`
- * tuple and the retired `0.2.1` alphas. They are not rows of `HOST_LINES`; they
- * survive here as the controls for "a tree or a nested copy on a line the
- * promise does not cover", so that the narrowing of the promise leaves no
- * coverage hole behind it. Every one of them must be refused by the tree check
- * against the promised line.
+ * The retired lines, taken from the shared contract table rather than restated
+ * here. `RETIRED_HOST_LINES` is the one literal, and the case below pins it
+ * against an independent restatement so an entry cannot quietly disappear.
+ *
+ * They are not rows of `HOST_LINES`; they survive here as the controls for "a
+ * tree or a nested copy on a line the promise does not cover", so that the
+ * narrowing of the promise leaves no coverage hole behind it. Every one of them
+ * must be refused by the tree check against the promised line.
  */
-const RETIRED_LINES = ["0.2.0-rc.2", "0.2.1-alpha.4", "0.2.1-alpha.5"]
+const RETIRED_LINES = RETIRED_HOST_LINES
+
+/**
+ * The same retired set, restated here as an independent literal.
+ *
+ * Written out a second time on purpose: a completeness check that compared the
+ * shared list against itself, against a count, or as a subset would still pass
+ * after an entry was deleted, which is exactly the regression this guards. The
+ * case below requires exact equality between the two.
+ */
+const RETIRED_SET_EXPECTED = [
+  "0.1.5-rc.2",
+  "0.1.6-alpha.1",
+  "0.1.6-alpha.2",
+  "0.1.7-alpha.1",
+  "0.1.7-alpha.2",
+  "0.1.7-rc.1",
+  "0.1.7-rc.2",
+  "0.2.0-rc.1",
+  "0.2.0-rc.2",
+  "0.2.1-alpha.1",
+  "0.2.1-alpha.2",
+  "0.2.1-alpha.3",
+  "0.2.1-alpha.4",
+  "0.2.1-alpha.5",
+  "0.2.1-rc.1",
+]
 
 /**
  * The key prefix each promised tuple is addressed by. The prefix identifies the
@@ -67,6 +96,25 @@ const RETIRED_LINES = ["0.2.0-rc.2", "0.2.1-alpha.4", "0.2.1-alpha.5"]
  * is the prefix itself.
  */
 const PREFIX_OF_TUPLE = { "0.2.1": "line021" }
+
+test("the retired set is exactly every line the promise dropped, and nothing else", () => {
+  // Exact equality against an independently written literal, not a length or a
+  // subset check: deleting any single entry from the shared table must fail
+  // here, and so must adding one. This is what makes the retired list a
+  // contract instead of a sample.
+  assert.deepEqual(RETIRED_LINES.slice().sort(), RETIRED_SET_EXPECTED.slice().sort())
+
+  // The retired set and the promise are disjoint, and together they cover every
+  // line this file's history ever carried. A version cannot be both promised and
+  // retired, and a retired version cannot come back without the promise losing it.
+  const promised = Object.values(HOST_LINES).map(line => line.version)
+  for (const retired of RETIRED_LINES) {
+    assert.equal(promised.includes(retired), false, "the promised table still carries the retired line " + retired)
+  }
+  // No retired entry may be a duplicate: a repeated entry would make the sorted
+  // comparison above pass while the list carried fewer distinct lines.
+  assert.equal(new Set(RETIRED_LINES).size, RETIRED_LINES.length, "the retired set carries a duplicate line")
+})
 
 test("the promised line table carries the line the user runs", () => {
   assert.deepEqual(Object.keys(HOST_LINES).sort(), ["line021"])

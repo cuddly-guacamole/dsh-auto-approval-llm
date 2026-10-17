@@ -78,6 +78,35 @@ export function linePrefixOf(tuple) {
  */
 export const FOREIGN_HOST_LINE = { version: "0.1.7-alpha.2", capability: "legacy" }
 
+/**
+ * Every host line this repository ever promised and no longer does, as one
+ * literal list, kept next to `HOST_LINES` so the two tables are read together.
+ *
+ * The set is closed on purpose: it is every version that once had a `HOST_LINES`
+ * row (recovered from this file's history) plus every version the docs name as
+ * retired, minus the line promised today. Both consumers below use it — the
+ * contract test pins it entry for entry, and the peer-range test drives the
+ * admission surface over it — so a line cannot leave the retired set without one
+ * of those cases going red.
+ */
+export const RETIRED_HOST_LINES = [
+  "0.1.5-rc.2",
+  "0.1.6-alpha.1",
+  "0.1.6-alpha.2",
+  "0.1.7-alpha.1",
+  "0.1.7-alpha.2",
+  "0.1.7-rc.1",
+  "0.1.7-rc.2",
+  "0.2.0-rc.1",
+  "0.2.0-rc.2",
+  "0.2.1-alpha.1",
+  "0.2.1-alpha.2",
+  "0.2.1-alpha.3",
+  "0.2.1-alpha.4",
+  "0.2.1-alpha.5",
+  "0.2.1-rc.1",
+]
+
 /** The reason an inert line reads: no reserved `auto` surface, nothing recognisable. */
 const INERT_CAPABILITY_REASON = "unrecognized-shape"
 
