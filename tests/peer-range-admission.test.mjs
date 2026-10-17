@@ -181,40 +181,57 @@ function compare(left, right) {
 
 /**
  * The truth table the arm must produce, measured against the installed `semver`
- * package under the plain reading. `0.2.1-rc.2` sits at true because the arm's
- * floor names its own tuple and a prerelease in it, so the plain reading admits
- * the promised line without the flag; `0.2.1` and `1.9.9` sit at true as plain
- * releases above that floor.
+ * package under both readings.
  *
- * Everything the promise retired sits at false. `0.2.1-rc.1` and the `0.2.1`
- * alphas are prereleases below the floor, so no comparator names them and the
- * plain reading refuses them; `0.2.0-rc.2` and `0.2.0` are below the floor and
- * in an earlier tuple, so they are refused for two reasons at once; and
- * `0.1.7-rc.2` — a line the promise used to span — is refused as well, which is
- * what catches a later lowering of the floor back across it. `2.0.0` is refused
- * by the `<2` bound alone.
+ * Every row carries its two expectations as separate literals: `[version,
+ * plainExpected, flaggedExpected]`. Neither value is computed from the other.
+ * That is deliberate and load-bearing — a rule that derived one side from the
+ * other would make the two assertions a single assertion written twice, so a
+ * wrong expectation would satisfy both at once, and the table would stop being
+ * able to tell the readings apart.
+ *
+ * `0.2.1-rc.2` sits at true under both readings because the arm's floor names its
+ * own tuple and a prerelease in it; `0.2.1` and `1.9.9` sit at true as plain
+ * releases above that floor. Every line the promise retired sits at false under
+ * both: `0.2.1-rc.1` and the `0.2.1` alphas are prereleases below the floor, so
+ * no comparator names their tuple; `0.2.0-rc.2` and `0.2.0` are below the floor
+ * and in an earlier tuple, refused for two reasons at once; `0.1.7-rc.2` — a
+ * line the promise used to span — is refused too, which is what catches a later
+ * lowering of the floor back across it; and `2.0.0` is refused by the `<2`
+ * bound alone.
+ *
+ * The last three rows are the rows the two readings *disagree* on, and they are
+ * here because that disagreement is the only reason the flag is modelled at all.
+ * They are prereleases whose major.minor.patch tuple no comparator names, so the
+ * plain reading refuses them and the host's flagged reading admits them. The case
+ * below asserts that at least one such row exists, so the table cannot quietly
+ * degenerate back into twenty rows where the two readings agree and the flagged
+ * side is a copy of the plain one.
  */
 const TRUTH_TABLE = [
-  ["0.2.1-rc.2", true],
-  ["0.2.1", true],
-  ["1.9.9", true],
-  ["0.2.1-rc.1", false],
-  ["0.2.0-rc.2", false],
-  ["0.2.0", false],
-  ["0.2.1-alpha.1", false],
-  ["0.2.1-alpha.2", false],
-  ["0.2.1-alpha.3", false],
-  ["0.2.1-alpha.4", false],
-  ["0.2.1-alpha.5", false],
-  ["0.1.7-rc.2", false],
-  ["0.1.7-rc.1", false],
-  ["0.1.7", false],
-  ["0.1.7-alpha.2", false],
-  ["0.1.7-alpha.1", false],
-  ["0.1.6", false],
-  ["0.1.6-alpha.1", false],
-  ["2.0.0", false],
-  ["0.1.5-rc.2", false],
+  ["0.2.1-rc.2", true, true],
+  ["0.2.1", true, true],
+  ["1.9.9", true, true],
+  ["0.3.0-alpha.1", false, true],
+  ["1.9.9-alpha.1", false, true],
+  ["0.2.2-alpha.1", false, true],
+  ["0.2.1-rc.1", false, false],
+  ["0.2.0-rc.2", false, false],
+  ["0.2.0", false, false],
+  ["0.2.1-alpha.1", false, false],
+  ["0.2.1-alpha.2", false, false],
+  ["0.2.1-alpha.3", false, false],
+  ["0.2.1-alpha.4", false, false],
+  ["0.2.1-alpha.5", false, false],
+  ["0.1.7-rc.2", false, false],
+  ["0.1.7-rc.1", false, false],
+  ["0.1.7", false, false],
+  ["0.1.7-alpha.2", false, false],
+  ["0.1.7-alpha.1", false, false],
+  ["0.1.6", false, false],
+  ["0.1.6-alpha.1", false, false],
+  ["2.0.0", false, false],
+  ["0.1.5-rc.2", false, false],
 ]
 
 test("the five dsh peers carry the promised admission range", () => {
@@ -406,29 +423,40 @@ test("every promised line is admitted by every peer under the host's reading", (
 })
 
 test("the arms admit the promised lines and the releases above them", () => {
-  // Both readings are pinned for every row. The plain half runs through the
-  // hand-rolled `satisfies()`; the flagged half needs the real package, because
-  // the flag's effect (a prerelease admitted without a comparator naming its
-  // tuple) is the one rule the hand-rolled path deliberately does not model.
+  // Both readings are pinned for every row, and each row states its two
+  // expectations as separate literals. Nothing is derived from the other side:
+  // the plain half runs through the hand-rolled `satisfies()`, and the flagged
+  // half needs the real package, because the flag's effect (a prerelease
+  // admitted without a comparator naming its tuple) is the one rule the
+  // hand-rolled path deliberately does not model.
   //
-  // Pinning only the plain half would leave the rows whose two readings differ —
-  // `0.3.0-alpha.1` and `1.9.9-alpha.1` — checked on one side only, and a floor
-  // moved to `>=0.2.1-rc.1 <2` would then re-admit `0.2.1-rc.1` under the flag
-  // while this case stayed green.
+  // Both halves are load-bearing for different failures. The plain half catches
+  // an arm that stopped naming the promised tuple; the flagged half catches an
+  // arm widened back across a retired tuple, which the plain reading alone would
+  // not see — a floor moved to `>=0.2.1-rc.1 <2` re-admits `0.2.1-rc.1` under the
+  // flag while leaving it refused by the plain reading.
   const reference = referenceSemver()
-  for (const [name, range] of dshPeers) {
-    for (const [version, expected] of TRUTH_TABLE) {
-      assert.equal(satisfies(version, range), expected, `${name} must ${expected ? "admit" : "refuse"} ${version}`)
-      // A row is either promised or retired, so the flagged reading agrees with
-      // the plain one for every row except the two higher-tuple prereleases,
-      // which are admitted by the flag alone and are pinned separately below.
-      const flaggedByFlagOnly = version === "0.3.0-alpha.1" || version === "1.9.9-alpha.1"
+  // The table must keep at least one row where the two readings disagree.
+  // Without such a row the flagged side is a restatement of the plain side and
+  // could not catch a flag-only admission even in principle.
+  const disagreements = TRUTH_TABLE.filter(([, plain, flagged]) => plain !== flagged)
+  assert.ok(
+    disagreements.length > 0,
+    "the truth table carries no row where the plain and flagged readings disagree; the flagged side would be a copy of the plain one",
+  )
+  for (const [version, plainExpected, flaggedExpected] of TRUTH_TABLE) {
+    for (const [name, range] of dshPeers) {
+      assert.equal(satisfies(version, range), plainExpected, `${name} must ${plainExpected ? "admit" : "refuse"} ${version} under the plain reading`)
       assert.equal(
         reference.satisfies(version, range, { includePrerelease: true }),
-        flaggedByFlagOnly ? true : expected,
-        `${name} must ${flaggedByFlagOnly || expected ? "admit" : "refuse"} ${version} under the host's flagged reading`,
+        flaggedExpected,
+        `${name} must ${flaggedExpected ? "admit" : "refuse"} ${version} under the host's flagged reading`,
       )
     }
+  }
+  // The retired `0.1.7-alpha.2` sentinel stays refused by every peer, which is
+  // the row-level check the table above already carries as `0.1.7-alpha.2` false.
+  for (const [name, range] of dshPeers) {
     assert.equal(satisfies("0.1.7-alpha.2", range), false, `${name} must not admit the retired alpha line`)
   }
 })
