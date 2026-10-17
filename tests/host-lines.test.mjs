@@ -1,11 +1,13 @@
 /**
- * Host-line contract: one arm per tuple is promised, and a tuple may promise
- * several lines — `0.2.0-rc.2`, and the `0.2.1` lines `0.2.1-alpha.4` and
- * `0.2.1-alpha.5`, the lines the user actually runs. Every row carries the
- * modern shape (`catalog` + `registerAuto`), measured on each line's real
- * service rather than read from its source, and every row is driven through the
- * same-signature migration. A line is appended when the user's host moves, and
- * a new tuple additionally adds an arm to the peer range. The peer range is an
+ * Host-line contract: one line is promised — `0.2.1-rc.2`, the line the user
+ * actually runs — and the promise carries exactly one arm because it spans
+ * exactly one tuple. The single row carries the modern shape (`catalog` +
+ * `registerAuto`), measured on that line's real service rather than read from
+ * its source, and it is driven through the same-signature migration. The
+ * `0.2.0` tuple and the `0.2.1` alphas have left the promise, so a host on any
+ * of them is no longer certified here. A line is appended when the user's host
+ * moves; a further tuple would additionally add an arm to the peer range, and
+ * nothing else does. The peer range is an
  * installation-admission surface, not a support claim, so the promise lives
  * here in `HOST_LINES` and nowhere else. This file pins the promised table, the
  * exact version pinning, the reverse controls that make a wrong-tree acceptance
@@ -49,29 +51,40 @@ const patch = readFileSync(join(ROOT, "cordis.patch.yml"), "utf8")
 const INERT_CONTROL_LINE = { version: "0.1.5-rc.2", capability: "unknown" }
 
 /**
- * The key prefix each promised tuple is addressed by. A tuple may promise more
- * than one line, so the prefix alone no longer identifies a row; it identifies
- * the tuple, and the ordinal suffix completes the key.
+ * Lines the promise used to cover and no longer does — the retired `0.2.0`
+ * tuple and the retired `0.2.1` alphas. They are not rows of `HOST_LINES`; they
+ * survive here as the controls for "a tree or a nested copy on a line the
+ * promise does not cover", so that the narrowing of the promise leaves no
+ * coverage hole behind it. Every one of them must be refused by the tree check
+ * against the promised line.
  */
-const PREFIX_OF_TUPLE = { "0.2.0": "line020", "0.2.1": "line021" }
+const RETIRED_LINES = ["0.2.0-rc.2", "0.2.1-alpha.4", "0.2.1-alpha.5"]
 
-test("the promised line table carries the lines the user runs", () => {
-  assert.deepEqual(Object.keys(HOST_LINES).sort(), ["line020", "line021alpha4", "line021alpha5"])
-  assert.equal(HOST_LINES.line020.version, "0.2.0-rc.2")
-  assert.equal(HOST_LINES.line020.capability, "modern")
-  assert.equal(HOST_LINES.line021alpha4.version, "0.2.1-alpha.4")
-  assert.equal(HOST_LINES.line021alpha4.capability, "modern")
-  assert.equal(HOST_LINES.line021alpha5.version, "0.2.1-alpha.5")
-  assert.equal(HOST_LINES.line021alpha5.capability, "modern")
+/**
+ * The key prefix each promised tuple is addressed by. The prefix identifies the
+ * tuple; a tuple promising more than one line would complete the key with an
+ * ordinal suffix, and the promised tuple promises exactly one line, so its key
+ * is the prefix itself.
+ */
+const PREFIX_OF_TUPLE = { "0.2.1": "line021" }
+
+test("the promised line table carries the line the user runs", () => {
+  assert.deepEqual(Object.keys(HOST_LINES).sort(), ["line021"])
+  assert.equal(HOST_LINES.line021.version, "0.2.1-rc.2")
+  assert.equal(HOST_LINES.line021.capability, "modern")
 })
 
-test("the promise spans one arm per tuple, and every key names its own tuple", () => {
-  // A tuple may promise several lines, so uniqueness is asserted on the
-  // *versions* rather than on the tuples. Two rows carrying one version would be
-  // a redundant row that the CLI can address twice and the per-line controls
-  // would read as two lines; the key set itself needs no such check, because
-  // object keys are duplicate-free by construction and a literal that repeated a
-  // key would simply lose a row to the exact-set assertion below.
+test("the promise spans one tuple and one arm, and the key names its own tuple", () => {
+  // The promised tuple set is exactly the prefix table's key set, so a row from
+  // any other tuple — the retired `0.2.0` one included — turns this case red
+  // instead of silently widening the promise to a second arm. Uniqueness is
+  // asserted on the *versions* rather than on the tuples: a tuple promising
+  // several lines would still need each of them distinct, and two rows carrying
+  // one version would be a redundant row that the CLI can address twice and the
+  // per-line controls would read as two lines. The key set itself needs no such
+  // check, because object keys are duplicate-free by construction and a literal
+  // that repeated a key would simply lose a row to the exact-set assertion
+  // above.
   const tuples = Object.values(HOST_LINES).map(line => line.version.split("-")[0])
   const versions = Object.values(HOST_LINES).map(line => line.version)
   const keys = Object.keys(HOST_LINES)
@@ -145,10 +158,11 @@ test("the installed-tree check rejects a foreign line and an empty tree", () => 
       "@deepseek-ai/dsh-session@" + line.version,
     ].sort())
     // Every line the promise does not cover — the inert one, the foreign
-    // sentinel, and any other promised line — must be refused by the tree
-    // check, not merely unlisted: a tree on a different promised line is still
+    // sentinel, and the lines the promise used to cover — must be refused by
+    // the tree check, not merely unlisted: a tree on a retired line is still
     // the wrong tree for the line under test.
     const notThis = [INERT_CONTROL_LINE.version, FOREIGN_HOST_LINE.version]
+      .concat(RETIRED_LINES)
       .concat(Object.values(HOST_LINES).filter(row => row.version !== line.version).map(row => row.version))
     for (const other of notThis) {
       mustReject("a tree on " + other + " checked against " + line.version, () => assertInstalledLine(line, { "@deepseek-ai/dsh-session": other }))
@@ -158,7 +172,7 @@ test("the installed-tree check rejects a foreign line and an empty tree", () => 
 })
 
 test("the npm-tree check rejects problems and nested foreign copies", () => {
-  const line = HOST_LINES.line020
+  const line = HOST_LINES.line021
   const good = { dependencies: { "@deepseek-ai/dsh-session": { version: line.version } } }
   assert.deepEqual(assertTreeLine(line, good), ["@deepseek-ai/dsh-session@" + line.version])
   const nested = {
@@ -172,18 +186,20 @@ test("the npm-tree check rejects problems and nested foreign copies", () => {
   mustReject("a nested copy on a foreign line", () => assertTreeLine(line, nested))
   mustReject("an npm problem list", () => assertTreeLine(line, { problems: ["extraneous: @deepseek-ai/dsh-llm"], dependencies: good.dependencies }))
   mustReject("an empty npm tree", () => assertTreeLine(line, { dependencies: {} }))
-  // A nested copy on the other promised line is a foreign copy for this one.
-  for (const other of Object.values(HOST_LINES)) {
-    if (other.version === line.version) continue
-    mustReject("a nested copy on the other promised line " + other.version, () => assertTreeLine(line, {
-      dependencies: { "@deepseek-ai/dsh-tools": { version: line.version, dependencies: { "@deepseek-ai/dsh-session": { version: other.version } } } },
+  // A nested copy on any line the promise does not cover — the retired `0.2.0`
+  // tuple and the retired alphas — is a foreign copy for this one. The promise
+  // is a single line now, so this walks the retired lines rather than the other
+  // promised ones; the property being pinned is the same one.
+  for (const other of RETIRED_LINES) {
+    mustReject("a nested copy on the retired line " + other, () => assertTreeLine(line, {
+      dependencies: { "@deepseek-ai/dsh-tools": { version: line.version, dependencies: { "@deepseek-ai/dsh-session": { version: other } } } },
     }))
   }
 })
 
 test("the capability check rejects the retired legacy reading", () => {
-  assert.equal(assertCapability(HOST_LINES.line020, "modern"), "modern")
-  mustReject("a legacy reading on the promised line", () => assertCapability(HOST_LINES.line020, "legacy"))
+  assert.equal(assertCapability(HOST_LINES.line021, "modern"), "modern")
+  mustReject("a legacy reading on the promised line", () => assertCapability(HOST_LINES.line021, "legacy"))
   for (const line of Object.values(HOST_LINES)) assert.notEqual(line.capability, "legacy")
   // `legacy` is the reading the shipped probe never returns (it answers `modern`
   // or `unknown`), so the rejection above cannot be satisfied by a value some
@@ -198,13 +214,13 @@ test("a line's capability field is load-bearing in both directions", () => {
     mustReject(line.version + " re-read as the retired legacy shape", () => assertCapability(line, "legacy"))
     mustReject(line.version + " re-read as a capability nobody returns", () => assertCapability(line, "modern-typo"))
   }
-  // The promise spans two lines but only one *reading*: both rows read `modern`,
-  // so there is no second distinct promised reading for the sentinel to be
-  // refused against, and the loop above already walked every promised line. A
-  // table whose capability drifted onto the sentinel's `legacy` reading — which
-  // would make the control below pass vacuously — is refused by the
+  // The promise is one line and therefore one *reading*: the row reads
+  // `modern`, so there is no second distinct promised reading for the sentinel
+  // to be refused against, and the loop above already walked every promised
+  // line. A table whose capability drifted onto the sentinel's `legacy` reading
+  // — which would make the control below pass vacuously — is refused by the
   // `assert.notEqual` in the "not a registered line" case.
-  mustReject("the foreign sentinel read as the promised reading", () => assertCapability(FOREIGN_HOST_LINE, HOST_LINES.line020.capability))
+  mustReject("the foreign sentinel read as the promised reading", () => assertCapability(FOREIGN_HOST_LINE, HOST_LINES.line021.capability))
 })
 
 /**

@@ -11,7 +11,7 @@
 | 项 | 要求 |
 |---|---|
 | 权限档 | **Auto 档**（machine value `auto-approval`，host 名 `Auto approval`）= `sandbox: danger-full-access` + `approval: ask`；其他档本插件不介入 |
-| DSH | `0.2.0-rc.2`、`0.2.1-alpha.4` 与 `0.2.1-alpha.5` **均完整支持**（peer 范围 `>=0.2.0-rc.2 <2 || >=0.2.1-alpha.4 <2`）——宿主**每个 tuple 承诺一臂线**（同一 tuple 可承诺多行）：**宿主线跟着用户实际在跑的宿主走**，上游进入新 tuple 的 alpha 时再逐条追加（同步 `HOST_LINES`）。peer 区间是**安装准入面**：**区间内未测的线不受支持**，上界 `<2` 只是范围上界；承诺线跨两个 tuple，故区间**按 tuple 分臂**，每条承诺线由承载它自己 tuple 的那一臂放行，**不依赖宿主门禁的 `includePrerelease` 标志**。`0.1.7-rc.2` 已退出承诺面并被抬升后的区间拒装。`auto` 档归上游 `@deepseek-ai/dsh-experimental-auto-review`，本插件只接管 `auto-approval`、两者可同开；旧机器值 `auto` 别名已随下限抬升移除 |
+| DSH | `0.2.1-rc.2` **完整支持**（peer 范围 `>=0.2.1-rc.2 <2`）——宿主**只承诺一条线**：**宿主线跟着用户实际在跑的宿主走**，上游发布新线时改这一行（同步 `HOST_LINES`）。peer 区间是**安装准入面**：**区间内未测的线不受支持**，上界 `<2` 只是范围上界。承诺面只剩一个 tuple，故区间**只留一臂**：一臂已足够让承诺线在朴素读法与宿主门禁的带标志读法下都被放行，**不依赖 `includePrerelease` 标志**；多一臂只会承认一个没有承诺的 tuple。`0.2.0-rc.2`、`0.2.1` 的全部 alpha、`0.2.1-rc.1` 与 `0.1.7-rc.2` 均已退出承诺面，并被单臂区间在**两种读法下都拒装**（旧双臂在带标志读法下仍放行 `0.2.1` 预发布，故单臂更强）。`auto` 档归上游 `@deepseek-ai/dsh-experimental-auto-review`，本插件只接管 `auto-approval`、两者可同开；旧机器值 `auto` 别名已随下限抬升移除 |
 | Node | `^22.19.0 || >=24.0.0` |
 | 共存 | 本插件是 `auto-approval` 档 `approval/request` 的唯一终结裁决者 —— 同一档位不要再叠第二个审批插件；上游 `@deepseek-ai/dsh-experimental-auto-review`（`auto`，Auto review / EXP）是另一个档位，可同时启用 |
 

@@ -1,12 +1,13 @@
 #!/usr/bin/env node
-// Re-runnable entry for the promised host lines. Each line is installed into a
-// scratch prefix under os.tmpdir() and driven through the shipped migration
-// decision layer against the real permission-presets service of that exact
-// line. Every installed dsh-* must equal the requested version and the observed
-// capability must equal the line expectation, so a prefix that resolved the
-// wrong line goes red instead of certifying itself. A line the plugin does not
-// take over is registered as inert and asserts exactly that: it loads there,
-// gates nothing and writes nothing. The checkout node_modules is never touched.
+// Re-runnable entry for the promised host line. Each promised line is installed
+// into a scratch prefix under os.tmpdir() and driven through the shipped
+// migration decision layer against the real permission-presets service of that
+// exact line. Every installed dsh-* must equal the requested version and the
+// observed capability must equal the line expectation, so a prefix that
+// resolved the wrong line goes red instead of certifying itself. A line the
+// plugin does not take over is registered as inert and asserts exactly that: it
+// loads there, gates nothing and writes nothing. The checkout node_modules is
+// never touched.
 import { execFileSync } from "node:child_process"
 import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -30,37 +31,36 @@ const LEGACY_AUTO_PRESET = "auto"
  * while any other reading means the plugin is registered there as inert — the
  * entry then asserts that nothing is gated and nothing is written.
  *
- * A tuple may promise several lines. The promise used to be exactly one line
- * per tuple, which made the key and the tuple interchangeable; that is no
- * longer so, and the key convention below is what keeps a row addressable when
- * two rows share a tuple.
+ * The promise is a single line, so the table is a single row: the `0.2.1` tuple
+ * promises `0.2.1-rc.2` and nothing earlier, and no other tuple is promised at
+ * all. One tuple is the reason the peer range needs one arm and no more.
  *
- * The key begins with the line prefix of its own tuple — `line020` for `0.2.0`,
- * `line021` for `0.2.1` — and carries an ordinal suffix when a tuple promises
- * more than one line, so `line021alpha4` and `line021alpha5` are the two rows
- * of the `0.2.1` tuple. The prefix is what a reader greps for; the suffix is
- * what keeps two rows of one tuple from colliding in the table and on the
- * `--line` command line. The exact version still lives in `version`, which is
- * what the probe installs and asserts.
+ * The key begins with the line prefix of its own tuple — `line021` for `0.2.1`
+ * — and carries an ordinal suffix only when a tuple promises more than one
+ * line; `line021alpha4` and `line021alpha5` were the two rows of the `0.2.1`
+ * tuple back when it promised both alphas, and the suffix is what kept them
+ * from colliding in the table and on the `--line` command line. A tuple that
+ * promises exactly one line needs no suffix, so its key is the prefix itself.
+ * The prefix is what a reader greps for; the exact version still lives in
+ * `version`, which is what the probe installs and asserts.
  *
- * Every row is a measured `modern` reading, taken by driving the real service
- * of that exact version rather than by reading its source. `line021alpha4` and
- * `line021alpha5` were each measured on a scratch prefix installed from the
- * registry at that exact version: both probes read `modern` with reason
- * `catalog+registerAuto` and the gate names stayed the plugin's own preset.
+ * The row is a measured `modern` reading, taken by driving the real service of
+ * that exact version rather than by reading its source: `line021` was measured
+ * on a scratch prefix installed from the registry at `0.2.1-rc.2`, where the
+ * probe read `modern` with reason `catalog+registerAuto` and the gate names
+ * stayed the plugin's own preset.
  */
 export const HOST_LINES = {
-  line020: { version: "0.2.0-rc.2", capability: "modern" },
-  line021alpha4: { version: "0.2.1-alpha.4", capability: "modern" },
-  line021alpha5: { version: "0.2.1-alpha.5", capability: "modern" },
+  line021: { version: "0.2.1-rc.2", capability: "modern" },
 }
 
 /**
  * The line prefix a promised tuple is addressed by, derived from the tuple
- * itself rather than kept as a table: `0.2.0` gives `line020`, `0.2.1` gives
- * `line021`. Deriving it means the prefix cannot drift away from the tuple it
- * names, and a key that does not begin with its own tuple's prefix is refused
- * by the contract test instead of being unaddressable from the CLI.
+ * itself rather than kept as a table: the promised `0.2.1` tuple gives
+ * `line021`, and a tuple that ever returns to the table derives its own prefix
+ * the same way. Deriving it means the prefix cannot drift away from the tuple
+ * it names, and a key that does not begin with its own tuple's prefix is
+ * refused by the contract test instead of being unaddressable from the CLI.
  */
 export function linePrefixOf(tuple) {
   return "line" + tuple.split(".").join("")

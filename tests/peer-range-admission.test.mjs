@@ -1,34 +1,35 @@
 /**
  * Peer-range admission contract. The five `@deepseek-ai/dsh-*` peers promise
- * one range arm per tuple — `0.2.0-rc.2`, plus the `0.2.1` lines
- * `0.2.1-alpha.4` and `0.2.1-alpha.5`, the lines the user actually runs —
- * through two arms `>=0.2.0-rc.2 <2 || >=0.2.1-alpha.4 <2`. A tuple may promise
- * several lines; it still carries exactly one arm.
+ * one line — `0.2.1-rc.2`, the line the user actually runs — through a single
+ * arm `>=0.2.1-rc.2 <2`. One promised tuple carries one arm, and the promise is
+ * one tuple, so the range is one arm and the arm count is the tuple count.
  *
  * The host evaluates peers with `semver.satisfies(runtimeVersion, range, { includePrerelease: true })`
  * (the `satisfies()` helper in `dsh-app-boot/lib/index.js`). The plain reading —
  * the rule implemented by `satisfies()` below, where a prerelease must be named
  * by a comparator in its own major.minor.patch tuple — is what decides the shape
- * of the arms. A single arm floored at `0.2.0-rc.2` admits that line under both
- * readings, but refuses `0.2.1-alpha.4` under the plain one, because no comparator
- * carried the `0.2.1` tuple. The promise therefore spans two tuples, and one arm
- * per promised tuple is the minimum that admits every promised line on its own
- * rather than on the flag alone. The flag stays pinned for each line as well, so
- * a host that stopped passing it is a red suite rather than a refused install
- * nobody sees.
+ * of the arm. The floor `>=0.2.1-rc.2` carries the `0.2.1` tuple and a
+ * prerelease, so the promised line is admitted under both readings and nothing
+ * about the promise rests on the flag. The flag stays pinned for the promised
+ * line as well, so a host that stopped passing it is a red suite rather than a
+ * refused install nobody sees.
  *
- * Raising the `0.2.1` floor to `alpha.4` removes `alpha.1`, `alpha.2` and
- * `alpha.3` from the promise, and removes them from the plain reading outright.
- * It does NOT remove them from the host's flagged reading: the first arm spans
- * `<2`, so under the flag it still admits every prerelease in the `0.2.1` tuple,
- * the three retired ordinals included. Refusing them under the flag would
- * mean bounding the first arm above (`<0.2.1-alpha.1`), which the project
- * rejected: it would trade the "a promised line is admitted without the flag"
- * property for a single-ordinal exclusion semver cannot express cleanly. So
- * the retired ordinals are unpromised and unsupported, and their admission
- * under the flag is stated here rather than papered over.
+ * The arm is single because the promise is: an arm is added when a further tuple
+ * is promised, and no second tuple is. The earlier two-arm shape existed to make
+ * a promise spanning `0.2.0` and `0.2.1` admissible under the plain reading; with
+ * that promise retired, a second arm would name a tuple nothing is promised on.
  *
- * Raising the floor dropped `0.1.7-rc.2`, `0.1.7-rc.1`, `0.1.7-alpha.2` and
+ * Retiring the earlier lines is a strengthening, not only a narrowing. Under the
+ * two-arm range the retired `0.2.1` alphas were refused by the plain reading but
+ * still admitted by the host's flagged one, because the first arm spanned `<2`
+ * and so carried every prerelease of that tuple. The single arm floored at
+ * `0.2.1-rc.2` refuses them under **both** readings, and refuses `0.2.0-rc.2`
+ * under both as well — the line is below the floor and no comparator names its
+ * tuple. Both halves are pinned below: the retired lines are refused by the
+ * plain reading and by the flagged one, so a later relaxation of the floor is
+ * caught here whichever reading it relaxes.
+ *
+ * The floor also dropped `0.1.7-rc.2`, `0.1.7-rc.1`, `0.1.7-alpha.2` and
  * `0.1.5-rc.2` out of admission; all four are pinned false below, so a later
  * relaxation of the range is caught here.
  *
@@ -53,8 +54,8 @@ import { HOST_LINES } from "../scripts/test-host-lines.mjs"
 
 const ROOT = process.cwd()
 
-/** The admission range promised by the dsh peers: one bounded arm per promised tuple. */
-const EXPECTED_RANGE = ">=0.2.0-rc.2 <2 || >=0.2.1-alpha.4 <2"
+/** The admission range promised by the dsh peers: one bounded arm on the one promised tuple. */
+const EXPECTED_RANGE = ">=0.2.1-rc.2 <2"
 
 /** Application-level peer that is not a host line and is not part of this contract. */
 const CORDIS_PEER = "@deepseek-ai/cordis"
@@ -151,28 +152,35 @@ function compare(left, right) {
 }
 
 /**
- * The truth table the arms must produce, measured against the installed
- * `semver` package under the plain reading. Both promised tuples sit at true —
- * each line is named by the arm carrying its own tuple, so the plain reading
- * admits it without the flag. `0.2.1-alpha.1`, `0.2.1-alpha.2` and
- * `0.2.1-alpha.3` sitting at false is the point of the raised floor: they left
- * the promise, so the plain reading no longer names them. `0.1.7-rc.2` — a line the promise used to span —
- * sitting at false is the point of the earlier raised floor: it is not promised
- * any more, so it must not stay installable, and a later lowering back across
- * the tuple is caught here.
+ * The truth table the arm must produce, measured against the installed `semver`
+ * package under the plain reading. `0.2.1-rc.2` sits at true because the arm's
+ * floor names its own tuple and a prerelease in it, so the plain reading admits
+ * the promised line without the flag; `0.2.1` and `1.9.9` sit at true as plain
+ * releases above that floor.
+ *
+ * Everything the promise retired sits at false. `0.2.1-rc.1` and the `0.2.1`
+ * alphas are prereleases below the floor, so no comparator names them and the
+ * plain reading refuses them; `0.2.0-rc.2` and `0.2.0` are below the floor and
+ * in an earlier tuple, so they are refused for two reasons at once; and
+ * `0.1.7-rc.2` — a line the promise used to span — is refused as well, which is
+ * what catches a later lowering of the floor back across it. `2.0.0` is refused
+ * by the `<2` bound alone.
  */
 const TRUTH_TABLE = [
-  ["0.2.0-rc.2", true],
-  ["0.2.1-alpha.3", false],
-  ["0.2.1-alpha.4", true],
-  ["0.2.1-alpha.5", true],
+  ["0.2.1-rc.2", true],
+  ["0.2.1", true],
+  ["1.9.9", true],
+  ["0.2.1-rc.1", false],
+  ["0.2.0-rc.2", false],
+  ["0.2.0", false],
   ["0.2.1-alpha.1", false],
   ["0.2.1-alpha.2", false],
+  ["0.2.1-alpha.3", false],
+  ["0.2.1-alpha.4", false],
+  ["0.2.1-alpha.5", false],
   ["0.1.7-rc.2", false],
   ["0.1.7-rc.1", false],
   ["0.1.7", false],
-  ["0.2.0", true],
-  ["1.9.9", true],
   ["0.1.7-alpha.2", false],
   ["0.1.7-alpha.1", false],
   ["0.1.6", false],
@@ -199,20 +207,21 @@ test("the five dsh peers carry the promised admission range", () => {
 })
 
 test("the range is one bounded arm per promised tuple, and still refuses the lines below the floor", () => {
-  // One arm per promised tuple, and no more. What a third arm would do is add a
-  // second, redundant way to admit the promise — the range already admits every
-  // release below its `<2` bound, and under the host's flagged reading every
-  // prerelease above the floor besides — so the arm count is not a claim about
-  // what gets installed. It is the bookkeeping that keeps one named arm per
-  // promised tuple, which is what makes each line admissible on its own. The
-  // tuple count is a Set: a tuple promising several lines still carries one arm.
+  // One arm per promised tuple, and no more — and the promise is one tuple, so
+  // the range is one arm. What a second arm would do is add a redundant way to
+  // admit the promise — the range already admits every release below its `<2`
+  // bound, and under the host's flagged reading every prerelease above the
+  // floor besides — so the arm count is not a claim about what gets installed.
+  // It is the bookkeeping that keeps one named arm per promised tuple, which is
+  // what makes the promised line admissible on its own. The tuple count is a
+  // Set, so a tuple promising several lines would still carry one arm.
   const arms = EXPECTED_RANGE.split("||")
   const promisedTuples = new Set(Object.values(HOST_LINES).map(line => line.version.split("-")[0]))
   assert.equal(arms.length, promisedTuples.size, "the range does not carry one arm per promised tuple")
   for (const [name, range] of dshPeers) {
     assert.equal(range.split("||").length, arms.length, `${name} disagrees with the promised arm count`)
-    // `0.1.7-rc.2` left the promise when the floor rose onto the `0.2.0` tuple,
-    // so the line it used to sit below is refused by every arm.
+    // `0.1.7-rc.2` left the promise when the floor rose onto the `0.2.x` tuples,
+    // so the line it used to sit below is refused by the arm.
     assert.equal(satisfies("0.1.7-rc.2", range), false, `${name} must refuse the dropped 0.1.7 line`)
     assert.equal(satisfies("0.1.7-alpha.2", range), false, `${name} must refuse the retired alpha line`)
     assert.equal(satisfies("0.1.5-rc.2", range), false, `${name} must refuse the retired rc line`)
@@ -225,12 +234,13 @@ test("every arm is a bounded comparator set floored on a promised tuple", () => 
   // exact version: moving to the next ordinal inside a tuple is the documented
   // maintenance step, and it changes `version` alone — pinning the range to the
   // exact line would turn that routine step into a red suite even though the
-  // range still admits the new ordinal. Admission of each promised line by its
+  // range still admits the new ordinal. Admission of the promised line by its
   // own arm is asserted separately below, which is where the exact floor matters.
   //
   // The tuples are de-duplicated because the arm rule counts tuples, not rows: a
-  // tuple promising two lines still carries one arm, so comparing a per-arm list
-  // against a per-row list would assert the retired one-line-per-tuple promise.
+  // tuple promising two lines would still carry one arm, so comparing a per-arm
+  // list against a per-row list would assert a one-arm-per-row rule that the
+  // project never held.
   const promisedTuples = [...new Set(promised.map(version => version.split("-")[0]))]
   const floors = []
   for (const arm of EXPECTED_RANGE.split("||")) {
@@ -263,11 +273,12 @@ test("every arm is a bounded comparator set floored on a promised tuple", () => 
 test("the plain reading admits every promised line without the flag", () => {
   // The host calls `semver.satisfies(runtimeVersion, range, { includePrerelease: true })`.
   // The plain rule — the one implemented above, and the one any consumer that
-  // forgets the flag would apply — must admit the promise on its own: each
-  // promised line is named by the arm carrying its own tuple, so no line depends
-  // on the flag. Asserted rather than assumed, because collapsing the promise
-  // back onto one tuple without widening the range would leave the newer line
-  // admitted by the flag alone, and that must turn this case red.
+  // forgets the flag would apply — must admit the promise on its own: the
+  // promised line is named by the arm carrying its own tuple and a prerelease in
+  // it, so it depends on no flag. Asserted rather than assumed, because an arm
+  // floored a tuple below the promise (as the retired `>=0.2.0-rc.2` arm was)
+  // would leave the promised line admitted by the flag alone, and that must turn
+  // this case red.
   const require_ = createRequire(join(ROOT, "package.json"))
   const reference = (() => {
     try {
@@ -313,16 +324,19 @@ test("the peer block keeps cordis and schemastery outside the dsh contract", () 
   assert.equal(manifest.peerDependencies["@deepseek-ai/schemastery"], "^3.18.0")
 })
 
-test("the retired 0.2.1 ordinals are refused by the plain reading but still admitted under the flag", () => {
-  // The ordinals that left the promise when the arm floor rose to `alpha.4`.
-  // Pinning both readings is the point: the plain reading refuses them (so no
-  // comparator names them any more), while the host's flagged reading still
-  // admits them through the first arm `>=0.2.0-rc.2 <2`, which spans `<2`.
-  // Asserting only the first half would let a later reader believe the range
-  // refuses them at install time; asserting only the second would hide that they
-  // are no longer named by any comparator. Both halves are load-bearing, and the
-  // gap between them is documented rather than papered over.
-  const retired = ["0.2.1-alpha.1", "0.2.1-alpha.2", "0.2.1-alpha.3"]
+test("the retired 0.2.1 ordinals are refused by both readings, not merely by the plain one", () => {
+  // The ordinals that left the promise when it was narrowed to `0.2.1-rc.2`.
+  // This case is the reverse of what it asserted under the two-arm range: there
+  // the plain reading refused them while the host's flagged reading still
+  // admitted them through the first arm `>=0.2.0-rc.2 <2`, which spanned `<2`.
+  // The single arm floored at `0.2.1-rc.2` refuses them under both readings —
+  // they are prereleases below the floor and no comparator names their tuple, so
+  // the flagged reading has nothing to admit them with. That is a strengthening
+  // the single arm bought, and pinning both readings is what keeps it: asserting
+  // only the plain half would let a later arm re-admit them under the flag
+  // without this suite noticing, and asserting only the flagged half would hide
+  // that they are refused at install time rather than merely unsupported.
+  const retired = ["0.2.1-alpha.1", "0.2.1-alpha.2", "0.2.1-alpha.3", "0.2.1-alpha.4", "0.2.1-alpha.5"]
   const require_ = createRequire(join(ROOT, "package.json"))
   let reference = null
   try {
@@ -331,27 +345,29 @@ test("the retired 0.2.1 ordinals are refused by the plain reading but still admi
     reference = null
   }
   for (const version of retired) {
-    assert.equal(satisfies(version, EXPECTED_RANGE), false, `${version} must leave the plain reading`)
+    assert.equal(satisfies(version, EXPECTED_RANGE), false, `${version} must stay out of the plain reading`)
     for (const [name, range] of dshPeers) {
       assert.equal(satisfies(version, range), false, `${name} must refuse ${version} under the plain reading`)
       if (reference === null) continue
       assert.equal(reference.satisfies(version, range), false, `${name}: semver must refuse ${version} under the plain reading`)
       assert.equal(
         reference.satisfies(version, range, { includePrerelease: true }),
-        true,
-        `${name} still admits ${version} under the host's flagged reading; if this flips, the arm shape changed and the docs must change with it`,
+        false,
+        `${name} must also refuse ${version} under the host's flagged reading; the single arm floored at 0.2.1-rc.2 names no comparator for a lower prerelease, so a true here means the arm was widened back across the tuple`,
       )
     }
   }
-  // The reason the flagged reading admits them: the first arm spans `<2`, so it
-  // admits every prerelease of the `0.2.1` tuple on its own.
+  // The reason the flagged reading refuses them: the only arm floors at
+  // `0.2.1-rc.2`, above every retired ordinal, and `<2` cannot pull a candidate
+  // back above a floor it fails. Pinned on the arm itself so the cause is stated
+  // rather than inferred from the whole range.
   if (reference === null) return
-  const firstArm = EXPECTED_RANGE.split("||")[0].trim()
+  const onlyArm = EXPECTED_RANGE.trim()
   for (const version of retired) {
     assert.equal(
-      reference.satisfies(version, firstArm, { includePrerelease: true }),
-      true,
-      `the first arm ${firstArm} is expected to be the reason ${version} survives the flagged reading`,
+      reference.satisfies(version, onlyArm, { includePrerelease: true }),
+      false,
+      `the only arm ${onlyArm} is expected to be the reason ${version} is refused under the flagged reading`,
     )
   }
 })
@@ -394,10 +410,13 @@ test("the refused prerelease tuples below the floor stay refused", () => {
 
 test("the range admits untested middle lines; admission is not support", () => {
   for (const [name, range] of dshPeers) {
-    for (const version of ["0.2.0", "0.2.1", "1.0.0", "1.9.9"]) {
+    for (const version of ["0.2.1", "0.2.2", "1.0.0", "1.9.9"]) {
       assert.equal(satisfies(version, range), true, `${name} must admit ${version}`)
     }
-    for (const version of ["0.1.9", "0.1.7-rc.2", "0.1.4", "0.1.4-rc.9", "1.9.9-alpha.1", "2.0.0"]) {
+    // `0.2.0` is a release below the floor, so it is refused along with the
+    // prereleases under it: the floor sits at `0.2.1-rc.2`, and nothing in the
+    // retired `0.2.0` tuple is above that.
+    for (const version of ["0.2.0", "0.1.9", "0.1.7-rc.2", "0.1.4", "0.1.4-rc.9", "1.9.9-alpha.1", "2.0.0"]) {
       assert.equal(satisfies(version, range), false, `${name} must refuse ${version}`)
     }
   }
