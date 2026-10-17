@@ -200,13 +200,14 @@ function compare(left, right) {
  * lowering of the floor back across it; and `2.0.0` is refused by the `<2`
  * bound alone.
  *
- * The last three rows are the rows the two readings *disagree* on, and they are
- * here because that disagreement is the only reason the flag is modelled at all.
- * They are prereleases whose major.minor.patch tuple no comparator names, so the
- * plain reading refuses them and the host's flagged reading admits them. The case
- * below asserts that at least one such row exists, so the table cannot quietly
- * degenerate back into twenty rows where the two readings agree and the flagged
- * side is a copy of the plain one.
+ * Three rows are the rows the two readings *disagree* on — `0.3.0-alpha.1`,
+ * `1.9.9-alpha.1` and `0.2.2-alpha.1`, the fourth through sixth entries below —
+ * and they are here because that disagreement is the only reason the flag is
+ * modelled at all. They are prereleases whose major.minor.patch tuple no
+ * comparator names, so the plain reading refuses them and the host's flagged
+ * reading admits them. The case below asserts that at least one such row exists,
+ * so the table cannot quietly degenerate back into a table where the two
+ * readings agree and the flagged side is a copy of the plain one.
  */
 const TRUTH_TABLE = [
   ["0.2.1-rc.2", true, true],
